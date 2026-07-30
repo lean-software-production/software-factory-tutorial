@@ -20,13 +20,16 @@ const TOOL_NAMES = [
 ];
 
 function coachingSystemPrompt(lesson: LessonDefinition): string {
-  return `You are a patient refactoring tutorial coach for "${lesson.title}".
-You work only inside the kata workspace. Keep a learner-led validation loop visible: inspect one small seam, propose one small safe change, let the learner choose, then validate immediately. Never take two change steps without an offer_choices selection.
+  return `You are a patient tutorial tutor for "${lesson.title}". The learner is building a software factory; the kata is its raw material.
 
-Use present_markdown for teaching and next-step instructions, present_diagram for flows, show_file_excerpt for a small relevant excerpt, and run_validation for checks. Use offer_choices whenever you ask whether the learner should make a change or you should make it. Do not invoke shell commands; run_validation is the only execution route and only accepts allowlisted IDs. Do not expose secrets or read outside the workspace. Be concise and never claim a validation passed without its result.
+At the beginning, read README.md, then docs/specs/README.md, then the first specification whose ledger status is Todo. Orient the learner around the whole exercise before discussing implementation. Read no calculator source until the current spec requires it. If that spec contains a Mermaid diagram, reproduce it with present_diagram and its text fallback.
+
+Teach only the current iteration, one small step at a time. Explain what the step achieves and exactly which file the learner should change. Quote command lines from the current spec exactly; never invent Pi CLI flags. Use offer_choices for every step: one option for the learner to make the change and one for you to make it. If the learner says they are done or asks for feedback, read the relevant file and compare it to the current spec. If they say it is not working, inspect the relevant files and evidence before offering a correction. Do not make changes unless the learner explicitly chooses that option.
+
+Do not act as the factory worker. Do not refactor the calculator on startup. Do not run tests, shell commands, or validation commands; the factory built in the current spec owns validation. Keep the transcript calm: use present_markdown for teaching, present_diagram for flows, and show_file_excerpt only for small relevant excerpts. Do not expose secrets or read outside the workspace.
 
 Lesson rules:
-${(lesson.rules ?? []).map((rule) => `- ${rule}`).join("\n") || "- Make one small behaviour-preserving refactoring at a time."}
+${(lesson.rules ?? []).map((rule) => `- ${rule}`).join("\n") || "- Follow the current specification exactly."}
 
 Kata coaching prompt:
 ${lesson.coachingPrompt}`;
@@ -91,11 +94,12 @@ export class PiTutorialAdapter {
     if (this.lesson.allowedActions?.length) {
       this.#bus.publish({ type: "presentation", presentation: { kind: "markdown", title: "Available actions", markdown: this.lesson.allowedActions.map((action) => `- ${action}`).join("\n") } });
     }
-    await this.chat("Begin the tutorial. Orient the learner, inspect the starting point, then offer exactly one next-step choice.");
+    await this.chat("Begin the tutorial. Read the exercise orientation and current iteration spec, present the iteration flow, then offer exactly one first-step choice.", "steer", false);
   }
 
-  async chat(text: string, delivery: "steer" | "followUp" = "steer"): Promise<void> {
+  async chat(text: string, delivery: "steer" | "followUp" = "steer", showInTranscript = true): Promise<void> {
     if (!text.trim() || text.length > 12_000) throw new Error("Chat messages must be between 1 and 12,000 characters.");
+    if (showInTranscript) this.#bus.publish({ type: "user-message", markdown: text });
     this.setState("working");
     try {
       await this.#session.prompt(text, this.#session.isStreaming ? { streamingBehavior: delivery } : undefined);

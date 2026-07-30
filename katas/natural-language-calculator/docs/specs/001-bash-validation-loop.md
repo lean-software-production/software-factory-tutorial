@@ -6,29 +6,6 @@ Build the smallest useful software factory. On each iteration, Pi makes one smal
 
 The learner should be able to read the entire factory in under a minute.
 
-## Behaviour
-
-Create these files at the kata root:
-
-- `factory.sh`
-- `work.md`
-- `heal.md`
-
-`work.md` tells Pi to inspect the current code and make one small, behaviour-preserving refactoring. `heal.md` tells Pi to inspect supplied failing test output and make the smallest correction it can infer. Both prompts tell Pi to edit files directly, not run tests or shell commands, and keep its response concise.
-
-`factory.sh` loops until the learner stops it. Each iteration:
-
-1. Checks for `test-failure.log`.
-2. If it is absent, runs Pi with `work.md`.
-3. If it is present, runs Pi with `heal.md` followed by the contents of `test-failure.log`.
-4. Runs Pi with file-inspection and file-editing tools only. Pi must not receive its `bash` tool.
-5. Runs `npm test`, capturing both standard output and standard error without terminating the loop when tests fail.
-6. Prints the captured test output unchanged.
-7. If the tests fail, writes that output to `test-failure.log`. If they pass, deletes `test-failure.log` if it exists.
-8. Pauses until the learner presses Enter; Ctrl-C stops the factory.
-
-A failing test result becomes the input to the next Pi turn without making Pi responsible for validation. A passing test removes that recovery state, so the next turn resumes ordinary work.
-
 ## Decision flow
 
 Show this Mermaid diagram when introducing the iteration:
@@ -49,11 +26,35 @@ flowchart TD
     Pause --> Start
 ```
 
-## Example
+## Behaviour
 
-A first run uses `work.md` to change one small part of the calculator, then the shell prints a green test run and pauses. The next run again uses `work.md`.
+Create these files at the kata root:
 
-If a run makes a mistake, the shell prints the failing output, saves it as `test-failure.log`, and pauses. After Enter, Pi receives `heal.md` and that failure log. It makes the smallest correction it can infer, after which Bash tests again. Once the tests pass, Bash deletes the failure log and the next turn returns to `work.md`.
+- `factory.sh`
+- `work.md`
+- `heal.md`
+
+`work.md` tells Pi to inspect the current code and make one small, behaviour-preserving refactoring. `heal.md` tells Pi to inspect the supplied test-failure evidence and make the smallest correction it can infer. Both prompts tell Pi to edit files directly, not run tests or shell commands, and keep their response concise.
+
+`factory.sh` loops until the learner stops it. Each iteration:
+
+1. Checks for `test-failure.log`.
+2. If it is absent, pipes `work.md` to Pi. If it is present, pipes `heal.md` and `test-failure.log` to Pi.
+3. Runs Pi with file-inspection and file-editing tools only. Pi must not receive its `bash` tool.
+4. Runs `npm test`, letting standard output stream to the terminal and writing standard error to `test-failure.log`.
+5. If the tests pass, deletes `test-failure.log`.
+6. If the tests fail, prints `test-failure.log`; it will become the next worker turn's input.
+7. Pauses until the learner presses Enter; Ctrl-C stops the factory.
+
+The worker cannot run the tests. Bash alone chooses `work.md` or `heal.md`, based only on whether the last validation failed.
+
+Use this exact Pi invocation in each branch; the option is `--tools` (plural):
+
+```sh
+cat work.md | pi --no-session --tools read,edit,write,grep,find,ls -p
+```
+
+In the failure branch, replace `cat work.md` with `cat heal.md test-failure.log`.
 
 ## Checks
 
@@ -68,7 +69,7 @@ Verify manually that:
 - Pi can read and edit the kata but cannot invoke a shell tool.
 - `npm test` runs after every Pi turn.
 - a failing `npm test` does not end the factory.
-- a failed test creates `test-failure.log`, and the next Pi turn uses `heal.md` with that output;
+- a failed test leaves `test-failure.log`, and the next Pi turn uses `heal.md` with that evidence;
 - a passing test deletes `test-failure.log`, and the next Pi turn uses `work.md`.
 - the learner can stop the loop with Ctrl-C.
 

@@ -37,7 +37,7 @@ export class ValidationRunner {
         cwd: this.cwd,
         shell: false,
         // Deliberately do not inherit provider credentials or arbitrary server secrets.
-        env: { PATH: process.env.PATH ?? "", CI: "1", NO_COLOR: "1" },
+        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", CI: "1", NO_COLOR: "1" },
         stdio: ["ignore", "pipe", "pipe"]
       });
       let output = "";

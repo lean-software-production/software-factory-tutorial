@@ -20,7 +20,7 @@ const noOpen = args.includes("--no-open");
 
 const loaded = await loadLesson(target);
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const server = await startLocalServer({ lesson: loaded.definition, workspace: loaded.workspace, webRoot: resolve(packageDirectory, "dist/web"), port });
+const server = await startLocalServer({ lesson: loaded.definition, workspace: loaded.workspace, webRoot: resolve(packageDirectory, "dist/web"), progress: loaded.progress, port });
 console.log(`Tutorial: ${loaded.definition.title}`);
 console.log(`Listening only on ${server.url}`);
 if (!noOpen) spawn(process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open", process.platform === "win32" ? ["/c", "start", server.url] : [server.url], { detached: true, stdio: "ignore" }).unref();

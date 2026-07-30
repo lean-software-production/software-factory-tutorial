@@ -31,6 +31,8 @@ export interface LessonDefinition {
   title: string;
   /** The directory in which kata files and validation commands run. */
   workspace: string;
+  /** Directory containing the iteration ledger; defaults to docs/specs. */
+  specsDirectory?: string;
   validationCommands: ValidationCommand[];
   coachingPrompt: string;
   rules?: string[];

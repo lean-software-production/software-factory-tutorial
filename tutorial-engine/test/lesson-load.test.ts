@@ -11,11 +11,15 @@ describe("loadLesson", () => {
     expect(loaded.definition.title).toBe("Fixture lesson");
     expect(loaded.workspace).toBe(fixture);
     expect(loaded.definition.validationCommands[0]?.id).toBe("check");
+    expect(loaded.progress).toEqual([
+      { id: "orientation", label: "Orientation", state: "done" },
+      { id: "001", label: "Fixture step", state: "current" },
+    ]);
   });
 
-  it("loads the bundled natural-language calculator lesson", async () => {
+  it("loads the bundled natural-language calculator lesson and its current iteration", async () => {
     const loaded = await loadLesson(calculatorKata);
-    expect(loaded.definition.validationCommands[0]?.command).toBe("npm");
-    expect(loaded.definition.validationCommands[0]?.args).toEqual(["test"]);
+    expect(loaded.definition.validationCommands).toEqual([]);
+    expect(loaded.progress.at(-1)).toMatchObject({ id: "001", state: "current" });
   });
 });

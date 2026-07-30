@@ -3,6 +3,7 @@ import { access } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import type { LessonDefinition } from "../lesson/contract.js";
+import type { ProgressItem } from "../lesson/load.js";
 import { TutorialEventBus } from "../protocol/event-bus.js";
 import { isBrowserMessage, type BrowserMessage, type TutorialEvent } from "../protocol/events.js";
 import { PiTutorialAdapter } from "../agent/pi-adapter.js";
@@ -17,6 +18,7 @@ export interface LocalServerOptions {
   lesson: LessonDefinition;
   workspace: string;
   webRoot: string;
+  progress: ProgressItem[];
   port?: number;
 }
 
@@ -75,7 +77,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (request.method === "GET" && url.pathname === "/api/events") {
       response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-      writeEvent(response, { type: "snapshot", title: options.lesson.title, runState: adapter.state, events: [...bus.history()], validationCommands: options.lesson.validationCommands.map(({ id, label }) => ({ id, label })) });
+      writeEvent(response, { type: "snapshot", title: options.lesson.title, runState: adapter.state, events: [...bus.history()], validationCommands: options.lesson.validationCommands.map(({ id, label }) => ({ id, label })), progress: options.progress });
       clients.add(response);
       const keepAlive = setInterval(() => response.write(": keepalive\n\n"), 20_000);
       request.on("close", () => { clearInterval(keepAlive); clients.delete(response); });

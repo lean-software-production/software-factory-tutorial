@@ -9,6 +9,11 @@ describe("ValidationRunner", () => {
     expect(result.output).toBe("green");
   });
 
+  it("preserves HOME for executable shims", async () => {
+    const runner = new ValidationRunner([{ id: "home", label: "Home", command: process.execPath, args: ["-e", "if (!process.env.HOME) process.exit(1)"] }], process.cwd());
+    await expect(runner.run("home")).resolves.toMatchObject({ passed: true });
+  });
+
   it("rejects commands not in the lesson allowlist", async () => {
     const runner = new ValidationRunner([], process.cwd());
     await expect(runner.run("anything")).rejects.toThrow("not allowed");

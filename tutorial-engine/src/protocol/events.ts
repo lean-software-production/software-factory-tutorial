@@ -1,4 +1,5 @@
 import type { InitialPresentation } from "../lesson/contract.js";
+import type { ProgressItem } from "../lesson/load.js";
 
 export type RunState = "idle" | "working" | "awaiting-choice" | "failed";
 
@@ -15,10 +16,11 @@ export interface ToolEvent {
 }
 
 export type TutorialEvent =
-  | { type: "snapshot"; title: string; runState: RunState; events: TutorialEvent[]; validationCommands: Array<{ id: string; label: string }> }
+  | { type: "snapshot"; title: string; runState: RunState; events: TutorialEvent[]; validationCommands: Array<{ id: string; label: string }>; progress: ProgressItem[] }
   | { type: "run-state"; state: RunState }
   | { type: "assistant-delta"; messageId: string; delta: string }
   | { type: "assistant-message"; messageId: string; markdown: string }
+  | { type: "user-message"; markdown: string }
   | { type: "tool-start"; tool: ToolEvent }
   | { type: "tool-progress"; toolId: string; text: string }
   | { type: "tool-complete"; toolId: string; summary: string }
