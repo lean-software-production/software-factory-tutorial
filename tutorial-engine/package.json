@@ -1,0 +1,46 @@
+{
+  "name": "@lean-software-production/tutorial-engine",
+  "version": "0.1.0",
+  "description": "A local browser-led refactoring tutorial engine powered by Pi's SDK",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "tutorial-engine": "./dist/cli.js"
+  },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=22.19.0" },
+  "scripts": {
+    "dev": "npm run build:web && tsx src/cli.ts",
+    "build": "npm run build:server && npm run build:web",
+    "build:server": "tsc -p tsconfig.json",
+    "build:web": "vite build",
+    "start": "node dist/cli.js",
+    "test": "vitest run --root .",
+    "check": "tsc --noEmit && npm run test",
+    "prepublishOnly": "npm run build && npm run check"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.83.0",
+    "@vitejs/plugin-react": "^5.1.4",
+    "jiti": "^2.7.0",
+    "mermaid": "^11.12.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "typebox": "^1.1.0",
+    "vite": "^7.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.0",
+    "@types/react": "^19.2.8",
+    "@types/react-dom": "^19.2.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  }
+}
