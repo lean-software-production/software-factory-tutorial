@@ -42,7 +42,6 @@ cd factory
 
 Edit files there by hand, then use the tutor for the next step or feedback. Once you have created `factory.sh`, run it directly.
 
-The tutor reads this README and the current iteration in `docs/specs/`. It will show one small step at a time. You can make the change yourself or ask the tutor to make it, then ask it to inspect your work whenever you need feedback.
 
 ## Iterations
 
