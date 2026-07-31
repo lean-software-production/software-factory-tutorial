@@ -1,12 +1,16 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { checkPiAuthentication } from "../scripts/setup.mjs";
 import { tutorialArguments } from "../scripts/tutorial.mjs";
+
+const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 describe("tutorial launcher", () => {
   it("forwards engine options after the tutorial workspace target", () => {
     assert.deepEqual(tutorialArguments(["--port", "4310", "--no-open"]), [
-      "run", "--workspace=tutorial-engine", "dev", "--", ".", "--port", "4310", "--no-open"
+      "run", "--workspace=tutorial-engine", "dev", "--", repositoryRoot, "--port", "4310", "--no-open"
     ]);
   });
 });

@@ -5,10 +5,11 @@ import { stderr } from "node:process";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
+export const tutorialDirectory = repositoryRoot;
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 
 export function tutorialArguments(argumentsForEngine) {
-  return ["run", "--workspace=tutorial-engine", "dev", "--", ".", ...argumentsForEngine];
+  return ["run", "--workspace=tutorial-engine", "dev", "--", tutorialDirectory, ...argumentsForEngine];
 }
 
 async function main() {
