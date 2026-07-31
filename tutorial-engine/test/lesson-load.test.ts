@@ -21,6 +21,10 @@ describe("loadLesson", () => {
     const loaded = await loadLesson(tutorialRoot);
     expect(loaded.definition.title).toBe("Software factory tutorial 🏭");
     expect(loaded.definition.validationCommands).toEqual([]);
-    expect(loaded.progress.at(-1)).toMatchObject({ id: "001", state: "current" });
+    expect(loaded.progress).toMatchObject([
+      { id: "orientation", state: "done" },
+      { id: "001", state: "current" },
+      { id: "002", state: "upcoming" },
+    ]);
   });
 });
