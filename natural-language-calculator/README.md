@@ -4,16 +4,20 @@ The codebase is a "natural language calculator" written in Typescript. Fortunate
 
 The calculator evaluates a deliberately small spoken-expression language. The starter code is correct but cramped: parsing, arithmetic, formatting, and command-line handling sit too close together.
 
-You can try the calculator yourself:
+You can try the calculator from the repository root. Install its dependencies and build it once, then use its local npm entrypoint:
 
 ```sh
-$ cd natural-language-calculator
-$ npm start "add four and nine"
-
-> spoken-expression-calculator-kata@0.1.0 start
-> tsx src/cli.ts add four and nine
+npm install --prefix natural-language-calculator
+npm run build --prefix natural-language-calculator
+npx ./natural-language-calculator "add four and nine"
 
 Result: 13
+```
+
+From inside `natural-language-calculator`, the equivalent command is:
+
+```sh
+npx . "add four and nine"
 ```
 
 The grammar accepts digit operands and the words `zero` through `twelve`:

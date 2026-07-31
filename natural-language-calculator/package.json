@@ -5,8 +5,17 @@
   "description": "A refactoring kata for a small spoken-expression calculator.",
   "license": "CC-BY-SA-4.0",
   "type": "module",
+  "bin": {
+    "natural-language-calculator": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE.md"
+  ],
   "scripts": {
-    "test": "vitest run",
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && vitest run",
     "start": "tsx src/cli.ts"
   },
   "devDependencies": {

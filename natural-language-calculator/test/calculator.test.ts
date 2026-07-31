@@ -69,4 +69,30 @@ describe("the command-line boundary", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("Unable to calculate that expression.");
   });
+
+  it("runs the built package through npx from the repository root", () => {
+    const repositoryRoot = resolve(process.cwd(), "..");
+    const result = spawnSync(
+      "npx",
+      ["--no-install", "./natural-language-calculator", "add", "four", "and", "nine"],
+      { cwd: repositoryRoot, encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("Result: 13\n");
+    expect(result.stderr).toBe("");
+  });
+
+  it("preserves errors through the npx entrypoint", () => {
+    const repositoryRoot = resolve(process.cwd(), "..");
+    const result = spawnSync(
+      "npx",
+      ["--no-install", "./natural-language-calculator", "divide", "nine", "by", "zero"],
+      { cwd: repositoryRoot, encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Unable to calculate that expression.");
+  });
 });
