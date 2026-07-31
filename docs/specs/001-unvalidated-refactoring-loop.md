@@ -17,26 +17,21 @@ flowchart TD
     Pause --> Start
 ```
 
-## Behaviour
+## Implementation order
 
-Create these files in `factory/`:
+Teach and build this iteration in this order. Complete each small step before moving to the next one:
 
-- `factory/factory.sh`
-- `factory/refactor.md`
+1. **Start the Bash loop.** Create `factory/factory.sh`, change to the `factory/` directory, and add the `while true; do ... done` structure that repeats a factory turn. Leave a temporary placeholder in the loop body while establishing the structure.
+2. **Add the pause and control flow.** Replace the placeholder with a `read -r -p` pause at the end of each turn so the learner must press Enter before the next turn. Ctrl-C stops the shell and therefore the factory.
+3. **Add the Pi invocation.** Before that pause, pipe the refactoring prompt to Pi from `calculator/`. Give Pi only file-inspection and file-editing tools; it must not receive its `bash` tool. Use this exact command:
 
-`refactor.md` tells Pi to inspect the calculator and make one small, behaviour-preserving refactoring. It tells Pi to edit files directly, not run tests, npm, or shell commands, and keep its response concise.
+   ```sh
+   cat refactor.md | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
+   ```
 
-`factory/factory.sh` loops until the learner stops it. It runs Pi from `calculator/`, so Pi works only on the kata. Each iteration:
+4. **Write the worker prompt.** Create `factory/refactor.md`. Tell Pi to inspect the calculator and make one small, behaviour-preserving refactoring. Tell Pi to edit files directly, not run tests, npm, or shell commands, and keep its response concise.
 
-1. Pipes `refactor.md` to Pi.
-2. Gives Pi only file-inspection and file-editing tools; Pi must not receive its `bash` tool.
-3. Pauses until the learner presses Enter; Ctrl-C stops the factory.
-
-Use this exact Pi invocation:
-
-```sh
-cat refactor.md | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
-```
+The completed `factory/factory.sh` loops until the learner stops it: Pi refactors, then Bash pauses for Enter before the next iteration.
 
 ## Advanced: substitute another worker
 

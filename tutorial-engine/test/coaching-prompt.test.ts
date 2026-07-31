@@ -8,11 +8,10 @@ const lesson = {
 };
 
 describe("coachingSystemPrompt", () => {
-  it("guides learner-led work from the change's heart outward", () => {
+  it("guides learner-led work in the current specification's stated order", () => {
     const prompt = coachingSystemPrompt(lesson);
 
-    expect(prompt).toContain("smallest visible behavior");
-    expect(prompt).toContain("heart of the change and work outward");
+    expect(prompt).toContain("implementation order stated by the current specification");
     expect(prompt).toContain("short conceptual outline");
     expect(prompt).toContain("small code snippet");
   });

@@ -65,7 +65,7 @@ This learner selects “Make it for me” whenever the scenario expects delegati
 
 ### Hands-on learner
 
-This learner selects “I’ll do it,” requests exact typing guidance at its declared checkpoint, applies the corresponding canonical patch, and reports completion. The tutor must first give a short conceptual outline, teach from the visible heart of the change outward, keep edits small, and inspect work when asked for feedback.
+This learner selects “I’ll do it,” requests exact typing guidance at its declared checkpoint, applies the corresponding canonical patch, and reports completion. The tutor must first give a short conceptual outline, teach in the active specification’s stated implementation order, keep edits small, and inspect work when asked for feedback.
 
 ### Hands-on learner with a mistake
 
@@ -78,7 +78,7 @@ Start with six lesson-001 sessions:
 | Scenario | Persona action | Required evidence |
 | --- | --- | --- |
 | `agent-led-happy-path` | Always delegates | The tutor offers control before editing and creates only the required factory files. The completed artifact implements the specified loop. |
-| `learner-led-happy-path` | Works through the lesson and asks once for exact typing guidance | The tutor gives an outline, teaches from the heart outward, gives small instructions, and checks reported work. |
+| `learner-led-happy-path` | Works through the lesson and asks once for exact typing guidance | The tutor gives an outline, teaches in the active specification’s stated implementation order, gives small instructions, and checks reported work. For lesson 001, it starts with the Bash loop. |
 | `mistake-missing-tools` | Omits Pi’s `--tools` allowlist | The tutor identifies the lost isolation boundary and gives the smallest repair. |
 | `mistake-wrong-calculator-directory` | Runs Pi outside `calculator/` | The tutor identifies the scope error and explains why the worker must be limited to the kata. |
 | `mistake-invalid-prompt-boundary` | Allows the worker to run tests or shell commands in `refactor.md` | The tutor identifies the lack of independent validation rather than only correcting wording. |
@@ -109,7 +109,7 @@ The gate checks only observable facts:
 - snapshots prove the injected defect existed when feedback was sent and was repaired only after the correction checkpoint; and
 - artifact and stubbed-runtime checks prove the required files, exact Pi invocation, tool allowlist, calculator working directory, loop, pause, and—where applicable—test-failure routing.
 
-Assertions about whether a diagram was understandable, a defect was explained, or guidance was helpful belong to the judge.
+Assertions about whether a diagram was understandable, a defect was explained, or guidance followed the active specification’s implementation order belong to the judge.
 
 ### LLM judge
 
@@ -120,7 +120,7 @@ Each applicable dimension receives 0–2 with these anchors:
 | Dimension | 0 | 1 | 2 |
 | --- | --- | --- | --- |
 | Persona respect and agency | Takes control or ignores the chosen path | Mostly respects the path but overreaches or leaves control unclear | Honors each choice and preserves the learner’s role |
-| Accuracy against the lesson | Contradicts or misses a material requirement | Correct but incomplete or imprecise | Correctly connects the step to the active lesson’s key constraint |
+| Accuracy against the lesson | Contradicts or misses a material requirement | Correct but incomplete or imprecise | Follows the active specification’s implementation order and correctly connects the step to the lesson’s key constraint |
 | Step size and clarity | Vague or overwhelms with a finished solution | Actionable but broader than needed or weakly explained | Gives the smallest actionable step and explains its purpose |
 | Mistake diagnosis (mistake scenarios only) | Misses or misidentifies the defect | Names the defect without its consequence | Identifies the defect, its consequence, and why the correction matters |
 | Correction or completion guidance | No usable next step | Usable but unnecessarily broad | Gives the smallest useful next action consistent with the learner’s choice |
