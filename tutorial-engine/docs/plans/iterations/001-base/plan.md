@@ -15,7 +15,7 @@ tutorial-engine/                         # publishable npm package
   docs/plans/iterations/001-base/
   package.json
 katas/
-  natural-language-calculator/           # independent TypeScript kata and lesson
+  calculator/                           # independent TypeScript kata and lesson
     src/
     test/
     tutorial.ts

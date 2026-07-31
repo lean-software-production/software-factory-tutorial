@@ -1,13 +1,13 @@
 # Software factory tutorial 🏭
 
 This is a tutorial about building a small software factory. The purpose of the factory is to 
-refactor the [natural language calculator](./natural-language-calculator) in this codebase, which has become difficult to maintain.
+refactor the [natural language calculator](./calculator) in this codebase, which has become difficult to maintain.
 
 ## About the calculator
 
 The codebase is a "natural language calculator" written in Typescript. Fortunately it has a reasonably comprehensive set of automated tests for its behaviour. Unfortunately the code is a mess.
 
-See the calculator's [README](./natural-language-calculator/README.md) for more details.
+See the calculator's [README](./calculator/README.md) for more details.
 
 ## Your goal
 

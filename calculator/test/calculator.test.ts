@@ -74,7 +74,7 @@ describe("the command-line boundary", () => {
     const repositoryRoot = resolve(process.cwd(), "..");
     const result = spawnSync(
       "npx",
-      ["--no-install", "./natural-language-calculator", "add", "four", "and", "nine"],
+      ["--no-install", "./calculator", "add", "four", "and", "nine"],
       { cwd: repositoryRoot, encoding: "utf8" },
     );
 
@@ -87,7 +87,7 @@ describe("the command-line boundary", () => {
     const repositoryRoot = resolve(process.cwd(), "..");
     const result = spawnSync(
       "npx",
-      ["--no-install", "./natural-language-calculator", "divide", "nine", "by", "zero"],
+      ["--no-install", "./calculator", "divide", "nine", "by", "zero"],
       { cwd: repositoryRoot, encoding: "utf8" },
     );
 

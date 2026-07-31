@@ -5,7 +5,7 @@
 Run the calculator from the repository root without publishing or installing it globally:
 
 ```sh
-npx ./natural-language-calculator "add four and nine"
+npx ./calculator "add four and nine"
 ```
 
 The equivalent command inside the calculator directory is `npx . "add four and nine"`.

@@ -7,14 +7,14 @@ The calculator evaluates a deliberately small spoken-expression language. The st
 You can try the calculator from the repository root. Install its dependencies and build it once, then use its local npm entrypoint:
 
 ```sh
-npm install --prefix natural-language-calculator
-npm run build --prefix natural-language-calculator
-npx ./natural-language-calculator "add four and nine"
+npm install --prefix calculator
+npm run build --prefix calculator
+npx ./calculator "add four and nine"
 
 Result: 13
 ```
 
-From inside `natural-language-calculator`, the equivalent command is:
+From inside `calculator`, the equivalent command is:
 
 ```sh
 npx . "add four and nine"
@@ -33,7 +33,7 @@ divide ( multiply twelve by three ) by six
 To run the tests for the calculator:
 
 ```sh
-cd natural-language-calculator
+cd calculator
 npm install
 npm test
 ```
