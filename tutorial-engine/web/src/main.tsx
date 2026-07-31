@@ -1,11 +1,13 @@
 import { StrictMode, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import mermaid from "mermaid";
-import { Markdown } from "./markdown.js";
+import { ChoiceIcon } from "./choice-icon.js";
+import { FileExcerptCodeBlock, Markdown } from "./markdown.js";
+import type { ChoiceIconCategory } from "../../src/protocol/events.js";
 import "./styles.css";
 
 type RunState = "idle" | "working" | "awaiting-choice" | "failed";
-type Option = { id: string; label: string; description?: string };
+type Option = { id: string; label: string; icon: ChoiceIconCategory; description?: string };
 type Presentation =
   | { kind: "markdown"; title: string; markdown: string }
   | { kind: "diagram"; title: string; mermaid: string; text: string };
@@ -67,7 +69,7 @@ function TranscriptEvent({ event, send }: { event: Event; send: (message: unknow
     case "assistant-delta": case "assistant-message": return <Card className="assistant"><Markdown>{event.type === "assistant-delta" ? event.delta : event.markdown}</Markdown></Card>;
     case "user-message": return <Card className="user"><Markdown>{event.markdown}</Markdown></Card>;
     case "presentation": return <Card title={event.presentation.title} className="presentation">{event.presentation.kind === "markdown" ? <Markdown>{event.presentation.markdown}</Markdown> : <MermaidCard source={event.presentation.mermaid} text={event.presentation.text} />}</Card>;
-    case "file-excerpt": return <Card title={event.title} className="excerpt"><p className="path">{event.path}:{event.startLine}</p><pre>{event.content}</pre>{event.truncated && <p className="muted">Excerpt only</p>}</Card>;
+    case "file-excerpt": return <Card title={event.title} className="excerpt"><p className="path">{event.path}:{event.startLine}</p><FileExcerptCodeBlock path={event.path} source={event.content} />{event.truncated && <p className="muted">Excerpt only</p>}</Card>;
     case "validation": return <Card title={`${event.passed ? "Passed" : "Failed"}: ${event.label}`} className={event.passed ? "validation pass" : "validation fail"}><p className="path">$ {event.command} · {event.durationMs}ms</p><pre>{event.output || "(no output)"}</pre></Card>;
     case "choice": return <ChoiceCard event={event} send={send} />;
     case "tool-start": case "tool-progress": case "tool-complete": return null;
@@ -78,7 +80,7 @@ function TranscriptEvent({ event, send }: { event: Event; send: (message: unknow
 
 function ChoiceCard({ event, send }: { event: Extract<Event, { type: "choice" }>; send: (message: unknown) => void }) {
   const [chosen, setChosen] = useState<string>();
-  return <Card title="Your choice" className="choice"><p>{event.question}</p><div className="options">{event.options.map((option) => <button key={option.id} disabled={Boolean(chosen)} onClick={() => { setChosen(option.id); send({ type: "choose", choiceId: event.id, optionId: option.id }); }}><strong>{option.label}</strong>{option.description && <span>{option.description}</span>}</button>)}</div></Card>;
+  return <Card title="Your choice" className="choice"><p>{event.question}</p><div className="options">{event.options.map((option) => <button key={option.id} disabled={Boolean(chosen)} onClick={() => { setChosen(option.id); send({ type: "choose", choiceId: event.id, optionId: option.id }); }}><span className="choice-option-label"><ChoiceIcon category={option.icon} /><strong>{option.label}</strong></span>{option.description && <span className="choice-option-description">{option.description}</span>}</button>)}</div></Card>;
 }
 
 function App() {

@@ -33,10 +33,12 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.83.0",
     "@vitejs/plugin-react": "^5.1.4",
+    "highlight.js": "^11.11.1",
     "mermaid": "^11.12.2",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
     "typebox": "^1.1.0",
     "vite": "^7.3.1"

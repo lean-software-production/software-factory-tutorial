@@ -23,5 +23,11 @@ describe("coachingSystemPrompt", () => {
     expect(prompt).toContain("I’ve made this step");
     expect(prompt).toContain("Show me exactly what to type");
     expect(prompt).toContain("Make this step for me");
+    expect(prompt).toContain("Every offer_choices option must supply an icon category.");
+    expect(prompt).toContain("“I’ll do it”=do");
+    expect(prompt).toContain("“Make it for me”=automate");
+    expect(prompt).toContain("“I’ve made this step”=confirm");
+    expect(prompt).toContain("“Show me exactly what to type”=show");
+    expect(prompt).toContain("Use pause for a stop or pause choice.");
   });
 });

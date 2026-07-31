@@ -3,9 +3,13 @@ import type { ProgressItem } from "../lesson/load.js";
 
 export type RunState = "idle" | "working" | "awaiting-choice" | "failed";
 
+export const choiceIconCategories = ["do", "show", "confirm", "automate", "pause"] as const;
+export type ChoiceIconCategory = (typeof choiceIconCategories)[number];
+
 export interface ChoiceOption {
   id: string;
   label: string;
+  icon: ChoiceIconCategory;
   description?: string;
 }
 

@@ -12,9 +12,16 @@ const text = (value: string, max: number, field: string): string => {
   return value;
 };
 
-const choiceOptionSchema = Type.Object({
+export const choiceOptionSchema = Type.Object({
   id: Type.String({ minLength: 1, maxLength: 80 }),
   label: Type.String({ minLength: 1, maxLength: 160 }),
+  icon: Type.Union([
+    Type.Literal("do"),
+    Type.Literal("show"),
+    Type.Literal("confirm"),
+    Type.Literal("automate"),
+    Type.Literal("pause")
+  ]),
   description: Type.Optional(Type.String({ maxLength: 500 }))
 });
 
