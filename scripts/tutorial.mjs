@@ -1,19 +1,26 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
+import { resolve } from "node:path";
 import { stderr } from "node:process";
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
-import { npmCommand, runWithTutorialEnvironment } from "./run-command.mjs";
+
+const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 
 export function tutorialArguments(argumentsForEngine) {
   return ["run", "--workspace=tutorial-engine", "dev", "--", ".", ...argumentsForEngine];
 }
 
 async function main() {
-  const exitCode = await runWithTutorialEnvironment(npmCommand, tutorialArguments(process.argv.slice(2))).catch((error) => {
-    stderr.write(`Unable to start the tutorial: ${error instanceof Error ? error.message : String(error)}\n`);
-    return 1;
+  const child = spawn(npmCommand, tutorialArguments(process.argv.slice(2)), {
+    cwd: repositoryRoot,
+    stdio: "inherit"
   });
-  process.exitCode = exitCode;
+  child.once("error", (error) => {
+    stderr.write(`Unable to start the tutorial: ${error.message}\n`);
+    process.exitCode = 1;
+  });
+  child.once("exit", (code, signal) => { process.exitCode = signal ? 1 : code ?? 1; });
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
+if (import.meta.main) await main();

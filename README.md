@@ -17,7 +17,7 @@ The factory will be implemented as a bash `while` loop that shells out to `pi -p
 
 ## Setup
 
-You need Node.js 22.19 or later, npm, an OpenCode API key, and a browser. Use Vim or any other editor; Docker and VS Code are not required.
+You need Node.js 22.19 or later, npm, a browser, and an authenticated Pi. Use Vim or any other editor; Docker and VS Code are not required.
 
 From the repository root:
 
@@ -26,7 +26,7 @@ npm install
 npm run setup
 ```
 
-`npm run setup` prompts for your `OPENCODE_API_KEY` and saves it in the ignored, owner-only `.local/secrets.envrc` file. It never runs during `npm install`. In CI or another non-interactive environment, export `OPENCODE_API_KEY` instead.
+`npm run setup` checks that Pi has an authenticated model for the web tutor. If it reports that Pi needs authentication, run `npx pi`, enter `/login`, and choose a provider. Pi keeps those credentials in its user-level configuration; this repository does not store them.
 
 ## Start the tutorial
 
@@ -40,7 +40,7 @@ The command opens the local tutor in your browser. Leave it running. In another 
 cd factory
 ```
 
-Edit files there by hand, then use the tutor for the next step or feedback. Once you have created `factory.sh`, run it directly.
+Edit files there by hand, then use the tutor for the next step or feedback. Once you have created `factory.sh`, run it directly. The lessons use Pi as the default factory worker. Advanced users may substitute another CLI harness when it preserves the worker requirements described in each lesson.
 
 
 ## Inspiration

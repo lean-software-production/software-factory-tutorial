@@ -38,6 +38,10 @@ Use this exact Pi invocation:
 cat refactor.md | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
 ```
 
+## Advanced: substitute another worker
+
+Pi is the blessed default worker. Advanced users may replace the Pi subshell with another CLI harness, but it must receive the prompt on standard input, run from `calculator/`, edit the kata files, and leave validation to Bash. Its authentication, sandboxing, and tool restrictions are your responsibility; do not assume another harness supports Pi's flags or restrictions.
+
 ## Checks
 
 From the repository root:
