@@ -43,10 +43,6 @@ cd factory
 Edit files there by hand, then use the tutor for the next step or feedback. Once you have created `factory.sh`, run it directly.
 
 
-## Iterations
-
-The ledger is in [`docs/specs/README.md`](docs/specs/README.md). The first row marked `Todo` is the current lesson. Each iteration adds only the capability needed to relieve the pressure exposed by the last one.
-
 ## Inspiration
 
 This independent TypeScript kata was inspired by Chelsea Troy's natural-language calculator exercise. See [`ATTRIBUTION.md`](ATTRIBUTION.md).
