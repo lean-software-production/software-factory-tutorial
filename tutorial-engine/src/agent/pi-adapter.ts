@@ -22,17 +22,11 @@ const TOOL_NAMES = [
 function coachingSystemPrompt(lesson: LessonDefinition): string {
   return `You are a patient tutorial tutor for "${lesson.title}". The learner is building a software factory; the kata is its raw material.
 
-At the beginning, read README.md, then docs/specs/README.md, then the first specification whose ledger status is Todo. Orient the learner around the whole exercise before discussing implementation. Read no calculator source until the current spec requires it. If that spec contains a Mermaid diagram, reproduce it with present_diagram and its text fallback.
+At the beginning, silently read README.md, then docs/specs/README.md, then the first specification whose ledger status is Todo. The ledger and specifications are your routing information, not the learner's lesson: do not mention the ledger, Todo, iteration numbers, or those file paths unless the learner asks. Orient the learner in plain language from the README before discussing implementation. Read no calculator source until the current spec requires it. If that spec contains a Mermaid diagram, reproduce it with present_diagram and its text fallback.
 
 Teach only the current iteration, one small step at a time. Explain what the step achieves and exactly which file the learner should change. Quote command lines from the current spec exactly; never invent Pi CLI flags. Use offer_choices for every step: one option for the learner to make the change and one for you to make it. If the learner says they are done or asks for feedback, read the relevant file and compare it to the current spec. If they say it is not working, inspect the relevant files and evidence before offering a correction. Do not make changes unless the learner explicitly chooses that option.
 
-Do not act as the factory worker. Do not refactor the calculator on startup. Do not run tests, shell commands, or validation commands; the factory built in the current spec owns validation. Keep the transcript calm: use present_markdown for teaching, present_diagram for flows, and show_file_excerpt only for small relevant excerpts. Do not expose secrets or read outside the workspace.
-
-Lesson rules:
-${(lesson.rules ?? []).map((rule) => `- ${rule}`).join("\n") || "- Follow the current specification exactly."}
-
-Kata coaching prompt:
-${lesson.coachingPrompt}`;
+Do not act as the factory worker. Do not refactor the calculator on startup. Do not run tests, shell commands, or validation commands; the factory built in the current spec owns validation. Keep the transcript calm: use present_markdown for teaching, present_diagram for flows, and show_file_excerpt only for small relevant excerpts. Do not expose secrets or read outside the workspace.`;
 }
 
 export class PiTutorialAdapter {
@@ -90,11 +84,7 @@ export class PiTutorialAdapter {
   get state(): RunState { return this.#state; }
 
   async begin(): Promise<void> {
-    for (const presentation of this.lesson.initialContent ?? []) this.#bus.publish({ type: "presentation", presentation });
-    if (this.lesson.allowedActions?.length) {
-      this.#bus.publish({ type: "presentation", presentation: { kind: "markdown", title: "Available actions", markdown: this.lesson.allowedActions.map((action) => `- ${action}`).join("\n") } });
-    }
-    await this.chat("Begin the tutorial. Read the exercise orientation and current iteration spec, present the iteration flow, then offer exactly one first-step choice.", "steer", false);
+    await this.chat("Begin the tutorial. Silently identify the current lesson. Welcome the learner in plain language, present its flow, then offer exactly one first-step choice.", "steer", false);
   }
 
   async chat(text: string, delivery: "steer" | "followUp" = "steer", showInTranscript = true): Promise<void> {

@@ -1,50 +1,29 @@
 # Tutorial engine
 
-A local, browser-led refactoring tutorial runner. It embeds `@earendil-works/pi-coding-agent` directly as a TypeScript SDK; it does not start Pi's CLI or RPC mode.
+A local, browser-led tutorial runner. It embeds `@earendil-works/pi-coding-agent` directly as a TypeScript SDK; it does not start Pi’s CLI or RPC mode.
 
-## Run a lesson
+## Run a tutorial
+
+Point the engine at a tutorial directory:
 
 ```sh
 cd tutorial-engine
 npm install
-npm run build
-npm start -- ../katas/my-kata
+npm run dev -- ..
 ```
 
-For local source development, build the web client and start the TypeScript server in one command:
+Add `--no-open` to suppress browser launch, or `--port 4310` to choose a port. The server binds only to `127.0.0.1`. Pi credentials remain in the server process; the browser has no filesystem or provider-credential access.
 
-```sh
-npm run dev -- ../katas/my-kata
-```
+## Tutorial convention
 
-Add `--no-open` to suppress browser launch, or `--port 4310` to select a port. The server binds only to `127.0.0.1` and prints its URL.
+A tutorial needs no engine configuration file. The engine infers it from the directory:
 
-Pi credentials remain in the server process and continue to use the local Pi SDK configuration. The browser has no filesystem or provider credential access.
+- the first `#` heading in `README.md` is the title and the README is the whole-exercise orientation;
+- `docs/specs/README.md` is the iteration ledger;
+- the first `Todo` row is the current iteration;
+- the linked spec tells the tutor what to teach.
 
-## Lesson contract
-
-A kata exports `tutorial.ts` (a default export is recommended):
-
-```ts
-import type { LessonDefinition } from "@lean-software-production/tutorial-engine";
-
-const lesson: LessonDefinition = {
-  title: "Small safe refactor",
-  workspace: ".",
-  validationCommands: [
-    { id: "test", label: "Run tests", command: "npm", args: ["test"] }
-  ],
-  coachingPrompt: "Teach one safe validation loop at a time.",
-  rules: ["Preserve behaviour."],
-  initialContent: [
-    { kind: "markdown", title: "Orientation", markdown: "Start with a green baseline." }
-  ]
-};
-
-export default lesson;
-```
-
-Validation commands are executable/argument pairs, never shell strings. Only listed command IDs can run. The tutorial agent receives a narrow tool allowlist: file inspection/editing inside the kata, structured presentation tools, and the allowlisted validation tool. It has no Bash tool.
+The tutor reads those files, guides one small step at a time, and offers to let the learner make a change or make it for them.
 
 ## Commands
 

@@ -6,7 +6,7 @@ import { loadLesson } from "./lesson/load.js";
 import { startLocalServer } from "./server/local-server.js";
 
 function usage(): never {
-  console.error("Usage: tutorial-engine <kata-directory|tutorial.ts> [--port 4310] [--no-open]");
+  console.error("Usage: tutorial-engine <tutorial-directory> [--port 4310] [--no-open]");
   process.exit(1);
 }
 

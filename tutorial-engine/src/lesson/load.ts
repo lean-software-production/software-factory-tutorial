@@ -1,16 +1,18 @@
-import { access, readFile, realpath } from "node:fs/promises";
-import { dirname, isAbsolute, resolve } from "node:path";
-import { createJiti } from "jiti";
-import { isLessonDefinition, type LessonDefinition } from "./contract.js";
+import { readFile, realpath } from "node:fs/promises";
+import { basename, resolve } from "node:path";
+import type { LessonDefinition } from "./contract.js";
 
 export type ProgressState = "done" | "current" | "upcoming";
 export interface ProgressItem { id: string; label: string; state: ProgressState; }
 
 export interface LoadedLesson {
   definition: LessonDefinition;
-  lessonFile: string;
   workspace: string;
   progress: ProgressItem[];
+}
+
+function titleFrom(readme: string, workspace: string): string {
+  return readme.match(/^#\s+(.+)$/m)?.[1]?.trim() || basename(workspace);
 }
 
 function readProgress(ledger: string): ProgressItem[] {
@@ -38,27 +40,15 @@ function readProgress(ledger: string): ProgressItem[] {
   ];
 }
 
-/** Load a kata's tutorial.ts without making the engine depend on its build setup. */
-export async function loadLesson(pathOrDirectory: string): Promise<LoadedLesson> {
-  const candidate = resolve(pathOrDirectory);
-  const lessonFile = candidate.endsWith(".ts") || candidate.endsWith(".js")
-    ? candidate
-    : resolve(candidate, "tutorial.ts");
-  await access(lessonFile);
-
-  const jiti = createJiti(import.meta.url, { interopDefault: true });
-  const module = await jiti.import<Record<string, unknown>>(lessonFile);
-  const definition = module.default ?? module.lesson ?? module;
-  if (!isLessonDefinition(definition)) {
-    throw new Error(`${lessonFile} does not export a valid LessonDefinition (default export is recommended).`);
-  }
-
-  const lessonDirectory = dirname(lessonFile);
-  const configuredWorkspace = isAbsolute(definition.workspace)
-    ? definition.workspace
-    : resolve(lessonDirectory, definition.workspace);
-  const workspace = await realpath(configuredWorkspace);
-  const specsDirectory = resolve(workspace, definition.specsDirectory ?? "docs/specs");
-  const progress = readProgress(await readFile(resolve(specsDirectory, "README.md"), "utf8"));
-  return { definition: { ...definition, workspace }, lessonFile, workspace, progress };
+/** Infer one tutorial from its README and iteration ledger. */
+export async function loadLesson(directory: string): Promise<LoadedLesson> {
+  const workspace = await realpath(resolve(directory));
+  const readme = await readFile(resolve(workspace, "README.md"), "utf8");
+  const ledger = await readFile(resolve(workspace, "docs/specs/README.md"), "utf8");
+  const definition: LessonDefinition = {
+    title: titleFrom(readme, workspace),
+    workspace,
+    validationCommands: [],
+  };
+  return { definition, workspace, progress: readProgress(ledger) };
 }

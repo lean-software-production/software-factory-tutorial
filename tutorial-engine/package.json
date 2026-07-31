@@ -33,7 +33,6 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.83.0",
     "@vitejs/plugin-react": "^5.1.4",
-    "jiti": "^2.7.0",
     "mermaid": "^11.12.2",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
