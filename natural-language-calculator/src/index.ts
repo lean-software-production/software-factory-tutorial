@@ -1,5 +1,21 @@
 type Output = (line: string) => void;
 
+const NUMBER_WORDS: Record<string, number> = {
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+};
+
 /**
  * Evaluate the kata's tiny spoken-expression language.
  *
@@ -35,20 +51,8 @@ export function evaluateSpokenExpression(source: string): number {
 
     if (/^\d+$/.test(word)) return Number(word);
 
-    // The intentionally repetitive vocabulary is another refactoring target.
-    if (word === "zero") return 0;
-    if (word === "one") return 1;
-    if (word === "two") return 2;
-    if (word === "three") return 3;
-    if (word === "four") return 4;
-    if (word === "five") return 5;
-    if (word === "six") return 6;
-    if (word === "seven") return 7;
-    if (word === "eight") return 8;
-    if (word === "nine") return 9;
-    if (word === "ten") return 10;
-    if (word === "eleven") return 11;
-    if (word === "twelve") return 12;
+    const numberWord = NUMBER_WORDS[word];
+    if (numberWord !== undefined) return numberWord;
 
     // Operators are prefix forms. Each branch repeats the same parser work on
     // purpose, leaving several safe seams for the refactoring lesson.

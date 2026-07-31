@@ -2,4 +2,6 @@
 **/dist/
 **/.subagents/
 *.log
-katas/*/test-failure.log
+*.swp
+factory/test-failure.log
+.local/

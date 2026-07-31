@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { loadLesson } from "../src/lesson/load.js";
 
 const fixture = fileURLToPath(new URL("./fixtures/sample-lesson", import.meta.url));
-const calculatorKata = fileURLToPath(new URL("../../katas/natural-language-calculator", import.meta.url));
+const tutorial = fileURLToPath(new URL("../../tutorial.ts", import.meta.url));
 
 describe("loadLesson", () => {
   it("loads a TypeScript default export and resolves its workspace", async () => {
@@ -17,8 +17,8 @@ describe("loadLesson", () => {
     ]);
   });
 
-  it("loads the bundled natural-language calculator lesson and its current iteration", async () => {
-    const loaded = await loadLesson(calculatorKata);
+  it("loads the repository tutorial and its current iteration", async () => {
+    const loaded = await loadLesson(tutorial);
     expect(loaded.definition.validationCommands).toEqual([]);
     expect(loaded.progress.at(-1)).toMatchObject({ id: "001", state: "current" });
   });

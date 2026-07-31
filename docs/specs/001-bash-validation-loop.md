@@ -2,7 +2,7 @@
 
 ## Goal
 
-Build the smallest useful software factory. On each iteration, Pi makes one small refactoring to the calculator. Bash runs the tests independently, shows the result, and waits for the learner.
+Build the smallest useful software factory. On each iteration, Pi makes one small refactoring to `natural-language-calculator/`. Bash runs the tests independently, shows the result, and waits for the learner.
 
 The learner should be able to read the entire factory in under a minute.
 
@@ -28,15 +28,15 @@ flowchart TD
 
 ## Behaviour
 
-Create these files at the kata root:
+Create these files in `factory/`:
 
-- `factory.sh`
-- `work.md`
-- `heal.md`
+- `factory/factory.sh`
+- `factory/work.md`
+- `factory/heal.md`
 
 `work.md` tells Pi to inspect the current code and make one small, behaviour-preserving refactoring. `heal.md` tells Pi to inspect the supplied test-failure evidence and make the smallest correction it can infer. Both prompts tell Pi to edit files directly, not run tests or shell commands, and keep their response concise.
 
-`factory.sh` loops until the learner stops it. Each iteration:
+`factory/factory.sh` loops until the learner stops it. It runs Pi from `natural-language-calculator/`, so Pi edits only the calculator. Each iteration:
 
 1. Checks for `test-failure.log`.
 2. If it is absent, pipes `work.md` to Pi. If it is present, pipes `heal.md` and `test-failure.log` to Pi.
@@ -51,17 +51,17 @@ The worker cannot run the tests. Bash alone chooses `work.md` or `heal.md`, base
 Use this exact Pi invocation in each branch; the option is `--tools` (plural):
 
 ```sh
-cat work.md | pi --no-session --tools read,edit,write,grep,find,ls -p
+cat work.md | (cd ../natural-language-calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
 ```
 
 In the failure branch, replace `cat work.md` with `cat heal.md test-failure.log`.
 
 ## Checks
 
-From the kata directory:
+From the repository root:
 
 ```sh
-./factory.sh
+./factory/factory.sh
 ```
 
 Verify manually that:
