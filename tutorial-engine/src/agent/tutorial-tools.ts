@@ -57,7 +57,7 @@ export function createTutorialTools(deps: TutorialToolDependencies): ToolDefinit
   const offerChoices = defineTool({
     name: "offer_choices",
     label: "Offer choices",
-    description: "Ask one fixed, short choice question. Use this whenever deciding whether the learner or you should make the next change. Waits for a browser selection.",
+    description: "Ask one fixed, short choice question that gives the learner control over the next tutorial step. Use it before making a change and after each guided step. Waits for a browser selection.",
     executionMode: "sequential",
     parameters: Type.Object({
       question: Type.String({ minLength: 1, maxLength: 1_000 }),
