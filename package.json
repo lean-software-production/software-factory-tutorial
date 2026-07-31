@@ -15,7 +15,9 @@
     "setup": "node scripts/setup.mjs",
     "tutorial": "node scripts/tutorial.mjs",
     "test:onboarding": "node --test test/onboarding.test.mjs",
-    "check": "npm run test:onboarding && npm run --workspace=tutorial-engine check && npm run --workspace=calculator test"
+    "test:eval": "vitest run evals/test --root .",
+    "eval": "npm run --workspace=tutorial-engine build && tsx evals/run.ts",
+    "check": "npm run test:onboarding && npm run test:eval && npm run --workspace=tutorial-engine check && npm run --workspace=calculator test"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.83.0"

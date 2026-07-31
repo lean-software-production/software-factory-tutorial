@@ -3,31 +3,12 @@ import { createRoot } from "react-dom/client";
 import mermaid from "mermaid";
 import { ChoiceIcon } from "./choice-icon.js";
 import { FileExcerptCodeBlock, Markdown } from "./markdown.js";
-import type { ChoiceIconCategory } from "../../src/protocol/events.js";
+import { parseTutorialEvent, serializeBrowserMessage, type BrowserMessage, type RunState, type TutorialEvent } from "../../src/protocol/events.js";
+import type { ProgressItem } from "../../src/lesson/load.js";
 import "./styles.css";
 
-type RunState = "idle" | "working" | "awaiting-choice" | "failed";
-type Option = { id: string; label: string; icon: ChoiceIconCategory; description?: string };
-type Presentation =
-  | { kind: "markdown"; title: string; markdown: string }
-  | { kind: "diagram"; title: string; mermaid: string; text: string };
-type Event =
-  | { type: "run-state"; state: RunState }
-  | { type: "assistant-delta"; messageId: string; delta: string }
-  | { type: "assistant-message"; messageId: string; markdown: string }
-  | { type: "user-message"; markdown: string }
-  | { type: "tool-start"; tool: { id: string; name: string; label: string } }
-  | { type: "tool-progress"; toolId: string; text: string }
-  | { type: "tool-complete"; toolId: string; summary: string }
-  | { type: "tool-error"; toolId?: string; message: string; retryable: boolean }
-  | { type: "validation"; id: string; label: string; command: string; output: string; exitCode: number | null; passed: boolean; durationMs: number }
-  | { type: "presentation"; presentation: Presentation }
-  | { type: "file-excerpt"; title: string; path: string; startLine: number; content: string; truncated: boolean }
-  | { type: "choice"; id: string; question: string; options: Option[] }
-  | { type: "choice-resolved"; id: string; optionId: string }
-  | { type: "error"; message: string; retryable: boolean };
-type ProgressItem = { id: string; label: string; state: "done" | "current" | "upcoming" };
-type Snapshot = { type: "snapshot"; title: string; runState: RunState; events: Event[]; validationCommands: Array<{ id: string; label: string }>; progress: ProgressItem[] };
+type Event = Exclude<TutorialEvent, { type: "snapshot" }>;
+type Snapshot = Extract<TutorialEvent, { type: "snapshot" }>;
 type WireEvent = Event | Snapshot;
 
 function applyEvent(events: Event[], incoming: Event): Event[] {
@@ -64,7 +45,7 @@ function Card({ children, title, className = "" }: { children: ReactNode; title?
   return <article className={`card ${className}`}>{title && <h2>{title}</h2>}{children}</article>;
 }
 
-function TranscriptEvent({ event, send }: { event: Event; send: (message: unknown) => void }) {
+function TranscriptEvent({ event, send }: { event: Event; send: (message: BrowserMessage) => void }) {
   switch (event.type) {
     case "assistant-delta": case "assistant-message": return <Card className="assistant"><Markdown>{event.type === "assistant-delta" ? event.delta : event.markdown}</Markdown></Card>;
     case "user-message": return <Card className="user"><Markdown>{event.markdown}</Markdown></Card>;
@@ -74,11 +55,11 @@ function TranscriptEvent({ event, send }: { event: Event; send: (message: unknow
     case "choice": return <ChoiceCard event={event} send={send} />;
     case "tool-start": case "tool-progress": case "tool-complete": return null;
     case "tool-error": case "error": return <Card title="Something needs attention" className="error"><p>{event.message}</p>{event.retryable && <p className="muted">You can retry or tell the coach what happened.</p>}</Card>;
-    case "choice-resolved": case "run-state": return null;
+    case "choice-resolved": case "run-state": case "audit": return null;
   }
 }
 
-function ChoiceCard({ event, send }: { event: Extract<Event, { type: "choice" }>; send: (message: unknown) => void }) {
+function ChoiceCard({ event, send }: { event: Extract<Event, { type: "choice" }>; send: (message: BrowserMessage) => void }) {
   const [chosen, setChosen] = useState<string>();
   return <Card title="Your choice" className="choice"><p>{event.question}</p><div className="options">{event.options.map((option) => <button key={option.id} disabled={Boolean(chosen)} onClick={() => { setChosen(option.id); send({ type: "choose", choiceId: event.id, optionId: option.id }); }}><span className="choice-option-label"><ChoiceIcon category={option.icon} /><strong>{option.label}</strong></span>{option.description && <span className="choice-option-description">{option.description}</span>}</button>)}</div></Card>;
 }
@@ -90,11 +71,11 @@ function App() {
   const [validationCommands, setValidationCommands] = useState<Array<{ id: string; label: string }>>([]);
   const [progress, setProgress] = useState<ProgressItem[]>([]);
   const [text, setText] = useState("");
-  const send = (message: unknown) => { void fetch("/api/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(message) }); };
+  const send = (message: BrowserMessage) => { void fetch("/api/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: serializeBrowserMessage(message) }); };
   useEffect(() => {
     const source = new EventSource("/api/events");
     source.onmessage = ({ data }) => {
-      const event = JSON.parse(data) as WireEvent;
+      const event = parseTutorialEvent(data) as WireEvent;
       if (event.type === "snapshot") { setTitle(event.title); setState(event.runState); setEvents(event.events); setValidationCommands(event.validationCommands); setProgress(event.progress); return; }
       if (event.type === "run-state") setState(event.state);
       setEvents((current) => applyEvent(current, event));

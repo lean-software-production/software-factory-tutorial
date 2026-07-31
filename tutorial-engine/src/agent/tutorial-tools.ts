@@ -1,11 +1,11 @@
-import { realpath, readFile } from "node:fs/promises";
-import { relative, resolve, sep } from "node:path";
+import { readFile } from "node:fs/promises";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { LessonDefinition } from "../lesson/contract.js";
 import type { ChoiceOption, TutorialEvent } from "../protocol/events.js";
 import type { ValidationRunner } from "../validation/runner.js";
 import { ChoiceManager } from "./choice-manager.js";
+import { WorkspaceBoundary } from "./workspace-boundary.js";
 
 const text = (value: string, max: number, field: string): string => {
   if (!value.trim() || value.length > max) throw new Error(`${field} must be between 1 and ${max} characters.`);
@@ -30,6 +30,7 @@ export interface TutorialToolDependencies {
   workspace: string;
   choices: ChoiceManager;
   validation: ValidationRunner;
+  boundary: WorkspaceBoundary;
   emit(event: TutorialEvent): void;
   setRunState(state: "working" | "awaiting-choice"): void;
 }
@@ -115,16 +116,20 @@ export function createTutorialTools(deps: TutorialToolDependencies): ToolDefinit
     }),
     async execute(_id, params) {
       if (params.endLine < params.startLine || params.endLine - params.startLine > 200) throw new Error("Excerpt must contain at most 201 lines.");
-      const candidate = resolve(deps.workspace, params.path);
-      const realWorkspace = await realpath(deps.workspace);
-      const realFile = await realpath(candidate);
-      const outsideWorkspace = relative(realWorkspace, realFile).startsWith(".." + sep) || relative(realWorkspace, realFile) === "..";
-      if (outsideWorkspace) throw new Error("Requested file is outside the kata workspace.");
-      const lines = (await readFile(realFile, "utf8")).split(/\r?\n/);
-      const selected = lines.slice(params.startLine - 1, params.endLine);
-      const content = selected.join("\n");
-      deps.emit({ type: "file-excerpt", title: text(params.title, 160, "title"), path: params.path, startLine: params.startLine, content, truncated: params.endLine < lines.length });
-      return { content: [{ type: "text", text: `Displayed ${params.path}:${params.startLine}-${params.endLine}` }], details: { path: params.path, startLine: params.startLine, endLine: params.endLine } };
+      let auditPath = params.path.replaceAll("\\", "/");
+      try {
+        const safePath = await deps.boundary.resolve(params.path);
+        auditPath = safePath.relative;
+        const lines = (await readFile(safePath.absolute, "utf8")).split(/\r?\n/);
+        const selected = lines.slice(params.startLine - 1, params.endLine);
+        const content = selected.join("\n");
+        deps.emit({ type: "audit", id: _id, tool: "show_file_excerpt", paths: [auditPath], mutation: false, outcome: "ok" });
+        deps.emit({ type: "file-excerpt", title: text(params.title, 160, "title"), path: auditPath, startLine: params.startLine, content, truncated: params.endLine < lines.length });
+        return { content: [{ type: "text", text: `Displayed ${auditPath}:${params.startLine}-${params.endLine}` }], details: { path: auditPath, startLine: params.startLine, endLine: params.endLine } };
+      } catch (error) {
+        deps.emit({ type: "audit", id: _id, tool: "show_file_excerpt", paths: [auditPath], mutation: false, outcome: "rejected", message: error instanceof Error ? error.message : "Workspace path rejected." });
+        throw error;
+      }
     }
   });
 

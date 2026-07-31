@@ -6,3 +6,4 @@
 factory/*
 !factory/.gitkeep
 .local/
+evals/reports/

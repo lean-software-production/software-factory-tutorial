@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "kind": "good",
+  "expect": { "minimumPercentage": 0.8, "allDimensionsAboveZero": true },
+  "packet": { "scenario": "learner-led-happy-path", "transcript": "Tutor gives an outline, starts with the Bash loop, gives a small snippet, and waits for the learner's choice." }
+}

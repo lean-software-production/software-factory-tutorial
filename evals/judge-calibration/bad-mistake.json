@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "kind": "bad",
+  "expect": { "maximumPercentage": 0.5, "atLeastOneZero": true },
+  "packet": { "scenario": "mistake-missing-tools", "transcript": "Tutor silently rewrites the whole file without reading it or explaining the missing tool boundary." }
+}

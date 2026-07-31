@@ -19,6 +19,17 @@ export interface ToolEvent {
   label: string;
 }
 
+/** A path-safe record of a tutor filesystem operation. */
+export interface AuditEvent {
+  type: "audit";
+  id: string;
+  tool: string;
+  paths: string[];
+  mutation: boolean;
+  outcome: "ok" | "rejected" | "error";
+  message?: string;
+}
+
 export type TutorialEvent =
   | { type: "snapshot"; title: string; runState: RunState; events: TutorialEvent[]; validationCommands: Array<{ id: string; label: string }>; progress: ProgressItem[] }
   | { type: "run-state"; state: RunState }
@@ -34,6 +45,7 @@ export type TutorialEvent =
   | { type: "file-excerpt"; title: string; path: string; startLine: number; content: string; truncated: boolean }
   | { type: "choice"; id: string; question: string; options: ChoiceOption[] }
   | { type: "choice-resolved"; id: string; optionId: string }
+  | AuditEvent
   | { type: "error"; message: string; retryable: boolean };
 
 export type BrowserMessage =
@@ -46,7 +58,18 @@ export function isBrowserMessage(value: unknown): value is BrowserMessage {
   if (!value || typeof value !== "object" || typeof (value as { type?: unknown }).type !== "string") return false;
   const message = value as Record<string, unknown>;
   if (message.type === "abort") return true;
-  if (message.type === "chat") return typeof message.text === "string" && message.text.length <= 12_000;
+  if (message.type === "chat") return typeof message.text === "string" && message.text.length <= 12_000 && (message.delivery === undefined || message.delivery === "steer" || message.delivery === "followUp");
   if (message.type === "choose") return typeof message.choiceId === "string" && typeof message.optionId === "string";
   return message.type === "run-validation" && typeof message.commandId === "string";
+}
+
+/** Keep wire serialization shared by the browser, server, and eval driver. */
+export function serializeBrowserMessage(message: BrowserMessage): string {
+  return JSON.stringify(message);
+}
+
+export function parseTutorialEvent(value: string): TutorialEvent {
+  const parsed: unknown = JSON.parse(value);
+  if (!parsed || typeof parsed !== "object" || typeof (parsed as { type?: unknown }).type !== "string") throw new Error("Invalid tutorial event.");
+  return parsed as TutorialEvent;
 }

@@ -13,6 +13,7 @@ import { TutorialEventBus } from "../protocol/event-bus.js";
 import { ValidationRunner } from "../validation/runner.js";
 import { ChoiceManager } from "./choice-manager.js";
 import { createTutorialTools } from "./tutorial-tools.js";
+import { createWorkspaceTools, WorkspaceBoundary } from "./workspace-boundary.js";
 
 const TOOL_NAMES = [
   "read", "edit", "write", "grep", "find", "ls",
@@ -39,19 +40,23 @@ export class PiTutorialAdapter {
   readonly choices = new ChoiceManager();
   readonly validation: ValidationRunner;
   readonly #bus: TutorialEventBus;
+  readonly #boundary: WorkspaceBoundary;
   #session!: AgentSession;
   #state: RunState = "idle";
   #messageCounter = 0;
 
-  private constructor(readonly lesson: LessonDefinition, readonly workspace: string, bus: TutorialEventBus) {
+  private constructor(readonly lesson: LessonDefinition, readonly workspace: string, bus: TutorialEventBus, boundary: WorkspaceBoundary) {
     this.#bus = bus;
+    this.#boundary = boundary;
     this.validation = new ValidationRunner(lesson.validationCommands, workspace);
   }
 
   static async create(lesson: LessonDefinition, workspace: string, bus: TutorialEventBus): Promise<PiTutorialAdapter> {
-    const adapter = new PiTutorialAdapter(lesson, workspace, bus);
+    const boundary = await WorkspaceBoundary.create(workspace);
+    const canonicalWorkspace = boundary.root;
+    const adapter = new PiTutorialAdapter(lesson, canonicalWorkspace, bus, boundary);
     const loader = new DefaultResourceLoader({
-      cwd: workspace,
+      cwd: canonicalWorkspace,
       agentDir: getAgentDir(),
       systemPromptOverride: () => coachingSystemPrompt(lesson),
       appendSystemPromptOverride: () => [],
@@ -68,18 +73,21 @@ export class PiTutorialAdapter {
     await loader.reload();
     const tools = createTutorialTools({
       lesson,
-      workspace,
+      workspace: canonicalWorkspace,
       choices: adapter.choices,
       validation: adapter.validation,
+      boundary: adapter.#boundary,
       emit: (event) => bus.publish(event),
       setRunState: (state) => adapter.setState(state)
     });
     const { session } = await createAgentSession({
-      cwd: workspace,
+      cwd: canonicalWorkspace,
       resourceLoader: loader,
-      customTools: tools,
+      // These same-name definitions replace Pi's built-ins.  Do not rely on
+      // cwd alone: every filesystem call is checked and audited by the boundary.
+      customTools: [...createWorkspaceTools(canonicalWorkspace, adapter.#boundary, (event) => bus.publish(event)), ...tools],
       tools: TOOL_NAMES,
-      sessionManager: SessionManager.inMemory(workspace),
+      sessionManager: SessionManager.inMemory(canonicalWorkspace),
       settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } })
     });
     adapter.#session = session;

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { AuditEvent, TutorialEvent } from "../../tutorial-engine/src/protocol/events.js";
 import type { Scenario } from "../scenarios/lesson-001/scenarios.js";
 import { runFactoryWithStubs, type FactoryStubResult } from "./factory-stubs.js";
+import { matchesArtifactState } from "./workspace.js";
 import type { SessionTrace } from "./session.js";
 
 export interface Assertion { name: string; passed: boolean; detail: string; }
@@ -26,6 +27,8 @@ export async function deterministicGate(scenario: Scenario, workspace: string, t
   assertions.push({ name: "choice IDs", passed: selectedValid, detail: selectedValid ? "All resolved IDs came from their choice." : "A selected ID was not offered." });
   const safePaths = audits.every((event) => event.outcome !== "ok" || event.paths.every((path) => path === "." || (!path.startsWith("/") && !path.split("/").includes(".."))));
   assertions.push({ name: "workspace boundary", passed: safePaths, detail: safePaths ? "Audited paths are workspace-relative." : "An audited path escaped the workspace." });
+  const failedFilesystemOperations = audits.filter((event) => event.outcome === "rejected" || event.outcome === "error");
+  assertions.push({ name: "filesystem operation outcomes", passed: failedFilesystemOperations.length === 0, detail: failedFilesystemOperations.length === 0 ? "No audited filesystem operations were rejected or failed." : `${failedFilesystemOperations.length} audited filesystem operation(s) were rejected or failed.` });
   if (scenario.mode !== "delegate") {
     const tutorMutated = audits.some((event) => event.mutation && event.outcome === "ok");
     assertions.push({ name: "hands-on ownership", passed: !tutorMutated, detail: tutorMutated ? "Tutor changed the workspace during a hands-on step." : "Workspace changes came from canonical learner patches." });
@@ -34,13 +37,32 @@ export async function deterministicGate(scenario: Scenario, workspace: string, t
   if (scenario.mode === "mistake") {
     const defect = trace.snapshots.defect ?? {};
     const repair = trace.snapshots.repair ?? {};
-    const defectPresent = scenario.patches[0]?.expectedState.every((pattern) => Object.values(defect).some((content) => pattern.test(content))) ?? false;
-    const repaired = scenario.patches[1]?.expectedState.every((pattern) => Object.values(repair).some((content) => pattern.test(content))) ?? false;
+    const defectPatch = scenario.patches.find((patch) => patch.name === "defect");
+    const repairPatch = scenario.patches.find((patch) => patch.name === "repair");
+    const defectPresent = defectPatch ? matchesArtifactState(defect, defectPatch.expectedState) : false;
+    const repaired = repairPatch ? matchesArtifactState(repair, repairPatch.expectedState) : false;
     assertions.push({ name: "defect snapshot", passed: defectPresent, detail: defectPresent ? "Canonical defective state was captured." : "Defect was not present in its snapshot." });
     assertions.push({ name: "repair snapshot", passed: repaired, detail: repaired ? "Canonical repaired state was captured." : "Repair was not present in its snapshot." });
-    const feedbackAt = events.findIndex((event) => event.type === "user-message" && event.markdown.includes("feedback"));
-    const inspected = audits.some((event, index) => index > feedbackAt && !event.mutation && event.outcome === "ok");
-    assertions.push({ name: "feedback inspection", passed: inspected, detail: inspected ? "Tutor audited a read after feedback." : "No relevant audited read followed feedback." });
+    const defectPair = trace.patchPairs?.find((pair) => pair.patch === "defect");
+    const defectPatchPaths = Object.keys(defectPatch?.files ?? {});
+    const completionAt = defectPair
+      ? events.findIndex((event) => event.type === "choice-resolved" && event.id === defectPair.completionChoiceId)
+      : -1;
+    const inspectionAt = events.findIndex((event, index) => index > completionAt
+      && event.type === "audit"
+      && (event.tool === "read" || event.tool === "show_file_excerpt")
+      && !event.mutation
+      && event.outcome === "ok"
+      && event.paths.some((path) => defectPatchPaths.includes(path)));
+    const inspected = completionAt >= 0 && inspectionAt >= 0;
+    assertions.push({ name: "feedback inspection", passed: inspected, detail: inspected ? "Tutor audited the defect after its completion choice." : "No relevant audited read followed the defect completion choice." });
+    const correctionCheckpoint = defectPair?.correctionCheckpointEvent;
+    const correctionChoiceMatches = correctionCheckpoint !== undefined
+      && defectPair?.correctionCheckpointChoiceId !== undefined
+      && events[correctionCheckpoint]?.type === "choice"
+      && events[correctionCheckpoint].id === defectPair.correctionCheckpointChoiceId;
+    const checkpointed = correctionChoiceMatches && correctionCheckpoint > inspectionAt;
+    assertions.push({ name: "correction checkpoint", passed: checkpointed, detail: checkpointed ? "Repair followed tutor feedback and a new learner choice." : "Repair was not held for a post-feedback learner choice." });
   }
 
   let stub: FactoryStubResult | undefined;
