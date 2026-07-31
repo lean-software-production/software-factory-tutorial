@@ -40,7 +40,7 @@ The command opens the local tutor in your browser. Leave it running. In another 
 cd factory
 ```
 
-Edit files there by hand, then use the tutor for the next step or feedback. Once you have created `factory.sh`, run it directly. The lessons use Pi as the default factory worker. Advanced users may substitute another CLI harness when it preserves the worker requirements described in each lesson.
+Edit files there by hand as instructed by the tutor, then use it for the next step or feedback. Once you have created `factory.sh`, run it directly. The lessons use Pi as the default factory worker. Advanced users may substitute another CLI harness when it preserves the worker requirements described in each lesson.
 
 
 ## Inspiration
