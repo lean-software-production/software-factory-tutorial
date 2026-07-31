@@ -44,9 +44,6 @@ Edit files there by hand—for example, with `vim`—then use the tutor for the 
 
 The tutor reads this README and the current iteration in `docs/specs/`. It will show one small step at a time. You can make the change yourself or ask the tutor to make it, then ask it to inspect your work whenever you need feedback.
 
-## The kata
-
-
 ## Iterations
 
 The ledger is in [`docs/specs/README.md`](docs/specs/README.md). The first row marked `Todo` is the current lesson. Each iteration adds only the capability needed to relieve the pressure exposed by the last one.
