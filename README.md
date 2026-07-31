@@ -1,7 +1,8 @@
 # Software factory tutorial 🏭
 
-This is a tutorial about building a small software factory. The purpose of the factory is to 
-refactor the [natural language calculator](./calculator) in this codebase, which has become difficult to maintain.
+You're going to build a small software factory. In this case, it is a simple, repeatable machine that improves a codebase a little bit at a time.
+
+The codebase is a [natural language calculator](./calculator) that has become difficult to maintain.
 
 ## About the calculator
 
