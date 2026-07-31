@@ -40,7 +40,7 @@ The command opens the local tutor in your browser. Leave it running. In another 
 cd factory
 ```
 
-Edit files there by hand—for example, with `vim`—then use the tutor for the next step or feedback. When you build the factory, run its `factory.sh` script directly.
+Edit files there by hand, then use the tutor for the next step or feedback. When you build the factory, run its `factory.sh` script directly.
 
 The tutor reads this README and the current iteration in `docs/specs/`. It will show one small step at a time. You can make the change yourself or ask the tutor to make it, then ask it to inspect your work whenever you need feedback.
 
