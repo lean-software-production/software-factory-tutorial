@@ -1,7 +1,7 @@
 import { StrictMode, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import mermaid from "mermaid";
-import ReactMarkdown from "react-markdown";
+import { Markdown } from "./markdown.js";
 import "./styles.css";
 
 type RunState = "idle" | "working" | "awaiting-choice" | "failed";
@@ -64,9 +64,9 @@ function Card({ children, title, className = "" }: { children: ReactNode; title?
 
 function TranscriptEvent({ event, send }: { event: Event; send: (message: unknown) => void }) {
   switch (event.type) {
-    case "assistant-delta": case "assistant-message": return <Card className="assistant"><div className="markdown"><ReactMarkdown>{event.type === "assistant-delta" ? event.delta : event.markdown}</ReactMarkdown></div></Card>;
-    case "user-message": return <Card className="user"><div className="markdown"><ReactMarkdown>{event.markdown}</ReactMarkdown></div></Card>;
-    case "presentation": return <Card title={event.presentation.title} className="presentation">{event.presentation.kind === "markdown" ? <div className="markdown"><ReactMarkdown>{event.presentation.markdown}</ReactMarkdown></div> : <MermaidCard source={event.presentation.mermaid} text={event.presentation.text} />}</Card>;
+    case "assistant-delta": case "assistant-message": return <Card className="assistant"><Markdown>{event.type === "assistant-delta" ? event.delta : event.markdown}</Markdown></Card>;
+    case "user-message": return <Card className="user"><Markdown>{event.markdown}</Markdown></Card>;
+    case "presentation": return <Card title={event.presentation.title} className="presentation">{event.presentation.kind === "markdown" ? <Markdown>{event.presentation.markdown}</Markdown> : <MermaidCard source={event.presentation.mermaid} text={event.presentation.text} />}</Card>;
     case "file-excerpt": return <Card title={event.title} className="excerpt"><p className="path">{event.path}:{event.startLine}</p><pre>{event.content}</pre>{event.truncated && <p className="muted">Excerpt only</p>}</Card>;
     case "validation": return <Card title={`${event.passed ? "Passed" : "Failed"}: ${event.label}`} className={event.passed ? "validation pass" : "validation fail"}><p className="path">$ {event.command} · {event.durationMs}ms</p><pre>{event.output || "(no output)"}</pre></Card>;
     case "choice": return <ChoiceCard event={event} send={send} />;
