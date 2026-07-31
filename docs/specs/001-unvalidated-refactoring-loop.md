@@ -4,7 +4,7 @@ Build the smallest repeated refactoring loop.
 
 ## Key concept
 
-A factory starts by repeating one useful action. Bash owns the loop and invokes Pi as a worker; the worker can inspect and edit the calculator but cannot use a shell.
+A factory starts by repeating one useful action. Bash owns the loop and invokes Pi as a worker; the worker can inspect and edit the calculator but cannot use a shell. Each turn announces itself in the console before Pi starts.
 
 ## Decision flow
 
@@ -23,15 +23,16 @@ Teach and build this iteration in this order. Complete each small step before mo
 
 1. **Start the Bash loop.** Create `factory/factory.sh`, change to the `factory/` directory, and add the `while true; do ... done` structure that repeats a factory turn. Leave a temporary placeholder in the loop body while establishing the structure.
 2. **Add the pause and control flow.** Replace the placeholder with a `read -r -p` pause at the end of each turn so the learner must press Enter before the next turn. Ctrl-C stops the shell and therefore the factory.
-3. **Add the Pi invocation.** Before that pause, pipe the refactoring prompt to Pi from `calculator/`. Give Pi only file-inspection and file-editing tools; it must not receive its `bash` tool. Use this exact command:
+3. **Announce and invoke Pi.** Before that pause, print `Starting refactoring iteration...`, then pipe the refactoring prompt to Pi from `calculator/`. Give Pi only file-inspection and file-editing tools; it must not receive its `bash` tool. Use these commands:
 
    ```sh
+   echo "Starting refactoring iteration..."
    cat refactor.md | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
    ```
 
 4. **Write the worker prompt.** Create `factory/refactor.md`. Tell Pi to inspect the calculator and make one small, behaviour-preserving refactoring. Tell Pi to edit files directly, not run tests, npm, or shell commands, and keep its response concise.
 
-The completed `factory/factory.sh` loops until the learner stops it: Pi refactors, then Bash pauses for Enter before the next iteration.
+The completed `factory/factory.sh` loops until the learner stops it: Bash announces the refactoring turn, Pi refactors, then Bash pauses for Enter before the next iteration.
 
 ## Advanced: substitute another worker
 
@@ -45,7 +46,7 @@ From the repository root:
 ./factory/factory.sh
 ```
 
-Verify manually that Pi can inspect and edit the calculator, cannot invoke a shell tool, and the loop waits for Enter before the next turn.
+Verify manually that the console announces each refactoring turn, Pi can inspect and edit the calculator, Pi cannot invoke a shell tool, and the loop waits for Enter before the next turn.
 
 ## Pressure test
 
