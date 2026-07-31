@@ -24,6 +24,7 @@ From the repository root:
 ```sh
 npm install
 npm run setup
+cd factory
 ```
 
 `npm run setup` prompts for your `OPENCODE_API_KEY` and saves it in the ignored, owner-only `.local/secrets.envrc` file. It never runs during `npm install`. In CI or another non-interactive environment, export `OPENCODE_API_KEY` instead.
@@ -37,10 +38,6 @@ npm run tutorial
 The command opens the local tutor in your browser. Edit the repository files by hand—for example, with `vim`—then use the tutor for the next step or feedback. When you build the factory, run its `factory/factory.sh` script directly.
 
 The tutor reads this README and the current iteration in `docs/specs/`. It will show one small step at a time. You can make the change yourself or ask the tutor to make it, then ask it to inspect your work whenever you need feedback.
-
-## Optional Dev Container
-
-Docker/OrbStack and VS Code's **Dev Containers** extension remain available if you want an isolated development environment. The container runs `npm ci` when it opens. Export `OPENCODE_API_KEY` before reopening it, then run `npm run tutorial`; the container passes that key through without writing it into the repository. Run `npm run setup` inside the container only if you prefer a local credential file there.
 
 ## The kata
 
