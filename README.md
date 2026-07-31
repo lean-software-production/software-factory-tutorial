@@ -17,29 +17,30 @@ The factory will be implemented as a bash `while` loop that shells out to `pi -p
 
 ## Setup
 
-The supplied Dev Container provides Node.js, pnpm, Graphviz, Pi, and both projects' npm dependencies.
+You need Node.js 22.19 or later, npm, an OpenCode API key, and a browser. Use Vim or any other editor; Docker and VS Code are not required.
 
-Install Docker Desktop or OrbStack and VS Code's **Dev Containers** extension. From a terminal, make an OpenCode Zen key available, then start VS Code from that same terminal:
+From the repository root:
 
 ```sh
-export OPENCODE_API_KEY=<your-key>
-code .
+npm install
+npm run setup
 ```
 
-In VS Code, press Command-Shift-P and choose **Dev Containers: Reopen in Container**. Wait for the image to build; VS Code then opens its integrated terminal inside the container.
-
-The Dev Container passes `OPENCODE_API_KEY` to Pi without writing it into the repository. If you use direnv, an ignored `.local/secrets.envrc` at the repository root can export the same variable before you run `code .`.
+`npm run setup` prompts for your `OPENCODE_API_KEY` and saves it in the ignored, owner-only `.local/secrets.envrc` file. It never runs during `npm install`. In CI or another non-interactive environment, export `OPENCODE_API_KEY` instead.
 
 ## Start the tutorial
 
-From the repository root, inside the Dev Container:
-
 ```sh
-cd tutorial-engine
-npm run dev -- .. --port 4310
+npm run tutorial -- --port 4310
 ```
 
+The command opens the local tutor in your browser. Edit the repository files by hand—for example, with `vim`—then use the tutor for the next step or feedback. To run the factory loop directly, use `npm run factory`.
+
 The tutor reads this README and the current iteration in `docs/specs/`. It will show one small step at a time. You can make the change yourself or ask the tutor to make it, then ask it to inspect your work whenever you need feedback.
+
+## Optional Dev Container
+
+Docker/OrbStack and VS Code's **Dev Containers** extension remain available if you want an isolated development environment. The container runs `npm ci` when it opens. Export `OPENCODE_API_KEY` before reopening it, then run `npm run tutorial`; the container passes that key through without writing it into the repository. Run `npm run setup` inside the container only if you prefer a local credential file there.
 
 ## The kata
 

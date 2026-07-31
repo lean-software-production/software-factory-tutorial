@@ -1,0 +1,24 @@
+{
+  "name": "validation-loops-tutorial",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A browser-led tutorial for building software validation loops.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "workspaces": [
+    "calculator",
+    "tutorial-engine"
+  ],
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "tutorial": "node scripts/tutorial.mjs",
+    "factory": "node scripts/factory.mjs",
+    "test:onboarding": "node --test test/onboarding.test.mjs",
+    "check": "npm run test:onboarding && npm run --workspace=tutorial-engine check && npm run --workspace=calculator test"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.83.0"
+  }
+}

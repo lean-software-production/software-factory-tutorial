@@ -15,7 +15,7 @@
   "containerEnv": {
     "OPENCODE_API_KEY": "${localEnv:OPENCODE_API_KEY}"
   },
-  "postCreateCommand": "npm --prefix tutorial-engine ci && npm --prefix natural-language-calculator ci",
+  "postCreateCommand": "npm ci",
   "customizations": {
     "vscode": {
       "extensions": [
