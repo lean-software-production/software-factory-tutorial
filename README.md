@@ -24,7 +24,6 @@ From the repository root:
 ```sh
 npm install
 npm run setup
-cd factory
 ```
 
 `npm run setup` prompts for your `OPENCODE_API_KEY` and saves it in the ignored, owner-only `.local/secrets.envrc` file. It never runs during `npm install`. In CI or another non-interactive environment, export `OPENCODE_API_KEY` instead.
@@ -35,7 +34,13 @@ cd factory
 npm run tutorial
 ```
 
-The command opens the local tutor in your browser. Edit the repository files by hand—for example, with `vim`—then use the tutor for the next step or feedback. When you build the factory, run its `factory/factory.sh` script directly.
+The command opens the local tutor in your browser. Leave it running. In another terminal, work in the factory directory:
+
+```sh
+cd factory
+```
+
+Edit files there by hand—for example, with `vim`—then use the tutor for the next step or feedback. When you build the factory, run its `factory.sh` script directly.
 
 The tutor reads this README and the current iteration in `docs/specs/`. It will show one small step at a time. You can make the change yourself or ask the tutor to make it, then ask it to inspect your work whenever you need feedback.
 
