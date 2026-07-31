@@ -3,5 +3,6 @@
 **/.subagents/
 *.log
 *.swp
-factory/test-failure.log
+factory/*
+!factory/.gitkeep
 .local/
