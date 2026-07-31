@@ -14,7 +14,6 @@
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "tutorial": "node scripts/tutorial.mjs",
-    "factory": "node scripts/factory.mjs",
     "test:onboarding": "node --test test/onboarding.test.mjs",
     "check": "npm run test:onboarding && npm run --workspace=tutorial-engine check && npm run --workspace=calculator test"
   },
