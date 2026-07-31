@@ -31,7 +31,7 @@ npm run setup
 ## Start the tutorial
 
 ```sh
-npm run tutorial -- --port 4310
+npm run tutorial
 ```
 
 The command opens the local tutor in your browser. Edit the repository files by hand—for example, with `vim`—then use the tutor for the next step or feedback. To run the factory loop directly, use `npm run factory`.
