@@ -15,7 +15,7 @@ npm run eval -- --scenario learner-led-happy-path --repeat 3
 npm run eval -- --calibrate
 ```
 
-A scope is mandatory. The initial lesson-001 matrix is six tutor sessions and six judge calls: roughly 120,000 total model tokens and 10–30 minutes when sequential. `--all` requires `--yes` in an interactive terminal. The tutor uses the ordinary tutorial Pi configuration; only the judge model is selected by `EVAL_JUDGE_MODEL`. Set `EVAL_JUDGE_COMMAND` only when the judge is invoked through a compatible Pi wrapper (default: `pi --no-session`).
+A scope is mandatory. The lesson-001 matrix is six tutor sessions and six judge calls: roughly 120,000 total model tokens and 10–30 minutes when sequential. `--all` requires `--yes` in an interactive terminal. The tutor uses the ordinary tutorial Pi configuration; only the judge model is selected by `EVAL_JUDGE_MODEL`. Set `EVAL_JUDGE_COMMAND` only when the judge is invoked through a compatible Pi wrapper (default: `pi --no-session`).
 
 ## What it exercises
 
@@ -23,7 +23,7 @@ The runner copies the tutorial into a temporary learner workspace, starts the ch
 
 The engine's file tools enforce the workspace boundary after resolving symlinks and emit sanitised `audit` events. This is a tool boundary, not an operating-system sandbox.
 
-`factory-stubs.ts` performs `bash -n` and runs the factory on a controlled `PATH`. Its `pi` and `npm` stubs capture stdin, arguments, working directory, test outcomes, and the Enter pause, so factory checks do not spend another model call.
+`factory-stubs.ts` performs `bash -n` and runs `factory/run.sh` on a controlled `PATH`. Its `pi` stub captures stdin, arguments, working directory, reviewer output, saved reports, and the Enter pause, so factory checks do not spend another model call.
 
 ## Results
 
@@ -33,4 +33,4 @@ Only provider 429/5xx, connection resets, and a timeout before useful output qua
 
 ## Authoring scenarios and calibrating the judge
 
-Scenario data lives in `scenarios/lesson-001/scenarios.ts` and has canonical atomic patches, learner messages, preconditions, and expected states. Keep the learner deterministic; it is not a second model. Add hand-reviewed JSON packets to `judge-calibration/` before changing the judge prompt or model, then run `npm run eval -- --calibrate` to verify that good packets stay passing and bad packets stay failing in regression review.
+Scenario data lives in `scenarios/lesson-*/scenarios.ts` and has canonical atomic patches, learner messages, preconditions, and expected states. Keep the learner deterministic; it is not a second model. Add hand-reviewed JSON packets to `judge-calibration/` before changing the judge prompt or model, then run `npm run eval -- --calibrate` to verify that good packets stay passing and bad packets stay failing in regression review.

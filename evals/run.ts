@@ -10,11 +10,13 @@ import { shouldRetry } from "./harness/retry.js";
 import { cleanupWorkspace, createWorkspace } from "./harness/workspace.js";
 import { scenarios } from "./scenarios/lesson-001/scenarios.js";
 import { lesson002Scenarios } from "./scenarios/lesson-002/scenarios.js";
+import { lesson003Scenarios } from "./scenarios/lesson-003/scenarios.js";
+import { lesson004Scenarios } from "./scenarios/lesson-004/scenarios.js";
 import type { Scenario } from "./scenarios/lesson-001/scenarios.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const reports = join(root, "evals/reports");
-const allScenarios = [...scenarios, ...lesson002Scenarios];
+const allScenarios = [...scenarios, ...lesson002Scenarios, ...lesson003Scenarios, ...lesson004Scenarios];
 
 function usage(): void {
   console.log(`Live tutorial evals (real model calls; not part of npm test)
@@ -26,7 +28,7 @@ Usage:
   npm run eval -- --scenario learner-led-happy-path --repeat 3
   npm run eval -- --calibrate
 
-A scope is required unless running judge calibration. EVAL_JUDGE_MODEL selects the judge model. The initial six-session suite is about 120,000 model tokens and normally takes 10–30 minutes.`);
+A scope is required unless running judge calibration. EVAL_JUDGE_MODEL selects the judge model. The lesson-001 suite is about 120,000 model tokens and normally takes 10–30 minutes.`);
 }
 
 function selected(args: string[]): Scenario[] {
@@ -88,7 +90,7 @@ async function main(): Promise<void> {
   const repeatIndex = args.indexOf("--repeat"); const repeat = repeatIndex >= 0 ? Number(args[repeatIndex + 1]) : 1;
   if (!Number.isInteger(repeat) || repeat < 1 || repeat > 3) throw new Error("--repeat must be 1, 2, or 3.");
   if (!process.env.EVAL_JUDGE_MODEL) throw new Error("Set EVAL_JUDGE_MODEL before running paid live evals.");
-  if (args.includes("--all") && !args.includes("--yes")) throw new Error("--all can cost about 120,000 tokens. Re-run with --yes to confirm.");
+  if (args.includes("--all") && !args.includes("--yes")) throw new Error(`--all can cost about ${allScenarios.length * 20_000} tokens. Re-run with --yes to confirm.`);
   console.log(`Selected: ${chosen.map((item) => item.id).join(", ")}\nTutor: ${process.env.PI_MODEL ?? "tutorial default"}\nJudge: ${process.env.EVAL_JUDGE_MODEL}\nEstimated budget: ${chosen.length * repeat * 20_000} model tokens.`);
   const results: Array<{ scenario: string; runs: Awaited<ReturnType<typeof runOnce>>[] }> = [];
   for (const scenario of chosen) {

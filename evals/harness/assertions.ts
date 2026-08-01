@@ -65,25 +65,60 @@ export async function deterministicGate(scenario: Scenario, workspace: string, t
     assertions.push({ name: "correction checkpoint", passed: checkpointed, detail: checkpointed ? "Repair followed tutor feedback and a new learner choice." : "Repair was not held for a post-feedback learner choice." });
   }
 
+  if (scenario.finalState) {
+    const files: Record<string, string> = {};
+    await Promise.all(Object.keys(scenario.finalState).map(async (path) => {
+      try { files[path] = await readFile(join(workspace, path), "utf8"); } catch { /* absence is checked below */ }
+    }));
+    const matched = matchesArtifactState(files, scenario.finalState);
+    assertions.push({ name: "final artifact state", passed: matched, detail: matched ? "Final artifacts match the active lesson expectations." : "Final artifacts do not match the active lesson expectations." });
+    if (scenario.lesson === "001") {
+      const success = files["factory/success.md"] ?? "";
+      const checks = [
+        /passes? its tests|passes? tests/i,
+        /reveals? intention|intention[- ]revealing/i,
+        /no duplication|duplication/i,
+        /fewest elements|few elements|minimal elements/i,
+        /many|multiple|series/i,
+        /not a checklist|not .*checklist|destination|durable strategy/i
+      ];
+      const passed = checks.every((pattern) => pattern.test(success));
+      assertions.push({ name: "success.md simple-design strategy", passed, detail: passed ? "success.md includes the four rules as a durable multi-refactoring destination." : "success.md is missing a simple-design rule or strategy framing." });
+    }
+  }
+
   let stub: FactoryStubResult | undefined;
   try {
-    const factory = await readFile(join(workspace, "factory/factory.sh"), "utf8");
-    stub = await runFactoryWithStubs(factory, scenario.lesson === "002" ? ["fail", "pass"] : ["pass"]);
-    const pi = stub.invocations.find((entry) => entry.command === "pi");
-    const expectedArgs = ["--no-session", "--tools", "read,edit,write,grep,find,ls", "-p"];
-    assertions.push({ name: "factory syntax and pause", passed: stub.syntaxPassed && stub.paused, detail: stub.syntaxPassed && stub.paused ? "Bash parses and observes Enter pause." : "Factory did not parse or pause." });
+    const factory = await readFile(join(workspace, "factory/run.sh"), "utf8");
+    stub = await runFactoryWithStubs(factory, scenario.lesson === "004" ? ["VERDICT: FAIL\n\nFINDINGS:\n- [FAIL] passes tests: intentional failure\n", "VERDICT: PASS\n\nFINDINGS:\n- [PASS] passes tests: repaired\n"] : undefined);
+    const piTurns = stub.invocations.filter((entry) => entry.command === "pi");
+    const doerArgs = ["--no-session", "--tools", "read,edit,write,grep,find,ls", "-p"];
+    const reviewerArgs = ["--no-session", "--tools", "read,grep,find,ls,bash", "-p"];
+    assertions.push({ name: "factory syntax", passed: stub.syntaxPassed, detail: stub.syntaxPassed ? "Bash parses run.sh." : "run.sh did not parse." });
     if (scenario.lesson === "001") {
-      const announced = stub.output.includes("Starting refactoring iteration...");
-      assertions.push({ name: "turn announcement", passed: announced, detail: announced ? "Factory announces the refactoring turn." : "Factory did not announce the refactoring turn." });
-    }
-    assertions.push({ name: "Pi invocation", passed: Boolean(pi) && JSON.stringify(pi!.args) === JSON.stringify(expectedArgs) && pi!.cwd.endsWith("/calculator"), detail: pi ? `${pi.cwd}: ${pi.args.join(" ")}` : "Pi stub was not invoked." });
-    if (scenario.lesson === "002") {
-      const piTurns = stub.invocations.filter((entry) => entry.command === "pi");
-      assertions.push({ name: "recovery evidence routing", passed: piTurns.length >= 2 && piTurns[1]?.stdin.includes("intentional failure") === true && Boolean(stub.failureLogBeforeEnter), detail: piTurns[1]?.stdin ?? "Recovery worker was not invoked." });
+      const doer = piTurns[0];
+      const oneShot = piTurns.length === 1 && stub.exitCode === 0;
+      assertions.push({ name: "one-shot doer invocation", passed: oneShot, detail: `${piTurns.length} Pi turn(s), exit=${stub.exitCode}` });
+      assertions.push({ name: "doer announcement", passed: stub.output.includes("Starting doer..."), detail: stub.output });
+      assertions.push({ name: "doer tool boundary", passed: Boolean(doer) && JSON.stringify(doer!.args) === JSON.stringify(doerArgs) && doer!.cwd.endsWith("/calculator") && doer!.stdin.includes("refactor prompt"), detail: doer ? `${doer.cwd}: ${doer.args.join(" ")}` : "Doer Pi stub was not invoked." });
+    } else if (scenario.lesson === "002") {
+      const [doer, reviewer] = piTurns;
+      assertions.push({ name: "doer then reviewer", passed: piTurns.length === 2 && stub.output.includes("Starting doer...") && stub.output.includes("Starting review..."), detail: `${piTurns.length} Pi turn(s)` });
+      assertions.push({ name: "doer tool boundary", passed: Boolean(doer) && JSON.stringify(doer!.args) === JSON.stringify(doerArgs) && doer!.cwd.endsWith("/calculator"), detail: doer ? doer.args.join(" ") : "Doer missing." });
+      assertions.push({ name: "reviewer evidence boundary", passed: Boolean(reviewer) && JSON.stringify(reviewer!.args) === JSON.stringify(reviewerArgs) && reviewer!.cwd.endsWith("/calculator") && reviewer!.stdin.includes("review prompt") && reviewer!.stdin.includes("success prompt"), detail: reviewer ? reviewer.args.join(" ") : "Reviewer missing." });
+    } else if (scenario.lesson === "003") {
+      const [doer, reviewer] = piTurns;
+      assertions.push({ name: "loop pause", passed: stub.paused, detail: stub.paused ? "No second loop began before Enter." : "The loop did not wait for Enter after review." });
+      assertions.push({ name: "loop roles", passed: Boolean(doer) && Boolean(reviewer) && JSON.stringify(doer!.args) === JSON.stringify(doerArgs) && JSON.stringify(reviewer!.args) === JSON.stringify(reviewerArgs) && stub.output.includes("Starting doer iteration...") && stub.output.includes("Starting review..."), detail: `${piTurns.length} Pi turn(s)` });
+    } else if (scenario.lesson === "004") {
+      const repairTurn = piTurns.find((entry) => entry.stdin.includes("repair prompt"));
+      assertions.push({ name: "review report saved", passed: stub.reviewReportBeforeEnter?.includes("VERDICT: FAIL") === true, detail: stub.reviewReportBeforeEnter ?? "No report before Enter." });
+      assertions.push({ name: "failed verdict routes to repair", passed: Boolean(repairTurn) && stub.output.includes("Starting repair iteration..."), detail: repairTurn?.stdin ?? "Repair worker was not invoked after the failed report." });
+      assertions.push({ name: "reviewer tee boundary", passed: piTurns.some((entry) => JSON.stringify(entry.args) === JSON.stringify(reviewerArgs) && entry.stdin.includes("success prompt")), detail: `${piTurns.length} Pi turn(s)` });
     }
     if (scenario.mode === "delegate") {
       const files = (await readdir(join(workspace, "factory"))).filter((file) => file !== ".gitkeep").sort();
-      const allowed = ["factory.sh", "refactor.md"];
+      const allowed = ["refactor.md", "run.sh", "success.md"];
       assertions.push({ name: "delegated file scope", passed: JSON.stringify(files) === JSON.stringify(allowed), detail: files.join(", ") || "No factory files created." });
     }
   } catch (error) { assertions.push({ name: "factory artifact", passed: false, detail: error instanceof Error ? error.message : "Factory is missing." }); }

@@ -91,7 +91,7 @@ export async function activateLesson(workspace: string, lesson: string): Promise
 export async function snapshot(workspace: string, label: string, destination: string): Promise<Record<string, string>> {
   const factory = join(workspace, "factory");
   const files: Record<string, string> = {};
-  for (const file of ["factory.sh", "refactor.md", "fix-tests.md", "heal.md", "work.md", "test-failure.log"]) {
+  for (const file of ["run.sh", "success.md", "refactor.md", "review.md", "repair.md", "review-report.md", "factory.sh", "fix-tests.md", "heal.md", "work.md", "test-failure.log"]) {
     try { files[`factory/${file}`] = await readFile(join(factory, file), "utf8"); } catch { /* absent is evidence too */ }
   }
   await mkdir(destination, { recursive: true });

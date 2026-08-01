@@ -6,11 +6,16 @@ import { deterministicGate } from "../harness/assertions.js";
 import { activateLesson, applyCanonicalPatch, matchesArtifactState } from "../harness/workspace.js";
 import { advanceHandsOnDriver, beginHandsOnDriver, EvalTimeoutError, foldSnapshotEvents, selectDelegationChoice } from "../harness/session.js";
 import { shouldRetry } from "../harness/retry.js";
-import { correctFactory, scenarios, type Scenario } from "../scenarios/lesson-001/scenarios.js";
+import { scenarios, type Scenario } from "../scenarios/lesson-001/scenarios.js";
+import { lesson002Scenarios } from "../scenarios/lesson-002/scenarios.js";
+import { lesson003Scenarios } from "../scenarios/lesson-003/scenarios.js";
+import { lesson004Scenarios } from "../scenarios/lesson-004/scenarios.js";
+import { loadActiveSpec } from "../harness/judge.js";
 import type { SessionTrace } from "../harness/session.js";
 import { loadLesson } from "../../tutorial-engine/src/lesson/load.js";
 
-const mistakeScenarios = scenarios.filter((scenario) => scenario.mode === "mistake");
+const allScenarios = [...scenarios, ...lesson002Scenarios, ...lesson003Scenarios, ...lesson004Scenarios];
+const mistakeScenarios = allScenarios.filter((scenario) => scenario.mode === "mistake");
 
 function traceFor(scenario: Scenario): SessionTrace {
   return {
@@ -22,7 +27,7 @@ function traceFor(scenario: Scenario): SessionTrace {
       { type: "snapshot", title: "Test", runState: "idle", events: [], validationCommands: [], progress: [] },
       { type: "choice", id: "choice-1", question: "Continue?", options: [{ id: "hands-on", label: "I’ll do it", icon: "do" }] },
       { type: "choice-resolved", id: "choice-1", optionId: "hands-on" },
-      { type: "audit", id: "read-1", tool: "read", paths: [Object.keys(scenario.patches.find((patch) => patch.name === "defect")?.files ?? {})[0] ?? "factory/factory.sh"], mutation: false, outcome: "ok" },
+      { type: "audit", id: "read-1", tool: "read", paths: [Object.keys(scenario.patches.find((patch) => patch.name === "defect")?.files ?? {})[0] ?? "factory/run.sh"], mutation: false, outcome: "ok" },
       { type: "choice", id: "correction-choice", question: "Correct it?", options: [{ id: "confirm", label: "I’ve made this step", icon: "confirm" }] }
     ]
   };
@@ -37,7 +42,8 @@ describe("live-eval regression coverage", () => {
 
     const workspace = await mkdtemp(join(tmpdir(), "eval-gate-"));
     try {
-      await applyCanonicalPatch(workspace, { name: "final", files: { "factory/factory.sh": correctFactory, "factory/refactor.md": "Inspect the calculator and make one small, behaviour-preserving refactoring. Edit files directly. Do not run tests, npm, or shell commands. Keep your response concise.\n" }, preconditions: {}, expectedState: {} });
+      const finalFiles = Object.assign({}, ...scenario.patches.map((patch) => patch.files)) as Record<string, string>;
+      await applyCanonicalPatch(workspace, { name: "final", files: finalFiles, preconditions: {}, expectedState: scenario.finalState ?? {} });
       const gate = await deterministicGate(scenario, workspace, traceFor(scenario));
       expect(gate.assertions.find((assertion) => assertion.name === "defect snapshot")?.passed).toBe(true);
       expect(gate.assertions.find((assertion) => assertion.name === "repair snapshot")?.passed).toBe(true);
@@ -56,21 +62,24 @@ describe("live-eval regression coverage", () => {
 
   it("splits the learner-led factory into canonical atomic edits", () => {
     const happy = scenarios.find((scenario) => scenario.id === "learner-led-happy-path")!;
-    expect(happy.patches.map((patch) => patch.name)).toEqual(["loop", "pause", "invoke", "prompt"]);
+    expect(happy.patches.map((patch) => patch.name)).toEqual(["success", "prompt", "invoke"]);
     expect(happy.patches.every((patch) => Object.keys(patch.files).length === 1)).toBe(true);
   });
 
   it("activates the declared lesson only in the disposable workspace", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "eval-lesson-"));
-    const ledger = "| Iteration | Goal | Status |\n| --- | --- | --- |\n| [001](001.md) | One | Todo |\n| [002](002.md) | Two | Todo |\n";
+    const ledger = "| Iteration | Goal | Status |\n| --- | --- | --- |\n| [001](001-invoke-a-doer.md) | One | Todo |\n| [002](002-review-a-doer.md) | Two | Todo |\n";
     await writeFile(join(workspace, "README.md"), "# Test\n");
     await (await import("node:fs/promises")).mkdir(join(workspace, "docs/specs"), { recursive: true });
     await writeFile(join(workspace, "docs/specs/README.md"), ledger);
     try {
       await activateLesson(workspace, "002");
       const activated = await readFile(join(workspace, "docs/specs/README.md"), "utf8");
-      expect(activated).toContain("[001](001.md) | One | Done");
-      expect(activated).toContain("[002](002.md) | Two | Todo");
+      expect(activated).toContain("[001](001-invoke-a-doer.md) | One | Done");
+      expect(activated).toContain("[002](002-review-a-doer.md) | Two | Todo");
+      await writeFile(join(workspace, "docs/specs/001-invoke-a-doer.md"), "obsolete inactive spec", "utf8");
+      await writeFile(join(workspace, "docs/specs/002-review-a-doer.md"), "# Active review spec", "utf8");
+      await expect(loadActiveSpec(workspace, "002")).resolves.toBe("# Active review spec");
       expect((await loadLesson(workspace)).progress.find((item) => item.state === "current")?.id).toBe("002");
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -252,7 +261,7 @@ describe("live-eval regression coverage", () => {
       { id: "pause", label: "A label the driver must not parse", icon: "pause" }
     ]))).toEqual({ kind: "delegate", optionId: "delegate" });
     expect(selectDelegationChoice(choice([
-      { id: "review", label: "Review the finished factory.sh", icon: "show" },
+      { id: "review", label: "Review the finished run.sh", icon: "show" },
       { id: "pause", label: "A label the driver must not parse", icon: "pause" }
     ]))).toEqual({ kind: "pause", optionId: "pause" });
     expect(() => selectDelegationChoice(choice([{ id: "other", label: "Automate differently", icon: "automate" }]))).toThrow("unsupported delegation choice");

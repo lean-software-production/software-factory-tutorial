@@ -23,101 +23,130 @@ export interface CanonicalPatch {
 
 export interface Scenario {
   id: string;
-  lesson: "001" | "002";
+  lesson: "001" | "002" | "003" | "004";
   mode: LearnerMode;
   description: string;
   expectedMistake?: string;
   /** Ordered, small learner edits. `defect` and `repair` retain stable report names. */
   patches: CanonicalPatch[];
+  /** Final file-specific artifact expectations for deterministic offline gates. */
+  finalState?: ArtifactState;
 }
 
-const factoryPath = "factory/factory.sh";
-const promptPath = "factory/refactor.md";
-const shellHeader = `#!/usr/bin/env bash
+export const runPath = "factory/run.sh";
+export const successPath = "factory/success.md";
+export const refactorPath = "factory/refactor.md";
+
+export const success = `# Success criteria
+
+These criteria describe the destination for many small refactorings, not a checklist for one refactoring turn. The doer may choose any small tactic that moves the calculator in this direction while preserving behaviour.
+
+1. Passes its tests. Evidence: the reviewer runs \`npm test\` from \`calculator/\` and reports the result.
+2. Reveals intention. Evidence: the diff and code read with clearer names, responsibilities, and control flow.
+3. No duplication. Evidence: repeated expressions or branches are removed without hiding meaning.
+4. Fewest elements. Evidence: imports, helpers, branches, and abstractions are no more numerous than the behaviour requires; installed complexity tools may support this judgement.
+`;
+
+export const refactor = `Study \`../factory/success.md\` and use those criteria to choose one small, behaviour-preserving refactoring that moves the calculator toward the desired state.
+
+Edit files directly. Do not run tests, npm, or shell commands. Keep your response concise.
+`;
+
+export const correctRun = `#!/usr/bin/env bash
 set -euo pipefail
 
 cd "$(dirname "$0")"
+echo "Starting doer..."
+cat refactor.md | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
+`;
 
+const missingToolsRun = correctRun.replace(" --tools read,edit,write,grep,find,ls", "");
+const wrongDirectoryRun = correctRun.replace("(cd ../calculator && pi", "(cd .. && pi");
+const invalidPrompt = `Inspect the calculator, run npm test and any shell commands you need, then perform a refactoring.
 `;
-const placeholder = "  # Add the factory turn here.\n";
-const loop = `${shellHeader}while true; do
-${placeholder}done
+const checklistSuccess = `# Success for this refactoring
+
+Checklist for the next refactoring: make the calculator cleaner, then run tests.
 `;
-const withPause = loop.replace(placeholder, '  read -r -p "Press Enter for the next iteration (Ctrl-C to stop)... "\n');
-const piCommand = '  echo "Starting refactoring iteration..."\n  cat refactor.md | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)\n';
-const withoutTools = piCommand.replace(" --tools read,edit,write,grep,find,ls", "");
-const wrongDirectoryCommand = piCommand.replace("(cd ../calculator && pi", "(cd .. && pi");
-export const correctFactory = withPause.replace('  read -r -p "Press Enter for the next iteration (Ctrl-C to stop)... "\n', `${piCommand}  read -r -p "Press Enter for the next iteration (Ctrl-C to stop)... "\n`);
-const refactor = "Inspect the calculator and make one small, behaviour-preserving refactoring. Edit files directly. Do not run tests, npm, or shell commands. Keep your response concise.\n";
-const invalidPrompt = "Inspect the calculator, run npm test and shell commands, then refactor it.\n";
 
 const absent = (path: string): ArtifactState => ({ [path]: { exists: false } });
 const contains = (path: string, patterns: RegExp[], excludes: RegExp[] = []): ArtifactState => ({ [path]: { exists: true, contains: patterns, excludes } });
 
-const loopStep = (): CanonicalPatch => ({
-  name: "loop", files: { [factoryPath]: loop }, message: "I've completed the Bash loop step. Please check it.",
-  preconditions: absent(factoryPath), expectedState: contains(factoryPath, [/while true; do/, /# Add the factory turn here\./]), checkpoint: "guided-step"
-});
-const pauseStep = (): CanonicalPatch => ({
-  name: "pause", files: { [factoryPath]: withPause }, message: "I've added the learner pause. Please check it.",
-  preconditions: contains(factoryPath, [/# Add the factory turn here\./]), expectedState: contains(factoryPath, [/read -r -p/, /while true; do/]), checkpoint: "guided-step"
-});
-const invokeStep = (): CanonicalPatch => ({
-  name: "invoke", files: { [factoryPath]: correctFactory }, message: "I've added the announcement and isolated Pi invocation. Please check it.",
-  preconditions: contains(factoryPath, [/read -r -p/], [/pi --no-session/]), expectedState: contains(factoryPath, [/Starting refactoring iteration/, /\(cd \.\.\/calculator && pi --no-session --tools read,edit,write,grep,find,ls -p\)/]), checkpoint: "guided-step"
+export const successExpectations: FileExpectation = {
+  exists: true,
+  contains: [
+    /passes? its tests|passes? tests/i,
+    /reveals? intention|intention[- ]revealing/i,
+    /no duplication|duplication/i,
+    /fewest elements|few elements|minimal elements/i,
+    /many|multiple|series/i,
+    /not a checklist|not .*checklist|destination|durable strategy/i,
+    /evidence/i
+  ]
+};
+
+export const lesson001FinalState: ArtifactState = {
+  [successPath]: successExpectations,
+  [refactorPath]: { exists: true, contains: [/\.\.\/factory\/success\.md/, /one small/, /behaviour-preserving|behavior-preserving/i, /Do not run tests, npm, or shell commands/] },
+  [runPath]: { exists: true, contains: [/Starting doer/, /cat refactor\.md \|/, /\(cd \.\.\/calculator && pi --no-session --tools read,edit,write,grep,find,ls -p\)/], excludes: [/while true/, /review\.md/, /read -r -p/] }
+};
+
+const successStep = (): CanonicalPatch => ({
+  name: "success", files: { [successPath]: success }, message: "I've defined the durable success criteria. Please check them.",
+  preconditions: absent(successPath), expectedState: { [successPath]: successExpectations }, checkpoint: "guided-step"
 });
 const promptStep = (): CanonicalPatch => ({
-  name: "prompt", files: { [promptPath]: refactor }, message: "I've written the worker prompt. Please check it.",
-  preconditions: absent(promptPath), expectedState: contains(promptPath, [/behaviour-preserving refactoring/, /Do not run tests, npm, or shell commands/]), checkpoint: "guided-step"
+  name: "prompt", files: { [refactorPath]: refactor }, message: "I've written the doer prompt. Please check it.",
+  preconditions: { [successPath]: successExpectations, [refactorPath]: { exists: false } },
+  expectedState: { [refactorPath]: lesson001FinalState[refactorPath]! }, checkpoint: "guided-step"
+});
+const invokeStep = (): CanonicalPatch => ({
+  name: "invoke", files: { [runPath]: correctRun }, message: "I've added the one-shot doer invocation. Please check it.",
+  preconditions: { [successPath]: successExpectations, [refactorPath]: { exists: true, contains: [/\.\.\/factory\/success\.md/] }, [runPath]: { exists: false } }, expectedState: lesson001FinalState, checkpoint: "guided-step"
 });
 const defectInvoke = (name: "missing-tools" | "wrong-directory"): CanonicalPatch => {
-  const factory = name === "missing-tools"
-    ? withPause.replace('  read -r -p "Press Enter for the next iteration (Ctrl-C to stop)... "\n', `${withoutTools}  read -r -p "Press Enter for the next iteration (Ctrl-C to stop)... "\n`)
-    : withPause.replace('  read -r -p "Press Enter for the next iteration (Ctrl-C to stop)... "\n', `${wrongDirectoryCommand}  read -r -p "Press Enter for the next iteration (Ctrl-C to stop)... "\n`);
+  const run = name === "missing-tools" ? missingToolsRun : wrongDirectoryRun;
   const expected = name === "missing-tools"
-    ? contains(factoryPath, [/pi --no-session -p/, /read -r -p/], [/--tools/])
-    : contains(factoryPath, [/\(cd \.\. && pi --no-session --tools/, /read -r -p/], [/\(cd \.\.\/calculator && pi/]);
+    ? contains(runPath, [/pi --no-session -p/], [/--tools/])
+    : contains(runPath, [/\(cd \.\. && pi --no-session --tools/], [/\(cd \.\.\/calculator && pi/]);
   return {
-    name: "defect", files: { [factoryPath]: factory }, message: "I've made the invocation step. Please give feedback.",
-    preconditions: contains(factoryPath, [/read -r -p/], [/pi --no-session/]), expectedState: expected, checkpoint: "guided-step"
+    name: "defect", files: { [runPath]: run }, message: "I've made the invocation step. Please give feedback.",
+    preconditions: { [successPath]: successExpectations, [refactorPath]: { exists: true, contains: [/\.\.\/factory\/success\.md/] }, [runPath]: { exists: false } }, expectedState: expected, checkpoint: "guided-step"
   };
 };
 const repairInvoke = (defect: CanonicalPatch): CanonicalPatch => ({
-  name: "repair", files: { [factoryPath]: correctFactory }, message: "I've applied the smallest repair. Please check it.",
-  preconditions: defect.expectedState,
-  expectedState: contains(factoryPath, [/\(cd \.\.\/calculator && pi --no-session --tools read,edit,write,grep,find,ls -p\)/, /read -r -p/]), checkpoint: "correction"
+  name: "repair", files: { [runPath]: correctRun }, message: "I've applied the smallest invocation repair. Please check it.",
+  preconditions: defect.expectedState, expectedState: { [runPath]: lesson001FinalState[runPath]! }, checkpoint: "correction"
 });
 const invalidPromptDefect = (): CanonicalPatch => ({
-  name: "defect", files: { [promptPath]: invalidPrompt }, message: "I've written the worker prompt. Please give feedback.",
-  preconditions: absent(promptPath), expectedState: contains(promptPath, [/npm test/, /shell commands/]), checkpoint: "guided-step"
+  name: "defect", files: { [refactorPath]: invalidPrompt }, message: "I've written the doer prompt. Please give feedback.",
+  preconditions: { [successPath]: successExpectations, [refactorPath]: { exists: false } }, expectedState: contains(refactorPath, [/npm test/, /shell commands/]), checkpoint: "guided-step"
 });
 const promptRepair = (defect: CanonicalPatch): CanonicalPatch => ({
-  name: "repair", files: { [promptPath]: refactor }, message: "I've applied the smallest repair. Please check it.",
-  preconditions: defect.expectedState,
-  expectedState: contains(promptPath, [/behaviour-preserving refactoring/, /Do not run tests, npm, or shell commands/]), checkpoint: "correction"
+  name: "repair", files: { [refactorPath]: refactor }, message: "I've applied the smallest prompt repair. Please check it.",
+  preconditions: defect.expectedState, expectedState: { [refactorPath]: lesson001FinalState[refactorPath]! }, checkpoint: "correction"
 });
-const noPauseDefect = (): CanonicalPatch => ({
-  name: "defect", files: { [factoryPath]: loop }, message: "I've made the control-flow step. Please give feedback.",
-  preconditions: contains(factoryPath, [/# Add the factory turn here\./]), expectedState: contains(factoryPath, [/while true; do/], [/read -r -p/]), checkpoint: "guided-step"
+const checklistSuccessDefect = (): CanonicalPatch => ({
+  name: "defect", files: { [successPath]: checklistSuccess }, message: "I've drafted success.md. Please give feedback.",
+  preconditions: absent(successPath), expectedState: contains(successPath, [/Checklist for the next refactoring/], [/reveals? intention/i, /fewest elements/i, /many small refactorings/i]), checkpoint: "guided-step"
 });
-const noPauseRepair = (defect: CanonicalPatch): CanonicalPatch => ({
-  name: "repair", files: { [factoryPath]: withPause }, message: "I've applied the smallest repair. Please check it.",
-  preconditions: defect.expectedState,
-  expectedState: contains(factoryPath, [/read -r -p/, /while true; do/]), checkpoint: "correction"
+const successRepair = (defect: CanonicalPatch): CanonicalPatch => ({
+  name: "repair", files: { [successPath]: success }, message: "I've rewritten success.md as durable strategy. Please check it.",
+  preconditions: defect.expectedState, expectedState: { [successPath]: successExpectations }, checkpoint: "correction"
 });
 
 const missingToolsDefect = defectInvoke("missing-tools");
 const wrongDirectoryDefect = defectInvoke("wrong-directory");
 const invalidDefect = invalidPromptDefect();
-const pauseDefect = noPauseDefect();
+const checklistDefect = checklistSuccessDefect();
 
 export const scenarios: Scenario[] = [
-  { id: "agent-led-happy-path", lesson: "001", mode: "delegate", description: "Delegating learner completes every offered delegation step.", patches: [] },
-  { id: "learner-led-happy-path", lesson: "001", mode: "hands-on", description: "Hands-on learner requests exact guidance and completes one canonical edit per required step.", patches: [loopStep(), pauseStep(), invokeStep(), promptStep()] },
-  { id: "mistake-missing-tools", lesson: "001", mode: "mistake", description: "Hands-on learner omits Pi's tool allowlist.", expectedMistake: "The worker has lost its tool allowlist isolation boundary.", patches: [loopStep(), pauseStep(), missingToolsDefect, repairInvoke(missingToolsDefect), promptStep()] },
-  { id: "mistake-wrong-calculator-directory", lesson: "001", mode: "mistake", description: "Hands-on learner starts Pi outside calculator.", expectedMistake: "The worker is not scoped to the calculator directory.", patches: [loopStep(), pauseStep(), wrongDirectoryDefect, repairInvoke(wrongDirectoryDefect), promptStep()] },
-  { id: "mistake-invalid-prompt-boundary", lesson: "001", mode: "mistake", description: "Hands-on learner gives the worker validation authority.", expectedMistake: "Validation is no longer independent from the worker.", patches: [loopStep(), pauseStep(), invokeStep(), invalidDefect, promptRepair(invalidDefect)] },
-  { id: "mistake-no-enter-pause", lesson: "001", mode: "mistake", description: "Hands-on learner omits the control pause.", expectedMistake: "The learner has no Enter control point between turns.", patches: [loopStep(), pauseDefect, noPauseRepair(pauseDefect), invokeStep(), promptStep()] }
+  { id: "agent-led-happy-path", lesson: "001", mode: "delegate", description: "Delegating learner completes the success criteria, doer prompt, and one-shot run script.", patches: [], finalState: lesson001FinalState },
+  { id: "learner-led-happy-path", lesson: "001", mode: "hands-on", description: "Hands-on learner requests exact guidance and completes one canonical edit per required step.", patches: [successStep(), promptStep(), invokeStep()], finalState: lesson001FinalState },
+  { id: "mistake-missing-tools", lesson: "001", mode: "mistake", description: "Hands-on learner omits Pi's doer tool allowlist.", expectedMistake: "The doer has lost its file-tool isolation boundary.", patches: [successStep(), promptStep(), missingToolsDefect, repairInvoke(missingToolsDefect)], finalState: lesson001FinalState },
+  { id: "mistake-wrong-calculator-directory", lesson: "001", mode: "mistake", description: "Hands-on learner starts Pi outside calculator.", expectedMistake: "The doer is not scoped to the calculator directory.", patches: [successStep(), promptStep(), wrongDirectoryDefect, repairInvoke(wrongDirectoryDefect)], finalState: lesson001FinalState },
+  { id: "mistake-invalid-prompt-boundary", lesson: "001", mode: "mistake", description: "Hands-on learner gives the doer validation authority.", expectedMistake: "Validation is no longer independent from the doer.", patches: [successStep(), invalidDefect, promptRepair(invalidDefect), invokeStep()], finalState: lesson001FinalState },
+  { id: "mistake-success-as-refactoring-checklist", lesson: "001", mode: "mistake", description: "Hands-on learner treats success.md as a next-refactoring checklist and omits the simple-design destination.", expectedMistake: "success.md must contain all four simple-design rules as durable factory strategy, not a one-turn checklist.", patches: [checklistDefect, successRepair(checklistDefect), promptStep(), invokeStep()], finalState: lesson001FinalState }
 ];
 
 export function findScenario(id: string): Scenario | undefined { return scenarios.find((scenario) => scenario.id === id); }
