@@ -1,10 +1,10 @@
 # Validation and recovery
 
-Validate every refactoring independently and send failures to a repair turn.
+Make Bash the independent reviewer and send failures to a repair turn.
 
 ## Key concept
 
-A reliable factory separates ordinary work from healing. Bash, not Pi, runs the tests and uses their result to choose the next prompt.
+A reliable factory has a doer and a reviewer. The doer changes the calculator; Bash is the independent reviewer. Bash, not Pi, runs the tests and uses their result to choose the next prompt.
 
 ## Decision flow
 
@@ -28,9 +28,9 @@ flowchart TD
 
 ## Behaviour
 
-Keep `factory/refactor.md` from the previous iteration and add `factory/fix-tests.md`.
+Keep `factory/refactor.md` and the repeated doer loop from the previous iteration, then add `factory/fix-tests.md`.
 
-`fix-tests.md` tells Pi that the last validation failed, supplies the test-failure evidence, and asks it to make the smallest correction it can infer. Like `refactor.md`, it tells Pi to edit files directly and not run tests, npm, or shell commands.
+`fix-tests.md` tells the doer that the last validation failed, supplies the test-failure evidence, and asks it to make the smallest correction it can infer. Like `refactor.md`, it tells the doer to edit files directly and not run tests, npm, or shell commands.
 
 Update `factory/run.sh`. Each iteration:
 
@@ -41,7 +41,7 @@ Update `factory/run.sh`. Each iteration:
 5. If the tests pass, deletes `test-failure.log`. If they fail, prints it; the saved evidence becomes the next worker turn’s input.
 6. Pauses until the learner presses Enter; Ctrl-C stops the factory.
 
-The worker cannot run tests. Bash chooses the normal work path (`refactor.md`) or the healing path (`fix-tests.md`) only from independent validation evidence.
+The doer cannot run tests. The Bash reviewer chooses the normal-work path (`refactor.md`) or the healing path (`fix-tests.md`) only from independent validation evidence.
 
 Use this exact Pi invocation in the normal-work branch:
 
@@ -53,7 +53,7 @@ In the healing branch, replace `cat refactor.md` with `cat fix-tests.md test-fai
 
 ## Advanced: substitute another worker
 
-Pi is the blessed default worker. Advanced users may replace the Pi subshell with another CLI harness, but it must receive the normal or recovery prompt on standard input, run from `calculator/`, edit the kata files, and leave validation to Bash. Its authentication, sandboxing, and tool restrictions are your responsibility; do not assume another harness supports Pi's flags or restrictions.
+Pi is the default doer. Advanced users may replace the Pi subshell with another CLI harness, but it must receive the normal or recovery prompt on standard input, run from `calculator/`, edit the kata files, and leave review to Bash. Its authentication, sandboxing, and tool restrictions are your responsibility; do not assume another harness supports Pi's flags or restrictions.
 
 ## Checks
 
