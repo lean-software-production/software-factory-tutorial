@@ -22,6 +22,21 @@ flowchart TD
     Reviewer --> Save[Save review-report.md]
     Save --> Pause[Pause for learner]
     Pause --> Start
+
+    classDef start fill:#fef3c7,stroke:#d97706,color:#78350f,stroke-width:2px
+    classDef decision fill:#ede9fe,stroke:#7c3aed,color:#3b0764,stroke-width:2px
+    classDef doer fill:#dbeafe,stroke:#2563eb,color:#172554,stroke-width:2px
+    classDef repair fill:#ffedd5,stroke:#ea580c,color:#7c2d12,stroke-width:2px
+    classDef reviewer fill:#dcfce7,stroke:#16a34a,color:#14532d,stroke-width:2px
+    classDef save fill:#cffafe,stroke:#0891b2,color:#164e63,stroke-width:2px
+    classDef pause fill:#fce7f3,stroke:#db2777,color:#831843,stroke-width:2px
+    class Start start
+    class Previous decision
+    class Refactor doer
+    class Repair repair
+    class Reviewer reviewer
+    class Save save
+    class Pause pause
 ```
 
 ## Implementation order

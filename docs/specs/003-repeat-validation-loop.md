@@ -18,6 +18,15 @@ flowchart TD
     Doer --> Reviewer[Reviewer\nreview.md + success.md]
     Reviewer --> Pause[Pause for human review]
     Pause --> Start
+
+    classDef start fill:#fef3c7,stroke:#d97706,color:#78350f,stroke-width:2px
+    classDef doer fill:#dbeafe,stroke:#2563eb,color:#172554,stroke-width:2px
+    classDef reviewer fill:#dcfce7,stroke:#16a34a,color:#14532d,stroke-width:2px
+    classDef pause fill:#fce7f3,stroke:#db2777,color:#831843,stroke-width:2px
+    class Start start
+    class Doer doer
+    class Reviewer reviewer
+    class Pause pause
 ```
 
 ## Implementation order

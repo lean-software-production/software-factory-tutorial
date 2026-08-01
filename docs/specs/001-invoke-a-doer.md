@@ -4,19 +4,23 @@ Define what a good refactoring looks like, run one agent operation, then review 
 
 ## Key concept
 
-The heart of every factory is a validation loop: a **doer** changes something, then a **reviewer** validates the change. This first iteration defines success and builds only the doer. You are the reviewer for now.
+Every factory is built around a validation loop: a **doer** makes a change, then a **reviewer** checks it against evidence before the next change. This first iteration defines success and builds only the doer. You are the reviewer for now.
 
 The doer receives a focused prompt and the success criteria, works in the calculator directory, and may inspect and edit files. It does not run a shell, tests, or quality tools. Keeping those activities outside the doer gives the reviewer independent evidence.
 
-## Decision flow
+## The validation loop
 
-Show this Mermaid diagram when introducing the iteration:
+When introducing the tutorial, show this Mermaid diagram and explain that this iteration completes just one pass through the loop:
 
 ```mermaid
 flowchart LR
-    Start([Run run.sh]) --> Doer[Doer\nrefactor.md + success.md]
-    Doer --> Human[Human reviewer\nInspect and validate]
-    Human --> End([Stop])
+    Doer[Doer\nMakes a focused change] --> Reviewer[Reviewer\nChecks evidence]
+    Reviewer -->|Evidence informs the next change| Doer
+
+    classDef doer fill:#dbeafe,stroke:#2563eb,color:#172554,stroke-width:2px
+    classDef reviewer fill:#dcfce7,stroke:#16a34a,color:#14532d,stroke-width:2px
+    class Doer doer
+    class Reviewer reviewer
 ```
 
 ## Implementation order

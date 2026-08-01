@@ -31,7 +31,19 @@ function MermaidCard({ source, text }: { source: string; text: string }) {
   const [failed, setFailed] = useState(false);
   const id = useMemo(() => `mermaid-${Math.random().toString(36).slice(2)}`, []);
   useEffect(() => {
-    mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "neutral" });
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: "base",
+      themeVariables: {
+        primaryColor: "#dbeafe",
+        primaryBorderColor: "#2563eb",
+        primaryTextColor: "#172554",
+        secondaryColor: "#dcfce7",
+        tertiaryColor: "#fef3c7",
+        lineColor: "#64748b"
+      }
+    });
     void mermaid.render(id, source).then(({ svg: rendered }) => setSvg(rendered)).catch(() => setFailed(true));
   }, [id, source]);
   return <>

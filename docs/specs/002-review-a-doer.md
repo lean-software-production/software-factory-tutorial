@@ -18,6 +18,15 @@ flowchart LR
     Doer --> Reviewer[Reviewer\nreview.md + success.md]
     Reviewer --> Verdict[Pass/fail findings]
     Verdict --> End([Stop])
+
+    classDef start fill:#fef3c7,stroke:#d97706,color:#78350f,stroke-width:2px
+    classDef doer fill:#dbeafe,stroke:#2563eb,color:#172554,stroke-width:2px
+    classDef reviewer fill:#dcfce7,stroke:#16a34a,color:#14532d,stroke-width:2px
+    classDef outcome fill:#fce7f3,stroke:#db2777,color:#831843,stroke-width:2px
+    class Start,End start
+    class Doer doer
+    class Reviewer reviewer
+    class Verdict outcome
 ```
 
 ## Implementation order
