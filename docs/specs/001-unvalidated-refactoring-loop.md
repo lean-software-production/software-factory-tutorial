@@ -21,7 +21,7 @@ flowchart TD
 
 Teach and build this iteration in this order. Complete each small step before moving to the next one:
 
-1. **Start the Bash loop.** Create `factory/factory.sh`, change to the `factory/` directory, and add the `while true; do ... done` structure that repeats a factory turn. Leave a temporary placeholder in the loop body while establishing the structure.
+1. **Start the Bash loop.** Create `factory/run.sh`, change to the `factory/` directory, and add the `while true; do ... done` structure that repeats a factory turn. Leave a temporary placeholder in the loop body while establishing the structure.
 2. **Add the pause and control flow.** Replace the placeholder with a `read -r -p` pause at the end of each turn so the learner must press Enter before the next turn. Ctrl-C stops the shell and therefore the factory.
 3. **Announce and invoke Pi.** Before that pause, print `Starting refactoring iteration...`, then pipe the refactoring prompt to Pi from `calculator/`. Give Pi only file-inspection and file-editing tools; it must not receive its `bash` tool. Use these commands:
 
@@ -32,7 +32,7 @@ Teach and build this iteration in this order. Complete each small step before mo
 
 4. **Write the worker prompt.** Create `factory/refactor.md`. Tell Pi to inspect the calculator and make one small, behaviour-preserving refactoring. Tell Pi to edit files directly, not run tests, npm, or shell commands, and keep its response concise.
 
-The completed `factory/factory.sh` loops until the learner stops it: Bash announces the refactoring turn, Pi refactors, then Bash pauses for Enter before the next iteration.
+The completed `factory/run.sh` loops until the learner stops it: Bash announces the refactoring turn, Pi refactors, then Bash pauses for Enter before the next iteration.
 
 ## Advanced: substitute another worker
 
@@ -43,7 +43,7 @@ Pi is the blessed default worker. Advanced users may replace the Pi subshell wit
 From the repository root:
 
 ```sh
-./factory/factory.sh
+./factory/run.sh
 ```
 
 Verify manually that the console announces each refactoring turn, Pi can inspect and edit the calculator, Pi cannot invoke a shell tool, and the loop waits for Enter before the next turn.

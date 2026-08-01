@@ -32,7 +32,7 @@ Keep `factory/refactor.md` from the previous iteration and add `factory/fix-test
 
 `fix-tests.md` tells Pi that the last validation failed, supplies the test-failure evidence, and asks it to make the smallest correction it can infer. Like `refactor.md`, it tells Pi to edit files directly and not run tests, npm, or shell commands.
 
-Update `factory/factory.sh`. Each iteration:
+Update `factory/run.sh`. Each iteration:
 
 1. Checks for `test-failure.log`.
 2. If it is absent, pipes `refactor.md` to Pi. If it is present, pipes `fix-tests.md` and `test-failure.log` to Pi.
@@ -60,7 +60,7 @@ Pi is the blessed default worker. Advanced users may replace the Pi subshell wit
 From the repository root:
 
 ```sh
-./factory/factory.sh
+./factory/run.sh
 ```
 
 Verify manually that:
