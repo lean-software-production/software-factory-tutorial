@@ -1,20 +1,16 @@
 # Software factory tutorial 🏭
 
-You're going to build a small software factory. In this case, it is a simple, repeatable machine that improves a codebase a little bit at a time.
-
-The codebase is a [natural language calculator](./calculator) that has become difficult to maintain.
+You're going to build a small software factory: a repeatable validation loop that improves a codebase a little at a time. You will give an agent a clear goal, validate its change independently, and feed the evidence into the next turn. Repeated safely, that feedback loop lets the factory converge on a healthier codebase.
 
 ## About the calculator
 
-The codebase is a "natural language calculator" written in Typescript. Fortunately it has a reasonably comprehensive set of automated tests for its behaviour. Unfortunately the code is a mess.
+The raw material is a natural-language calculator written in TypeScript. It has a solid set of automated tests to provide the factory's first validation evidence, but its code has become messy and hard to maintain. You can inspect the code in [`./calculator`](./calculator). Your factory's job is to make safe, repeated refactorings that clean it up without changing what it does.
 
 See the calculator's [README](./calculator/README.md) for more details.
 
 ## Your goal
 
-You will build simple software factory that makes safe, repeated refactorings to improve the quality of the codebase.
-
-The factory will be implemented as a bash `while` loop that shells out to `pi -p` to run an agent operation each loop.
+You will begin with a bash `while` loop that shells out to `pi -p` for each agent operation, then build it into a loop where independent validation guides the next change.
 
 ## Setup
 
