@@ -125,6 +125,11 @@ export class PiTutorialAdapter {
     await this.chat("Begin the tutorial. Silently identify the current lesson. Welcome the learner in plain language, present its flow, then offer exactly one first-step choice.", "steer", false);
   }
 
+  async resume(): Promise<void> {
+    this.log.info("Submitting the saved-session continuation request to Pi.");
+    await this.chat("The learner has resumed a saved tutorial. Their previous browser transcript is visible to them, but this is a fresh tutor process. Inspect the current factory workspace and the current specification, briefly identify the next unfinished small step, then offer exactly one appropriate choice. Do not repeat the full welcome or assume an unfinished choice is still active.", "steer", false);
+  }
+
   async chat(text: string, delivery: "steer" | "followUp" = "steer", showInTranscript = true): Promise<void> {
     if (!text.trim() || text.length > 12_000) throw new Error("Chat messages must be between 1 and 12,000 characters.");
     if (showInTranscript) this.#bus.publish({ type: "user-message", markdown: text });

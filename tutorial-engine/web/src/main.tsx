@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import mermaid from "mermaid";
 import { ChoiceIcon } from "./choice-icon.js";
 import { FileExcerptCodeBlock, Markdown } from "./markdown.js";
-import { parseTutorialEvent, serializeBrowserMessage, type BrowserMessage, type RunState, type TutorialEvent } from "../../src/protocol/events.js";
+import { parseTutorialEvent, serializeBrowserMessage, type BrowserMessage, type RunState, type SessionBootstrap, type TutorialEvent } from "../../src/protocol/events.js";
 import type { ProgressItem } from "../../src/lesson/load.js";
 import "./styles.css";
 
@@ -67,13 +67,18 @@ function TranscriptEvent({ event, send }: { event: Event; send: (message: Browse
     case "choice": return <ChoiceCard event={event} send={send} />;
     case "tool-start": case "tool-progress": case "tool-complete": return null;
     case "tool-error": case "error": return <Card title="Something needs attention" className="error"><p>{event.message}</p>{event.retryable && <p className="muted">You can retry or tell the coach what happened.</p>}</Card>;
-    case "choice-resolved": case "run-state": case "audit": return null;
+    case "choice-resolved": case "run-state": case "session-state": case "audit": return null;
   }
 }
 
 function ChoiceCard({ event, send }: { event: Extract<Event, { type: "choice" }>; send: (message: BrowserMessage) => void }) {
   const [chosen, setChosen] = useState<string>();
-  return <Card title="Your choice" className="choice"><p>{event.question}</p><div className="options">{event.options.map((option) => <button key={option.id} disabled={Boolean(chosen)} onClick={() => { setChosen(option.id); send({ type: "choose", choiceId: event.id, optionId: option.id }); }}><span className="choice-option-label"><ChoiceIcon category={option.icon} /><strong>{option.label}</strong></span>{option.description && <span className="choice-option-description">{option.description}</span>}</button>)}</div></Card>;
+  return <Card title="Your choice" className="choice"><p>{event.question}</p><div className="options">{event.options.map((option) => <button key={option.id} disabled={event.historical || Boolean(chosen)} onClick={() => { setChosen(option.id); send({ type: "choose", choiceId: event.id, optionId: option.id }); }}><span className="choice-option-label"><ChoiceIcon category={option.icon} /><strong>{option.label}</strong></span>{option.description && <span className="choice-option-description">{option.description}</span>}</button>)}</div>{event.historical && <p className="muted">This was a choice from the saved session.</p>}</Card>;
+}
+
+function SessionStartCard({ session, send }: { session: SessionBootstrap; send: (message: BrowserMessage) => void }) {
+  if (session.state !== "select") return null;
+  return <Card title="Continue this tutorial?" className="choice"><p>A saved session was found. Resume keeps the factory files and shows the earlier transcript. Starting again removes everything in <code>factory/</code>.</p><div className="options"><button onClick={() => send({ type: "start-session", mode: "resume" })}><span className="choice-option-label"><ChoiceIcon category="do" /><strong>Resume saved session</strong></span></button><button onClick={() => send({ type: "start-session", mode: "fresh" })}><span className="choice-option-label"><ChoiceIcon category="restart" /><strong>Start again</strong></span><span className="choice-option-description">Deletes factory/* and begins from the first step.</span></button></div></Card>;
 }
 
 function App() {
@@ -82,21 +87,26 @@ function App() {
   const [events, setEvents] = useState<Event[]>([]);
   const [validationCommands, setValidationCommands] = useState<Array<{ id: string; label: string }>>([]);
   const [progress, setProgress] = useState<ProgressItem[]>([]);
+  const [session, setSession] = useState<SessionBootstrap>({ state: "starting", hasSavedSession: false });
   const [text, setText] = useState("");
-  const send = (message: BrowserMessage) => { void fetch("/api/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: serializeBrowserMessage(message) }); };
+  const send = (message: BrowserMessage) => {
+    if (message.type === "start-session") setSession((current) => ({ ...current, state: "starting" }));
+    void fetch("/api/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: serializeBrowserMessage(message) });
+  };
   useEffect(() => {
     const source = new EventSource("/api/events");
     source.onmessage = ({ data }) => {
       const event = parseTutorialEvent(data) as WireEvent;
-      if (event.type === "snapshot") { setTitle(event.title); setState(event.runState); setEvents(event.events); setValidationCommands(event.validationCommands); setProgress(event.progress); return; }
+      if (event.type === "snapshot") { setTitle(event.title); setState(event.runState); setEvents(event.events.reduce(applyEvent, [])); setValidationCommands(event.validationCommands); setProgress(event.progress); setSession(event.session); return; }
       if (event.type === "run-state") setState(event.state);
+      if (event.type === "session-state") { setSession(event.session); return; }
       setEvents((current) => applyEvent(current, event));
     };
     return () => source.close();
   }, []);
   return <main><header><div><p className="eyebrow">LOCAL TUTORIAL</p><h1>{title}</h1><nav className="progress" aria-label="Tutorial progress">{progress.map((item) => <span key={item.id} className={item.state}>{item.label}</span>)}</nav></div><span className={`state ${state}`}>{state.replace("-", " ")}</span></header>
-    <section className="transcript" aria-live="polite">{events.map((event, index) => <TranscriptEvent key={`${event.type}-${index}`} event={event} send={send} />)}{state === "working" && <div className="thinking" role="status"><span aria-hidden="true" />Thinking…</div>}</section>
-    <footer><form onSubmit={(event) => { event.preventDefault(); if (text.trim()) { send({ type: "chat", text }); setText(""); } }}><label className="visually-hidden" htmlFor="chat">Message the coach</label><textarea id="chat" value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (text.trim()) { send({ type: "chat", text }); setText(""); } } }} placeholder="Ask the coach or steer the current step…" rows={2} /><button type="submit">Send</button></form><div className="secondary"><button onClick={() => send({ type: "abort" })} disabled={state === "idle"}>Stop</button>{validationCommands.map((command) => <button key={command.id} onClick={() => send({ type: "run-validation", commandId: command.id })}>{command.label}</button>)}</div></footer>
+    <section className="transcript" aria-live="polite"><SessionStartCard session={session} send={send} />{events.map((event, index) => <TranscriptEvent key={`${event.type}-${index}`} event={event} send={send} />)}{session.state !== "select" && state === "working" && <div className="thinking" role="status"><span aria-hidden="true" />Thinking…</div>}</section>
+    {session.state === "active" && <footer><form onSubmit={(event) => { event.preventDefault(); if (text.trim()) { send({ type: "chat", text }); setText(""); } }}><label className="visually-hidden" htmlFor="chat">Message the coach</label><textarea id="chat" value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (text.trim()) { send({ type: "chat", text }); setText(""); } } }} placeholder="Ask the coach or steer the current step…" rows={2} /><button type="submit">Send</button></form><div className="secondary"><button onClick={() => send({ type: "abort" })} disabled={state === "idle"}>Stop</button>{validationCommands.map((command) => <button key={command.id} onClick={() => send({ type: "run-validation", commandId: command.id })}>{command.label}</button>)}</div></footer>}
   </main>;
 }
 

@@ -20,7 +20,8 @@ export const choiceOptionSchema = Type.Object({
     Type.Literal("show"),
     Type.Literal("confirm"),
     Type.Literal("automate"),
-    Type.Literal("pause")
+    Type.Literal("pause"),
+    Type.Literal("restart")
   ]),
   description: Type.Optional(Type.String({ maxLength: 500 }))
 });

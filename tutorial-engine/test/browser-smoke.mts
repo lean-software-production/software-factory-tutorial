@@ -25,7 +25,7 @@ async function main(): Promise<void> {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (request.method === "GET" && url.pathname === "/api/events") {
       response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-      response.write(`data: ${JSON.stringify({ type: "snapshot", title: "Browser smoke", runState: "awaiting-choice", events: [], validationCommands: [], progress: [] })}\n\n`);
+      response.write(`data: ${JSON.stringify({ type: "snapshot", title: "Browser smoke", runState: "awaiting-choice", events: [], validationCommands: [], progress: [], session: { state: "active", hasSavedSession: false } })}\n\n`);
       response.write(`data: ${JSON.stringify({ type: "choice", id: "smoke-choice", question: "Choose a path", options: [{ id: "hands-on", label: "I’ll do it", icon: "do" }, { id: "delegate", label: "Make it for me", icon: "automate" }] })}\n\n`);
       return;
     }

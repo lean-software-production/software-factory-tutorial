@@ -3,7 +3,7 @@ import type { ProgressItem } from "../lesson/load.js";
 
 export type RunState = "idle" | "working" | "awaiting-choice" | "failed";
 
-export const choiceIconCategories = ["do", "show", "confirm", "automate", "pause"] as const;
+export const choiceIconCategories = ["do", "show", "confirm", "automate", "pause", "restart"] as const;
 export type ChoiceIconCategory = (typeof choiceIconCategories)[number];
 
 export interface ChoiceOption {
@@ -30,8 +30,14 @@ export interface AuditEvent {
   message?: string;
 }
 
+export interface SessionBootstrap {
+  state: "select" | "starting" | "active";
+  hasSavedSession: boolean;
+}
+
 export type TutorialEvent =
-  | { type: "snapshot"; title: string; runState: RunState; events: TutorialEvent[]; validationCommands: Array<{ id: string; label: string }>; progress: ProgressItem[] }
+  | { type: "snapshot"; title: string; runState: RunState; events: TutorialEvent[]; validationCommands: Array<{ id: string; label: string }>; progress: ProgressItem[]; session: SessionBootstrap }
+  | { type: "session-state"; session: SessionBootstrap }
   | { type: "run-state"; state: RunState }
   | { type: "assistant-delta"; messageId: string; delta: string }
   | { type: "assistant-message"; messageId: string; markdown: string }
@@ -43,12 +49,13 @@ export type TutorialEvent =
   | { type: "validation"; id: string; label: string; command: string; output: string; exitCode: number | null; passed: boolean; durationMs: number }
   | { type: "presentation"; presentation: InitialPresentation }
   | { type: "file-excerpt"; title: string; path: string; startLine: number; content: string; truncated: boolean }
-  | { type: "choice"; id: string; question: string; options: ChoiceOption[] }
+  | { type: "choice"; id: string; question: string; options: ChoiceOption[]; historical?: boolean }
   | { type: "choice-resolved"; id: string; optionId: string }
   | AuditEvent
   | { type: "error"; message: string; retryable: boolean };
 
 export type BrowserMessage =
+  | { type: "start-session"; mode: "resume" | "fresh" }
   | { type: "chat"; text: string; delivery?: "steer" | "followUp" }
   | { type: "choose"; choiceId: string; optionId: string }
   | { type: "abort" }
@@ -58,6 +65,7 @@ export function isBrowserMessage(value: unknown): value is BrowserMessage {
   if (!value || typeof value !== "object" || typeof (value as { type?: unknown }).type !== "string") return false;
   const message = value as Record<string, unknown>;
   if (message.type === "abort") return true;
+  if (message.type === "start-session") return message.mode === "resume" || message.mode === "fresh";
   if (message.type === "chat") return typeof message.text === "string" && message.text.length <= 12_000 && (message.delivery === undefined || message.delivery === "steer" || message.delivery === "followUp");
   if (message.type === "choose") return typeof message.choiceId === "string" && typeof message.optionId === "string";
   return message.type === "run-validation" && typeof message.commandId === "string";
