@@ -4,7 +4,7 @@ Add an agent that reviews the doer's change against the success criteria.
 
 ## Key concept
 
-A factory needs a doer and a reviewer with different responsibilities. The doer changes the calculator. The reviewer examines that change, runs independent checks, and reports whether it meets the learner's definition of success.
+A factory needs a doer and a reviewer with different responsibilities. The doer changes the calculator. The reviewer examines that change, runs independent checks, and reports whether it preserves behaviour and moves the calculator towards the learner's definition of success.
 
 This iteration performs one doer turn followed by one reviewer turn. It is still not a repeated loop and has no recovery path.
 
@@ -33,7 +33,7 @@ flowchart LR
 
 Keep `factory/success.md`, `factory/refactor.md`, and the one-shot doer invocation from the first iteration. Teach and build this iteration in this order. Complete each small step before moving to the next one:
 
-1. **Write the reviewer prompt.** Create `factory/review.md`. Tell the reviewer to inspect the doer's previous change against the supplied `success.md` criteria. It should read the code and diff, run tests and relevant installed complexity or quality tools, and report independent evidence. It must not modify files.
+1. **Write the reviewer prompt.** Create `factory/review.md`. Tell the reviewer to inspect the doer's previous change against the supplied `success.md` criteria. It should read the code and diff, run tests and relevant installed complexity or quality tools, and report independent evidence. It must verify preserved behaviour and assess whether the change advances, or at least does not compromise, each criterion. It must not expect one small refactoring to achieve the factory's whole destination, and it must not modify files.
 
    Require this response format:
 

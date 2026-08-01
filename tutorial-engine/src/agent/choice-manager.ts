@@ -10,6 +10,10 @@ interface PendingChoice {
 export class ChoiceManager {
   readonly #pending = new Map<string, PendingChoice>();
 
+  get pendingIds(): readonly string[] {
+    return [...this.#pending.keys()];
+  }
+
   wait(id: string, options: ChoiceOption[], signal?: AbortSignal): Promise<string> {
     if (this.#pending.has(id)) throw new Error(`Choice '${id}' is already pending.`);
     return new Promise<string>((resolve, reject) => {
@@ -41,8 +45,10 @@ export class ChoiceManager {
     return true;
   }
 
-  cancelAll(reason = "Choice cancelled."): void {
+  cancelAll(reason = "Choice cancelled."): string[] {
+    const cancelled = [...this.#pending.keys()];
     for (const choice of this.#pending.values()) choice.reject(new Error(reason));
     this.#pending.clear();
+    return cancelled;
   }
 }

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { loadLesson } from "./lesson/load.js";
-import { createTutorialLogger } from "./runtime-log.js";
+import { createTutorialLogger, defaultTutorialLogPath } from "./runtime-log.js";
 import { startLocalServer } from "./server/local-server.js";
 
 function usage(): never {
@@ -12,7 +12,8 @@ function usage(): never {
 }
 
 async function main(): Promise<void> {
-  const log = createTutorialLogger();
+  const log = createTutorialLogger({ filePath: defaultTutorialLogPath() });
+  log.info(`Writing diagnostics to ${log.filePath}.`);
   const args = process.argv.slice(2);
   const target = args.find((arg) => !arg.startsWith("-"));
   if (!target) usage();

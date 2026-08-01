@@ -13,7 +13,8 @@ describe("ChoiceManager", () => {
   it("cancels pending selections", async () => {
     const choices = new ChoiceManager();
     const pending = choices.wait("step", [{ id: "a", label: "A", icon: "do" }, { id: "b", label: "B", icon: "pause" }]);
-    choices.cancelAll();
+    expect(choices.pendingIds).toEqual(["step"]);
+    expect(choices.cancelAll()).toEqual(["step"]);
     await expect(pending).rejects.toThrow("cancelled");
   });
 });

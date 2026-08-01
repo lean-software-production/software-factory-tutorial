@@ -37,6 +37,8 @@ At the beginning, silently read README.md, then docs/specs/README.md, then the f
 
 Teach only the current iteration, one small step at a time, in the implementation order stated by the current specification. Explain what each step achieves before explaining how.
 
+When generating \`factory/success.md\` on the learner's behalf, default to Kent Beck's four rules of simple design: passes its tests, reveals intention, no duplication, and fewest elements. Present them as the destination for the factory's accumulated refactorings, not as a checklist that one change must complete. Preserve behaviour, and let the learner refine the criteria if they choose.
+
 Every offer_choices option must supply an icon category. Use the standard mapping: “I’ll do it”=do; “Make it for me”=automate; “I’ve made this step”=confirm; “Show me exactly what to type”=show; and “Make this step for me”=automate. Use pause for a stop or pause choice.
 
 For a new change, use offer_choices to offer “I’ll do it” and “Make it for me.” If the learner selects “I’ll do it,” first use present_markdown to give a short conceptual outline of the few moves ahead. Then immediately begin the first guided step. Name the file and relevant nearby code, explain the intent, and show a small code snippet the learner can type. Do not give a large finished-file replacement. After every guided step, use offer_choices with these labels: “I’ve made this step”, “Show me exactly what to type”, and “Make this step for me”. If they ask for exact typing instructions, give the precise small edit; if they ask you to make it, edit only that step. If the learner says they are done or asks for feedback, read the relevant file and compare it to the current spec. If they say it is not working, inspect the relevant files and evidence before offering a correction.
@@ -59,6 +61,7 @@ export class PiTutorialAdapter {
   #heartbeat?: NodeJS.Timeout;
   #toolLabels = new Map<string, string>();
   #respondingMessages = new Set<string>();
+  #supersededChoices = new Set<string>();
 
   private constructor(readonly lesson: LessonDefinition, readonly workspace: string, bus: TutorialEventBus, boundary: WorkspaceBoundary, private readonly log: TutorialLogger) {
     this.#bus = bus;
@@ -125,11 +128,20 @@ export class PiTutorialAdapter {
   async chat(text: string, delivery: "steer" | "followUp" = "steer", showInTranscript = true): Promise<void> {
     if (!text.trim() || text.length > 12_000) throw new Error("Chat messages must be between 1 and 12,000 characters.");
     if (showInTranscript) this.#bus.publish({ type: "user-message", markdown: text });
+    const queuedBehindTurn = this.#session.isStreaming;
+    if (queuedBehindTurn) this.log.info(`Pi is already working; this learner request will be queued as ${delivery}.`);
+    if (this.#state === "awaiting-choice") {
+      const pendingChoices = this.choices.pendingIds;
+      this.log.info(`Learner request arrived while awaiting choice ${pendingChoices.join(", ") || "(not yet registered)"}; it will supersede that choice.`);
+      const superseded = this.choices.cancelAll("Learner message superseded this choice.");
+      superseded.forEach((choiceId) => this.#supersededChoices.add(choiceId));
+      if (superseded.length) this.log.info("Learner message superseded the outstanding choice; releasing Pi to respond.");
+    }
     this.log.info(`Submitting ${showInTranscript ? "learner" : "initial"} request to Pi (${text.length} characters; ${delivery}).`);
     this.setState("working");
     try {
-      await this.#session.prompt(text, this.#session.isStreaming ? { streamingBehavior: delivery } : undefined);
-      this.log.info("Pi finished processing the request.");
+      await this.#session.prompt(text, queuedBehindTurn ? { streamingBehavior: delivery } : undefined);
+      this.log.info(queuedBehindTurn ? "Learner request is queued behind the active tutor turn." : "Pi finished processing the request.");
     } catch (error) {
       this.log.error("Pi could not process the request", error);
       this.setState("failed");
@@ -241,7 +253,10 @@ export class PiTutorialAdapter {
       const label = this.#toolLabels.get(event.toolCallId) ?? event.toolName;
       this.#toolLabels.delete(event.toolCallId);
       this.#activity = "waiting for Pi";
-      if (event.isError) {
+      if (event.isError && this.#supersededChoices.delete(event.toolCallId)) {
+        this.log.info("Pi choice was superseded by a learner message.");
+        this.#bus.publish({ type: "tool-complete", toolId: event.toolCallId, summary: "Choice superseded by learner message." });
+      } else if (event.isError) {
         this.log.info(`Pi tool “${label}” failed: ${content || `${event.toolName} failed.`}`);
         this.#bus.publish({ type: "tool-error", toolId: event.toolCallId, message: content || `${event.toolName} failed.`, retryable: true });
       } else {
@@ -249,6 +264,10 @@ export class PiTutorialAdapter {
         this.log.info(`Pi completed tool “${label}”${validationResult}.`);
         this.#bus.publish({ type: "tool-complete", toolId: event.toolCallId, summary: content });
       }
+      return;
+    }
+    if (event.type === "queue_update") {
+      this.log.info(`Pi message queue: ${event.steering.length} steering request${event.steering.length === 1 ? "" : "s"} and ${event.followUp.length} follow-up request${event.followUp.length === 1 ? "" : "s"} waiting.`);
       return;
     }
     if (event.type === "agent_settled") {

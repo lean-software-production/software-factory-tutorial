@@ -1,6 +1,6 @@
 # Define success and invoke a doer
 
-Define what a good refactoring looks like, run one agent operation, then review its work yourself.
+Define what a well-factored calculator looks like, run one agent operation, then review its work yourself.
 
 ## Key concept
 
@@ -27,8 +27,8 @@ flowchart LR
 
 Teach and build this iteration in this order. Complete each small step before moving to the next one:
 
-1. **Define success.** Create `factory/success.md` before creating either agent prompt. Describe, in your own terms, what a good refactoring of this calculator looks like. Choose clear, observable criteria that fit the change you want to make, and for each one say what evidence a reviewer should examine—for example, tests, a diff, imports and dependencies, or an installed complexity tool. The criteria are the standard that both agents will use. Help the learner make their criteria evidence-based if they are stuck, without prescribing the criteria themselves.
-2. **Write the doer prompt.** Create `factory/refactor.md`. Tell the doer to study `../factory/success.md` and that it must use those criteria to choose one small, behaviour-preserving refactoring, and that it must edit files directly. Tell it not to run tests, npm, or shell commands, and to keep its response concise.
+1. **Define success.** Create `factory/success.md` before creating either agent prompt. Describe, in your own terms, the well-factored calculator the factory should produce after many refactorings. Default to Kent Beck's four rules of simple design: passes its tests, reveals intention, no duplication, and fewest elements. The learner may refine those criteria. For each, name evidence a reviewer can use to tell whether a change preserves or advances it—for example, tests, a diff, imports and dependencies, or an installed complexity tool. Make the criteria a durable strategy for the whole factory, not a checklist for the next refactoring. They should guide the doer's choice of tactic without prescribing it. Help the learner make their criteria evidence-based if they are stuck.
+2. **Write the doer prompt.** Create `factory/refactor.md`. Tell the doer to study `../factory/success.md` and use those criteria to choose one small, behaviour-preserving refactoring that moves the calculator towards the desired state. It must edit files directly. Tell it not to run tests, npm, or shell commands, and to keep its response concise.
 3. **Invoke Pi.** Create `factory/run.sh`. Change to the script's directory, then pipe `refactor.md` to Pi running from `calculator/`. Give Pi only file-inspection and file-editing tools; it must not receive its `bash` tool. Use this script:
 
    ```sh
