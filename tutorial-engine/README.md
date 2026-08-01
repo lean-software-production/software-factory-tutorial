@@ -14,6 +14,8 @@ npm run dev -- ..
 
 Add `--no-open` to suppress browser launch, or `--port 4310` to choose a port. The server binds only to `127.0.0.1`. Pi credentials remain in the server process; the browser has no filesystem or provider-credential access.
 
+Keep the launching terminal open. It prints timestamped startup, browser, Pi, tool, validation, and shutdown events. While Pi is working, a heartbeat every 15 seconds names its current activity, so a browser spinner always has a corresponding server-side status.
+
 ## Tutorial convention
 
 A tutorial needs no engine configuration file. The engine infers it from the directory:

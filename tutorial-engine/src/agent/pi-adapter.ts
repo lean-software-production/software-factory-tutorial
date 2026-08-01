@@ -14,11 +14,21 @@ import { ValidationRunner } from "../validation/runner.js";
 import { ChoiceManager } from "./choice-manager.js";
 import { createTutorialTools } from "./tutorial-tools.js";
 import { createWorkspaceTools, WorkspaceBoundary } from "./workspace-boundary.js";
+import type { TutorialLogger } from "../runtime-log.js";
 
 const TOOL_NAMES = [
   "read", "edit", "write", "grep", "find", "ls",
   "present_markdown", "present_diagram", "offer_choices", "run_validation", "show_file_excerpt"
 ];
+
+/** Log operational identifiers, but never tool content or learner chat text. */
+function toolDetail(args: unknown): string {
+  if (!args || typeof args !== "object") return "";
+  const value = args as Record<string, unknown>;
+  if (typeof value.path === "string") return ` for ${value.path}`;
+  if (typeof value.commandId === "string") return ` for validation ${value.commandId}`;
+  return "";
+}
 
 export function coachingSystemPrompt(lesson: LessonDefinition): string {
   return `You are a patient tutorial tutor for "${lesson.title}". The learner is building a software factory; the kata is its raw material.
@@ -44,17 +54,24 @@ export class PiTutorialAdapter {
   #session!: AgentSession;
   #state: RunState = "idle";
   #messageCounter = 0;
+  #activity = "waiting for Pi";
+  #workingSince = 0;
+  #heartbeat?: NodeJS.Timeout;
+  #toolLabels = new Map<string, string>();
+  #respondingMessages = new Set<string>();
 
-  private constructor(readonly lesson: LessonDefinition, readonly workspace: string, bus: TutorialEventBus, boundary: WorkspaceBoundary) {
+  private constructor(readonly lesson: LessonDefinition, readonly workspace: string, bus: TutorialEventBus, boundary: WorkspaceBoundary, private readonly log: TutorialLogger) {
     this.#bus = bus;
     this.#boundary = boundary;
     this.validation = new ValidationRunner(lesson.validationCommands, workspace);
   }
 
-  static async create(lesson: LessonDefinition, workspace: string, bus: TutorialEventBus): Promise<PiTutorialAdapter> {
+  static async create(lesson: LessonDefinition, workspace: string, bus: TutorialEventBus, log: TutorialLogger): Promise<PiTutorialAdapter> {
+    log.info(`Resolving tutorial workspace ${workspace}.`);
     const boundary = await WorkspaceBoundary.create(workspace);
     const canonicalWorkspace = boundary.root;
-    const adapter = new PiTutorialAdapter(lesson, canonicalWorkspace, bus, boundary);
+    const adapter = new PiTutorialAdapter(lesson, canonicalWorkspace, bus, boundary, log);
+    log.info("Loading Pi configuration and tutorial-only resources.");
     const loader = new DefaultResourceLoader({
       cwd: canonicalWorkspace,
       agentDir: getAgentDir(),
@@ -71,6 +88,7 @@ export class PiTutorialAdapter {
       extensionFactories: []
     });
     await loader.reload();
+    log.info("Pi resources loaded; creating restricted tutor tools.");
     const tools = createTutorialTools({
       lesson,
       workspace: canonicalWorkspace,
@@ -80,6 +98,7 @@ export class PiTutorialAdapter {
       emit: (event) => bus.publish(event),
       setRunState: (state) => adapter.setState(state)
     });
+    log.info("Creating Pi agent session.");
     const { session } = await createAgentSession({
       cwd: canonicalWorkspace,
       resourceLoader: loader,
@@ -92,22 +111,27 @@ export class PiTutorialAdapter {
     });
     adapter.#session = session;
     session.subscribe((event) => adapter.onPiEvent(event));
+    log.info("Pi agent session created and event monitoring is active.");
     return adapter;
   }
 
   get state(): RunState { return this.#state; }
 
   async begin(): Promise<void> {
+    this.log.info("Submitting the initial welcome request to Pi.");
     await this.chat("Begin the tutorial. Silently identify the current lesson. Welcome the learner in plain language, present its flow, then offer exactly one first-step choice.", "steer", false);
   }
 
   async chat(text: string, delivery: "steer" | "followUp" = "steer", showInTranscript = true): Promise<void> {
     if (!text.trim() || text.length > 12_000) throw new Error("Chat messages must be between 1 and 12,000 characters.");
     if (showInTranscript) this.#bus.publish({ type: "user-message", markdown: text });
+    this.log.info(`Submitting ${showInTranscript ? "learner" : "initial"} request to Pi (${text.length} characters; ${delivery}).`);
     this.setState("working");
     try {
       await this.#session.prompt(text, this.#session.isStreaming ? { streamingBehavior: delivery } : undefined);
+      this.log.info("Pi finished processing the request.");
     } catch (error) {
+      this.log.error("Pi could not process the request", error);
       this.setState("failed");
       this.#bus.publish({ type: "error", message: error instanceof Error ? error.message : "Pi failed to start.", retryable: true });
     }
@@ -120,48 +144,91 @@ export class PiTutorialAdapter {
   async runValidation(commandId: string): Promise<void> {
     const command = this.lesson.validationCommands.find((item) => item.id === commandId);
     if (!command) throw new Error(`Validation command '${commandId}' is not allowed.`);
-    this.setState("working");
+    this.log.info(`Starting validation “${command.label}” (${commandId}).`);
+    this.setState("working", `running validation “${command.label}”`);
     try {
       const result = await this.validation.run(commandId, (text) => this.#bus.publish({ type: "tool-progress", toolId: `validation:${commandId}`, text }));
+      this.log.info(`Validation “${command.label}” ${result.passed ? "passed" : "failed"} in ${result.durationMs}ms (exit ${result.exitCode ?? "no code"}).`);
       this.#bus.publish({ type: "validation", id: command.id, label: command.label, ...result });
       this.setState("idle");
     } catch (error) {
+      this.log.error(`Validation “${command.label}” could not run`, error);
       this.setState("failed");
       this.#bus.publish({ type: "error", message: error instanceof Error ? error.message : "Validation could not start.", retryable: true });
     }
   }
 
   async abort(): Promise<void> {
+    this.log.info("Aborting the current tutor request at the learner's request.");
     this.choices.cancelAll("Learner stopped the current step.");
     await this.#session.abort();
     this.setState("idle");
   }
 
   dispose(): void {
+    this.log.info("Disposing the Pi tutor session.");
+    this.stopHeartbeat();
     this.choices.cancelAll("Tutorial server stopped.");
     this.#session.dispose();
   }
 
-  private setState(state: RunState): void {
+  private setState(state: RunState, activity = "waiting for Pi"): void {
+    const changed = this.#state !== state;
     this.#state = state;
+    if (state === "working") {
+      this.#activity = activity;
+      if (changed) this.startHeartbeat();
+    } else {
+      this.stopHeartbeat();
+    }
+    if (changed) this.log.info(`Tutor state: ${state}${state === "working" ? ` (${this.#activity}).` : "."}`);
     this.#bus.publish({ type: "run-state", state });
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.#workingSince = Date.now();
+    this.#heartbeat = setInterval(() => {
+      this.log.info(`Tutor is still ${this.#activity} (${Math.round((Date.now() - this.#workingSince) / 1_000)} seconds).`);
+    }, 15_000);
+    this.#heartbeat.unref();
+  }
+
+  private stopHeartbeat(): void {
+    if (this.#heartbeat) clearInterval(this.#heartbeat);
+    this.#heartbeat = undefined;
   }
 
   private onPiEvent(event: AgentSessionEvent): void {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       const message = event.message as { id?: string };
-      this.#bus.publish({ type: "assistant-delta", messageId: message.id ?? `assistant-${this.#messageCounter}`, delta: event.assistantMessageEvent.delta });
+      const messageId = message.id ?? `assistant-${this.#messageCounter}`;
+      if (!this.#respondingMessages.has(messageId)) {
+        this.#respondingMessages.add(messageId);
+        this.#activity = "receiving Pi's response";
+        this.log.info("Pi started responding.");
+      }
+      this.#bus.publish({ type: "assistant-delta", messageId, delta: event.assistantMessageEvent.delta });
       return;
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
       const message = event.message as { id?: string; content?: Array<{ type: string; text?: string }> };
+      const messageId = message.id ?? `assistant-${this.#messageCounter++}`;
       const markdown = message.content?.filter((item) => item.type === "text").map((item) => item.text ?? "").join("") ?? "";
-      if (markdown) this.#bus.publish({ type: "assistant-message", messageId: message.id ?? `assistant-${this.#messageCounter++}`, markdown });
+      if (markdown) {
+        this.#respondingMessages.delete(messageId);
+        this.log.info(`Pi completed a response (${markdown.length} characters).`);
+        this.#bus.publish({ type: "assistant-message", messageId, markdown });
+      }
       return;
     }
     if (event.type === "tool_execution_start") {
       const definition = this.#session.getToolDefinition(event.toolName);
-      this.#bus.publish({ type: "tool-start", tool: { id: event.toolCallId, name: event.toolName, label: definition?.label ?? event.toolName } });
+      const label = definition?.label ?? event.toolName;
+      this.#toolLabels.set(event.toolCallId, label);
+      this.#activity = `running ${label}`;
+      this.log.info(`Pi started tool “${label}”${toolDetail(event.args)} (${event.toolCallId}).`);
+      this.#bus.publish({ type: "tool-start", tool: { id: event.toolCallId, name: event.toolName, label } });
       return;
     }
     if (event.type === "tool_execution_update") {
@@ -171,10 +238,22 @@ export class PiTutorialAdapter {
     }
     if (event.type === "tool_execution_end") {
       const content = event.result?.content?.filter((item: { type: string }) => item.type === "text").map((item: { text?: string }) => item.text ?? "").join("") ?? "";
-      if (event.isError) this.#bus.publish({ type: "tool-error", toolId: event.toolCallId, message: content || `${event.toolName} failed.`, retryable: true });
-      else this.#bus.publish({ type: "tool-complete", toolId: event.toolCallId, summary: content });
+      const label = this.#toolLabels.get(event.toolCallId) ?? event.toolName;
+      this.#toolLabels.delete(event.toolCallId);
+      this.#activity = "waiting for Pi";
+      if (event.isError) {
+        this.log.info(`Pi tool “${label}” failed: ${content || `${event.toolName} failed.`}`);
+        this.#bus.publish({ type: "tool-error", toolId: event.toolCallId, message: content || `${event.toolName} failed.`, retryable: true });
+      } else {
+        const validationResult = event.toolName === "run_validation" && content ? `: ${content}` : "";
+        this.log.info(`Pi completed tool “${label}”${validationResult}.`);
+        this.#bus.publish({ type: "tool-complete", toolId: event.toolCallId, summary: content });
+      }
       return;
     }
-    if (event.type === "agent_settled" && this.#state !== "awaiting-choice") this.setState("idle");
+    if (event.type === "agent_settled") {
+      this.log.info("Pi agent settled.");
+      if (this.#state !== "awaiting-choice") this.setState("idle");
+    }
   }
 }

@@ -17,14 +17,13 @@ describe("loadLesson", () => {
     ]);
   });
 
-  it("loads the repository tutorial and its current iteration", async () => {
+  it("loads the repository tutorial regardless of how many lesson rows its ledger contains", async () => {
     const loaded = await loadLesson(tutorialRoot);
     expect(loaded.definition.title).toBe("Software factory tutorial 🏭");
     expect(loaded.definition.validationCommands).toEqual([]);
-    expect(loaded.progress).toMatchObject([
-      { id: "orientation", state: "done" },
-      { id: "001", state: "current" },
-      { id: "002", state: "upcoming" },
-    ]);
+    expect(loaded.progress[0]).toEqual({ id: "orientation", label: "Orientation", state: "done" });
+    expect(loaded.progress.length).toBeGreaterThan(1);
+    expect(loaded.progress.filter((item) => item.state === "current")).toHaveLength(1);
+    expect(loaded.progress.slice(1).every((item) => item.id.length > 0 && item.label.length > 0)).toBe(true);
   });
 });

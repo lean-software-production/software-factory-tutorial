@@ -7,6 +7,7 @@ import type { ProgressItem } from "../lesson/load.js";
 import { TutorialEventBus } from "../protocol/event-bus.js";
 import { isBrowserMessage, type BrowserMessage, type TutorialEvent } from "../protocol/events.js";
 import { PiTutorialAdapter } from "../agent/pi-adapter.js";
+import { createTutorialLogger, type TutorialLogger } from "../runtime-log.js";
 
 const MIME_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -20,6 +21,7 @@ export interface LocalServerOptions {
   webRoot: string;
   progress: ProgressItem[];
   port?: number;
+  logger?: TutorialLogger;
 }
 
 export interface StartedServer {
@@ -57,9 +59,13 @@ function headers(response: ServerResponse): void {
 }
 
 export async function startLocalServer(options: LocalServerOptions): Promise<StartedServer> {
+  const log = options.logger ?? createTutorialLogger();
+  log.info(`Checking browser interface at ${resolve(options.webRoot, "index.html")}.`);
   await access(resolve(options.webRoot, "index.html"));
+  log.info("Creating the local tutor session; this may contact Pi's configured provider.");
   const bus = new TutorialEventBus();
-  const adapter = await PiTutorialAdapter.create(options.lesson, options.workspace, bus);
+  const adapter = await PiTutorialAdapter.create(options.lesson, options.workspace, bus, log);
+  log.info("Tutor session is ready.");
   const clients = new Set<ServerResponse>();
   let server: Server;
 
@@ -79,17 +85,28 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
       response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
       writeEvent(response, { type: "snapshot", title: options.lesson.title, runState: adapter.state, events: [...bus.history()], validationCommands: options.lesson.validationCommands.map(({ id, label }) => ({ id, label })), progress: options.progress });
       clients.add(response);
+      log.info(`Browser connected to the event stream (${clients.size} client${clients.size === 1 ? "" : "s"}).`);
       const keepAlive = setInterval(() => response.write(": keepalive\n\n"), 20_000);
-      request.on("close", () => { clearInterval(keepAlive); clients.delete(response); });
+      request.on("close", () => {
+        clearInterval(keepAlive);
+        clients.delete(response);
+        log.info(`Browser disconnected from the event stream (${clients.size} client${clients.size === 1 ? "" : "s"} remaining).`);
+      });
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/messages") {
       try {
         const body = await readJson(request);
-        if (!isBrowserMessage(body)) return sendJson(response, 400, { error: "Invalid browser message." });
+        if (!isBrowserMessage(body)) {
+          log.info("Rejected an invalid browser message.");
+          return sendJson(response, 400, { error: "Invalid browser message." });
+        }
+        const detail = body.type === "chat" ? `chat (${body.text.length} characters)` : body.type === "choose" ? `choice ${body.choiceId}/${body.optionId}` : body.type === "run-validation" ? `validation ${body.commandId}` : "abort";
+        log.info(`Browser requested ${detail}.`);
         dispatch(body);
         return sendJson(response, 202, { accepted: true });
       } catch (error) {
+        log.error("Browser request failed", error);
         return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." });
       }
     }
@@ -113,17 +130,22 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
   const unsubscribe = bus.subscribe((event) => {
     for (const client of clients) writeEvent(client, event);
   });
+  server.on("error", (error) => log.error("Local HTTP server error", error));
   const port = options.port ?? 0;
+  log.info(`Binding local HTTP server to 127.0.0.1:${port || "an available port"}.`);
   await new Promise<void>((resolvePromise, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => { server.off("error", reject); resolvePromise(); });
   });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Could not determine tutorial server address.");
+  const url = `http://127.0.0.1:${address.port}`;
+  log.info("Starting the tutor's welcome request.");
   void adapter.begin();
   return {
-    url: `http://127.0.0.1:${address.port}`,
+    url,
     close: async () => {
+      log.info("Closing tutor session and browser connections.");
       unsubscribe();
       adapter.dispose();
       for (const client of clients) client.end();
