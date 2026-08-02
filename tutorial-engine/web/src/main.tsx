@@ -7,6 +7,10 @@ import { parseTutorialEvent, serializeBrowserMessage, type BrowserMessage, type 
 import type { ProgressItem } from "../../src/lesson/load.js";
 import "./styles.css";
 
+// Resolved against the page, not the server root, so the tutorial also works when
+// something (e.g. the canvas dev-server control) proxies it under a subfolder path.
+const apiUrl = (route: string) => new URL(`api/${route}`, document.baseURI).toString();
+
 type Event = Exclude<TutorialEvent, { type: "snapshot" }>;
 type Snapshot = Extract<TutorialEvent, { type: "snapshot" }>;
 type WireEvent = Event | Snapshot;
@@ -94,12 +98,12 @@ function App() {
   const send = (message: BrowserMessage) => {
     if (!serverConnected) return;
     if (message.type === "start-session") setSession((current) => ({ ...current, state: "starting" }));
-    void fetch("/api/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: serializeBrowserMessage(message) })
+    void fetch(apiUrl("messages"), { method: "POST", headers: { "Content-Type": "application/json" }, body: serializeBrowserMessage(message) })
       .then((response) => { if (!response.ok) setServerConnection("disconnected"); })
       .catch(() => setServerConnection("disconnected"));
   };
   useEffect(() => {
-    const source = new EventSource("/api/events");
+    const source = new EventSource(apiUrl("events"));
     source.onopen = () => setServerConnection("connected");
     source.onerror = () => setServerConnection("disconnected");
     source.onmessage = ({ data }) => {

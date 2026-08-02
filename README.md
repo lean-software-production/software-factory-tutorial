@@ -31,7 +31,21 @@ npm run setup
 npm run tutorial
 ```
 
-The command opens the local tutor in your browser. Leave it running. In another terminal, work in the factory directory:
+The command opens the local tutor in your browser. It listens on loopback only; if no
+browser opens, visit the printed address yourself.
+
+To reach the tutor from another machine — for example through a proxy that serves it under
+a subfolder, such as the EnsembleWorks canvas dev-server control at `/dev/4310/` — pick the
+port the proxy expects and bind beyond loopback:
+
+```sh
+npm run tutorial -- --port 4310 --host 0.0.0.0 --no-open
+```
+
+The tutor has no authentication and edits the working tree, so only do that on a network you
+trust.
+
+Leave it running. In another terminal, work in the factory directory:
 
 ```sh
 cd factory
