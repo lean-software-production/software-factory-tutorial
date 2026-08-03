@@ -5,7 +5,8 @@
   "description": "A browser-led tutorial for building software validation loops.",
   "type": "module",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.19.0",
+    "npm": ">=11.0.0"
   },
   "workspaces": [
     "calculator",

@@ -14,7 +14,11 @@ You will begin with a bash `while` loop that shells out to `pi -p` for each agen
 
 ## Setup
 
-You need Node.js 22.19 or later, npm, a browser, and an authenticated Pi. Use Vim or any other editor; Docker and VS Code are not required.
+You need Node.js 22.19 or later, npm 11 or later, a browser, and an authenticated Pi. Use Vim or any other editor; Docker and VS Code are not required.
+
+Node 22 still bundles npm 10, which cannot record the `libc` field this repository's lockfile
+uses and quietly strips it on every install. `npm install` warns when it is too old; upgrade
+with `npm install -g npm@11`.
 
 From the repository root:
 
