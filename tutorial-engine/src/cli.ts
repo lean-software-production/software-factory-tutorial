@@ -2,28 +2,20 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { ArgumentError, parseArguments, USAGE } from "./cli-arguments.js";
 import { loadLesson } from "./lesson/load.js";
 import { createTutorialLogger, defaultTutorialLogPath } from "./runtime-log.js";
 import { LOOPBACK_HOST, startLocalServer } from "./server/local-server.js";
 
-function usage(): never {
-  console.error("Usage: tutorial-engine <tutorial-directory> [--port 4310] [--host 0.0.0.0] [--no-open]");
-  process.exit(1);
-}
-
 async function main(): Promise<void> {
+  const parsed = parseArguments(process.argv.slice(2));
+  if (parsed.kind === "help") {
+    console.log(USAGE);
+    return;
+  }
+  const { target, port, host, noOpen } = parsed.options;
   const log = createTutorialLogger({ filePath: defaultTutorialLogPath() });
   log.info(`Writing diagnostics to ${log.filePath}.`);
-  const args = process.argv.slice(2);
-  const target = args.find((arg) => !arg.startsWith("-"));
-  if (!target) usage();
-  const portIndex = args.indexOf("--port");
-  const port = portIndex >= 0 ? Number(args[portIndex + 1]) : undefined;
-  if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) usage();
-  const hostIndex = args.indexOf("--host");
-  const host = hostIndex >= 0 ? args[hostIndex + 1] : undefined;
-  if (hostIndex >= 0 && (!host || host.startsWith("-"))) usage();
-  const noOpen = args.includes("--no-open");
 
   log.info(`Starting tutorial server for ${resolve(target)}.`);
   log.info("Loading tutorial definition and progress.");
@@ -64,6 +56,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
+  if (error instanceof ArgumentError) {
+    console.error(`${error.message}\n${USAGE}`);
+    process.exitCode = 1;
+    return;
+  }
   createTutorialLogger().error("Tutorial server could not start", error);
   process.exitCode = 1;
 });
