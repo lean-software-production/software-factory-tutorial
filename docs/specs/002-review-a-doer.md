@@ -35,6 +35,19 @@ Keep `factory/success.md`, `factory/refactor.md`, and the one-shot doer invocati
 
 1. **Write the reviewer prompt.** Create `factory/review.md`. Tell the reviewer to inspect the doer's previous change against the supplied `success.md` criteria. It should read the code and diff, run tests and relevant installed complexity or quality tools, and report independent evidence. It must verify preserved behaviour and assess whether the change advances, or at least does not compromise, each criterion. It must not expect one small refactoring to achieve the factory's whole destination, and it must not modify files.
 
+   Name the commands rather than the packages, because the wrong entry point in the same package can stall the loop. The calculator workspace exposes one script per measurement, each printing to the terminal and exiting non-zero when it finds a problem:
+
+   ```sh
+   npm run lint         # eslint: complexity, depth, function length, duplicated branches
+   npm run duplication  # jscpd: copy-paste clones, with locations
+   npm run cycles       # madge: circular imports
+   npm run deadcode     # knip: unused files, exports, and dependencies
+   npm run quality      # all four in sequence, stopping at the first failure
+   npm run complexity   # ccts-json: cognitive complexity scores, no threshold
+   ```
+
+   Tell the reviewer to prefer these scripts over calling the tools directly. Two of the installed packages misbehave when invoked by name: `cognitive-complexity-ts`'s default `ccts` binary starts a web server on port 5678 and never exits, so only the `ccts-json` form behind `npm run complexity` is safe; and `code-health-meter` writes HTML instead of terminal output, shells out to `pnpm` and Graphviz, and still exits `0` when those are missing, so a reviewer cannot read a verdict from it.
+
    Require this response format:
 
    ```text
@@ -70,7 +83,7 @@ From the repository root:
 Verify manually that the reviewer:
 
 - is announced before Pi is invoked, runs after the doer, and does not edit calculator files;
-- can run `npm test` and the quality tools it needs;
+- can run `npm test` and the quality scripts it needs, and cites their output rather than a package name;
 - returns exactly one `PASS` or `FAIL` verdict; and
 - reports a specific pass-or-fail finding for every criterion in `factory/success.md`.
 

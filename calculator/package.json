@@ -16,14 +16,26 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && vitest run",
-    "start": "tsx src/cli.ts"
+    "start": "tsx src/cli.ts",
+    "lint": "eslint src",
+    "complexity": "ccts-json src",
+    "duplication": "jscpd src --min-lines 3 --min-tokens 10 --reporters console",
+    "cycles": "madge --circular src --extensions ts",
+    "deadcode": "knip",
+    "quality": "npm run lint && npm run duplication && npm run cycles && npm run deadcode"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "code-health-meter": "^4.1.2",
     "cognitive-complexity-ts": "^0.8.2",
+    "eslint": "^10.8.0",
+    "eslint-plugin-sonarjs": "^4.2.0",
+    "jscpd": "^4.0.5",
+    "knip": "^6.31.0",
+    "madge": "^7.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
+    "typescript-eslint": "^8.66.0",
     "vitest": "^2.1.8"
   }
 }
