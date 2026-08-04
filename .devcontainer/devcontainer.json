@@ -1,0 +1,30 @@
+{
+	"name": "software-factory-tutorial",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+	"mounts": [
+		"source=software-factory-tutorial-state,target=/home/vscode/.tutorial-state,type=volume"
+	],
+	"containerEnv": {
+		"PI_CODING_AGENT_DIR": "/home/vscode/.tutorial-state/pi-agent"
+	},
+	// An OpenCode Zen key on the host authenticates Pi without an interactive
+	// /login. It lives in remoteEnv, not containerEnv, so rotating the host
+	// value needs only a reopen rather than a rebuild, and the key is never
+	// baked into the container's creation metadata. Hosts without the variable
+	// pass an empty string, which Pi reads as "no key" and ignores, so the
+	// `pi` + /login path keeps working untouched.
+	"remoteEnv": {
+		"OPENCODE_API_KEY": "${localEnv:OPENCODE_API_KEY}"
+	},
+	"forwardPorts": [4310],
+	"portsAttributes": {
+		"4310": {
+			"label": "tutor",
+			"onAutoForward": "openBrowser"
+		}
+	},
+	"postCreateCommand": "bash .devcontainer/post-create.sh",
+	"remoteUser": "vscode"
+}
