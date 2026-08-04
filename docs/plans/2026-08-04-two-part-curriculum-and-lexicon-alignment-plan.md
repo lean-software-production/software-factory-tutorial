@@ -383,8 +383,8 @@ in this order:
 1. **Write the validator prompt.** Create `factory/refactor-validate.md`. Its job to be done is one
    sentence: was the change a single refactoring, and did it reduce what
    `node scripts/quality.mjs` reports against the recorded baseline? Tell it to read the working-tree diff
-   in `calculator/`, run `node scripts/quality.mjs`, and compare the result with
-   `../factory/refactor-quality-before.txt`. It must not modify any file, and it must not run shell
+   in `calculator/`, run `node scripts/quality.mjs`, and compare the result with the baseline
+   supplied to it on standard input after the prompt. It must not modify any file, and it must not run shell
    commands that modify files.
 
    Require this response format:
@@ -410,7 +410,7 @@ in this order:
      exit 1
    fi
    echo "Starting validation..."
-   cat refactor-validate.md \
+   cat refactor-validate.md refactor-quality-before.txt \
      | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
      | tee refactor-validate-findings.txt
    ```
@@ -927,7 +927,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 echo "Starting validation..."
-cat refactor-validate.md \\
+cat refactor-validate.md refactor-quality-before.txt \\
   | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \\
   | tee refactor-validate-findings.txt
 `;
@@ -1361,7 +1361,7 @@ export const validateRunPath = "factory/refactor-validate.sh";
 const doerRunPath = "factory/refactor-do.sh";
 const refactorPath = "factory/refactor.md";
 
-export const validate = `Read the working-tree diff in the calculator and decide one thing: was the change a single refactoring, and did it reduce what \`node scripts/quality.mjs\` reports compared with \`../factory/refactor-quality-before.txt\`?
+export const validate = `Read the working-tree diff in the calculator and decide one thing: was the change a single refactoring, and did it reduce what \`node scripts/quality.mjs\` reports compared with the baseline included below?
 
 Run \`node scripts/quality.mjs\` yourself and quote what it reported. Do not modify any file, and do not run shell commands that modify files.
 
@@ -1382,7 +1382,7 @@ if [ ! -f refactor-quality-before.txt ]; then
   exit 1
 fi
 echo "Starting validation..."
-cat refactor-validate.md \\
+cat refactor-validate.md refactor-quality-before.txt \\
   | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \\
   | tee refactor-validate-findings.txt
 `;
@@ -1391,7 +1391,7 @@ const editableValidateRun = correctValidateRun.replace("read,grep,find,ls,bash",
 const unguardedValidateRun = correctValidateRun.replace(/if \[ ! -f refactor-quality-before\.txt \]; then\n.*\n.*\nfi\n/, "");
 
 export const lesson003FinalState: ArtifactState = {
-  [validatePath]: { exists: true, contains: [/quality\.mjs/, /refactor-quality-before\.txt/, /VERDICT: PASS/, /EVIDENCE/], excludes: [/edit files/i] },
+  [validatePath]: { exists: true, contains: [/quality\.mjs/, /baseline/, /VERDICT: PASS/, /EVIDENCE/], excludes: [/edit files/i] },
   [validateRunPath]: {
     exists: true,
     contains: [/Starting validation/, /--tools read,grep,find,ls,bash -p/, /tee refactor-validate-findings\.txt/, /refactor-quality-before\.txt/],
