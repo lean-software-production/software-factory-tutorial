@@ -741,7 +741,7 @@ Replace the body of `docs/specs/006-route-failed-verdicts-to-repair.md` with the
    and chooses the next machine from it:
 
    ```sh
-   verdict=$(grep -m1 -o 'VERDICT: \(PASS\|FAIL\)' validate-findings.txt || echo "VERDICT: FAIL")
+   verdict=$(grep -m1 -o 'VERDICT: \(PASS\|FAIL\)' validate-findings.txt | head -1 || echo "VERDICT: FAIL")
    if [ "$verdict" = "VERDICT: FAIL" ]; then
      echo "Starting repair..."
      cat repair.md success.md validate-findings.txt \
@@ -749,8 +749,10 @@ Replace the body of `docs/specs/006-route-failed-verdicts-to-repair.md` with the
    fi
    ```
 
-   An unreadable or missing verdict is treated as a failure. Say why: the alternative is a line that
-   treats "I could not tell" as "everything is fine".
+   `head -1` matters: `grep -m1` stops at the first matching *line* but prints every match on it, so
+   a validator that restates its own output format would produce a two-line value matching neither
+   branch. A missing or unreadable verdict is treated as a failure. Say why: the alternative is a
+   line that treats "I could not tell" as "everything is fine".
 
 **Checks.** Run `./factory/refactor/run.sh` and confirm that a passing verdict starts the next
 refactoring, a failing verdict starts a repair carrying the findings, and the repair machine is
