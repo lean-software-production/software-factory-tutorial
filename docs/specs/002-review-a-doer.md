@@ -38,10 +38,10 @@ Keep `factory/success.md`, `factory/refactor.md`, and the one-shot doer invocati
    Name the command rather than the package, so the reviewer quotes output instead of working out how to run a tool. The calculator workspace exposes one quality measurement:
 
    ```sh
-   npm run --silent quality
+   node scripts/quality.mjs
    ```
 
-   It reports complexity and size findings with a file, a line, and a rule name, then unused files, exports, and dependencies — printing both reports even when the first one fails, and exiting non-zero if either reports. `--silent` keeps npm from appending its own `command failed` block to that non-zero exit, which a reviewer would otherwise read as a broken script. Tell the reviewer to cite that output.
+   It reports complexity and size findings with a file, a line, and a rule name, then unused files, exports, and dependencies — printing both reports even when the first one fails, and exiting non-zero if either reports. Give the reviewer this form rather than `npm run quality`: npm appends its own `command failed` block to a non-zero exit, which a reviewer reads as a broken script rather than as code with findings. Tell the reviewer to cite that output.
 
    Require this response format:
 

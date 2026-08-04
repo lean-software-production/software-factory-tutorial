@@ -44,12 +44,13 @@ npm test
 better:
 
 ```sh
-npm run --silent quality
+node scripts/quality.mjs
 ```
 
-`--silent` matters: the command exits non-zero whenever it finds something, and without it npm
-appends its own `npm error … command failed` block, which reads like the script broke rather than
-like the code has findings.
+`npm run quality` does the same thing. Prefer the direct form in scripts and agent prompts: the
+check exits non-zero whenever it finds something, and npm appends its own `npm error … command
+failed` block to that exit, which reads like the script broke rather than like the code has
+findings. `npm run --silent quality` suppresses that too.
 
 It runs two checks and prints both reports, even when the first one fails, so a single run shows
 the whole picture:
