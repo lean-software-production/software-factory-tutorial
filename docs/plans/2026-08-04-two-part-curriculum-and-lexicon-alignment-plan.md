@@ -373,7 +373,7 @@ Its boundary is the mirror image of the doer's. The doer could edit and could no
 validator can run things and cannot edit. That is not a detail — an agent that both makes a change
 and reports on it is reporting on itself.
 
-This validator is deliberately simple. It knows one number.
+This validator is deliberately simple. It knows one check.
 
 ## Implementation order
 
@@ -381,8 +381,8 @@ Keep `factory/refactor.md` and `factory/refactor-do.sh` from the previous lesson
 in this order:
 
 1. **Write the validator prompt.** Create `factory/refactor-validate.md`. Its job to be done is one
-   sentence: was the change a single refactoring, and did it improve
-   `node scripts/quality.mjs` against the recorded baseline? Tell it to read the working-tree diff
+   sentence: was the change a single refactoring, and did it reduce what
+   `node scripts/quality.mjs` reports against the recorded baseline? Tell it to read the working-tree diff
    in `calculator/`, run `node scripts/quality.mjs`, and compare the result with
    `../factory/refactor-quality-before.txt`. It must not modify any file, and it must not run shell
    commands that modify files.
@@ -447,7 +447,7 @@ refuses rather than reporting on a stale baseline.
 
 ## Pressure test
 
-This validator knows one number. Ask it whether the change revealed intention, or removed
+This validator knows one check. Ask it whether the change revealed intention, or removed
 duplication, and it has nothing to say — you never told it what good looks like. Hold that thought;
 it is what Part 2 answers.
 
@@ -605,7 +605,7 @@ Replace the body of `docs/specs/005-join-them-into-an-assembly-line.md`. It must
    fewest elements. For each, name evidence a validator can quote — a command whose output it can
    paste, not a package name it must work out how to run. Make the criteria a durable strategy for
    the whole line, not a checklist for the next refactoring, and say why: the validator in lesson
-   003 knew one number, which was enough while a human read every verdict. A line that runs
+   003 knew one check, which was enough while a human read every verdict. A line that runs
    unattended needs criteria that outlive a single turn.
 
 3. **Point both prompts at the criteria.** Both `refactor.md` and `validate.md` now read
@@ -1361,7 +1361,7 @@ export const validateRunPath = "factory/refactor-validate.sh";
 const doerRunPath = "factory/refactor-do.sh";
 const refactorPath = "factory/refactor.md";
 
-export const validate = `Read the working-tree diff in the calculator and decide one thing: was the change a single refactoring, and did it improve \`node scripts/quality.mjs\` compared with \`../factory/refactor-quality-before.txt\`?
+export const validate = `Read the working-tree diff in the calculator and decide one thing: was the change a single refactoring, and did it reduce what \`node scripts/quality.mjs\` reports compared with \`../factory/refactor-quality-before.txt\`?
 
 Run \`node scripts/quality.mjs\` yourself and quote what it reported. Do not modify any file, and do not run shell commands that modify files.
 

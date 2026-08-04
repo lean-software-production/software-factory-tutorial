@@ -97,7 +97,7 @@ The learner writes `refactor-validate.md` and `refactor-validate.sh`, then runs 
 hand whenever they want. Nothing chains it to the doer.
 
 The validator's prompt is deliberately simple. Its job to be done is narrow enough to state in one
-sentence — was the change a single refactoring, and did it improve `node scripts/quality.mjs`
+sentence — was the change a single refactoring, and did it reduce what `node scripts/quality.mjs` reports
 against the recorded baseline? — and its response format is a verdict plus evidence:
 
 ```text
@@ -108,7 +108,7 @@ EVIDENCE:
 ```
 
 Handing the learner a polished validation prompt here would teach nothing; they would copy it. A
-naive validator that knows one number is something they can see the limits of, and those limits are
+naive validator that knows one check is something they can see the limits of, and those limits are
 what lesson 005's `success.md` answers.
 
 The validator gets `read,grep,find,ls,bash` and no `edit` or `write`. Its prompt forbids
@@ -163,7 +163,7 @@ folder — which is why the line needed an edge before it could be named.
 `factory/refactor/run.sh` runs the doer, then the validator, then pauses, repeatedly. It prints the
 verdict and stops for the learner between passes.
 
-`success.md` arrives in this lesson and for this reason: the naive validator knew one number, which
+`success.md` arrives in this lesson and for this reason: the naive validator knew one check, which
 was enough while a human read every verdict, but a line that runs unattended needs criteria that
 outlive a single turn. The learner writes what a well-factored calculator looks like, defaulting to
 Kent Beck's four rules of simple design, and names evidence a validator can quote for each. Both
