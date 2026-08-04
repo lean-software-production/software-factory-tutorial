@@ -18,9 +18,10 @@ Three things in that one line are worth naming.
 
 The text on standard input is the **job to be done**. Nothing else tells the agent what you want.
 
-`-p` makes the run **headless**: Pi does the job and exits, with no human in the conversation while
-it works. That matters because everything you build after this runs without you watching it. An
-agent you have to talk to cannot be part of something that runs on its own.
+The run is **headless**: Pi does the job and exits, with no human in the conversation while it
+works. `-p` asks for that explicitly. That matters because everything you build after this runs
+without you watching it. An agent you have to talk to cannot be part of something that runs on its
+own.
 
 `--tools read,grep,find,ls` is the **boundary**. This agent can look at the calculator and nothing
 else — it cannot change a file even if it decides it should. You will draw a different boundary for
@@ -32,18 +33,17 @@ The learner creates no files in this lesson. Teach it in this order:
 
 1. **Run the command.** From the repository root, run the command above and read what comes back.
    The answer is unremarkable; the mechanics are the lesson.
-2. **Run it again without `-p`.** Drop the `-p` and run it again. Pi opens an interactive session
-   instead of answering and exiting. Have the learner leave the session with `/exit`. Ask them what
-   would happen if a script ran the second form and walked away.
-3. **Change the job.** Have the learner replace the sentence on standard input with a question of
-   their own and run it again. The harness did not change; only the job did.
+2. **Change the job.** Have the learner replace the sentence on standard input with a question of
+   their own and run it again. The harness did not change; only the job did. Ask them what would
+   happen if a script ran this and walked away — nothing is waiting for a person, which is the
+   whole point.
 
 ## Checks
 
 Ask the learner to answer these from what they just ran, in their own words:
 
 - Which part of the command was the harness, and which part was the job to be done?
-- What did `-p` change?
+- What made the run headless, and why does that matter for what comes next?
 - What could this agent not have done, however it was asked?
 
 ## Pressure test

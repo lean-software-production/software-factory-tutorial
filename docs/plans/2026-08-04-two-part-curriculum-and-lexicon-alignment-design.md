@@ -39,8 +39,8 @@ machines, and the learner should join them before naming the result.
 
 ## Lesson 001: Run an agent headlessly
 
-The learner writes no files. They run one command, read the answer, then run it again without `-p`
-to feel the difference:
+The learner writes no files. They run one command, read the answer, then run it again with a job of
+their own:
 
 ```sh
 echo "Describe what this calculator does, in three sentences." \

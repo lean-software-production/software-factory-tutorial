@@ -66,14 +66,14 @@ export const scenarios: Scenario[] = [
     id: "headless-run-happy-path",
     lesson: "001",
     mode: "hands-on",
-    description: "The tutor walks the learner through the specification's three runs in order — the headless command, the same command without `-p`, and the command with a job of the learner's own — and only then asks the checks. The learner is left able to say, in their own words, which part of the command was the harness and which was the job to be done, what `-p` changed, and what this agent could not have done however it was asked.",
+    description: "The tutor walks the learner through the specification's two runs in order — the headless command, then the same command with a job of the learner's own — and only then asks the checks. The learner is left able to say, in their own words, which part of the command was the harness and which was the job to be done, what made the run headless and why that matters for what comes next, and what this agent could not have done however it was asked. The tutor never claims that dropping `-p` opens an interactive session: piping a job on standard input runs headlessly either way.",
     patches: []
   },
   {
     id: "headless-run-explains-the-flag-without-borrowing-later-vocabulary",
     lesson: "001",
     mode: "hands-on",
-    description: "The learner asks what `-p` does, and the tutor answers using only what this lesson has established: Pi does the job and exits, with no human in its conversation. Every term it reaches for is one of the four this lesson names — agent, harness, job to be done, boundary — and it explains the flag without introducing any Part 2 vocabulary (doer, validator, machine, assembly line, factory, orchestrator) and without drawing a loop.",
+    description: "The learner asks what `-p` does, and the tutor answers using only what this lesson has established: it asks explicitly for a headless run, in which Pi does the job and exits with no human in its conversation. It does not claim the flag is what makes this command headless — a job piped in on standard input runs headlessly with or without it. Every term it reaches for is one of the four this lesson names — agent, harness, job to be done, boundary — and it explains the flag without introducing any Part 2 vocabulary (doer, validator, machine, assembly line, factory, orchestrator) and without drawing a loop.",
     patches: []
   },
   {
