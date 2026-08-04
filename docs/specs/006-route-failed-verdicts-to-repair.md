@@ -13,25 +13,24 @@ a `FAIL` scrolls past and the next iteration is identical to the one that would 
 
 Now it branches. For the first time, what runs next depends on what just happened. Deciding which
 machine runs next is the **orchestrator**'s job, and here `run.sh` is doing it. In lesson 004 the
-learner was the orchestrator; this lesson is where that job moves into software.
+learner was the orchestrator; this lesson is where the routing part of that job moves into software.
+The rest of it stays with the learner, and the pressure test is about which rest.
 
 ```mermaid
 flowchart TD
-    Baseline[Record baseline] --> Doer[refactor.md\nDoer]
-    Doer --> Validator[validate.md\nValidator]
+    Baseline[Record baseline] --> Doer[Doer\nrefactor.md]
+    Doer --> Validator[Validator\nvalidate.md]
     Validator --> Verdict{Read the verdict}
     Verdict -- PASS --> Pause[Pause for the learner]
-    Verdict -- FAIL or unreadable --> Repair[repair.md\nDoer, narrower job]
+    Verdict -- FAIL or unreadable --> Repair[Doer, narrower job\nrepair.md]
     Repair --> Pause
     Pause --> Baseline
 
     classDef doer fill:#dbeafe,stroke:#2563eb,color:#172554,stroke-width:2px
-    classDef repair fill:#ffedd5,stroke:#ea580c,color:#7c2d12,stroke-width:2px
     classDef validator fill:#dcfce7,stroke:#16a34a,color:#14532d,stroke-width:2px
     classDef decision fill:#ede9fe,stroke:#7c3aed,color:#3b0764,stroke-width:2px
     classDef plain fill:#f1f5f9,stroke:#475569,color:#0f172a,stroke-width:2px
-    class Doer doer
-    class Repair repair
+    class Doer,Repair doer
     class Validator validator
     class Verdict decision
     class Baseline,Pause plain
@@ -67,7 +66,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    or `VERDICT: FAIL` it can find, and chooses the next machine from it:
 
    ```sh
-   verdict=$(grep -m1 -o 'VERDICT: \(PASS\|FAIL\)' validate-findings.txt || echo "VERDICT: FAIL")
+   verdict=$(grep -m1 -o 'VERDICT: \(PASS\|FAIL\)' validate-findings.txt | head -1 || echo "VERDICT: FAIL")
    if [ "$verdict" = "VERDICT: FAIL" ]; then
      echo "Starting repair..."
      cat repair.md success.md validate-findings.txt \
@@ -79,7 +78,36 @@ Build this lesson in this order. Complete each small step before moving to the n
    criteria the line is working towards, and the findings it is answering. Leave the findings out and
    it has nothing to repair.
 
-   That block goes after the validation phase and before the `read`, so the loop becomes:
+   **The `head -1` is not decoration, and it is worth stopping on.** `grep -m1` stops after the first
+   matching *line*, but `-o` still prints every match found on that line. A validator that quotes its
+   own format back at you — "the verdict must be `VERDICT: PASS` or `VERDICT: FAIL`" is exactly the
+   kind of sentence a model writes into its evidence — puts two matches on one line, and `grep` dutifully
+   prints both:
+
+   ```console
+   $ printf 'must be VERDICT: PASS or VERDICT: FAIL\nVERDICT: FAIL\n' | grep -m1 -o 'VERDICT: \(PASS\|FAIL\)'
+   VERDICT: PASS
+   VERDICT: FAIL
+   ```
+
+   `$verdict` would then be a two-line string equal to neither `VERDICT: PASS` nor `VERDICT: FAIL`,
+   the `if` would not fire, and the line would sail past a failure into the pause — the precise
+   mistake the fallback below exists to prevent, arriving through the one door the fallback does not
+   watch. Note that this is not a case the missing-file fallback catches: `grep` found something, so
+   it exits zero and `||` never runs. `head -1` takes the first match rather than the first matching
+   line, which is what "the first verdict in the file" meant all along.
+
+   Be clear about what that leaves standing. The parse now always yields exactly one verdict, but it
+   is the first verdict *string* in the file, which is only the real verdict because the format
+   lesson 005 gave the validator puts `VERDICT:` on the first line. A validator that opened with a
+   paragraph about the format and reached its judgement afterwards would have that paragraph read as
+   its verdict. The routing is only ever as good as the format the validator keeps to, and that is a
+   thing to know about this line rather than a thing this lesson fixes.
+
+   That block goes after the validation phase and before the `read`. The first three lines of
+   `run.sh` — the shebang, `set -euo pipefail`, and `cd "$(dirname "$0")"` — are unchanged from
+   lesson 005 and are not repeated below; keep them. Every relative path in the loop depends on that
+   `cd`, which is what lets Checks invoke the script from the repository root. The loop becomes:
 
    ```sh
    while true; do
@@ -91,7 +119,7 @@ Build this lesson in this order. Complete each small step before moving to the n
      cat validate.md success.md quality-before.txt \
        | (cd ../../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
        | tee validate-findings.txt
-     verdict=$(grep -m1 -o 'VERDICT: \(PASS\|FAIL\)' validate-findings.txt || echo "VERDICT: FAIL")
+     verdict=$(grep -m1 -o 'VERDICT: \(PASS\|FAIL\)' validate-findings.txt | head -1 || echo "VERDICT: FAIL")
      if [ "$verdict" = "VERDICT: FAIL" ]; then
        echo "Starting repair..."
        cat repair.md success.md validate-findings.txt \
@@ -130,6 +158,18 @@ Build this lesson in this order. Complete each small step before moving to the n
    do it quietly, because a missing verdict prints nothing. Read the other way, the worst case is one
    repair turn that was not needed. The two mistakes are not the same size.
 
+   That fallback leans on something `run.sh` already had. Adding `head -1` put a pipe inside the
+   command substitution, and a pipeline's exit status is its *last* command's — `head` succeeds even
+   when `grep` found nothing, so `||` would never fire. It fires because line two of the script is
+   `set -euo pipefail`, and `pipefail` makes the pipeline report `grep`'s failure. Try the same
+   expression in a shell without it and the fallback silently does nothing:
+
+   ```console
+   $ bash -c 'printf "no verdict\n" | grep -m1 -o "VERDICT: \(PASS\|FAIL\)" | head -1 || echo "VERDICT: FAIL"'
+   $ bash -o pipefail -c 'printf "no verdict\n" | grep -m1 -o "VERDICT: \(PASS\|FAIL\)" | head -1 || echo "VERDICT: FAIL"'
+   VERDICT: FAIL
+   ```
+
    Note what the `if` does not have: an `else`. A `PASS` is not a branch that does something else, it
    is the branch that does nothing — the loop falls through to the pause, and the next iteration
    starts a fresh refactoring exactly as it always did. The pass behaviour is the line the learner
@@ -137,6 +177,18 @@ Build this lesson in this order. Complete each small step before moving to the n
 
    The `tee` overwrites `validate-findings.txt` on every iteration, so the verdict being read is
    always the current one. A `FAIL` cannot stick around and trigger a repair on some later pass.
+
+   Lesson 005 printed the folder as the whole line. It has gained exactly one file:
+
+   ```text
+   factory/refactor/
+     do.sh              validate.sh          run.sh
+     refactor.md        validate.md          success.md
+     repair.md
+     quality-before.txt validate-findings.txt
+   ```
+
+   Three scripts, four prompts, and the two files the machines pass between them.
 
 ## Checks
 
@@ -152,17 +204,29 @@ Verify by hand that:
 - the repair machine is handed the findings — the validator's own words are in what was piped to it;
 - a passing verdict starts no repair, and the next iteration is a fresh refactoring;
 - the loop still pauses for Enter once per iteration, whichever way the verdict went; and
-- a run in which the validator produces no recognisable verdict routes to repair rather than past it.
+- a run in which the validator produces no recognisable verdict routes to repair rather than past it;
+  and
+- a verdict line that mentions both `PASS` and `FAIL` still yields one verdict, not two.
 
-The last one is easier to arrange than to wait for. With the line stopped, overwrite
-`validate-findings.txt` with a few lines of prose containing no verdict, then run just the `verdict=`
-line and the `if` in a shell to see which way it goes.
+The last two are easier to arrange than to wait for. Feed the parse some prose directly, remembering
+that it needs `pipefail` to behave the way `run.sh` makes it behave:
+
+```sh
+bash -o pipefail -c 'printf "The code looks fine to me.\n" \
+  | grep -m1 -o "VERDICT: \(PASS\|FAIL\)" | head -1 || echo "VERDICT: FAIL"'
+
+bash -o pipefail -c 'printf "must be VERDICT: PASS or VERDICT: FAIL\nVERDICT: FAIL\n" \
+  | grep -m1 -o "VERDICT: \(PASS\|FAIL\)" | head -1 || echo "VERDICT: FAIL"'
+```
+
+The first must print `VERDICT: FAIL`. The second must print exactly one line.
 
 ## Pressure test
 
-The line now does by itself what the learner did by hand in lesson 004. It reads a verdict, it
-carries the evidence, and it chooses what runs next. That was the whole of the orchestrator's job as
-lesson 004 described it — and the learner is still sitting at the keyboard.
+The line now does by itself two of the three things the learner did by hand in lesson 004. It reads a
+verdict and chooses what runs next, and it carries the evidence from the validator to the machine
+that needs it. Lesson 004 named a third: judging when to stop. That one has not moved, and the
+learner is still sitting at the keyboard supplying it.
 
 So ask what is left. What can the learner do at that pause that the line cannot do for itself?
 
@@ -179,5 +243,5 @@ So ask what is left. What can the learner do at that pause that the line cannot 
   ends it. It stops when a human stops pressing Enter.
 
 Every one of those is a judgement, and every one of them is still the learner's. The line has taken
-over the mechanical part of the orchestrator's job — routing — and left the part that requires
-knowing what the work is for.
+over the mechanical part of the orchestrator's job — routing the work and carrying the evidence — and
+left the part that requires knowing what the work is for.
