@@ -40,20 +40,17 @@ npm test
 
 ## Measuring quality
 
-`npm test` says whether behaviour still holds. These scripts say whether the code is getting
-better. Each prints to the terminal and exits non-zero when it finds a problem, so a reviewer —
-human or agent — can quote the output as evidence:
+`npm test` says whether behaviour still holds. `npm run quality` says whether the code is getting
+better:
 
 ```sh
-npm run lint         # eslint: complexity, nesting depth, function length, duplicated branches
-npm run duplication  # jscpd: copy-paste clones, with file and line locations
-npm run cycles       # madge: circular imports
-npm run deadcode     # knip: unused files, exports, and dependencies
-npm run quality      # all four, stopping at the first failure
-npm run complexity   # ccts-json: cognitive complexity per function (reports, does not gate)
+npm run quality
 ```
 
-Findings on the starting code are expected: each one names a seam worth refactoring. Prefer
-these scripts to invoking the tools directly — `ccts` (without `-json`) starts a web server and
-never exits, and `code-health-meter` writes HTML files while exiting `0` even when its audits
-fail.
+It runs ESLint over `src`, reporting cognitive complexity, cyclomatic complexity, nesting depth,
+function length, statement count, parameter count, and duplicated branches. Every finding carries
+a file, a line, and the rule name, and the command exits non-zero when it finds any — so a
+reviewer, human or agent, can quote the output as evidence.
+
+Findings on the starting code are expected: each one names a seam worth refactoring. The
+thresholds describe the well-factored destination, so a finished refactoring reports none.

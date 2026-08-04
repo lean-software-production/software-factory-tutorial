@@ -14,11 +14,16 @@ export default tseslint.config(
   {
     files: ["src/**/*.ts"],
     rules: {
-      // Reveals intention: small units with shallow control flow.
-      complexity: ["error", { max: 8 }],
-      "max-depth": ["error", 3],
-      "max-lines-per-function": ["error", { max: 40, skipBlankLines: true, skipComments: true }],
-      "max-params": ["error", 4],
+      // Reveals intention: small units with shallow control flow. The thresholds are
+      // deliberately tight so a smell reports while it is still small, rather than
+      // only once a function has grown past rescuing. A well-factored calculator
+      // clears them; the starting code does not.
+      complexity: ["error", { max: 5 }],
+      "sonarjs/cognitive-complexity": ["error", 5],
+      "max-depth": ["error", 2],
+      "max-lines-per-function": ["error", { max: 20, skipBlankLines: true, skipComments: true }],
+      "max-statements": ["error", 12],
+      "max-params": ["error", 3],
       // No duplication: structural repetition that token-based tools miss.
       "sonarjs/no-identical-functions": "error",
       "sonarjs/no-duplicated-branches": "error",
