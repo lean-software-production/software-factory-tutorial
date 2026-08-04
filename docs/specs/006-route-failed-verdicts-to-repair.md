@@ -62,11 +62,11 @@ Build this lesson in this order. Complete each small step before moving to the n
    Like every other prompt on the line, `repair.md` names no path to go and fetch. Its inputs — the
    criteria and the findings — arrive appended to it by the caller.
 
-2. **Branch on the verdict.** `run.sh` scans `validate-findings.txt` for the first `VERDICT: PASS`
-   or `VERDICT: FAIL` it can find, and chooses the next machine from it:
+2. **Branch on the verdict.** `run.sh` takes the first line of `validate-findings.txt` that *begins*
+   with `VERDICT: PASS` or `VERDICT: FAIL`, and chooses the next machine from it:
 
    ```sh
-   verdict=$(grep -m1 -o 'VERDICT: \(PASS\|FAIL\)' validate-findings.txt | head -1 || echo "VERDICT: FAIL")
+   verdict=$(grep -m1 -o '^VERDICT: \(PASS\|FAIL\)' validate-findings.txt || echo "VERDICT: FAIL")
    if [ "$verdict" = "VERDICT: FAIL" ]; then
      echo "Starting repair..."
      cat repair.md success.md validate-findings.txt \
@@ -78,31 +78,26 @@ Build this lesson in this order. Complete each small step before moving to the n
    criteria the line is working towards, and the findings it is answering. Leave the findings out and
    it has nothing to repair.
 
-   **The `head -1` is not decoration, and it is worth stopping on.** `grep -m1` stops after the first
-   matching *line*, but `-o` still prints every match found on that line. A validator that quotes its
-   own format back at you — "the verdict must be `VERDICT: PASS` or `VERDICT: FAIL`" is exactly the
-   kind of sentence a model writes into its evidence — puts two matches on one line, and `grep` dutifully
-   prints both:
+   **That `^` is the whole of the parse's correctness, and it is worth stopping on.** Without it the
+   pattern matches a verdict string anywhere on a line, including inside a sentence about verdicts.
+   The validator is a model being asked to justify itself, and a model justifying itself quotes the
+   rules it was given. "The verdict must be `VERDICT: PASS` or `VERDICT: FAIL`, and mine is:" is an
+   entirely ordinary thing for it to write above its actual answer — and an unanchored `grep` would
+   read `PASS` out of that sentence and skip the repair the file below it was asking for. The line
+   would carry on refactoring on top of a change the validator had just failed, having been told so
+   in writing.
 
-   ```console
-   $ printf 'must be VERDICT: PASS or VERDICT: FAIL\nVERDICT: FAIL\n' | grep -m1 -o 'VERDICT: \(PASS\|FAIL\)'
-   VERDICT: PASS
-   VERDICT: FAIL
-   ```
+   Anchored, the pattern can only match a line that opens with `VERDICT:`, so prose about verdicts is
+   invisible to it however the validator phrases its reasoning. `-m1` then stops at the first such
+   line, and `-o` trims it to the verdict itself, discarding anything the validator appended after it.
 
-   `$verdict` would then be a two-line string equal to neither `VERDICT: PASS` nor `VERDICT: FAIL`,
-   the `if` would not fire, and the line would sail past a failure into the pause — the precise
-   mistake the fallback below exists to prevent, arriving through the one door the fallback does not
-   watch. Note that this is not a case the missing-file fallback catches: `grep` found something, so
-   it exits zero and `||` never runs. `head -1` takes the first match rather than the first matching
-   line, which is what "the first verdict in the file" meant all along.
-
-   Be clear about what that leaves standing. The parse now always yields exactly one verdict, but it
-   is the first verdict *string* in the file, which is only the real verdict because the format
-   lesson 005 gave the validator puts `VERDICT:` on the first line. A validator that opened with a
-   paragraph about the format and reached its judgement afterwards would have that paragraph read as
-   its verdict. The routing is only ever as good as the format the validator keeps to, and that is a
-   thing to know about this line rather than a thing this lesson fixes.
+   Be clear about what that rests on, because it is this lesson's real subject. The anchor works
+   because lesson 005 told the validator to open its response with `VERDICT:` on the first non-empty
+   line, and for no other reason. The orchestrator does not understand the verdict; it recognises a
+   shape, and the shape is a promise the validator makes and could break. Every branch in every line
+   the learner builds after this one will rest on some agreement of that kind between a machine that
+   writes and a machine that reads. When routing goes wrong, this is usually where to look — not at
+   the branch, but at whether the thing being read still looks the way the reader was told to expect.
 
    That block goes after the validation phase and before the `read`. The first three lines of
    `run.sh` — the shebang, `set -euo pipefail`, and `cd "$(dirname "$0")"` — are unchanged from
@@ -119,7 +114,7 @@ Build this lesson in this order. Complete each small step before moving to the n
      cat validate.md success.md quality-before.txt \
        | (cd ../../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
        | tee validate-findings.txt
-     verdict=$(grep -m1 -o 'VERDICT: \(PASS\|FAIL\)' validate-findings.txt | head -1 || echo "VERDICT: FAIL")
+     verdict=$(grep -m1 -o '^VERDICT: \(PASS\|FAIL\)' validate-findings.txt || echo "VERDICT: FAIL")
      if [ "$verdict" = "VERDICT: FAIL" ]; then
        echo "Starting repair..."
        cat repair.md success.md validate-findings.txt \
@@ -158,18 +153,6 @@ Build this lesson in this order. Complete each small step before moving to the n
    do it quietly, because a missing verdict prints nothing. Read the other way, the worst case is one
    repair turn that was not needed. The two mistakes are not the same size.
 
-   That fallback leans on something `run.sh` already had. Adding `head -1` put a pipe inside the
-   command substitution, and a pipeline's exit status is its *last* command's — `head` succeeds even
-   when `grep` found nothing, so `||` would never fire. It fires because line two of the script is
-   `set -euo pipefail`, and `pipefail` makes the pipeline report `grep`'s failure. Try the same
-   expression in a shell without it and the fallback silently does nothing:
-
-   ```console
-   $ bash -c 'printf "no verdict\n" | grep -m1 -o "VERDICT: \(PASS\|FAIL\)" | head -1 || echo "VERDICT: FAIL"'
-   $ bash -o pipefail -c 'printf "no verdict\n" | grep -m1 -o "VERDICT: \(PASS\|FAIL\)" | head -1 || echo "VERDICT: FAIL"'
-   VERDICT: FAIL
-   ```
-
    Note what the `if` does not have: an `else`. A `PASS` is not a branch that does something else, it
    is the branch that does nothing — the loop falls through to the pause, and the next iteration
    starts a fresh refactoring exactly as it always did. The pass behaviour is the line the learner
@@ -206,20 +189,22 @@ Verify by hand that:
 - the loop still pauses for Enter once per iteration, whichever way the verdict went; and
 - a run in which the validator produces no recognisable verdict routes to repair rather than past it;
   and
-- a verdict line that mentions both `PASS` and `FAIL` still yields one verdict, not two.
+- a report whose opening sentence quotes both `PASS` and `FAIL` is still routed on the verdict line
+  underneath it, not on the sentence.
 
-The last two are easier to arrange than to wait for. Feed the parse some prose directly, remembering
-that it needs `pipefail` to behave the way `run.sh` makes it behave:
+The last two are easier to arrange than to wait for. Feed the parse some prose directly:
 
 ```sh
-bash -o pipefail -c 'printf "The code looks fine to me.\n" \
-  | grep -m1 -o "VERDICT: \(PASS\|FAIL\)" | head -1 || echo "VERDICT: FAIL"'
+bash -c 'printf "The code looks fine to me.\n" > d.txt
+  grep -m1 -o "^VERDICT: \(PASS\|FAIL\)" d.txt || echo "VERDICT: FAIL"'
 
-bash -o pipefail -c 'printf "must be VERDICT: PASS or VERDICT: FAIL\nVERDICT: FAIL\n" \
-  | grep -m1 -o "VERDICT: \(PASS\|FAIL\)" | head -1 || echo "VERDICT: FAIL"'
+bash -c 'printf "must be VERDICT: PASS or VERDICT: FAIL, and mine is:\nVERDICT: FAIL\n" > d.txt
+  grep -m1 -o "^VERDICT: \(PASS\|FAIL\)" d.txt || echo "VERDICT: FAIL"'
 ```
 
-The first must print `VERDICT: FAIL`. The second must print exactly one line.
+Both must print `VERDICT: FAIL`, the second from its verdict line rather than from the sentence above
+it. Delete `d.txt` afterwards. Drop the `^` from either command and watch the second one change its
+mind — that is the whole reason the anchor is there.
 
 ## Pressure test
 
