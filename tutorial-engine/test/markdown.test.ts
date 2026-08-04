@@ -36,4 +36,28 @@ describe("Markdown", () => {
     expect(markup).toContain('class="hljs-keyword">const</span>');
     expect(markup).toContain(">Copy</button>");
   });
+
+  it("wraps prose excerpts so a long line cannot widen the page", () => {
+    const prose = renderToStaticMarkup(createElement(FileExcerptCodeBlock, {
+      path: "factory/success.md",
+      source: "The calculator passes its tests, reveals its intention, carries no duplication, and uses the fewest elements the behaviour requires."
+    }));
+    const findings = renderToStaticMarkup(createElement(FileExcerptCodeBlock, {
+      path: "factory/refactor/validate-findings.txt",
+      source: "VERDICT: FAIL\n\nFINDINGS:\n- [FAIL] no duplication: the same branch appears in parse() and format(), which is what this refactoring was supposed to remove."
+    }));
+
+    expect(prose).toContain('class="code-block wrap"');
+    expect(findings).toContain('class="code-block wrap"');
+  });
+
+  it("lets code excerpts scroll rather than breaking a command across lines", () => {
+    const shell = renderToStaticMarkup(createElement(FileExcerptCodeBlock, {
+      path: "factory/refactor/run.sh",
+      source: "cat validate.md success.md quality-before.txt | (cd ../../calculator && pi --no-session --tools read,grep,find,ls,bash -p)"
+    }));
+
+    expect(shell).toContain('class="code-block"');
+    expect(shell).not.toContain("code-block wrap");
+  });
 });

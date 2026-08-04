@@ -41,6 +41,17 @@ export function inferCodeLanguage(path: string): string | undefined {
   return extension ? languages[extension] : undefined;
 }
 
+/**
+ * Prose wraps; code scrolls. A long sentence in a Markdown or findings file has
+ * no reason to widen the page, but breaking a shell command mid-flag makes it
+ * harder to read than a scrollbar does. An unrecognised extension is treated as
+ * prose: the files this tutorial shows without a known language are success
+ * criteria, prompts and verdicts.
+ */
+function wrapsLines(language: string | undefined): boolean {
+  return language === undefined || language === "markdown";
+}
+
 export function CodeBlock({ source, language, className, children }: CodeBlockProps) {
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
 
@@ -54,7 +65,7 @@ export function CodeBlock({ source, language, className, children }: CodeBlockPr
     }
   }
 
-  return <div className="code-block">
+  return <div className={wrapsLines(language) ? "code-block wrap" : "code-block"}>
     <div className="code-block-toolbar">
       {language && <span className="code-language">{language}</span>}
       <button className="copy-code" type="button" onClick={() => void copy()} aria-label="Copy code">
