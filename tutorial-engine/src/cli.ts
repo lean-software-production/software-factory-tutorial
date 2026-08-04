@@ -2,25 +2,20 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { ArgumentError, parseArguments, USAGE } from "./cli-arguments.js";
 import { loadLesson } from "./lesson/load.js";
 import { createTutorialLogger, defaultTutorialLogPath } from "./runtime-log.js";
-import { startLocalServer } from "./server/local-server.js";
-
-function usage(): never {
-  console.error("Usage: tutorial-engine <tutorial-directory> [--port 4310] [--no-open]");
-  process.exit(1);
-}
+import { LOOPBACK_HOST, startLocalServer } from "./server/local-server.js";
 
 async function main(): Promise<void> {
+  const parsed = parseArguments(process.argv.slice(2));
+  if (parsed.kind === "help") {
+    console.log(USAGE);
+    return;
+  }
+  const { target, port, host, noOpen } = parsed.options;
   const log = createTutorialLogger({ filePath: defaultTutorialLogPath() });
   log.info(`Writing diagnostics to ${log.filePath}.`);
-  const args = process.argv.slice(2);
-  const target = args.find((arg) => !arg.startsWith("-"));
-  if (!target) usage();
-  const portIndex = args.indexOf("--port");
-  const port = portIndex >= 0 ? Number(args[portIndex + 1]) : undefined;
-  if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) usage();
-  const noOpen = args.includes("--no-open");
 
   log.info(`Starting tutorial server for ${resolve(target)}.`);
   log.info("Loading tutorial definition and progress.");
@@ -33,13 +28,22 @@ async function main(): Promise<void> {
     webRoot: resolve(packageDirectory, "dist/web"),
     progress: loaded.progress,
     port,
+    host,
     logger: log
   });
-  log.info(`Listening only on ${server.url}.`);
+  log.info(server.host === LOOPBACK_HOST
+    ? `Listening only on ${server.url}.`
+    : `Listening on ${server.url} — reachable from other machines on ${server.host}:${server.port}.`);
   if (noOpen) log.info("Browser launch disabled by --no-open.");
   else {
     log.info("Opening the tutorial in your default browser.");
-    spawn(process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open", process.platform === "win32" ? ["/c", "start", server.url] : [server.url], { detached: true, stdio: "ignore" }).unref();
+    const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+    const child = spawn(opener, process.platform === "win32" ? ["/c", "start", server.url] : [server.url], { detached: true, stdio: "ignore" });
+    // A machine without a browser opener is common on servers; keep serving and say so.
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      log.info(`Could not open a browser automatically (${opener}: ${error.code ?? error.message}). Open ${server.url} yourself.`);
+    });
+    child.unref();
   }
   const shutdown = async (signal: string) => {
     log.info(`Received ${signal}; stopping tutorial server.`);
@@ -52,6 +56,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
+  if (error instanceof ArgumentError) {
+    console.error(`${error.message}\n${USAGE}`);
+    process.exitCode = 1;
+    return;
+  }
   createTutorialLogger().error("Tutorial server could not start", error);
   process.exitCode = 1;
 });

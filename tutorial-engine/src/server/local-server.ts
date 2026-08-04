@@ -16,18 +16,39 @@ const MIME_TYPES: Record<string, string> = {
 };
 const MAX_BODY_BYTES = 16_384;
 
+// The tutorial reads and writes the learner's working tree and has no authentication,
+// so it stays on loopback unless a host is asked for explicitly. Environments that
+// proxy it — the canvas dev-server control — opt in with --host 0.0.0.0.
+export const LOOPBACK_HOST = "127.0.0.1";
+
 export interface LocalServerOptions {
   lesson: LessonDefinition;
   workspace: string;
   webRoot: string;
   progress: ProgressItem[];
   port?: number;
+  host?: string;
   logger?: TutorialLogger;
 }
 
 export interface StartedServer {
   url: string;
+  port: number;
+  host: string;
   close(): Promise<void>;
+}
+
+// A proxy may mount the tutorial under a subfolder (the canvas dev-server control does)
+// and pass the prefix through, so match routes and assets by suffix rather than exact path.
+function isRoute(pathname: string, route: string): boolean {
+  return pathname === `/api/${route}` || pathname.endsWith(`/api/${route}`);
+}
+
+function assetPaths(pathname: string): string[] {
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments.length === 0) return ["/index.html"];
+  const paths = segments.map((_, index) => `/${segments.slice(index).join("/")}`);
+  return pathname.endsWith("/") ? [...paths, "/index.html"] : paths;
 }
 
 function writeEvent(response: ServerResponse, event: TutorialEvent): void {
@@ -54,9 +75,11 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 
 function headers(response: ServerResponse): void {
   response.setHeader("X-Content-Type-Options", "nosniff");
-  response.setHeader("X-Frame-Options", "DENY");
+  // SAMEORIGIN rather than DENY so a same-origin subfolder proxy (the canvas
+  // dev-server control frames /dev/<port>/) can embed the tutorial.
+  response.setHeader("X-Frame-Options", "SAMEORIGIN");
   response.setHeader("Referrer-Policy", "no-referrer");
-  response.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'");
+  response.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'self'");
 }
 
 export async function startLocalServer(options: LocalServerOptions): Promise<StartedServer> {
@@ -131,7 +154,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
   server = createServer(async (request, response) => {
     headers(response);
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (request.method === "GET" && url.pathname === "/api/events") {
+    if (request.method === "GET" && isRoute(url.pathname, "events")) {
       response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
       writeEvent(response, { type: "snapshot", title: options.lesson.title, runState: adapter?.state ?? runState, events: [...bus.history()], validationCommands: options.lesson.validationCommands.map(({ id, label }) => ({ id, label })), progress: options.progress, session: bootstrap });
       clients.add(response);
@@ -144,7 +167,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
       });
       return;
     }
-    if (request.method === "POST" && url.pathname === "/api/messages") {
+    if (request.method === "POST" && isRoute(url.pathname, "messages")) {
       try {
         const body = await readJson(request);
         if (!isBrowserMessage(body)) {
@@ -162,19 +185,21 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
     }
     if (request.method !== "GET" && request.method !== "HEAD") return sendJson(response, 405, { error: "Method not allowed." });
 
-    const requestPath = url.pathname === "/" ? "/index.html" : url.pathname;
     const webRoot = resolve(options.webRoot);
-    const candidate = resolve(webRoot, `.${requestPath}`);
-    if (candidate !== webRoot && !candidate.startsWith(webRoot + sep)) return sendJson(response, 403, { error: "Forbidden." });
-    try {
-      await access(candidate);
+    for (const requestPath of assetPaths(url.pathname)) {
+      const candidate = resolve(webRoot, `.${requestPath}`);
+      if (candidate !== webRoot && !candidate.startsWith(webRoot + sep)) return sendJson(response, 403, { error: "Forbidden." });
+      try { await access(candidate); } catch { continue; }
       response.writeHead(200, { "Content-Type": MIME_TYPES[extname(candidate)] ?? "application/octet-stream", "Cache-Control": "no-store" });
       if (request.method === "HEAD") response.end();
       else createReadStream(candidate).pipe(response);
-    } catch {
-      // Vite's SPA entry supports refreshes on client routes without exposing the filesystem.
-      createReadStream(resolve(options.webRoot, "index.html")).pipe(response);
+      return;
     }
+    // Vite's SPA entry supports refreshes on client routes without exposing the filesystem.
+    // It needs an explicit Content-Type: with nosniff, a typeless response will not render.
+    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+    if (request.method === "HEAD") response.end();
+    else createReadStream(resolve(webRoot, "index.html")).pipe(response);
   });
 
   const unsubscribe = bus.subscribe((event) => {
@@ -183,19 +208,26 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
   });
   server.on("error", (error) => log.error("Local HTTP server error", error));
   const port = options.port ?? 0;
-  log.info(`Binding local HTTP server to 127.0.0.1:${port || "an available port"}.`);
+  const host = options.host ?? LOOPBACK_HOST;
+  log.info(`Binding local HTTP server to ${host}:${port || "an available port"}.`);
   await new Promise<void>((resolvePromise, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => { server.off("error", reject); resolvePromise(); });
+    server.listen(port, host, () => { server.off("error", reject); resolvePromise(); });
   });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Could not determine tutorial server address.");
-  const url = `http://127.0.0.1:${address.port}`;
-  log.info(`Listening only on ${url}.`);
+  // Always the loopback URL: it is what a browser on this machine should open,
+  // whichever interface the server is bound to.
+  const url = `http://${LOOPBACK_HOST}:${address.port}`;
+  log.info(host === LOOPBACK_HOST
+    ? `Listening only on ${url}.`
+    : `Listening on ${url}, and on ${host}:${address.port} from other machines.`);
   if (hasSavedSession) log.info(`Saved tutorial session found at ${sessionLog.path}; waiting for learner choice.`);
   else void startSession("fresh");
   return {
     url,
+    port: address.port,
+    host,
     close: async () => {
       log.info("Closing tutor session and browser connections.");
       await startPromise;
