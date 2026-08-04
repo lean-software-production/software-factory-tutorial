@@ -679,11 +679,11 @@ describe("deterministicGate per-lesson factory assertions", () => {
 });
 
 describe("deterministicGate delegated file scope", () => {
+  // Lessons 001 and 004 build nothing and have no delegate scenario, so they
+  // have no scope to declare.
   const scopeFiles: Record<string, string[]> = {
-    "001": [],
     "002": ["factory/refactor-do.sh", "factory/refactor-quality-before.txt", "factory/refactor.md"],
     "003": ["factory/refactor-do.sh", "factory/refactor-quality-before.txt", "factory/refactor-validate-findings.txt", "factory/refactor-validate.md", "factory/refactor-validate.sh", "factory/refactor.md"],
-    "004": ["factory/refactor-do.sh", "factory/refactor-quality-before.txt", "factory/refactor-validate-findings.txt", "factory/refactor-validate.md", "factory/refactor-validate.sh", "factory/refactor.md"],
     "005": ["factory/refactor/do.sh", "factory/refactor/quality-before.txt", "factory/refactor/refactor.md", "factory/refactor/run.sh", "factory/refactor/success.md", "factory/refactor/validate-findings.txt", "factory/refactor/validate.md", "factory/refactor/validate.sh"],
     "006": ["factory/refactor/do.sh", "factory/refactor/quality-before.txt", "factory/refactor/refactor.md", "factory/refactor/repair.md", "factory/refactor/run.sh", "factory/refactor/success.md", "factory/refactor/validate-findings.txt", "factory/refactor/validate.md", "factory/refactor/validate.sh"]
   };
@@ -707,12 +707,19 @@ describe("deterministicGate delegated file scope", () => {
     } finally { await rm(workspace, { recursive: true, force: true }); }
   }, 30000);
 
-  it("rejects last lesson's findings left beside the line's folder", async () => {
-    const workspace = await workspaceWith({ ...Object.fromEntries(scopeFiles["005"]!.map((path) => [path, "placeholder\n"])), "factory/refactor-validate-findings.txt": "stale\n" });
+  it("rejects a Part 1 script left beside the line's folder, but tolerates the findings a tutor cannot delete", async () => {
+    // The move tool relocates and never destroys, so the one file lesson 005
+    // says to delete outright is allowed to survive a delegated run. Nothing
+    // else the move should have taken is.
+    const line = Object.fromEntries(scopeFiles["005"]!.map((path) => [path, "placeholder\n"]));
+    const tolerated = await workspaceWith({ ...line, "factory/refactor-validate-findings.txt": "stale\n" });
+    const stray = await workspaceWith({ ...line, "factory/refactor-validate.sh": "stale\n" });
     try {
-      const gate = await deterministicGate(gateScenario("005", "delegate"), workspace, emptyTrace());
+      const survived = await deterministicGate(gateScenario("005", "delegate"), tolerated, emptyTrace());
+      expect(passed(survived, "delegated file scope")).toBe(true);
+      const gate = await deterministicGate(gateScenario("005", "delegate"), stray, emptyTrace());
       const scope = named(gate, "delegated file scope");
-      expect(scope.some((assertion) => !assertion.passed && assertion.detail.includes("refactor-validate-findings.txt"))).toBe(true);
-    } finally { await rm(workspace, { recursive: true, force: true }); }
+      expect(scope.some((assertion) => !assertion.passed && assertion.detail.includes("refactor-validate.sh"))).toBe(true);
+    } finally { await Promise.all([rm(tolerated, { recursive: true, force: true }), rm(stray, { recursive: true, force: true })]); }
   }, 30000);
 });

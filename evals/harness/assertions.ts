@@ -72,17 +72,23 @@ interface DirectoryScope { directory: string; allowed: string[]; }
  * when they run. It is not derivable from `LESSON_SCRIPTS.files`.
  */
 const DELEGATED_SCOPE: Record<string, DirectoryScope[] | undefined> = {
-  "001": [{ directory: "factory", allowed: [] }],
+  // Lessons 001 and 004 build nothing and have no delegate scenario, so they
+  // have no delegated scope either.
   "002": [{ directory: "factory", allowed: ["refactor-do.sh", "refactor-quality-before.txt", "refactor.md"] }],
   "003": [{ directory: "factory", allowed: ["refactor-do.sh", "refactor-quality-before.txt", "refactor-validate-findings.txt", "refactor-validate.md", "refactor-validate.sh", "refactor.md"] }],
-  // Lesson 004 adds no file of its own, so it inherits the previous lesson's scope.
-  "004": [{ directory: "factory", allowed: ["refactor-do.sh", "refactor-quality-before.txt", "refactor-validate-findings.txt", "refactor-validate.md", "refactor-validate.sh", "refactor.md"] }],
   // Lesson 005 moves the whole line into `factory/refactor/`, so the parent
-  // directory must hold nothing but that folder. Its scenarios seed the flat
-  // Part 1 files, so a learner who copied instead of moving — or who kept the
-  // stale findings file the lesson says to delete — is caught right here.
+  // directory holds nothing but that folder and the one file a delegating tutor
+  // cannot remove. Its scenarios seed the flat Part 1 files, so a learner who
+  // copied instead of moving is caught right here.
+  //
+  // `refactor-validate-findings.txt` is the exception: the lesson tells the
+  // learner to delete it outright, and the tutor's toolset can move a file but
+  // never destroy one. Tolerating that single leftover costs nothing — the line
+  // writes its own findings inside `factory/refactor/` on its next pass, so the
+  // stale copy is superseded rather than consulted. Every other flat Part 1
+  // file must still be gone.
   "005": [
-    { directory: "factory", allowed: ["refactor"] },
+    { directory: "factory", allowed: ["refactor", "refactor-validate-findings.txt"] },
     { directory: "factory/refactor", allowed: ["do.sh", "quality-before.txt", "refactor.md", "run.sh", "success.md", "validate-findings.txt", "validate.md", "validate.sh"] }
   ],
   "006": [

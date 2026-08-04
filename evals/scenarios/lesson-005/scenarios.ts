@@ -285,13 +285,22 @@ const survivingFlatFilesRepair = (broken: CanonicalPatch): CanonicalPatch => ({
   expectedState: partOneAbsent, checkpoint: "correction"
 });
 
+/**
+ * The delegate route's one concession. A delegating tutor moves the line with
+ * the move tool, which relocates but cannot destroy, so the file the lesson
+ * tells the learner to delete outright — last week's findings — may survive.
+ * The delegated file scope tolerates it for the same reason. Every other flat
+ * Part 1 path must still be gone, which is the point of the move.
+ */
+const { [partOneFindingsPath]: _deletedByHand, ...delegatedFinalState } = lesson005FinalState;
+
 const unsharedDefect = runDefect("unshared-criteria");
 const noPauseDefect = runDefect("no-pause");
 const staleDefect = staleParentDefect();
 const survivingDefect = survivingFlatFilesDefect();
 
 export const lesson005Scenarios: Scenario[] = [
-  { id: "line-agent-led-happy-path", lesson: "005", mode: "delegate", description: "Delegating learner gives the line its own folder, its criteria, and the script that runs it in order.", seed: partOneSeed, patches: [], finalState: lesson005FinalState },
+  { id: "line-agent-led-happy-path", lesson: "005", mode: "delegate", description: "Delegating learner gives the line its own folder, its criteria, and the script that runs it in order.", seed: partOneSeed, patches: [], finalState: delegatedFinalState },
   { id: "line-learner-led-happy-path", lesson: "005", mode: "hands-on", description: "Hands-on learner moves the line into its own folder, writes the criteria, points both prompts at them, and adds the run script, one canonical edit at a time.", seed: partOneSeed, patches: [relocateStep(), successStep(), criteriaStep(), runStep()], finalState: lesson005FinalState },
   { id: "mistake-flat-files-survive-the-move", lesson: "005", mode: "mistake", description: "Hands-on learner copies the line into its own folder instead of moving it, leaving the flat Part 1 files and last week's findings beside it.", expectedMistake: "Two copies of every prompt and script now exist, so an edit to one silently leaves the other behind, and the stale findings file sits where the line writes its own.", seed: partOneSeed, patches: [survivingDefect, survivingFlatFilesRepair(survivingDefect), successStep(), criteriaStep(), runStep()], finalState: lesson005FinalState },
   { id: "mistake-stale-parent-path-after-the-move", lesson: "005", mode: "mistake", description: "Hands-on learner moves the scripts a directory deeper but leaves them reaching for `../calculator`.", expectedMistake: "The relocated script points at a directory that does not exist, which is what running the move once would have caught.", seed: partOneSeed, patches: [staleDefect, staleParentRepair(staleDefect), successStep(), criteriaStep(), runStep()], finalState: lesson005FinalState },
