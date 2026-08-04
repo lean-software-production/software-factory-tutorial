@@ -698,6 +698,17 @@ describe("deterministicGate delegated file scope", () => {
     } finally { await rm(workspace, { recursive: true, force: true }); }
   }, 30000);
 
+  it("ignores the engine's own transcript, which every session writes into factory/", async () => {
+    // `TutorialSessionLog` writes factory/tutorial-session.jsonl as soon as the
+    // server binds, so counting it as tutor output would fail every delegate
+    // scenario before the tutor had done anything at all.
+    const workspace = await workspaceWith({ ...Object.fromEntries(scopeFiles["002"]!.map((path) => [path, "placeholder\n"])), "factory/tutorial-session.jsonl": "{}\n" });
+    try {
+      const gate = await deterministicGate(gateScenario("002", "delegate"), workspace, emptyTrace());
+      expect(passed(gate, "delegated file scope")).toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
   it("rejects a stray file the lesson never asked for", async () => {
     const workspace = await workspaceWith({ ...Object.fromEntries(scopeFiles["002"]!.map((path) => [path, "placeholder\n"])), "factory/notes.md": "stray\n" });
     try {

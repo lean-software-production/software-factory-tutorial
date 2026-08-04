@@ -249,7 +249,10 @@ export async function deterministicGate(scenario: Scenario, workspace: string, t
   if (scopes) {
     for (const scope of scopes) {
       try {
-        const found = (await readdir(join(workspace, scope.directory))).filter((file) => file !== ".gitkeep").sort();
+        // `.gitkeep` is the repository's own; `tutorial-session.jsonl` is the
+        // engine's transcript, written into `factory/` by every session the
+        // moment the server binds. Neither is the tutor answering the lesson.
+        const found = (await readdir(join(workspace, scope.directory))).filter((file) => file !== ".gitkeep" && file !== "tutorial-session.jsonl").sort();
         const unexpected = found.filter((file) => !scope.allowed.includes(file));
         assertions.push({ name: "delegated file scope", passed: unexpected.length === 0, detail: unexpected.length ? `${scope.directory}: unexpected ${unexpected.join(", ")}` : `${scope.directory}: ${found.join(", ") || "no files created"}` });
       } catch (error) {
