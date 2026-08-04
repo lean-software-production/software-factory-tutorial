@@ -92,7 +92,7 @@ export async function loadActiveSpec(workspace: string, lesson: string): Promise
   const rows = ledger.split(/\r?\n/).filter((line) => line.trimStart().startsWith("|"));
   for (const row of rows) {
     const cells = row.split("|").slice(1, -1).map((cell) => cell.trim());
-    if (cells.length < 3 || cells[0] === "Iteration" || cells[0].startsWith("---")) continue;
+    if (cells.length < 3 || !["Todo", "Done"].includes(cells[2] ?? "")) continue;
     if (cells[2] === "Done") continue;
     const link = cells[0]?.match(/\[([^\]]+)\]\(([^)]+)\)/);
     const id = link?.[1] ?? cells[0];
