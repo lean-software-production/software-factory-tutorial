@@ -26,7 +26,9 @@ Teach and build this lesson in this order. Complete each small step before movin
    cat refactor.md | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
    ```
 
-The first step records a baseline: what `node scripts/quality.mjs` said about the calculator before the doer touched anything. Keeping that number gives the next lesson something to compare against, and a comparison is the only way to tell an improvement from an assertion. The script runs `node scripts/quality.mjs` rather than `npm run quality` because npm appends its own error block to a non-zero exit, which reads as though the script broke when in fact it only reported a score.
+The first step records a baseline: what `node scripts/quality.mjs` reported about the calculator before the doer touched anything. Run it yourself and you will see what it produces — ESLint findings about complexity and size, knip findings about unused code, and a summary line naming which tool reported anything. It is a list of complaints, not a score. Keeping that list gives the next lesson something to compare against, and a comparison is the only way to tell an improvement from an assertion. The script runs `node scripts/quality.mjs` rather than `npm run quality` because npm appends its own error block to a non-zero exit, which reads as though the script broke when in fact it only reported findings.
+
+Note that the baseline is re-recorded every time you run `refactor-do.sh`. It records the calculator as it stood at the start of *this* turn, not a fixed starting point for the whole of Part 1. That is deliberate: the question worth asking about a turn is whether that turn improved things, and after the second turn a baseline from before the first would no longer answer it.
 
 The two lines around the Pi call are the harness — deterministic code wrapping a model call. Notice that each step announces itself before it runs. Nothing the harness does should be invisible to you, because when a run surprises you the announcements are how you find out which part surprised you.
 
