@@ -47,10 +47,18 @@ better:
 npm run quality
 ```
 
-It runs ESLint over `src`, reporting cognitive complexity, cyclomatic complexity, nesting depth,
-function length, statement count, parameter count, and duplicated branches. Every finding carries
-a file, a line, and the rule name, and the command exits non-zero when it finds any — so a
-reviewer, human or agent, can quote the output as evidence.
+It runs two checks and prints both reports, even when the first one fails, so a single run shows
+the whole picture:
+
+- **ESLint** over `src` — cognitive complexity, cyclomatic complexity, nesting depth, function
+  length, statement count, parameter count, and duplicated branches. Each finding carries a file,
+  a line, and the rule name.
+- **knip** — unused files, exports, and dependencies. This is what catches the leftovers of an
+  extraction: a module the refactoring stopped importing, or an export nothing calls.
+
+The command exits non-zero if either check reports, so a reviewer, human or agent, can quote the
+output as evidence. `npm test` covers a third case for free: `noUnusedLocals` and
+`noUnusedParameters` make unused variables, imports, and parameters a build error.
 
 Findings on the starting code are expected: each one names a seam worth refactoring. The
 thresholds describe the well-factored destination, so a finished refactoring reports none.

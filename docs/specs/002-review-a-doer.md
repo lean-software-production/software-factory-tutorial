@@ -35,13 +35,13 @@ Keep `factory/success.md`, `factory/refactor.md`, and the one-shot doer invocati
 
 1. **Write the reviewer prompt.** Create `factory/review.md`. Tell the reviewer to inspect the doer's previous change against the supplied `success.md` criteria. It should read the code and diff, run tests and relevant installed complexity or quality tools, and report independent evidence. It must verify preserved behaviour and assess whether the change advances, or at least does not compromise, each criterion. It must not expect one small refactoring to achieve the factory's whole destination, and it must not modify files.
 
-   Name the command rather than the package, so the reviewer quotes output instead of working out how to run a tool. The calculator workspace exposes one quality measurement, which prints each finding with a file, a line, and a rule name, and exits non-zero when it finds any:
+   Name the command rather than the package, so the reviewer quotes output instead of working out how to run a tool. The calculator workspace exposes one quality measurement:
 
    ```sh
    npm run quality
    ```
 
-   Tell the reviewer to cite that output. Findings on the starting code are expected: each names a seam the doer can remove.
+   It reports complexity and size findings with a file, a line, and a rule name, then unused files, exports, and dependencies — printing both reports even when the first one fails, and exiting non-zero if either reports. Tell the reviewer to cite that output. Findings on the starting code are expected: each names a seam the doer can remove.
 
    Require this response format:
 

@@ -17,12 +17,13 @@
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && vitest run",
     "start": "tsx src/cli.ts",
-    "quality": "eslint src"
+    "quality": "node scripts/quality.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "eslint": "^10.8.0",
     "eslint-plugin-sonarjs": "^4.2.0",
+    "knip": "^6.31.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.66.0",
