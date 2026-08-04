@@ -70,7 +70,7 @@ describe("activityDetail", () => {
   const root = "/workspaces/software-factory-tutorial";
 
   it("shortens an absolute workspace path to what the learner recognises", () => {
-    expect(activityDetail({ path: `${root}/docs/specs/001-invoke-a-doer.md` }, root)).toBe(" docs/specs/001-invoke-a-doer.md");
+    expect(activityDetail({ path: `${root}/docs/specs/001-run-an-agent-headlessly.md` }, root)).toBe(" docs/specs/001-run-an-agent-headlessly.md");
   });
 
   // Pi sends both forms. Resolving a relative one would silently depend on the

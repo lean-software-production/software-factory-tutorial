@@ -11,8 +11,12 @@ export type ArtifactState = Record<string, FileExpectation>;
 
 export interface CanonicalPatch {
   name: string;
-  /** The only files the deterministic learner changes in this atomic step. */
-  files: Record<string, string>;
+  /**
+   * The only files the deterministic learner changes in this atomic step. A
+   * `null` value deletes the file, which is what lets a lesson that moves its
+   * artefacts model the move rather than only its destination.
+   */
+  files: Record<string, string | null>;
   message: string;
   /** State that must exist immediately before the learner makes this edit. */
   preconditions: ArtifactState;
@@ -23,130 +27,60 @@ export interface CanonicalPatch {
 
 export interface Scenario {
   id: string;
-  lesson: "001" | "002" | "003" | "004";
+  lesson: "001" | "002" | "003" | "004" | "005" | "006";
   mode: LearnerMode;
   description: string;
+  /**
+   * The defect a `mistake` scenario deliberately commits, and which the tutor
+   * must diagnose. It is only meaningful in that mode: the judge prompt states
+   * it as something present in the transcript, and only `mistake` scenarios
+   * score the `mistakeDiagnosis` dimension. Anything a non-mistake scenario
+   * must *avoid* belongs in `description`, as a requirement the judge can grade.
+   */
   expectedMistake?: string;
+  /**
+   * What earlier lessons left in the workspace before this one begins. The
+   * learner copy is created without any `factory/` files, so a lesson that
+   * builds on Part 1 — or, in lesson 005's case, moves it — has to say what it
+   * is building on. Applied before the session starts, by nobody the tutor sees.
+   */
+  seed?: Record<string, string>;
   /** Ordered, small learner edits. `defect` and `repair` retain stable report names. */
   patches: CanonicalPatch[];
-  /** Final file-specific artifact expectations for deterministic offline gates. */
+  /** Final file-specific artefact expectations for deterministic offline gates. */
   finalState?: ArtifactState;
 }
 
-export const runPath = "factory/run.sh";
-export const successPath = "factory/success.md";
-export const refactorPath = "factory/refactor.md";
-
-export const success = `# Success criteria
-
-These criteria describe the destination for many small refactorings, not a checklist for one refactoring turn. The doer may choose any small tactic that moves the calculator in this direction while preserving behaviour.
-
-1. Passes its tests. Evidence: the reviewer runs \`npm test\` from \`calculator/\` and reports the result.
-2. Reveals intention. Evidence: the diff and code read with clearer names, responsibilities, and control flow.
-3. No duplication. Evidence: repeated expressions or branches are removed without hiding meaning.
-4. Fewest elements. Evidence: imports, helpers, branches, and abstractions are no more numerous than the behaviour requires; installed complexity tools may support this judgement.
-`;
-
-export const refactor = `Study \`../factory/success.md\` and use those criteria to choose one small, behaviour-preserving refactoring that moves the calculator toward the desired state.
-
-Edit files directly. Do not run tests, npm, or shell commands. Keep your response concise.
-`;
-
-export const correctRun = `#!/usr/bin/env bash
-set -euo pipefail
-
-cd "$(dirname "$0")"
-echo "Starting doer..."
-cat refactor.md | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
-`;
-
-const missingToolsRun = correctRun.replace(" --tools read,edit,write,grep,find,ls", "");
-const wrongDirectoryRun = correctRun.replace("(cd ../calculator && pi", "(cd .. && pi");
-const invalidPrompt = `Inspect the calculator, run npm test and any shell commands you need, then perform a refactoring.
-`;
-const checklistSuccess = `# Success for this refactoring
-
-Checklist for the next refactoring: make the calculator cleaner, then run tests.
-`;
-
-const absent = (path: string): ArtifactState => ({ [path]: { exists: false } });
-const contains = (path: string, patterns: RegExp[], excludes: RegExp[] = []): ArtifactState => ({ [path]: { exists: true, contains: patterns, excludes } });
-
-export const successExpectations: FileExpectation = {
-  exists: true,
-  contains: [
-    /passes? its tests|passes? tests/i,
-    /reveals? intention|intention[- ]revealing/i,
-    /no duplication|duplication/i,
-    /fewest elements|few elements|minimal elements/i,
-    /many|multiple|series/i,
-    /not a checklist|not .*checklist|destination|durable strategy/i,
-    /evidence/i
-  ]
-};
-
-export const lesson001FinalState: ArtifactState = {
-  [successPath]: successExpectations,
-  [refactorPath]: { exists: true, contains: [/\.\.\/factory\/success\.md/, /one small/, /behaviour-preserving|behavior-preserving/i, /Do not run tests, npm, or shell commands/] },
-  [runPath]: { exists: true, contains: [/Starting doer/, /cat refactor\.md \|/, /\(cd \.\.\/calculator && pi --no-session --tools read,edit,write,grep,find,ls -p\)/], excludes: [/while true/, /review\.md/, /read -r -p/] }
-};
-
-const successStep = (): CanonicalPatch => ({
-  name: "success", files: { [successPath]: success }, message: "I've defined the durable success criteria. Please check them.",
-  preconditions: absent(successPath), expectedState: { [successPath]: successExpectations }, checkpoint: "guided-step"
-});
-const promptStep = (): CanonicalPatch => ({
-  name: "prompt", files: { [refactorPath]: refactor }, message: "I've written the doer prompt. Please check it.",
-  preconditions: { [successPath]: successExpectations, [refactorPath]: { exists: false } },
-  expectedState: { [refactorPath]: lesson001FinalState[refactorPath]! }, checkpoint: "guided-step"
-});
-const invokeStep = (): CanonicalPatch => ({
-  name: "invoke", files: { [runPath]: correctRun }, message: "I've added the one-shot doer invocation. Please check it.",
-  preconditions: { [successPath]: successExpectations, [refactorPath]: { exists: true, contains: [/\.\.\/factory\/success\.md/] }, [runPath]: { exists: false } }, expectedState: lesson001FinalState, checkpoint: "guided-step"
-});
-const defectInvoke = (name: "missing-tools" | "wrong-directory"): CanonicalPatch => {
-  const run = name === "missing-tools" ? missingToolsRun : wrongDirectoryRun;
-  const expected = name === "missing-tools"
-    ? contains(runPath, [/pi --no-session -p/], [/--tools/])
-    : contains(runPath, [/\(cd \.\. && pi --no-session --tools/], [/\(cd \.\.\/calculator && pi/]);
-  return {
-    name: "defect", files: { [runPath]: run }, message: "I've made the invocation step. Please give feedback.",
-    preconditions: { [successPath]: successExpectations, [refactorPath]: { exists: true, contains: [/\.\.\/factory\/success\.md/] }, [runPath]: { exists: false } }, expectedState: expected, checkpoint: "guided-step"
-  };
-};
-const repairInvoke = (defect: CanonicalPatch): CanonicalPatch => ({
-  name: "repair", files: { [runPath]: correctRun }, message: "I've applied the smallest invocation repair. Please check it.",
-  preconditions: defect.expectedState, expectedState: { [runPath]: lesson001FinalState[runPath]! }, checkpoint: "correction"
-});
-const invalidPromptDefect = (): CanonicalPatch => ({
-  name: "defect", files: { [refactorPath]: invalidPrompt }, message: "I've written the doer prompt. Please give feedback.",
-  preconditions: { [successPath]: successExpectations, [refactorPath]: { exists: false } }, expectedState: contains(refactorPath, [/npm test/, /shell commands/]), checkpoint: "guided-step"
-});
-const promptRepair = (defect: CanonicalPatch): CanonicalPatch => ({
-  name: "repair", files: { [refactorPath]: refactor }, message: "I've applied the smallest prompt repair. Please check it.",
-  preconditions: defect.expectedState, expectedState: { [refactorPath]: lesson001FinalState[refactorPath]! }, checkpoint: "correction"
-});
-const checklistSuccessDefect = (): CanonicalPatch => ({
-  name: "defect", files: { [successPath]: checklistSuccess }, message: "I've drafted success.md. Please give feedback.",
-  preconditions: absent(successPath), expectedState: contains(successPath, [/Checklist for the next refactoring/], [/reveals? intention/i, /fewest elements/i, /many small refactorings/i]), checkpoint: "guided-step"
-});
-const successRepair = (defect: CanonicalPatch): CanonicalPatch => ({
-  name: "repair", files: { [successPath]: success }, message: "I've rewritten success.md as durable strategy. Please check it.",
-  preconditions: defect.expectedState, expectedState: { [successPath]: successExpectations }, checkpoint: "correction"
-});
-
-const missingToolsDefect = defectInvoke("missing-tools");
-const wrongDirectoryDefect = defectInvoke("wrong-directory");
-const invalidDefect = invalidPromptDefect();
-const checklistDefect = checklistSuccessDefect();
-
+/**
+ * Lesson 001 runs one headless Pi command by hand and creates no file, so these
+ * scenarios carry no patches and no `finalState`. Nothing deterministic is left
+ * on disk to grade: the model-graded judge reads the transcript against
+ * `docs/specs/001-run-an-agent-headlessly.md`. None of them sets
+ * `expectedMistake`: the judge prompt states that field as a defect present in
+ * the transcript, so using it for something the tutor must *avoid* would reward
+ * the transcript that commits it. Prohibitions are stated in `description`
+ * instead, as positive requirements the judge can find or fail to find.
+ */
 export const scenarios: Scenario[] = [
-  { id: "agent-led-happy-path", lesson: "001", mode: "delegate", description: "Delegating learner completes the success criteria, doer prompt, and one-shot run script.", patches: [], finalState: lesson001FinalState },
-  { id: "learner-led-happy-path", lesson: "001", mode: "hands-on", description: "Hands-on learner requests exact guidance and completes one canonical edit per required step.", patches: [successStep(), promptStep(), invokeStep()], finalState: lesson001FinalState },
-  { id: "mistake-missing-tools", lesson: "001", mode: "mistake", description: "Hands-on learner omits Pi's doer tool allowlist.", expectedMistake: "The doer has lost its file-tool isolation boundary.", patches: [successStep(), promptStep(), missingToolsDefect, repairInvoke(missingToolsDefect)], finalState: lesson001FinalState },
-  { id: "mistake-wrong-calculator-directory", lesson: "001", mode: "mistake", description: "Hands-on learner starts Pi outside calculator.", expectedMistake: "The doer is not scoped to the calculator directory.", patches: [successStep(), promptStep(), wrongDirectoryDefect, repairInvoke(wrongDirectoryDefect)], finalState: lesson001FinalState },
-  { id: "mistake-invalid-prompt-boundary", lesson: "001", mode: "mistake", description: "Hands-on learner gives the doer validation authority.", expectedMistake: "Validation is no longer independent from the doer.", patches: [successStep(), invalidDefect, promptRepair(invalidDefect), invokeStep()], finalState: lesson001FinalState },
-  { id: "mistake-success-as-refactoring-checklist", lesson: "001", mode: "mistake", description: "Hands-on learner treats success.md as a next-refactoring checklist and omits the simple-design destination.", expectedMistake: "success.md must contain all four simple-design rules as durable factory strategy, not a one-turn checklist.", patches: [checklistDefect, successRepair(checklistDefect), promptStep(), invokeStep()], finalState: lesson001FinalState }
+  {
+    id: "headless-run-happy-path",
+    lesson: "001",
+    mode: "hands-on",
+    description: "The tutor walks the learner through the specification's two runs in order — the headless command, then the same command with a job of the learner's own — and only then asks the checks. The learner is left able to say, in their own words, which part of the command was the harness and which was the job to be done, what made the run headless and why that matters for what comes next, and what this agent could not have done however it was asked. The tutor never claims that dropping `-p` opens an interactive session: piping a job on standard input runs headlessly either way.",
+    patches: []
+  },
+  {
+    id: "headless-run-explains-the-flag-without-borrowing-later-vocabulary",
+    lesson: "001",
+    mode: "hands-on",
+    description: "The learner asks what `-p` does, and the tutor answers using only what this lesson has established: it asks explicitly for a headless run, in which Pi does the job and exits with no human in its conversation. It does not claim the flag is what makes this command headless — a job piped in on standard input runs headlessly with or without it. Every term it reaches for is one of the four this lesson names — agent, harness, job to be done, boundary — and it explains the flag without introducing any Part 2 vocabulary (doer, validator, machine, assembly line, factory, orchestrator) and without drawing a loop.",
+    patches: []
+  },
+  {
+    id: "headless-run-refuses-to-build-a-file",
+    lesson: "001",
+    mode: "hands-on",
+    description: "The learner offers to write the command into a script or a prompt file, and the tutor declines, keeps the lesson to commands run by hand, and says why meeting one agent matters before anything wraps it. The workspace still holds no file the learner created when the lesson ends.",
+    patches: []
+  }
 ];
-
-export function findScenario(id: string): Scenario | undefined { return scenarios.find((scenario) => scenario.id === id); }

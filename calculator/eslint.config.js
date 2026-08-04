@@ -2,10 +2,10 @@ import sonarjs from "eslint-plugin-sonarjs";
 import tseslint from "typescript-eslint";
 
 /**
- * Review rules for the kata, chosen so a reviewer can cite a rule name and a line
- * instead of an opinion. The limits describe the well-factored destination in
- * factory/success.md, so the messy starting code is expected to report findings:
- * each one names a seam the doer can remove.
+ * Review rules for the kata, chosen so a validator can cite a rule name and a line
+ * instead of an opinion. The limits mark out the well-factored destination the
+ * success criteria describe, so the messy starting code is expected to report
+ * findings: each one names a seam the doer can remove.
  */
 export default tseslint.config(
   { ignores: ["dist/**", "node_modules/**", "eslint.config.js"] },

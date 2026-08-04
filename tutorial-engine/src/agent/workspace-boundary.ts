@@ -1,4 +1,4 @@
-import { access, lstat, mkdir, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
   createEditToolDefinition,
@@ -7,8 +7,10 @@ import {
   createLsToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
+  defineTool,
   type ToolDefinition
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import type { AuditEvent } from "../protocol/events.js";
 
 export type AuditSink = (event: AuditEvent) => void;
@@ -61,6 +63,20 @@ export class WorkspaceBoundary {
     await writeFile(safePath.absolute, content, "utf8");
   }
   async mkdir(path: string): Promise<void> { await mkdir((await this.resolve(path, true)).absolute, { recursive: true }); }
+  /**
+   * Relocate one file. Deliberately narrower than a delete: both ends are
+   * resolved through the boundary, and an occupied destination is refused, so a
+   * move can rearrange the workspace but never destroy anything in it.
+   */
+  async move(path: string, destination: string): Promise<{ from: string; to: string }> {
+    const source = await this.resolve(path);
+    const target = await this.resolve(destination, true);
+    if (source.absolute === target.absolute) throw new Error("The source and destination are the same path.");
+    if (await this.exists(target.absolute)) throw new Error(`'${target.relative}' already exists; a move never overwrites.`);
+    await mkdir(dirname(target.absolute), { recursive: true });
+    await rename(source.absolute, target.absolute);
+    return { from: source.relative, to: target.relative };
+  }
   async isDirectory(path: string): Promise<boolean> { return (await stat((await this.resolve(path)).absolute)).isDirectory(); }
   async stat(path: string) { return stat((await this.resolve(path)).absolute); }
   async readdir(path: string): Promise<string[]> { return readdir((await this.resolve(path)).absolute); }
@@ -86,6 +102,9 @@ export class WorkspaceBoundary {
 }
 
 function pathArguments(name: string, params: Record<string, unknown>): string[] {
+  // A move is audited at both ends: relocating a file out of the workspace is
+  // exactly as much of a boundary crossing as writing outside it.
+  if (name === "move") return [params.path, params.destination].filter((path): path is string => typeof path === "string");
   if (name === "edit" || name === "read" || name === "write") return typeof params.path === "string" ? [params.path] : [];
   return typeof params.path === "string" ? [params.path] : ["."];
 }
@@ -130,8 +149,25 @@ export function createWorkspaceTools(workspace: string, boundary: WorkspaceBound
   // validates the requested search root before its process is started.
   const find = createFindToolDefinition(canonicalWorkspace);
   const ls = createLsToolDefinition(canonicalWorkspace, { operations: { exists: (path) => boundary.exists(path), stat: (path) => boundary.stat(path), readdir: (path) => boundary.readdir(path) } });
+  // Pi has no move tool of its own, and lesson 005's first act is a move. Read,
+  // write and edit together can copy a file but cannot retire the original, so
+  // without this a delegating tutor could only ever leave two of everything.
+  const move = defineTool({
+    name: "move",
+    label: "Move file",
+    description: "Move or rename one file inside the tutorial workspace. Both paths are workspace-relative. Missing parent directories are created. It refuses a destination that already exists, and it cannot delete a file.",
+    parameters: Type.Object({
+      path: Type.String({ minLength: 1, maxLength: 400, description: "The file to move, relative to the workspace root." }),
+      destination: Type.String({ minLength: 1, maxLength: 400, description: "Where it should end up, relative to the workspace root." })
+    }),
+    async execute(_id, params) {
+      const moved = await boundary.move(params.path, params.destination);
+      return { content: [{ type: "text", text: `Moved ${moved.from} to ${moved.to}` }], details: moved };
+    }
+  });
   return [
     audited(read, boundary, sink, false), audited(edit, boundary, sink, true), audited(write, boundary, sink, true),
+    audited(move, boundary, sink, true),
     audited(grep, boundary, sink, false), audited(find, boundary, sink, false), audited(ls, boundary, sink, false)
   ];
 }

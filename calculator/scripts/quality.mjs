@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Runs every quality check and prints all of their output, even when an earlier one
-// fails. A reviewer judging several success criteria at once needs the whole picture
+// fails. A validator judging several success criteria at once needs the whole picture
 // from a single run, not just the first failure. Exits non-zero if any check failed.
 //
 // Runnable as `node scripts/quality.mjs` as well as through `npm run quality`: it

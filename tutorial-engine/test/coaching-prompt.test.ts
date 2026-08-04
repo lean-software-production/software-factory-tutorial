@@ -19,7 +19,7 @@ describe("coachingSystemPrompt", () => {
   it("defaults generated success criteria to Kent Beck's four rules", () => {
     const prompt = coachingSystemPrompt(lesson);
 
-    expect(prompt).toContain("When generating `factory/success.md` on the learner's behalf");
+    expect(prompt).toContain("When generating `factory/refactor/success.md` on the learner's behalf");
     expect(prompt).toContain("Kent Beck's four rules of simple design");
     expect(prompt).toContain("passes its tests, reveals intention, no duplication, and fewest elements");
     expect(prompt).toContain("destination for the factory's accumulated refactorings");
@@ -38,5 +38,28 @@ describe("coachingSystemPrompt", () => {
     expect(prompt).toContain("“I’ve made this step”=confirm");
     expect(prompt).toContain("“Show me exactly what to type”=show");
     expect(prompt).toContain("Use pause for a stop or pause choice.");
+  });
+
+  it("names the doer by its lexicon role rather than as a worker", () => {
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).not.toMatch(/\bworker\b/i);
+    expect(prompt).not.toMatch(/\breviewer\b/i);
+    expect(prompt).toContain("another doer CLI");
+    expect(prompt).toContain("Do not act as the doer.");
+  });
+
+  it("holds the learner at the end of every lesson", () => {
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("At the end of every lesson, stop there.");
+    expect(prompt).toContain("offer a choice between pausing for now and continuing to the next lesson");
+  });
+
+  it("holds the learner at the end of Part 1 with the stronger, more specific beat", () => {
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("end of Part 1");
+    expect(prompt).toContain("offer a choice between finishing for now and continuing into Part 2");
   });
 });

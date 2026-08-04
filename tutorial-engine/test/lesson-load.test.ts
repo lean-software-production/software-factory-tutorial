@@ -6,15 +6,22 @@ const fixture = fileURLToPath(new URL("./fixtures/sample-lesson", import.meta.ur
 const tutorialRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 describe("loadLesson", () => {
-  it("loads a tutorial directory from its README and ledger", async () => {
+  it("groups lesson rows under the part heading that precedes them", async () => {
     const loaded = await loadLesson(fixture);
     expect(loaded.definition.title).toBe("Fixture tutorial");
     expect(loaded.workspace).toBe(fixture);
     expect(loaded.definition.validationCommands).toEqual([]);
     expect(loaded.progress).toEqual([
       { id: "orientation", label: "Orientation", state: "done" },
-      { id: "001", label: "Fixture step", state: "current" },
+      { id: "001", label: "Fixture step", state: "current", part: "Part 1 — First part" },
+      { id: "002", label: "Second fixture step", state: "upcoming", part: "Part 2 — Second part" },
     ]);
+  });
+
+  it("ignores a header row whatever its first column is called", async () => {
+    const loaded = await loadLesson(fixture);
+    expect(loaded.progress.some((item) => item.label === "Goal")).toBe(false);
+    expect(loaded.progress.some((item) => item.id === "Lesson")).toBe(false);
   });
 
   it("loads the repository tutorial regardless of how many lesson rows its ledger contains", async () => {

@@ -8,14 +8,16 @@ Build the trusted engine once, choose a judge model, then select a scope:
 
 ```sh
 export EVAL_JUDGE_MODEL='provider/model-name'
-npm run eval -- --scenario learner-led-happy-path
-npm run eval -- --lesson 002
+npm run eval -- --scenario doer-learner-led-happy-path
+npm run eval -- --lesson 005
 npm run eval -- --all --yes
-npm run eval -- --scenario learner-led-happy-path --repeat 3
+npm run eval -- --scenario doer-learner-led-happy-path --repeat 3
 npm run eval -- --calibrate
 ```
 
-A scope is mandatory. The lesson-001 matrix is six tutor sessions and six judge calls: roughly 120,000 total model tokens and 10–30 minutes when sequential. `--all` requires `--yes` in an interactive terminal. The tutor uses the ordinary tutorial Pi configuration; only the judge model is selected by `EVAL_JUDGE_MODEL`. Set `EVAL_JUDGE_COMMAND` only when the judge is invoked through a compatible Pi wrapper (default: `pi --no-session`).
+A scope is mandatory. The largest matrices, lessons 002 and 005, are six tutor sessions and six judge calls each: roughly 120,000 total model tokens and 10–30 minutes when sequential. Lessons 001 and 004 build no artefact, so their scenarios are graded by the judge alone. `--all` requires `--yes` in an interactive terminal. The tutor uses the ordinary tutorial Pi configuration; only the judge model is selected by `EVAL_JUDGE_MODEL`. Set `EVAL_JUDGE_COMMAND` only when the judge is invoked through a compatible Pi wrapper (default: `pi --no-session`).
+
+`evals/tsconfig.json` typechecks this directory under `--strict`. The harness runs under `tsx`, which strips types without checking them, so `npm run check` runs `npm run check:eval` to keep a wrong annotation here from being invisible.
 
 ## What it exercises
 
@@ -23,7 +25,7 @@ The runner copies the tutorial into a temporary learner workspace, starts the ch
 
 The engine's file tools enforce the workspace boundary after resolving symlinks and emit sanitised `audit` events. This is a tool boundary, not an operating-system sandbox.
 
-`factory-stubs.ts` performs `bash -n` and runs `factory/run.sh` on a controlled `PATH`. Its `pi` stub captures stdin, arguments, working directory, reviewer output, saved reports, and the Enter pause, so factory checks do not spend another model call.
+`factory-stubs.ts` performs `bash -n` and runs the script the active lesson asks for — `factory/refactor-do.sh`, `factory/refactor-validate.sh`, or `factory/refactor/run.sh` — on a controlled `PATH`. Its `pi` stub captures stdin, arguments, working directory, validator output, saved reports, and the Enter pause, so factory checks do not spend another model call.
 
 ## Results
 

@@ -23,12 +23,24 @@ export async function createWorkspace(repositoryRoot: string, scenarioId: string
   return workspace;
 }
 
-export async function applyPatch(workspace: string, files: Record<string, string>): Promise<void> {
+export async function applyPatch(workspace: string, files: Record<string, string | null>): Promise<void> {
   await Promise.all(Object.entries(files).map(async ([path, content]) => {
     const target = join(workspace, path);
+    // A null deletes: a lesson that moves its artefacts has to be able to say
+    // that the old path is gone, not merely that the new one has arrived.
+    if (content === null) { await rm(target, { force: true }); return; }
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, content, "utf8");
   }));
+}
+
+/**
+ * Put what earlier lessons left behind into the workspace before the session
+ * starts. `createWorkspace` copies no `factory/` file, so without this a lesson
+ * that builds on Part 1 would ask its learner to extend, or move, nothing.
+ */
+export async function seedWorkspace(workspace: string, seed: Record<string, string> | undefined): Promise<void> {
+  if (seed) await applyPatch(workspace, seed);
 }
 
 function matches(pattern: RegExp, content: string): boolean {
@@ -37,9 +49,10 @@ function matches(pattern: RegExp, content: string): boolean {
 }
 
 /** Check file-specific state without treating a healthy file as proof of a defect elsewhere. */
-export function matchesArtifactState(files: Record<string, string>, expected: ArtifactState): boolean {
+export function matchesArtifactState(files: Record<string, string | null>, expected: ArtifactState): boolean {
   return Object.entries(expected).every(([path, expectation]) => {
-    const exists = Object.hasOwn(files, path);
+    // A null is the same absence a patch's null writes: the file is not there.
+    const exists = Object.hasOwn(files, path) && files[path] !== null;
     if (expectation.exists !== undefined && expectation.exists !== exists) return false;
     if (!exists) return !expectation.contains?.length && !expectation.excludes?.length;
     const content = files[path] ?? "";
@@ -89,9 +102,18 @@ export async function activateLesson(workspace: string, lesson: string): Promise
 }
 
 export async function snapshot(workspace: string, label: string, destination: string): Promise<Record<string, string>> {
+  // Part 1 leaves flat `factory/refactor-*` files; lesson 005 moves the whole
+  // line into `factory/refactor/`, so both shapes are captured.
+  const paths = [
+    "refactor.md", "refactor-do.sh", "refactor-quality-before.txt",
+    "refactor-validate.md", "refactor-validate.sh", "refactor-validate-findings.txt",
+    "refactor/refactor.md", "refactor/validate.md", "refactor/success.md", "refactor/repair.md",
+    "refactor/do.sh", "refactor/validate.sh", "refactor/run.sh",
+    "refactor/quality-before.txt", "refactor/validate-findings.txt"
+  ];
   const factory = join(workspace, "factory");
   const files: Record<string, string> = {};
-  for (const file of ["run.sh", "success.md", "refactor.md", "review.md", "repair.md", "review-report.md", "factory.sh", "fix-tests.md", "heal.md", "work.md", "test-failure.log"]) {
+  for (const file of paths) {
     try { files[`factory/${file}`] = await readFile(join(factory, file), "utf8"); } catch { /* absent is evidence too */ }
   }
   await mkdir(destination, { recursive: true });

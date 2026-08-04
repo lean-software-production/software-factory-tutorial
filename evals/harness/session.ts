@@ -4,7 +4,7 @@ import { loadLesson } from "../../tutorial-engine/src/lesson/load.js";
 import { startLocalServer, type StartedServer } from "../../tutorial-engine/src/server/local-server.js";
 import { parseTutorialEvent, serializeBrowserMessage, type BrowserMessage, type TutorialEvent } from "../../tutorial-engine/src/protocol/events.js";
 import type { CanonicalPatch, Scenario } from "../scenarios/lesson-001/scenarios.js";
-import { activateLesson, applyCanonicalPatch, scrubProcessEnvironment, snapshot } from "./workspace.js";
+import { activateLesson, applyCanonicalPatch, scrubProcessEnvironment, seedWorkspace, snapshot } from "./workspace.js";
 
 const FIRST_OUTPUT_TIMEOUT = 90_000;
 const STEP_TIMEOUT = 120_000;
@@ -105,11 +105,31 @@ function advancePendingPatch(
 }
 
 /**
+ * Lessons 001 and 004 deliberately build nothing, so their scenarios carry no
+ * canonical patch and there is no edit to pair a confirmation with. The learner
+ * still has to be able to finish: follow the tutor's own stopping point, and
+ * treat the first pause it offers as the end of the lesson. Everything else is
+ * answered in the way that keeps a hand-run lesson moving — confirm that the
+ * step was done, ask for the exact wording, or start the walkthrough.
+ */
+function advanceZeroPatchScenario(state: HandsOnDriverState, choice: ChoiceEvent): { state: HandsOnDriverState; actions: HandsOnDriverAction[] } {
+  if (hasIcon(choice, "pause")) return { state: { phase: "complete" }, actions: [selection(choice, "pause")] };
+  for (const icon of ["confirm", "show", "do"] as const) {
+    if (hasIcon(choice, icon)) return { state, actions: [selection(choice, icon)] };
+  }
+  throw new PersonaProtocolError(`Tutor offered an unsupported hands-on choice: ${choice.options.map((option) => `${option.label} (${option.icon})`).join(", ")}`);
+}
+
+/**
  * Pure protocol state machine for the deterministic hands-on learner. Each
  * atomic patch is paired only with a structured confirmation, never tutor prose.
  */
 export function advanceHandsOnDriver(state: HandsOnDriverState, scenario: Scenario, event: ChoiceEvent | AuditEvent): { state: HandsOnDriverState; actions: HandsOnDriverAction[] } {
   if (state.phase === "complete") throw new PersonaProtocolError("The hands-on driver is already complete.");
+  if (scenario.patches.length === 0) {
+    if (event.type !== "choice") throw new PersonaProtocolError("Expected a structured tutor choice.");
+    return advanceZeroPatchScenario(state, event);
+  }
   if (state.phase === "awaiting-defect-audit") {
     const patch = patchAt(scenario, state.patchIndex);
     if (!isRelevantDefectRead(patch, event)) throw new PersonaProtocolError(`Expected an audited read of the defective ${Object.keys(patch.files).join(", ")}.`);
@@ -237,6 +257,9 @@ export async function runPersonaSession(options: { repositoryRoot: string; works
     // `loadLesson` deliberately chooses the first Todo row, so activate the
     // requested lesson in the temporary learner copy before creating the engine.
     await activateLesson(options.workspace, options.scenario.lesson);
+    // Earlier lessons' artefacts arrive before the engine starts, so the tutor
+    // finds the workspace the learner would actually have carried forward.
+    await seedWorkspace(options.workspace, options.scenario.seed);
     const loaded = await loadLesson(options.workspace);
     server = await startLocalServer({ lesson: loaded.definition, workspace: options.workspace, webRoot: options.webRoot, progress: loaded.progress });
   } catch (error) {
@@ -260,14 +283,6 @@ export async function runPersonaSession(options: { repositoryRoot: string; works
   const nextChoice = async (after = 0): Promise<Extract<TutorialEvent, { type: "choice" }>> => {
     const event = await trace.waitFor((candidate, all) => candidate.type === "choice" && all.indexOf(candidate) >= after && !handledChoices.has(candidate.id));
     if (event.type !== "choice") throw new PersonaProtocolError("Expected a structured choice event.");
-    return event;
-  };
-  const choose = async (labels: readonly string[], after = 0) => {
-    const event = await nextChoice(after);
-    const optionId = choiceOptionId(event, labels);
-    if (!optionId) throw new PersonaProtocolError(`Tutor offered an unsupported choice: ${event.options.map((option) => option.label).join(", ")}`);
-    handledChoices.add(event.id);
-    await send({ type: "choose", choiceId: event.id, optionId });
     return event;
   };
   const applyStep = async (patch: CanonicalPatch, tutorEvents: TutorialEvent[], completionChoiceId: string) => {
@@ -301,7 +316,7 @@ export async function runPersonaSession(options: { repositoryRoot: string; works
       // delegate option whenever the tutor completes an atomic step and asks again.
       for (let turns = 0; turns < 16; turns++) {
         const event = await trace.waitFor((candidate) => (candidate.type === "choice" && !handledChoices.has(candidate.id)) || (candidate.type === "run-state" && candidate.state === "idle"));
-        if (event.type === "run-state") break;
+        if (event.type !== "choice") break;
         const action = selectDelegationChoice(event);
         const choiceIndex = trace.events.indexOf(event);
         handledChoices.add(event.id);
@@ -318,11 +333,20 @@ export async function runPersonaSession(options: { repositoryRoot: string; works
       let state = beginHandsOnDriver();
       let tutorEventsStart = trace.events.length;
       let minimumChoiceIndex = 0;
-      while (state.phase !== "complete") {
+      // A lesson that builds nothing ends on the tutor's own pause rather than
+      // on its last patch, so bound the walkthrough rather than trusting it.
+      // The zero-patch floor is 16, not 8: a patch-free lesson can still have
+      // several numbered steps (one of which may repeat), check questions,
+      // and a closing lesson-boundary pause, and a tutor that offers then
+      // confirms each of those is verbose but correct, not a failure.
+      const maximumTurns = 16 + options.scenario.patches.length * 8;
+      for (let turns = 0; state.phase !== "complete"; turns++) {
+        if (turns >= maximumTurns) throw new PersonaProtocolError(`Tutor exceeded ${maximumTurns} hands-on steps without completing the lesson.`);
         if (state.phase === "awaiting-defect-audit") {
           const defect = patchAt(options.scenario, state.patchIndex);
           const auditStart = tutorEventsStart;
           const audit = await trace.waitFor((event, all) => all.indexOf(event) >= auditStart && isRelevantDefectRead(defect, event));
+          if (audit.type !== "audit") throw new PersonaProtocolError("Expected an audited read of the defective files.");
           const auditIndex = trace.events.indexOf(audit);
           const transition = advanceHandsOnDriver(state, options.scenario, audit);
           state = transition.state;

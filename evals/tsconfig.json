@@ -1,0 +1,18 @@
+{
+  "//": "The eval harness runs under tsx, which strips types without checking them. Nothing else typechecks these modules, so a wrong annotation here would be invisible to CI forever. `npm run check` runs this.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["reports"]
+}
