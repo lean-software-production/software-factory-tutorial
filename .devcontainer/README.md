@@ -42,6 +42,28 @@ forwarding reaches. Add `--host 0.0.0.0` only
 when something outside the forwarding mechanism needs to reach it — the tutor has
 no authentication and edits the working tree.
 
+## Which models the container picks
+
+The tutorial runs two agents on separate models — see
+[Two models, on purpose](../README.md#two-models-on-purpose) — and the container
+supplies a default for each:
+
+| Agent | Model | Set by |
+| --- | --- | --- |
+| The web tutor | `opencode-go/deepseek-v4-flash` | `TUTOR_MODEL` in `devcontainer.json` |
+| The `pi -p` doer | `opencode/big-pickle`, which is free | `seed-doer-model.mjs`, from `post-create.sh` |
+
+They are set two different ways because they live in two different places. The tutor
+reads an environment variable. The doer reads Pi's saved `/model` default, which lives
+in the state volume rather than this repository, so the container has to write it —
+which `seed-doer-model.mjs` does only when the volume has no choice saved yet. Pick a
+model with `/model` and it is yours; a rebuild will not overwrite it.
+
+Both values assume the OpenCode Zen provider this image is built around. Log in
+elsewhere and Pi falls back to its own pick — noted in the tutorial log for the tutor,
+and reported for both by `npm run setup`. `export TUTOR_MODEL=<provider>/<model>`
+overrides the tutor for one shell; `/model` changes the doer for good.
+
 ## Credentials survive a rebuild
 
 `PI_CODING_AGENT_DIR` points at a named volume mounted on

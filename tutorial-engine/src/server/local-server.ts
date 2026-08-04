@@ -156,7 +156,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (request.method === "GET" && isRoute(url.pathname, "events")) {
       response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-      writeEvent(response, { type: "snapshot", title: options.lesson.title, runState: adapter?.state ?? runState, events: [...bus.history()], validationCommands: options.lesson.validationCommands.map(({ id, label }) => ({ id, label })), progress: options.progress, session: bootstrap });
+      writeEvent(response, { type: "snapshot", title: options.lesson.title, runState: adapter?.state ?? runState, activity: adapter?.activity ?? "waiting for Pi", events: [...bus.history()], validationCommands: options.lesson.validationCommands.map(({ id, label }) => ({ id, label })), progress: options.progress, session: bootstrap });
       clients.add(response);
       log.info(`Browser connected to the event stream (${clients.size} client${clients.size === 1 ? "" : "s"}).`);
       const keepAlive = setInterval(() => response.write(": keepalive\n\n"), 20_000);

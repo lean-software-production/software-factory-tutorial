@@ -36,9 +36,11 @@ export interface SessionBootstrap {
 }
 
 export type TutorialEvent =
-  | { type: "snapshot"; title: string; runState: RunState; events: TutorialEvent[]; validationCommands: Array<{ id: string; label: string }>; progress: ProgressItem[]; session: SessionBootstrap }
+  | { type: "snapshot"; title: string; runState: RunState; activity: string; events: TutorialEvent[]; validationCommands: Array<{ id: string; label: string }>; progress: ProgressItem[]; session: SessionBootstrap }
   | { type: "session-state"; session: SessionBootstrap }
   | { type: "run-state"; state: RunState }
+  /** What the tutor is doing right now, for the spinner. Status, not transcript: see `TRANSIENT_EVENTS`. */
+  | { type: "activity"; text: string }
   | { type: "assistant-delta"; messageId: string; delta: string }
   | { type: "assistant-message"; messageId: string; markdown: string }
   | { type: "user-message"; markdown: string }
@@ -53,6 +55,32 @@ export type TutorialEvent =
   | { type: "choice-resolved"; id: string; optionId: string }
   | AuditEvent
   | { type: "error"; message: string; retryable: boolean };
+
+/**
+ * Events that describe the moment rather than the transcript. They are never
+ * kept in the bus history and never written to the session log, so a resumed
+ * session cannot replay a stale "reading README.md" as though it just happened.
+ */
+const TRANSIENT_EVENTS = new Set<TutorialEvent["type"]>(["snapshot", "session-state", "activity"]);
+
+export function isTranscriptEvent(event: TutorialEvent): boolean {
+  return !TRANSIENT_EVENTS.has(event.type);
+}
+
+/**
+ * An activity is phrased to suit the engine's log, where the heartbeat repeats
+ * it as "Tutor is still working: running read README.md (30 seconds)". Under
+ * the browser's spinner it is a caption of its own, so it starts a sentence and
+ * trails off while the work continues — unless it already trails off partway,
+ * as "waiting for Pi… read README.md" does, where a second ellipsis would only
+ * clutter the line.
+ */
+export function activityCaption(activity: string): string {
+  const trimmed = activity.trim();
+  if (!trimmed) return "Thinking…";
+  const sentence = `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
+  return sentence.includes("…") ? sentence : `${sentence}…`;
+}
 
 export type BrowserMessage =
   | { type: "start-session"; mode: "resume" | "fresh" }

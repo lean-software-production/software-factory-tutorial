@@ -1,6 +1,6 @@
 import { appendFile, readdir, readFile, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { parseTutorialEvent, type TutorialEvent } from "./protocol/events.js";
+import { isTranscriptEvent, parseTutorialEvent, type TutorialEvent } from "./protocol/events.js";
 
 const SESSION_LOG_NAME = "tutorial-session.jsonl";
 
@@ -49,7 +49,7 @@ export class TutorialSessionLog {
   }
 
   append(event: TutorialEvent): void {
-    if (event.type === "snapshot" || event.type === "session-state") return;
+    if (!isTranscriptEvent(event)) return;
     this.#writes = this.#writes.then(async () => {
       await appendFile(this.path, `${JSON.stringify(event)}\n`, "utf8");
     });

@@ -14,7 +14,7 @@ You will begin with a bash `while` loop that shells out to `pi -p` for each agen
 
 ## Setup
 
-You need Node.js 22.19 or later, npm 11 or later, a browser, and an authenticated Pi. Use Vim or any other editor; Docker and VS Code are not required.
+You need Node.js 22.19 or later, npm 11 or later, a browser, and an authenticated `pi` on your `PATH`. Use Vim or any other editor; Docker and VS Code are not required.
 
 Node 22 still bundles npm 10, which cannot record the `libc` field this repository's lockfile
 uses and quietly strips it on every install. `npm install` warns when it is too old; upgrade
@@ -27,7 +27,38 @@ npm install
 npm run setup
 ```
 
-`npm run setup` checks that Pi has an authenticated model for the web tutor. If it reports that Pi needs authentication, run `npx pi`, enter `/login`, and choose a provider. Pi keeps those credentials in its user-level configuration; this repository does not store them.
+The lessons call `pi` directly, so it has to be on your `PATH`. `npm install` already
+fetched the version this repository pins, so exporting npm's local binary directory is
+enough; install it globally if you would rather:
+
+```sh
+export PATH="$PWD/node_modules/.bin:$PATH"
+```
+
+`npm run setup` checks that Pi has an authenticated model for the web tutor. If it reports that Pi needs authentication, run `pi`, enter `/login`, and choose a provider. Pi keeps those credentials in its user-level configuration; this repository does not store them.
+
+It also names the two models the tutorial runs on.
+
+## Two models, on purpose
+
+The tutorial runs two agents, and they want opposite things.
+
+| Agent | Wants | Chosen with |
+| --- | --- | --- |
+| The web tutor | To teach well, at whatever a good explanation costs you | `TUTOR_MODEL` |
+| The doer your factory drives with `pi -p` | To be cheap and fast | `pi`, then `/model` |
+
+The doer's mistakes are not a problem to design away — catching them with independent
+validation is the skill this tutorial teaches, so a small quick model is the better
+raw material. Give the tutor whatever you would rather it used:
+
+```sh
+export TUTOR_MODEL=<provider>/<model>   # `pi --list-models` shows your options
+```
+
+Leave `TUTOR_MODEL` unset and Pi picks the tutor's model for you. Name a model that
+does not exist or is not authenticated and the tutor falls back to Pi's pick rather
+than failing; `npm run setup` reports whichever happened.
 
 ## Start the tutorial
 
