@@ -21,8 +21,8 @@ Keep the launching terminal open. It prints timestamped startup, browser, Pi, to
 A tutorial needs no engine configuration file. The engine infers it from the directory:
 
 - the first `#` heading in `README.md` is the title and the README is the whole-exercise orientation;
-- `docs/specs/README.md` is the iteration ledger;
-- the first `Todo` row is the current iteration;
+- `docs/specs/README.md` is the lesson ledger;
+- the first `Todo` row is the current lesson;
 - the linked spec tells the tutor what to teach.
 
 The tutor reads those files, guides one small step at a time, and offers to let the learner make a change or make it for them.

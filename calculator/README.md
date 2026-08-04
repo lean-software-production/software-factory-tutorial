@@ -61,6 +61,6 @@ the whole picture:
 - **knip** — unused files, exports, and dependencies. This is what catches the leftovers of an
   extraction: a module the refactoring stopped importing, or an export nothing calls.
 
-The command exits non-zero if either check reports, so a reviewer, human or agent, can quote the
+The command exits non-zero if either check reports, so a validator, human or agent, can quote the
 output as evidence. `npm test` covers a third case for free: `noUnusedLocals` and
 `noUnusedParameters` make unused variables, imports, and parameters a build error.

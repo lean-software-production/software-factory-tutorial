@@ -1,16 +1,20 @@
 # Software factory tutorial 🏭
 
-You're going to build a small software factory: a repeatable validation loop that improves a codebase a little at a time. You will give an agent a clear goal, validate its change independently, and feed the evidence into the next turn. Repeated safely, that feedback loop lets the factory converge on a healthier codebase.
+You're going to build a small software factory: software that improves a codebase a little at a time and checks its own work.
+
+The tutorial is two pieces of work. **Part 1** builds one agent at a time and runs each of them by hand — a doer that changes the code, then a validator that gathers independent evidence about the change — so you can see what each one contributes before anything is automated. **Part 2** joins them into an assembly line that runs itself and routes a failed verdict back for repair. Repeated safely, that feedback loop converges on a healthier codebase.
 
 ## About the calculator
 
-The raw material is a natural-language calculator written in TypeScript. It has a solid set of automated tests to provide the factory's first validation evidence, but its code has become messy and hard to maintain. You can inspect the code in [`./calculator`](./calculator). Your factory's job is to make safe, repeated refactorings that clean it up without changing what it does.
+The raw material is a natural-language calculator written in TypeScript. It has a solid set of automated tests to provide your first validation evidence, but its code has become messy and hard to maintain. You can inspect the code in [`./calculator`](./calculator). Your job is to make safe, repeated refactorings that clean it up without changing what it does.
 
 See the calculator's [README](./calculator/README.md) for more details.
 
 ## Your goal
 
-You will begin with a bash `while` loop that shells out to `pi -p` for each agent operation, then build it into a loop where independent validation guides the next change.
+You begin with a single headless `pi -p` command that reads the calculator and answers a question. It creates no files and there is no loop yet. From there you build a doer that changes the code, then a validator that checks the change against written criteria, then carry the validator's findings back to the doer by hand. Only once you have run that loop yourself do you automate it.
+
+Six lessons: 001–004 are Part 1, 005–006 are Part 2. Each part is a separate piece of homework, and the tutor stops at the end of lesson 004 so you can choose whether to carry straight on.
 
 ## Setup
 
@@ -46,7 +50,7 @@ The tutorial runs two agents, and they want opposite things.
 | Agent | Wants | Chosen with |
 | --- | --- | --- |
 | The web tutor | To teach well, at whatever a good explanation costs you | `TUTOR_MODEL` |
-| The doer your factory drives with `pi -p` | To be cheap and fast | `pi`, then `/model` |
+| The doer you drive with `pi -p` | To be cheap and fast | `pi`, then `/model` |
 
 The doer's mistakes are not a problem to design away — catching them with independent
 validation is the skill this tutorial teaches, so a small quick model is the better
@@ -86,7 +90,7 @@ Leave it running. In another terminal, work in the factory directory:
 cd factory
 ```
 
-Edit files there by hand as instructed by the tutor, then use it for the next step or feedback. Once you have created `run.sh`, run it directly. The lessons use Pi as the default factory doer. Advanced users may substitute another CLI harness when it preserves the doer requirements described in each lesson.
+Edit files there by hand as instructed by the tutor, then use it for the next step or feedback. Once you have created `refactor-do.sh` in lesson 002, run it directly. Lesson 005 moves the whole line into `factory/refactor/`, and from then on you run `factory/refactor/run.sh`. The lessons use Pi as the default doer. Advanced users may substitute another CLI harness when it preserves the doer requirements described in each lesson.
 
 ## Resume a tutorial
 

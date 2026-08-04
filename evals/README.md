@@ -23,7 +23,7 @@ The runner copies the tutorial into a temporary learner workspace, starts the ch
 
 The engine's file tools enforce the workspace boundary after resolving symlinks and emit sanitised `audit` events. This is a tool boundary, not an operating-system sandbox.
 
-`factory-stubs.ts` performs `bash -n` and runs `factory/run.sh` on a controlled `PATH`. Its `pi` stub captures stdin, arguments, working directory, reviewer output, saved reports, and the Enter pause, so factory checks do not spend another model call.
+`factory-stubs.ts` performs `bash -n` and runs `factory/run.sh` on a controlled `PATH`. Its `pi` stub captures stdin, arguments, working directory, validator output, saved reports, and the Enter pause, so factory checks do not spend another model call.
 
 ## Results
 
