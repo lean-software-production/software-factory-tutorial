@@ -21,7 +21,7 @@ import { createWorkspaceTools, WorkspaceBoundary } from "./workspace-boundary.js
 import type { TutorialLogger } from "../runtime-log.js";
 
 const TOOL_NAMES = [
-  "read", "edit", "write", "grep", "find", "ls",
+  "read", "edit", "write", "move", "grep", "find", "ls",
   "present_markdown", "present_diagram", "offer_choices", "run_validation", "show_file_excerpt"
 ];
 
