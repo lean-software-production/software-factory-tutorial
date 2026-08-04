@@ -26,15 +26,35 @@ Build this lesson in this order. Complete each small step before moving to the n
 
    ```sh
    mkdir factory/refactor
-   git mv factory/refactor-do.sh       factory/refactor/do.sh
-   git mv factory/refactor-validate.sh factory/refactor/validate.sh
-   git mv factory/refactor.md          factory/refactor/refactor.md
-   git mv factory/refactor-validate.md factory/refactor/validate.md
+   mv factory/refactor-do.sh              factory/refactor/do.sh
+   mv factory/refactor-validate.sh        factory/refactor/validate.sh
+   mv factory/refactor.md                 factory/refactor/refactor.md
+   mv factory/refactor-validate.md        factory/refactor/validate.md
+   mv factory/refactor-quality-before.txt factory/refactor/quality-before.txt
    ```
 
-   The `refactor-` prefixes drop because the folder now carries the line's name. Two references
-   inside the scripts still use the old names, so update them: `refactor-validate.md` becomes
-   `validate.md`, and `refactor-validate-findings.txt` becomes `validate-findings.txt`.
+   That is plain `mv`, not `git mv`: `factory/` is git-ignored, so none of the learner's work is
+   tracked and there is nothing for git to move.
+
+   Lesson 004 also left `factory/refactor-validate-findings.txt` behind. Delete it; it is last
+   week's output, and the line writes its own.
+
+   The `refactor-` prefixes drop because the folder now carries the line's name. Nothing inside the
+   folder should still be called `refactor-` anything, except `refactor.md` — that name belongs to
+   the doer's job, not to the line.
+
+   The scripts do not survive the move untouched. Fix every stale name inside them:
+
+   - both scripts sit one directory deeper, so each `(cd ../calculator && ...)` becomes
+     `(cd ../../calculator && ...)`;
+   - `refactor-quality-before.txt` becomes `quality-before.txt`, in the line that writes it and in
+     `validate.sh`'s guard;
+   - `refactor-validate.md` becomes `validate.md`, and `refactor-validate-findings.txt` becomes
+     `validate-findings.txt`;
+   - the guard's message now names the script the learner would actually run: `./do.sh`.
+
+   Run `./factory/refactor/do.sh` and `./factory/refactor/validate.sh` once from the repository root
+   before going on. A rename that nobody exercises is a rename nobody has checked.
 
    Nothing behaves differently after this step, which is the point worth making. What the learner
    bought is an edge. A second line — one that writes documentation, say — would be a second folder
@@ -64,10 +84,31 @@ Build this lesson in this order. Complete each small step before moving to the n
    Its criteria have to outlive a single turn.
 
 3. **Point both prompts at the criteria.** Neither `refactor.md` nor `validate.md` carries its own
-   criteria any more. Both defer to `success.md`, which arrives appended to the prompt when the line
-   runs — the same trick lesson 003 used to hand the validator its baseline. Neither prompt names a
-   path to go and fetch, because both machines run from `calculator/` and neither needs to reach
-   outside it.
+   criteria any more. Both defer to `success.md`, which arrives appended to the prompt — the same
+   trick lesson 003 used to hand the validator its baseline. Neither prompt names a path to go and
+   fetch, because both machines run from `calculator/` and neither needs to reach outside it.
+
+   Which means every caller has to hand the criteria over, and there are now three of them. Update
+   `do.sh`:
+
+   ```sh
+   cat refactor.md success.md | (cd ../../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
+   ```
+
+   and `validate.sh`:
+
+   ```sh
+   cat validate.md success.md quality-before.txt \
+     | (cd ../../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
+     | tee validate-findings.txt
+   ```
+
+   Miss either one and that script goes on sending a prompt that defers to criteria nobody hands it.
+
+   This is the reason the criteria live in a file of their own rather than inside the two prompts:
+   three callers now hand the same criteria to two machines, and a copy in each prompt would drift.
+   One of them would be edited, the other would not, and the doer and the validator would quietly
+   stop working towards the same thing.
 
    The validator must give one finding for every criterion in `success.md`, in this format:
 
@@ -94,26 +135,43 @@ Build this lesson in this order. Complete each small step before moving to the n
    while true; do
      echo "Recording quality baseline..."
      (cd ../../calculator && node scripts/quality.mjs) > quality-before.txt || true
-     echo "Starting doer iteration..."
+     echo "Starting doer..."
      cat refactor.md success.md | (cd ../../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
      echo "Starting validation..."
-     cat validate.md success.md \
+     cat validate.md success.md quality-before.txt \
        | (cd ../../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
        | tee validate-findings.txt
      read -r -p "Press Enter for the next iteration, or Ctrl-C to stop. "
    done
    ```
 
-   The line records its own baseline at the top of every pass, so it never needs the guard that
-   `validate.sh` has: it cannot reach the validator without having written `quality-before.txt` a
-   moment earlier. `validate.sh` still needs its guard, because it can still be run on its own.
+   The validator's `cat` carries three files, in the order the validator was taught to expect them:
+   its job, the criteria, then the baseline it is comparing against. Leave `quality-before.txt` out
+   and the instruction in `validate.md` to compare against the baseline below would point at
+   nothing.
 
-   Which is the other thing to notice: `do.sh` and `validate.sh` are untouched and still work
-   exactly as they did. The line did not replace them. It ordered them.
+   `validate.sh` guards against a missing baseline. `run.sh` needs no such guard, because it writes
+   the baseline and hands it over in the same pass. The guard was never about a file existing on
+   disk; it is about the validator receiving something to compare against.
 
-   One turn of this loop is an **iteration** — a bounded batch of agent work between check-ins. The
-   `read` is where the line hands control back to the learner, and Ctrl-C at that prompt stops the
-   line.
+   `do.sh` and `validate.sh` still run on their own, exactly as they did. The line did not replace
+   them. It ordered them.
+
+   One turn of this loop is an **iteration**: baseline, doer, validator, pause. That is the bounded
+   batch of agent work between check-ins. Each `echo` names a phase within the iteration, not an
+   iteration of its own. The `read` is where the line hands control back to the learner, and Ctrl-C
+   at that prompt stops the line.
+
+   With that written, the folder is the whole line:
+
+   ```text
+   factory/refactor/
+     do.sh              validate.sh          run.sh
+     refactor.md        validate.md          success.md
+     quality-before.txt validate-findings.txt
+   ```
+
+   Three scripts, three prompts, and the two files the machines pass between them.
 
 ## Checks
 
@@ -138,7 +196,7 @@ The line runs in order, and it stops for the learner between iterations. What it
 anything at all with what the validator found.
 
 Watch a `FAIL` go past and then press Enter. The next iteration is identical to the one that would
-have followed a `PASS`: same prompt, same baseline, same job. The findings were written to a file and
+have followed a `PASS`: same prompt, same criteria, same job. The findings were written to a file and
 read by nobody.
 
 That is lesson 004's copy-paste — the step the learner did with their own hands — still undone. The
