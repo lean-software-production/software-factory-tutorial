@@ -335,7 +335,11 @@ export async function runPersonaSession(options: { repositoryRoot: string; works
       let minimumChoiceIndex = 0;
       // A lesson that builds nothing ends on the tutor's own pause rather than
       // on its last patch, so bound the walkthrough rather than trusting it.
-      const maximumTurns = 8 + options.scenario.patches.length * 8;
+      // The zero-patch floor is 16, not 8: a patch-free lesson can still have
+      // several numbered steps (one of which may repeat), check questions,
+      // and a closing lesson-boundary pause, and a tutor that offers then
+      // confirms each of those is verbose but correct, not a failure.
+      const maximumTurns = 16 + options.scenario.patches.length * 8;
       for (let turns = 0; state.phase !== "complete"; turns++) {
         if (turns >= maximumTurns) throw new PersonaProtocolError(`Tutor exceeded ${maximumTurns} hands-on steps without completing the lesson.`);
         if (state.phase === "awaiting-defect-audit") {
