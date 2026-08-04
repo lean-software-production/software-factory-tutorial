@@ -12,23 +12,25 @@ import { scenarios } from "./scenarios/lesson-001/scenarios.js";
 import { lesson002Scenarios } from "./scenarios/lesson-002/scenarios.js";
 import { lesson003Scenarios } from "./scenarios/lesson-003/scenarios.js";
 import { lesson004Scenarios } from "./scenarios/lesson-004/scenarios.js";
+import { lesson005Scenarios } from "./scenarios/lesson-005/scenarios.js";
+import { lesson006Scenarios } from "./scenarios/lesson-006/scenarios.js";
 import type { Scenario } from "./scenarios/lesson-001/scenarios.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const reports = join(root, "evals/reports");
-const allScenarios = [...scenarios, ...lesson002Scenarios, ...lesson003Scenarios, ...lesson004Scenarios];
+const allScenarios = [...scenarios, ...lesson002Scenarios, ...lesson003Scenarios, ...lesson004Scenarios, ...lesson005Scenarios, ...lesson006Scenarios];
 
 function usage(): void {
   console.log(`Live tutorial evals (real model calls; not part of npm test)
 
 Usage:
-  npm run eval -- --scenario learner-led-happy-path
-  npm run eval -- --lesson 002
+  npm run eval -- --scenario doer-learner-led-happy-path
+  npm run eval -- --lesson 005
   npm run eval -- --all --yes
-  npm run eval -- --scenario learner-led-happy-path --repeat 3
+  npm run eval -- --scenario doer-learner-led-happy-path --repeat 3
   npm run eval -- --calibrate
 
-A scope is required unless running judge calibration. EVAL_JUDGE_MODEL selects the judge model. The lesson-001 suite is about 120,000 model tokens and normally takes 10–30 minutes.`);
+A scope is required unless running judge calibration. EVAL_JUDGE_MODEL selects the judge model. The largest single-lesson suite is lesson 002, at about 120,000 model tokens and normally 10–30 minutes.`);
 }
 
 function selected(args: string[]): Scenario[] {

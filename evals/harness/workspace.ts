@@ -89,9 +89,18 @@ export async function activateLesson(workspace: string, lesson: string): Promise
 }
 
 export async function snapshot(workspace: string, label: string, destination: string): Promise<Record<string, string>> {
+  // Part 1 leaves flat `factory/refactor-*` files; lesson 005 moves the whole
+  // line into `factory/refactor/`, so both shapes are captured.
+  const paths = [
+    "refactor.md", "refactor-do.sh", "refactor-quality-before.txt",
+    "refactor-validate.md", "refactor-validate.sh", "refactor-validate-findings.txt",
+    "refactor/refactor.md", "refactor/validate.md", "refactor/success.md", "refactor/repair.md",
+    "refactor/do.sh", "refactor/validate.sh", "refactor/run.sh",
+    "refactor/quality-before.txt", "refactor/validate-findings.txt"
+  ];
   const factory = join(workspace, "factory");
   const files: Record<string, string> = {};
-  for (const file of ["run.sh", "success.md", "refactor.md", "review.md", "repair.md", "review-report.md", "factory.sh", "fix-tests.md", "heal.md", "work.md", "test-failure.log"]) {
+  for (const file of paths) {
     try { files[`factory/${file}`] = await readFile(join(factory, file), "utf8"); } catch { /* absent is evidence too */ }
   }
   await mkdir(destination, { recursive: true });

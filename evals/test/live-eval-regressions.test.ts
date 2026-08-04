@@ -10,11 +10,13 @@ import { scenarios, type Scenario } from "../scenarios/lesson-001/scenarios.js";
 import { lesson002Scenarios } from "../scenarios/lesson-002/scenarios.js";
 import { lesson003Scenarios } from "../scenarios/lesson-003/scenarios.js";
 import { lesson004Scenarios } from "../scenarios/lesson-004/scenarios.js";
+import { lesson005Scenarios } from "../scenarios/lesson-005/scenarios.js";
+import { lesson006Scenarios } from "../scenarios/lesson-006/scenarios.js";
 import { loadActiveSpec } from "../harness/judge.js";
 import type { SessionTrace } from "../harness/session.js";
 import { loadLesson } from "../../tutorial-engine/src/lesson/load.js";
 
-const allScenarios = [...scenarios, ...lesson002Scenarios, ...lesson003Scenarios, ...lesson004Scenarios];
+const allScenarios = [...scenarios, ...lesson002Scenarios, ...lesson003Scenarios, ...lesson004Scenarios, ...lesson005Scenarios, ...lesson006Scenarios];
 const mistakeScenarios = allScenarios.filter((scenario) => scenario.mode === "mistake");
 
 function traceFor(scenario: Scenario): SessionTrace {
@@ -34,7 +36,7 @@ function traceFor(scenario: Scenario): SessionTrace {
 }
 
 describe("live-eval regression coverage", () => {
-  it.each(mistakeScenarios)("records scenario-specific defect and repair evidence for $id", async (scenario) => {
+  it.each(mistakeScenarios)("records scenario-specific defect and repair evidence for $id", { timeout: 30000 }, async (scenario) => {
     const defect = scenario.patches.find((patch) => patch.name === "defect")!;
     const repair = scenario.patches.find((patch) => patch.name === "repair")!;
     expect(matchesArtifactState(defect.files, defect.expectedState)).toBe(true);
@@ -60,10 +62,42 @@ describe("live-eval regression coverage", () => {
     }
   });
 
-  it("splits the learner-led factory into canonical atomic edits", () => {
-    const happy = scenarios.find((scenario) => scenario.id === "learner-led-happy-path")!;
-    expect(happy.patches.map((patch) => patch.name)).toEqual(["success", "prompt", "invoke"]);
+  it("splits the learner-led doer into canonical atomic edits", () => {
+    const happy = lesson002Scenarios.find((scenario) => scenario.id === "doer-learner-led-happy-path")!;
+    expect(happy.patches.map((patch) => patch.name)).toEqual(["prompt", "invoke"]);
     expect(happy.patches.every((patch) => Object.keys(patch.files).length === 1)).toBe(true);
+  });
+
+  it("covers all six lessons, and grades the two that build nothing by transcript alone", () => {
+    expect([...new Set(allScenarios.map((scenario) => scenario.lesson))].sort()).toEqual(["001", "002", "003", "004", "005", "006"]);
+    for (const scenario of allScenarios.filter((item) => item.lesson === "001" || item.lesson === "004")) {
+      expect(scenario.patches, scenario.id).toEqual([]);
+      expect(scenario.finalState, scenario.id).toBeUndefined();
+      expect(scenario.description.length, scenario.id).toBeGreaterThan(80);
+    }
+  });
+
+  it.each(allScenarios.filter((scenario) => scenario.patches.length))("applies every canonical patch of $id in order, landing on its final state", async (scenario) => {
+    // Nothing typechecks these modules, and no other test exercises a patch's
+    // preconditions, so a stale ordering would otherwise pass silently.
+    const workspace = await mkdtemp(join(tmpdir(), "eval-chain-"));
+    try {
+      for (const patch of scenario.patches) await applyCanonicalPatch(workspace, patch);
+      if (!scenario.finalState) return;
+      const files: Record<string, string> = {};
+      for (const path of Object.keys(scenario.finalState)) {
+        try { files[path] = await readFile(join(workspace, path), "utf8"); } catch { /* absence is checked by matchesArtifactState */ }
+      }
+      expect(matchesArtifactState(files, scenario.finalState)).toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  });
+
+  it("keeps success.md a finalState key of every lesson-005 scenario that has one", () => {
+    // The gate reads the criteria out of the files it loaded from finalState's
+    // keys, so dropping the key would grade an empty string, not the artefact.
+    for (const scenario of allScenarios.filter((item) => item.lesson === "005" && item.finalState)) {
+      expect(Object.keys(scenario.finalState!), scenario.id).toContain("factory/refactor/success.md");
+    }
   });
 
   it("activates the declared lesson only in the disposable workspace", async () => {

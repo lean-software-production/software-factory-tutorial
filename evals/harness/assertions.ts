@@ -94,9 +94,7 @@ const auditable = (events: TutorialEvent[]) => events.filter((event): event is A
 
 export async function deterministicGate(scenario: Scenario, workspace: string, trace: SessionTrace): Promise<GateResult> {
   const assertions: Assertion[] = [];
-  // Widened deliberately: the gate grades six lessons, and the scenario type
-  // catches up when the scenario modules are renumbered.
-  const lesson: string = scenario.lesson;
+  const lesson = scenario.lesson;
   const events = trace.events;
   const audits = auditable(events);
   const snapshot = events.find((event) => event.type === "snapshot");
