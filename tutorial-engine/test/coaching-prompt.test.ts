@@ -49,10 +49,17 @@ describe("coachingSystemPrompt", () => {
     expect(prompt).toContain("Do not act as the doer.");
   });
 
-  it("holds the learner at the end of Part 1", () => {
+  it("holds the learner at the end of every lesson", () => {
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("At the end of every lesson, stop there.");
+    expect(prompt).toContain("offer a choice between pausing for now and continuing to the next lesson");
+  });
+
+  it("holds the learner at the end of Part 1 with the stronger, more specific beat", () => {
     const prompt = coachingSystemPrompt(lesson);
 
     expect(prompt).toContain("end of Part 1");
-    expect(prompt).toContain("offer a choice between finishing for now and continuing");
+    expect(prompt).toContain("offer a choice between finishing for now and continuing into Part 2");
   });
 });
