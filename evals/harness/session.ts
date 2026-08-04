@@ -285,14 +285,6 @@ export async function runPersonaSession(options: { repositoryRoot: string; works
     if (event.type !== "choice") throw new PersonaProtocolError("Expected a structured choice event.");
     return event;
   };
-  const choose = async (labels: readonly string[], after = 0) => {
-    const event = await nextChoice(after);
-    const optionId = choiceOptionId(event, labels);
-    if (!optionId) throw new PersonaProtocolError(`Tutor offered an unsupported choice: ${event.options.map((option) => option.label).join(", ")}`);
-    handledChoices.add(event.id);
-    await send({ type: "choose", choiceId: event.id, optionId });
-    return event;
-  };
   const applyStep = async (patch: CanonicalPatch, tutorEvents: TutorialEvent[], completionChoiceId: string) => {
     await applyCanonicalPatch(options.workspace, patch);
     snapshots[patch.name] = await snapshot(options.workspace, patch.name, join(options.reportDirectory, "snapshots"));

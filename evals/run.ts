@@ -30,7 +30,7 @@ Usage:
   npm run eval -- --scenario doer-learner-led-happy-path --repeat 3
   npm run eval -- --calibrate
 
-A scope is required unless running judge calibration. EVAL_JUDGE_MODEL selects the judge model. The largest single-lesson suite is lesson 002, at about 120,000 model tokens and normally 10–30 minutes.`);
+A scope is required unless running judge calibration. EVAL_JUDGE_MODEL selects the judge model. The largest single-lesson suites are lessons 002 and 005, at about 120,000 model tokens and normally 10–30 minutes each.`);
 }
 
 function selected(args: string[]): Scenario[] {
@@ -42,7 +42,7 @@ function selected(args: string[]): Scenario[] {
     return [scenario];
   }
   if (lessonIndex >= 0 && args[lessonIndex + 1]) {
-    const lesson = args[lessonIndex + 1].padStart(3, "0"); const result = allScenarios.filter((item) => item.lesson === lesson);
+    const lesson = (args[lessonIndex + 1] ?? "").padStart(3, "0"); const result = allScenarios.filter((item) => item.lesson === lesson);
     if (!result.length) throw new Error(`No scenarios for lesson ${lesson}.`);
     return result;
   }
@@ -108,7 +108,7 @@ async function main(): Promise<void> {
   const stable = results.every(({ runs }) => {
     const passing = runs.filter((run) => run.passed).length;
     const percentages = runs.map((run) => run.percentage ?? 0).sort((a, b) => a - b);
-    return repeat === 1 ? passing === 1 : passing >= 2 && percentages[Math.floor(percentages.length / 2)] >= 0.8;
+    return repeat === 1 ? passing === 1 : passing >= 2 && (percentages[Math.floor(percentages.length / 2)] ?? 0) >= 0.8;
   });
   await mkdir(reports, { recursive: true }); await writeFile(join(reports, "latest.json"), JSON.stringify(results, null, 2));
   if (!stable) process.exitCode = 1;

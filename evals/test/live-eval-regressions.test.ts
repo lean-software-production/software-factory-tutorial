@@ -25,12 +25,14 @@ function traceFor(scenario: Scenario): SessionTrace {
     startedAt: new Date().toISOString(), endedAt: new Date().toISOString(),
     messages: [],
     patchPairs: [{ patch: "defect", learnerMessage: "I've made the step. Please give feedback.", tutorEvents: [], completionChoiceId: "choice-1", correctionCheckpointEvent: 4, correctionCheckpointChoiceId: "correction-choice" }],
-    snapshots: Object.fromEntries(scenario.patches.map((patch) => [patch.name, patch.files])), 
+    // A real snapshot reads the workspace, so a patch's deletion shows up as an
+    // absent key rather than a null. `matchesArtifactState` reads both as absence.
+    snapshots: Object.fromEntries(scenario.patches.map((patch) => [patch.name, Object.fromEntries(Object.entries(patch.files).filter((entry): entry is [string, string] => entry[1] !== null))])),
     events: [
-      { type: "snapshot", title: "Test", runState: "idle", events: [], validationCommands: [], progress: [] },
+      { type: "snapshot", title: "Test", runState: "idle", activity: "waiting for Pi", events: [], validationCommands: [], progress: [], session: { state: "active", hasSavedSession: false } },
       { type: "choice", id: "choice-1", question: "Continue?", options: [{ id: "hands-on", label: "I’ll do it", icon: "do" }] },
       { type: "choice-resolved", id: "choice-1", optionId: "hands-on" },
-      { type: "audit", id: "read-1", tool: "read", paths: [Object.keys(scenario.patches.find((patch) => patch.name === "defect")?.files ?? {})[0] ?? "factory/run.sh"], mutation: false, outcome: "ok" },
+      { type: "audit", id: "read-1", tool: "read", paths: [Object.keys(scenario.patches.find((patch) => patch.name === "defect")?.files ?? {})[0] ?? "factory/refactor-do.sh"], mutation: false, outcome: "ok" },
       { type: "choice", id: "correction-choice", question: "Correct it?", options: [{ id: "confirm", label: "I’ve made this step", icon: "confirm" }] }
     ]
   };
@@ -47,7 +49,7 @@ describe("live-eval regression coverage", () => {
     try {
       await seedWorkspace(workspace, scenario.seed);
       const finalFiles = Object.assign({}, ...scenario.patches.map((patch) => patch.files)) as Record<string, string | null>;
-      await applyCanonicalPatch(workspace, { name: "final", files: finalFiles, preconditions: {}, expectedState: scenario.finalState ?? {} });
+      await applyCanonicalPatch(workspace, { name: "final", files: finalFiles, message: "ignored", checkpoint: "guided-step", preconditions: {}, expectedState: scenario.finalState ?? {} });
       const gate = await deterministicGate(scenario, workspace, traceFor(scenario));
       expect(gate.assertions.find((assertion) => assertion.name === "defect snapshot")?.passed).toBe(true);
       expect(gate.assertions.find((assertion) => assertion.name === "repair snapshot")?.passed).toBe(true);
@@ -211,7 +213,7 @@ describe("live-eval regression coverage", () => {
   it("folds snapshot history before waiting on streamed events", () => {
     const choice = { type: "choice" as const, id: "first", question: "Continue?", options: [{ id: "do", label: "I’ll do it", icon: "do" as const }] };
     const events = foldSnapshotEvents([
-      { type: "snapshot" as const, title: "Test", runState: "awaiting-choice" as const, events: [choice], validationCommands: [], progress: [] },
+      { type: "snapshot" as const, title: "Test", runState: "awaiting-choice" as const, activity: "waiting for Pi", events: [choice], validationCommands: [], progress: [], session: { state: "active" as const, hasSavedSession: false } },
       choice
     ]);
     expect(events.filter((event) => event.type === "choice")).toHaveLength(1);
@@ -485,7 +487,7 @@ const gateScenario = (lesson: string, mode: "delegate" | "hands-on", finalState?
 const emptyTrace = (): SessionTrace => ({
   startedAt: "", endedAt: "", messages: [], snapshots: {},
   events: [
-    { type: "snapshot", title: "Test", runState: "idle", events: [], validationCommands: [], progress: [] },
+    { type: "snapshot", title: "Test", runState: "idle", activity: "waiting for Pi", events: [], validationCommands: [], progress: [], session: { state: "active", hasSavedSession: false } },
     { type: "choice", id: "choice-1", question: "Continue?", options: [{ id: "hands-on", label: "I’ll do it", icon: "do" }] }
   ]
 });

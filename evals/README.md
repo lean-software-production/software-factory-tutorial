@@ -15,7 +15,9 @@ npm run eval -- --scenario doer-learner-led-happy-path --repeat 3
 npm run eval -- --calibrate
 ```
 
-A scope is mandatory. The lesson-002 matrix, the largest, is six tutor sessions and six judge calls: roughly 120,000 total model tokens and 10–30 minutes when sequential. Lessons 001 and 004 build no artefact, so their scenarios are graded by the judge alone. `--all` requires `--yes` in an interactive terminal. The tutor uses the ordinary tutorial Pi configuration; only the judge model is selected by `EVAL_JUDGE_MODEL`. Set `EVAL_JUDGE_COMMAND` only when the judge is invoked through a compatible Pi wrapper (default: `pi --no-session`).
+A scope is mandatory. The largest matrices, lessons 002 and 005, are six tutor sessions and six judge calls each: roughly 120,000 total model tokens and 10–30 minutes when sequential. Lessons 001 and 004 build no artefact, so their scenarios are graded by the judge alone. `--all` requires `--yes` in an interactive terminal. The tutor uses the ordinary tutorial Pi configuration; only the judge model is selected by `EVAL_JUDGE_MODEL`. Set `EVAL_JUDGE_COMMAND` only when the judge is invoked through a compatible Pi wrapper (default: `pi --no-session`).
+
+`evals/tsconfig.json` typechecks this directory under `--strict`. The harness runs under `tsx`, which strips types without checking them, so `npm run check` runs `npm run check:eval` to keep a wrong annotation here from being invisible.
 
 ## What it exercises
 
