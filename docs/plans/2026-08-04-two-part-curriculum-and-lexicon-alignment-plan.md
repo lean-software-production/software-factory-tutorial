@@ -741,7 +741,7 @@ Replace the body of `docs/specs/006-route-failed-verdicts-to-repair.md` with the
    and chooses the next machine from it:
 
    ```sh
-   verdict=$(grep -m1 -o 'VERDICT: \(PASS\|FAIL\)' validate-findings.txt | head -1 || echo "VERDICT: FAIL")
+   verdict=$(grep -m1 -o '^VERDICT: \(PASS\|FAIL\)' validate-findings.txt || echo "VERDICT: FAIL")
    if [ "$verdict" = "VERDICT: FAIL" ]; then
      echo "Starting repair..."
      cat repair.md success.md validate-findings.txt \
@@ -749,10 +749,15 @@ Replace the body of `docs/specs/006-route-failed-verdicts-to-repair.md` with the
    fi
    ```
 
-   `head -1` matters: `grep -m1` stops at the first matching *line* but prints every match on it, so
-   a validator that restates its own output format would produce a two-line value matching neither
-   branch. A missing or unreadable verdict is treated as a failure. Say why: the alternative is a
-   line that treats "I could not tell" as "everything is fine".
+   The `^` anchor is the whole of the parse's correctness, and worth dwelling on. Without it,
+   `grep -m1` stops at the first matching *line* but prints every match on that line, so a validator
+   whose evidence quotes its own output format ("must be VERDICT: PASS or VERDICT: FAIL") yields
+   either a two-line value matching neither branch, or — worse — the wrong single verdict. The
+   anchor also removes the need for a pipe, and with it a silent dependency on `pipefail` for the
+   fallback to fire at all. It works because lesson 005's response format puts the verdict on the
+   first non-empty line: the routing is only ever as good as the format the validator keeps to, and
+   the lesson should say so. A missing or unreadable verdict is treated as a failure. Say why too:
+   the alternative is a line that treats "I could not tell" as "everything is fine".
 
 **Checks.** Run `./factory/refactor/run.sh` and confirm that a passing verdict starts the next
 refactoring, a failing verdict starts a repair carrying the findings, and the repair machine is
