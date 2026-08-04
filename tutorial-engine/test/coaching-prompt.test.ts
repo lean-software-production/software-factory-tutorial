@@ -19,7 +19,7 @@ describe("coachingSystemPrompt", () => {
   it("defaults generated success criteria to Kent Beck's four rules", () => {
     const prompt = coachingSystemPrompt(lesson);
 
-    expect(prompt).toContain("When generating `factory/success.md` on the learner's behalf");
+    expect(prompt).toContain("When generating `factory/refactor/success.md` on the learner's behalf");
     expect(prompt).toContain("Kent Beck's four rules of simple design");
     expect(prompt).toContain("passes its tests, reveals intention, no duplication, and fewest elements");
     expect(prompt).toContain("destination for the factory's accumulated refactorings");

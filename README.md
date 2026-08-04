@@ -84,13 +84,15 @@ npm run tutorial -- --port 4310 --host 0.0.0.0 --no-open
 The tutor has no authentication and edits the working tree, so only do that on a network you
 trust.
 
-Leave it running. In another terminal, work in the factory directory:
+Leave it running and open a second terminal at the repository root. Stay there: every command the lessons give you is written to run from the root, and the scripts you build take their paths relative to it. If you put `pi` on your `PATH` with the `export` above rather than installing it globally, repeat that export in this terminal too — from lesson 002 the scripts you write call `pi` themselves.
+
+The files you write by hand all live under `factory/`, which is where the tutor looks for your work. Edit them with your usual editor as the tutor instructs, then go back to the tutor for the next step or for feedback. Once you have created `factory/refactor-do.sh` in lesson 002, run it directly:
 
 ```sh
-cd factory
+./factory/refactor-do.sh
 ```
 
-Edit files there by hand as instructed by the tutor, then use it for the next step or feedback. Once you have created `refactor-do.sh` in lesson 002, run it directly. Lesson 005 moves the whole line into `factory/refactor/`, and from then on you run `factory/refactor/run.sh`. The lessons use Pi as the default doer. Advanced users may substitute another CLI harness when it preserves the doer requirements described in each lesson.
+Lesson 005 moves the whole line into `factory/refactor/`, and from then on you run `./factory/refactor/run.sh`. The lessons use Pi as the default doer. Advanced users may substitute another CLI harness when it preserves the doer requirements described in each lesson.
 
 ## Resume a tutorial
 

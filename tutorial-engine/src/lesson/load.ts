@@ -45,7 +45,7 @@ function readProgress(ledger: string): ProgressItem[] {
   ];
 }
 
-/** Infer one tutorial from its README and iteration ledger. */
+/** Infer one tutorial from its README and lesson ledger. */
 export async function loadLesson(directory: string): Promise<LoadedLesson> {
   const workspace = await realpath(resolve(directory));
   const readme = await readFile(resolve(workspace, "README.md"), "utf8");
