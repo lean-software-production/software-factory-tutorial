@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { browserCommand } from "./browser-open.js";
 import { ArgumentError, parseArguments, USAGE } from "./cli-arguments.js";
 import { loadLesson } from "./lesson/load.js";
 import { createTutorialLogger, defaultTutorialLogPath } from "./runtime-log.js";
@@ -37,11 +38,11 @@ async function main(): Promise<void> {
   if (noOpen) log.info("Browser launch disabled by --no-open.");
   else {
     log.info("Opening the tutorial in your default browser.");
-    const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-    const child = spawn(opener, process.platform === "win32" ? ["/c", "start", server.url] : [server.url], { detached: true, stdio: "ignore" });
+    const { command, args } = browserCommand(server.url);
+    const child = spawn(command, args, { detached: true, stdio: "ignore" });
     // A machine without a browser opener is common on servers; keep serving and say so.
     child.once("error", (error: NodeJS.ErrnoException) => {
-      log.info(`Could not open a browser automatically (${opener}: ${error.code ?? error.message}). Open ${server.url} yourself.`);
+      log.info(`Could not open a browser automatically (${command}: ${error.code ?? error.message}). Open ${server.url} yourself.`);
     });
     child.unref();
   }
