@@ -72,16 +72,22 @@ done directly: choose one small, behaviour-preserving refactoring and edit the f
 set -euo pipefail
 
 cd "$(dirname "$0")"
+echo "Recording quality baseline..."
 (cd ../calculator && node scripts/quality.mjs) > refactor-quality-before.txt || true
 echo "Starting doer..."
 cat refactor.md | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
 ```
 
 The baseline exists because lesson 003's validator needs a *before* number to compare against. It
-also earns its place as teaching: the two lines around the Pi call are deterministic code wrapping a
+also earns its place as teaching: the lines around the Pi call are deterministic code wrapping a
 model call, which is what makes this a harness rather than a command. `node scripts/quality.mjs`
 rather than `npm run quality` follows the calculator's README, which warns that npm's own error
 block on a non-zero exit reads like the script broke.
+
+Every step the harness takes announces itself, not only the Pi invocations. The existing rule that
+each Pi call needs a preceding `echo` identifying its role widens here: a learner watching the
+terminal should be able to name what the harness is doing at each moment, and a silent capture step
+is exactly the kind of thing that later looks like magic.
 
 The doer gets no `bash` tool. It cannot check its own work, which is the point.
 
@@ -225,8 +231,13 @@ invocation in the line is a machine, `factory/refactor/` is an assembly line, an
 what runs next. Part 1 avoids all three, because a learner who has not yet joined anything has no
 referent for them.
 
-`.pi/skills/ensemble-review/SKILL.md` needs a judgement call rather than a rename: if it scores or
-selects among candidate outputs, the lexicon's term is *judge*, not validator.
+`.pi/skills/ensemble-review/SKILL.md` describes an ensemble of **validators**. Three models review
+the same single file against the same criteria, which is the validator role by the lexicon's
+definition; there are no competing candidates, so the *judge* role does not apply. The skill's prose
+adopts *validator* for the three reviewing models. Its synthesis step — comparing the three reports
+and weighing which voice to trust — has no lexicon term today, and the skill can keep describing it
+in its own words rather than forcing a fit. The skill name and its `/ensemble-review` invocation
+stay as they are; renaming a working command earns nothing.
 
 The historical design documents under `docs/plans/`, including the two
 `provider-agnostic-worker` files, keep their current vocabulary. They record what was decided when,
