@@ -130,10 +130,21 @@ if (!isNpm && input.includes('validate prompt')) {
     // Recorded before the Enter is written, because the script moves on after.
     waitingAtEnter = !exited;
   } else {
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 1000);
-      child.once("close", () => { clearTimeout(timer); resolve(); });
-    });
+    // A script with no Enter prompt is expected to finish, so wait for it to,
+    // rather than for a fixed slice of wall-clock time: a fixed sleep made
+    // every assertion about this script's exit code a race the machine could
+    // lose under load. Give up only once the turn log has been quiet far longer
+    // than any gap inside a run, which is how a `while true` that asks for
+    // nothing is still stopped rather than waited on.
+    let quietPolls = 0;
+    let seenInvocations = -1;
+    for (let tries = 0; tries < 2_400 && !exited; tries++) {
+      const count = (await readInvocations(log)).length;
+      quietPolls = count === seenInvocations ? quietPolls + 1 : 0;
+      seenInvocations = count;
+      if (quietPolls >= 80) break;
+      await wait(25);
+    }
   }
 
   let reportBeforeEnter: string | undefined;
