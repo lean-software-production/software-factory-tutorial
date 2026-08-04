@@ -44,8 +44,12 @@ npm test
 better:
 
 ```sh
-npm run quality
+npm run --silent quality
 ```
+
+`--silent` matters: the command exits non-zero whenever it finds something, and without it npm
+appends its own `npm error … command failed` block, which reads like the script broke rather than
+like the code has findings.
 
 It runs two checks and prints both reports, even when the first one fails, so a single run shows
 the whole picture:
@@ -59,6 +63,3 @@ the whole picture:
 The command exits non-zero if either check reports, so a reviewer, human or agent, can quote the
 output as evidence. `npm test` covers a third case for free: `noUnusedLocals` and
 `noUnusedParameters` make unused variables, imports, and parameters a build error.
-
-Findings on the starting code are expected: each one names a seam worth refactoring. The
-thresholds describe the well-factored destination, so a finished refactoring reports none.
