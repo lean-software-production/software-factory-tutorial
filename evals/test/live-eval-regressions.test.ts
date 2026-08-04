@@ -15,6 +15,7 @@ import { lesson006Scenarios } from "../scenarios/lesson-006/scenarios.js";
 import { loadActiveSpec } from "../harness/judge.js";
 import type { SessionTrace } from "../harness/session.js";
 import { loadLesson } from "../../tutorial-engine/src/lesson/load.js";
+import type { ChoiceIconCategory } from "../../tutorial-engine/src/protocol/events.js";
 
 const allScenarios = [...scenarios, ...lesson002Scenarios, ...lesson003Scenarios, ...lesson004Scenarios, ...lesson005Scenarios, ...lesson006Scenarios];
 const mistakeScenarios = allScenarios.filter((scenario) => scenario.mode === "mistake");
@@ -78,9 +79,35 @@ describe("live-eval regression coverage", () => {
     }
   });
 
+  it.each(allScenarios.filter((scenario) => scenario.mode === "hands-on" && scenario.patches.length === 0))(
+    "drives $id to completion on the tutor's own stopping point", (scenario) => {
+      // Lessons 001 and 004 build nothing, so there is no last patch to end on.
+      // Without a route of its own such a scenario can only end in a protocol
+      // error, whatever the tutor does, which is how seven of them shipped.
+      const choice = (id: string, icons: ChoiceIconCategory[]) => ({
+        type: "choice" as const, id, question: "Tutor prose must not matter",
+        options: icons.map((icon) => ({ id: `${id}-${icon}`, label: `Any ${icon} wording`, icon }))
+      });
+
+      let result = advanceHandsOnDriver(beginHandsOnDriver(), scenario, choice("start", ["do", "automate"]));
+      expect(result.actions).toEqual([{ type: "select", choiceId: "start", optionId: "start-do" }]);
+      expect(result.state).toEqual({ phase: "awaiting-instruction", patchIndex: 0 });
+
+      result = advanceHandsOnDriver(result.state, scenario, choice("guidance", ["show", "automate"]));
+      expect(result.actions).toEqual([{ type: "select", choiceId: "guidance", optionId: "guidance-show" }]);
+
+      result = advanceHandsOnDriver(result.state, scenario, choice("ran-it", ["confirm", "show", "automate"]));
+      expect(result.actions).toEqual([{ type: "select", choiceId: "ran-it", optionId: "ran-it-confirm" }]);
+      expect(result.actions.some((action) => action.type === "apply")).toBe(false);
+
+      result = advanceHandsOnDriver(result.state, scenario, choice("part-boundary", ["pause"]));
+      expect(result.actions).toEqual([{ type: "select", choiceId: "part-boundary", optionId: "part-boundary-pause" }]);
+      expect(result.state).toEqual({ phase: "complete" });
+    });
+
   it.each(allScenarios.filter((scenario) => scenario.patches.length))("applies every canonical patch of $id in order, landing on its final state", async (scenario) => {
-    // Nothing typechecks these modules, and no other test exercises a patch's
-    // preconditions, so a stale ordering would otherwise pass silently.
+    // No other test exercises a patch's preconditions, and the typecheck cannot
+    // see an ordering, so a stale one would otherwise pass silently.
     const workspace = await mkdtemp(join(tmpdir(), "eval-chain-"));
     try {
       await seedWorkspace(workspace, scenario.seed);
