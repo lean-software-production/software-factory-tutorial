@@ -39,4 +39,20 @@ describe("coachingSystemPrompt", () => {
     expect(prompt).toContain("“Show me exactly what to type”=show");
     expect(prompt).toContain("Use pause for a stop or pause choice.");
   });
+
+  it("names the doer by its lexicon role rather than as a worker", () => {
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).not.toMatch(/\bworker\b/i);
+    expect(prompt).not.toMatch(/\breviewer\b/i);
+    expect(prompt).toContain("another doer CLI");
+    expect(prompt).toContain("Do not act as the doer.");
+  });
+
+  it("holds the learner at the end of Part 1", () => {
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("end of Part 1");
+    expect(prompt).toContain("offer a choice between finishing for now and continuing");
+  });
 });
