@@ -197,7 +197,15 @@ export async function deterministicGate(scenario: Scenario, workspace: string, t
         const doer = iterationTurns[0];
         assertions.push({ name: "one-shot doer invocation", passed: iterationTurns.length === 1 && stub.exitCode === 0, detail: `${iterationTurns.length} Pi turn(s), exit=${stub.exitCode}` });
         assertions.push({ name: "baseline announcement", passed: stub.output.includes("Recording quality baseline..."), detail: stub.output });
-        assertions.push({ name: "baseline recorded", passed: stub.reportAfterEnter !== undefined, detail: stub.reportAfterEnter === undefined ? "No quality baseline was written beside the script." : "The baseline was recorded before the doer ran." });
+        // The baseline only means anything if it describes the calculator as the
+        // doer found it, so the phase echoes are read in the order they arrived.
+        const baselineAt = stub.output.indexOf("Recording quality baseline...");
+        const doerAt = stub.output.indexOf("Starting doer...");
+        const baselineFirst = baselineAt >= 0 && doerAt >= 0 && baselineAt < doerAt;
+        const baselineDetail = stub.reportAfterEnter === undefined
+          ? "No quality baseline was written beside the script."
+          : baselineFirst ? "The baseline was written beside the script, announced before the doer." : "The baseline was not announced ahead of the doer.";
+        assertions.push({ name: "baseline recorded", passed: stub.reportAfterEnter !== undefined && baselineFirst, detail: baselineDetail });
         assertions.push({ name: "doer announcement", passed: stub.output.includes("Starting doer..."), detail: stub.output });
         assertions.push({ name: "doer tool boundary", passed: Boolean(doer) && JSON.stringify(doer!.args) === JSON.stringify(doerArgs) && doer!.cwd.endsWith("/calculator") && doer!.stdin.includes("refactor prompt"), detail: doer ? `${doer.cwd}: ${doer.args.join(" ")}` : "The doer's Pi stub was not invoked." });
       } else if (lesson === "003") {

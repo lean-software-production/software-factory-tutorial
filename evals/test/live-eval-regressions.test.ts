@@ -445,6 +445,29 @@ describe("deterministicGate per-lesson factory assertions", () => {
     } finally { await rm(workspace, { recursive: true, force: true }); }
   }, 30000);
 
+  it("fails the lesson 002 gate when the baseline is recorded after the doer", async () => {
+    const lines = canonicalDoScript.trimEnd().split("\n");
+    const reordered = [...lines.slice(0, 4), ...lines.slice(6), ...lines.slice(4, 6), ""].join("\n");
+    const workspace = await workspaceWith({ "factory/refactor-do.sh": reordered, "factory/refactor.md": "job\n" });
+    try {
+      const gate = await deterministicGate(gateScenario("002", "hands-on"), workspace, emptyTrace());
+      expect(passed(gate, "baseline announcement")).toBe(true);
+      expect(passed(gate, "baseline recorded")).not.toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("fails the lesson 002 gate when the script spends a second doer turn", async () => {
+    const workspace = await workspaceWith({
+      "factory/refactor-do.sh": `${canonicalDoScript}cat refactor.md | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)\n`,
+      "factory/refactor.md": "job\n"
+    });
+    try {
+      const gate = await deterministicGate(gateScenario("002", "hands-on"), workspace, emptyTrace());
+      expect(passed(gate, "one-shot doer invocation")).not.toBe(true);
+      expect(passed(gate, "doer tool boundary")).toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
   it("grades the lesson 003 validator script, including its missing-baseline guard", async () => {
     const workspace = await workspaceWith({ "factory/refactor-validate.sh": canonicalValidateScript });
     try {
@@ -488,6 +511,17 @@ describe("deterministicGate per-lesson factory assertions", () => {
     try {
       const gate = await deterministicGate(gateScenario("005", "hands-on"), workspace, emptyTrace());
       expect(passed(gate, "loop pause")).not.toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("fails the lesson 005 gate when the doer is not handed the criteria", async () => {
+    const workspace = await workspaceWith({
+      "factory/refactor/run.sh": canonicalLineScript.replace("cat refactor.md success.md |", "cat refactor.md |")
+    });
+    try {
+      const gate = await deterministicGate(gateScenario("005", "hands-on"), workspace, emptyTrace());
+      expect(passed(gate, "shared success criteria")).not.toBe(true);
+      expect(passed(gate, "line roles")).toBe(true);
     } finally { await rm(workspace, { recursive: true, force: true }); }
   }, 30000);
 
