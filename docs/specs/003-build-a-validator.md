@@ -23,8 +23,8 @@ in this order:
    sentence: was the change a single refactoring, and did it reduce what
    `node scripts/quality.mjs` reports against the recorded baseline? Tell it to read the working-tree
    diff in `calculator/`, run `node scripts/quality.mjs`, and compare the findings it gets with the
-   findings recorded in `../factory/refactor-quality-before.txt`. It must not modify any file, and it
-   must not run shell commands that modify files.
+   baseline included below its instructions. It must not modify any file, and it must not run shell
+   commands that modify files.
 
    Require this response format:
 
@@ -49,7 +49,7 @@ in this order:
      exit 1
    fi
    echo "Starting validation..."
-   cat refactor-validate.md \
+   cat refactor-validate.md refactor-quality-before.txt \
      | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
      | tee refactor-validate-findings.txt
    ```
@@ -57,6 +57,11 @@ in this order:
    The validator gets `bash` so it can run the quality check, and no `edit` or `write` so it cannot
    repair what it finds. It stops rather than invent a comparison when there is no baseline. Its
    findings go to the terminal and to a file, because the next lesson needs them.
+
+   Notice that the script concatenates the baseline onto the prompt rather than telling the validator
+   where to find it. The validator never reaches outside `calculator/`; the harness carries the
+   evidence to it, which is the same deterministic code around a model call you wrote in the previous
+   lesson.
 
 ## Advanced: substitute another validator
 
