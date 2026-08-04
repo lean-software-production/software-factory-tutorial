@@ -150,8 +150,8 @@ The lesson opens with a move, not a new file:
 
 ```sh
 mkdir factory/refactor
-git mv factory/refactor-do.sh factory/refactor/do.sh
-git mv factory/refactor-validate.sh factory/refactor/validate.sh
+mv factory/refactor-do.sh factory/refactor/do.sh
+mv factory/refactor-validate.sh factory/refactor/validate.sh
 ```
 
 The prompts move alongside, and the `refactor-` prefixes drop because the folder now carries the
@@ -199,8 +199,8 @@ branches, which is the first time the assembly line is not a straight sequence.
 
 `readProgress` in `tutorial-engine/src/lesson/load.ts` learns two things: it recognises `## Part N —
 <title>` headings and emits a group item so the sidebar renders parts as sections, and its header
-filter changes from the literal `"Iteration"` to `"Lesson"`. `ProgressItem` gains a group field;
-the web sidebar renders group boundaries. `tutorial-engine/test/lesson-load.test.ts` covers both the
+filter changes from the literal `"Iteration"` to `"Lesson"`. `ProgressItem` gains an optional
+`part` field, and the web sidebar renders a heading wherever it changes. `tutorial-engine/test/lesson-load.test.ts` covers both the
 two-table ledger and the renamed header cell.
 
 The tutor's system prompt in `tutorial-engine/src/agent/pi-adapter.ts` stops saying *worker*: "another
@@ -223,8 +223,9 @@ canonical one.
 
 *Iteration* as a curriculum unit becomes **lesson**, matching `evals/scenarios/lesson-00N/`, the
 root README, and `tutorial-engine/src/lesson/`. The word is then free for the lexicon's meaning, a
-bounded batch of agent work — which is what `"Starting doer iteration..."` in the loop lessons
-already means, so those strings stay.
+bounded batch of agent work, which is what the loop lessons' Enter prompt now names. The scripts'
+phase echoes say `"Starting doer..."` and `"Starting validation..."`: each announces the machine
+about to run, and the iteration is the pass around them rather than any one line of output.
 
 **Machine**, **assembly line**, and **orchestrator** enter the tutorial in Part 2 only. Each Pi
 invocation in the line is a machine, `factory/refactor/` is an assembly line, and `run.sh` decides

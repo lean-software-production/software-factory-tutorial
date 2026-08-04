@@ -171,7 +171,7 @@ Build this lesson in this order. Complete each small step before moving to the n
      quality-before.txt validate-findings.txt
    ```
 
-   Three scripts, four prompts, and the two files the machines pass between them.
+   Three scripts, three prompts, the success criteria all three machines share, and the two files the machines pass between them.
 
 ## Checks
 

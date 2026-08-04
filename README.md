@@ -89,6 +89,7 @@ Leave it running and open a second terminal at the repository root. Stay there: 
 The files you write by hand all live under `factory/`, which is where the tutor looks for your work. Edit them with your usual editor as the tutor instructs, then go back to the tutor for the next step or for feedback. Once you have created `factory/refactor-do.sh` in lesson 002, run it directly:
 
 ```sh
+chmod +x factory/refactor-do.sh
 ./factory/refactor-do.sh
 ```
 
