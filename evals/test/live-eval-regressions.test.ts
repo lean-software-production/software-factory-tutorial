@@ -288,3 +288,275 @@ describe("live-eval regression coverage", () => {
     expect(shouldRetry(new Error("provider returned 429"))).toBe(true);
   });
 });
+
+/**
+ * Per-lesson deterministic gates. Each lesson is graded against the script that
+ * lesson actually builds, so every branch below runs the canonical script from
+ * its specification through the stubbed factory.
+ */
+
+const canonicalDoScript = `#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+echo "Recording quality baseline..."
+(cd ../calculator && node scripts/quality.mjs) > refactor-quality-before.txt || true
+echo "Starting doer..."
+cat refactor.md | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
+`;
+
+const canonicalValidateScript = `#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+if [ ! -f refactor-quality-before.txt ]; then
+  echo "No quality baseline. Run ./refactor-do.sh first." >&2
+  exit 1
+fi
+echo "Starting validation..."
+cat refactor-validate.md refactor-quality-before.txt \\
+  | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \\
+  | tee refactor-validate-findings.txt
+`;
+
+const canonicalLineScript = `#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+while true; do
+  echo "Recording quality baseline..."
+  (cd ../../calculator && node scripts/quality.mjs) > quality-before.txt || true
+  echo "Starting doer..."
+  cat refactor.md success.md | (cd ../../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
+  echo "Starting validation..."
+  cat validate.md success.md quality-before.txt \\
+    | (cd ../../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \\
+    | tee validate-findings.txt
+  read -r -p "Press Enter for the next iteration, or Ctrl-C to stop. "
+done
+`;
+
+const canonicalRoutingScript = canonicalLineScript.replace(
+  `  read -r -p`,
+  `  verdict=$(grep -m1 -o '^VERDICT: \\(PASS\\|FAIL\\)' validate-findings.txt || echo "VERDICT: FAIL")
+  if [ "$verdict" = "VERDICT: FAIL" ]; then
+    echo "Starting repair..."
+    cat repair.md success.md validate-findings.txt \\
+      | (cd ../../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
+  fi
+  read -r -p`
+);
+
+const canonicalSuccess = `# Success criteria
+
+These criteria describe the destination for many small refactorings, not a checklist for one turn.
+
+1. Passes its tests. Evidence: \`npm test\` from \`calculator/\`.
+2. Reveals intention. Evidence: the diff reads with clearer names.
+3. No duplication. Evidence: \`grep -n\` puts the repeated passages side by side.
+4. Fewest elements. Evidence: \`node scripts/quality.mjs\`.
+`;
+
+const gateScenario = (lesson: string, mode: "delegate" | "hands-on", finalState?: Scenario["finalState"]): Scenario =>
+  ({ id: `gate-${lesson}-${mode}`, lesson, mode, description: "Deterministic gate fixture", patches: [], finalState } as unknown as Scenario);
+
+const emptyTrace = (): SessionTrace => ({
+  startedAt: "", endedAt: "", messages: [], snapshots: {},
+  events: [
+    { type: "snapshot", title: "Test", runState: "idle", events: [], validationCommands: [], progress: [] },
+    { type: "choice", id: "choice-1", question: "Continue?", options: [{ id: "hands-on", label: "I’ll do it", icon: "do" }] }
+  ]
+});
+
+async function workspaceWith(files: Record<string, string>): Promise<string> {
+  const { mkdir } = await import("node:fs/promises");
+  const workspace = await mkdtemp(join(tmpdir(), "eval-lesson-gate-"));
+  for (const [path, contents] of Object.entries(files)) {
+    await mkdir(join(workspace, path, ".."), { recursive: true });
+    await writeFile(join(workspace, path), contents);
+  }
+  return workspace;
+}
+
+const named = (gate: Awaited<ReturnType<typeof deterministicGate>>, name: string) =>
+  gate.assertions.filter((assertion) => assertion.name === name);
+const passed = (gate: Awaited<ReturnType<typeof deterministicGate>>, name: string) => {
+  const matches = named(gate, name);
+  expect(matches.length, `expected an assertion named "${name}", got: ${gate.assertions.map((assertion) => assertion.name).join(", ")}`).toBeGreaterThan(0);
+  return matches.every((assertion) => assertion.passed) || matches.map((assertion) => `${assertion.name}: ${assertion.detail}`).join(" | ");
+};
+
+describe("deterministicGate lesson routing", () => {
+  it("expects no factory script for lesson 001", async () => {
+    const gate = await deterministicGate(gateScenario("001", "hands-on"), "/nonexistent", emptyTrace());
+    expect(named(gate, "factory artifact")).toHaveLength(0);
+    expect(named(gate, "factory syntax")).toHaveLength(0);
+  });
+
+  it("expects no factory script for lesson 004, which builds nothing of its own", async () => {
+    const gate = await deterministicGate(gateScenario("004", "hands-on"), "/nonexistent", emptyTrace());
+    expect(named(gate, "factory artifact")).toHaveLength(0);
+    expect(named(gate, "factory syntax")).toHaveLength(0);
+  });
+
+  it.each([
+    ["002", "factory/refactor-do.sh"],
+    ["003", "factory/refactor-validate.sh"],
+    ["005", "factory/refactor/run.sh"],
+    ["006", "factory/refactor/run.sh"]
+  ])("reports the missing lesson %s script by its own path", async (lesson, path) => {
+    const gate = await deterministicGate(gateScenario(lesson, "hands-on"), "/nonexistent", emptyTrace());
+    expect(gate.assertions.find((assertion) => assertion.name === "factory artifact")?.detail).toContain(path);
+  });
+});
+
+describe("deterministicGate per-lesson factory assertions", () => {
+  it("grades the lesson 002 doer script", async () => {
+    const workspace = await workspaceWith({ "factory/refactor-do.sh": canonicalDoScript, "factory/refactor.md": "job\n" });
+    try {
+      const gate = await deterministicGate(gateScenario("002", "hands-on"), workspace, emptyTrace());
+      for (const name of ["factory syntax", "one-shot doer invocation", "baseline announcement", "baseline recorded", "doer announcement", "doer tool boundary"]) {
+        expect(passed(gate, name)).toBe(true);
+      }
+      expect(named(gate, "validation announcement")).toHaveLength(0);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("fails the lesson 002 gate when the doer keeps its shell tool", async () => {
+    const workspace = await workspaceWith({
+      "factory/refactor-do.sh": canonicalDoScript.replace("read,edit,write,grep,find,ls", "read,edit,write,grep,find,ls,bash"),
+      "factory/refactor.md": "job\n"
+    });
+    try {
+      const gate = await deterministicGate(gateScenario("002", "hands-on"), workspace, emptyTrace());
+      expect(passed(gate, "doer tool boundary")).not.toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("fails the lesson 002 gate when the baseline lands under another name", async () => {
+    const workspace = await workspaceWith({
+      "factory/refactor-do.sh": canonicalDoScript.replace(/refactor-quality-before\.txt/, "quality-before.txt"),
+      "factory/refactor.md": "job\n"
+    });
+    try {
+      const gate = await deterministicGate(gateScenario("002", "hands-on"), workspace, emptyTrace());
+      expect(passed(gate, "baseline recorded")).not.toBe(true);
+      expect(passed(gate, "doer tool boundary")).toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("grades the lesson 003 validator script, including its missing-baseline guard", async () => {
+    const workspace = await workspaceWith({ "factory/refactor-validate.sh": canonicalValidateScript });
+    try {
+      const gate = await deterministicGate(gateScenario("003", "hands-on"), workspace, emptyTrace());
+      for (const name of ["factory syntax", "validation announcement", "validator evidence boundary", "findings saved", "missing baseline guard"]) {
+        expect(passed(gate, name)).toBe(true);
+      }
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("fails the lesson 003 gate when the baseline guard is dropped", async () => {
+    const workspace = await workspaceWith({
+      "factory/refactor-validate.sh": canonicalValidateScript.replace(/if \[ ! -f[\s\S]*?fi\n/, "")
+    });
+    try {
+      const gate = await deterministicGate(gateScenario("003", "hands-on"), workspace, emptyTrace());
+      expect(passed(gate, "validator evidence boundary")).toBe(true);
+      expect(passed(gate, "missing baseline guard")).not.toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("grades the lesson 005 assembly line and its success criteria", async () => {
+    const workspace = await workspaceWith({ "factory/refactor/run.sh": canonicalLineScript, "factory/refactor/success.md": canonicalSuccess });
+    try {
+      const gate = await deterministicGate(
+        gateScenario("005", "hands-on", { "factory/refactor/success.md": { exists: true } }),
+        workspace,
+        emptyTrace()
+      );
+      for (const name of ["factory syntax", "loop pause", "iteration turns", "line roles", "shared success criteria", "findings saved", "success.md simple-design strategy"]) {
+        expect(passed(gate, name)).toBe(true);
+      }
+      expect(named(gate, "failed verdict routes to repair")).toHaveLength(0);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("fails the lesson 005 gate when the line never pauses for the learner", async () => {
+    const workspace = await workspaceWith({
+      "factory/refactor/run.sh": canonicalLineScript.replace(/  read -r -p .*\n/, "  break\n")
+    });
+    try {
+      const gate = await deterministicGate(gateScenario("005", "hands-on"), workspace, emptyTrace());
+      expect(passed(gate, "loop pause")).not.toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("grades the lesson 006 verdict branch", async () => {
+    const workspace = await workspaceWith({ "factory/refactor/run.sh": canonicalRoutingScript });
+    try {
+      const gate = await deterministicGate(gateScenario("006", "hands-on"), workspace, emptyTrace());
+      for (const name of ["factory syntax", "loop pause", "iteration turns", "line roles", "shared success criteria", "findings saved", "anchored verdict parse", "failed verdict routes to repair", "repair carries the findings", "repair tool boundary"]) {
+        expect(passed(gate, name)).toBe(true);
+      }
+      expect(gate.stub?.callsBeforeEnter).toBe(3);
+      expect(gate.stub?.reportBeforeEnter).toContain("VERDICT: FAIL");
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("fails the lesson 006 gate when the verdict pattern loses its anchor", async () => {
+    const workspace = await workspaceWith({ "factory/refactor/run.sh": canonicalRoutingScript.replace("'^VERDICT:", "'VERDICT:") });
+    try {
+      const gate = await deterministicGate(gateScenario("006", "hands-on"), workspace, emptyTrace());
+      expect(passed(gate, "anchored verdict parse")).not.toBe(true);
+      expect(passed(gate, "failed verdict routes to repair")).toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("fails the lesson 006 gate when a failing verdict starts no repair", async () => {
+    const workspace = await workspaceWith({ "factory/refactor/run.sh": canonicalLineScript });
+    try {
+      const gate = await deterministicGate(gateScenario("006", "hands-on"), workspace, emptyTrace());
+      expect(passed(gate, "failed verdict routes to repair")).not.toBe(true);
+      expect(passed(gate, "iteration turns")).not.toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+});
+
+describe("deterministicGate delegated file scope", () => {
+  const scopeFiles: Record<string, string[]> = {
+    "001": [],
+    "002": ["factory/refactor-do.sh", "factory/refactor-quality-before.txt", "factory/refactor.md"],
+    "003": ["factory/refactor-do.sh", "factory/refactor-quality-before.txt", "factory/refactor-validate-findings.txt", "factory/refactor-validate.md", "factory/refactor-validate.sh", "factory/refactor.md"],
+    "004": ["factory/refactor-do.sh", "factory/refactor-quality-before.txt", "factory/refactor-validate-findings.txt", "factory/refactor-validate.md", "factory/refactor-validate.sh", "factory/refactor.md"],
+    "005": ["factory/refactor/do.sh", "factory/refactor/quality-before.txt", "factory/refactor/refactor.md", "factory/refactor/run.sh", "factory/refactor/success.md", "factory/refactor/validate-findings.txt", "factory/refactor/validate.md", "factory/refactor/validate.sh"],
+    "006": ["factory/refactor/do.sh", "factory/refactor/quality-before.txt", "factory/refactor/refactor.md", "factory/refactor/repair.md", "factory/refactor/run.sh", "factory/refactor/success.md", "factory/refactor/validate-findings.txt", "factory/refactor/validate.md", "factory/refactor/validate.sh"]
+  };
+
+  it.each(Object.keys(scopeFiles))("accepts exactly what lesson %s leaves behind", async (lesson) => {
+    const { mkdir } = await import("node:fs/promises");
+    const workspace = await workspaceWith(Object.fromEntries(scopeFiles[lesson]!.map((path) => [path, "placeholder\n"])));
+    try {
+      await mkdir(join(workspace, "factory"), { recursive: true });
+      const gate = await deterministicGate(gateScenario(lesson, "delegate"), workspace, emptyTrace());
+      expect(passed(gate, "delegated file scope")).toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("rejects a stray file the lesson never asked for", async () => {
+    const workspace = await workspaceWith({ ...Object.fromEntries(scopeFiles["002"]!.map((path) => [path, "placeholder\n"])), "factory/notes.md": "stray\n" });
+    try {
+      const gate = await deterministicGate(gateScenario("002", "delegate"), workspace, emptyTrace());
+      const scope = named(gate, "delegated file scope");
+      expect(scope.some((assertion) => !assertion.passed && assertion.detail.includes("notes.md"))).toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("rejects last lesson's findings left beside the line's folder", async () => {
+    const workspace = await workspaceWith({ ...Object.fromEntries(scopeFiles["005"]!.map((path) => [path, "placeholder\n"])), "factory/refactor-validate-findings.txt": "stale\n" });
+    try {
+      const gate = await deterministicGate(gateScenario("005", "delegate"), workspace, emptyTrace());
+      const scope = named(gate, "delegated file scope");
+      expect(scope.some((assertion) => !assertion.passed && assertion.detail.includes("refactor-validate-findings.txt"))).toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+});

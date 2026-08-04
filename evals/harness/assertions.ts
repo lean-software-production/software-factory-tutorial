@@ -9,10 +9,94 @@ import type { SessionTrace } from "./session.js";
 export interface Assertion { name: string; passed: boolean; detail: string; }
 export interface GateResult { passed: boolean; assertions: Assertion[]; stub?: FactoryStubResult; }
 
+const doerArgs = ["--no-session", "--tools", "read,edit,write,grep,find,ls", "-p"];
+const validatorArgs = ["--no-session", "--tools", "read,grep,find,ls,bash", "-p"];
+
+interface LessonScript {
+  /** Workspace-relative path of the script this lesson asks the learner to produce. */
+  path: string;
+  /** Files the script reads, seeded beside it so the stub run reaches the same content the learner's would. */
+  files: Record<string, string>;
+  /** The file the script tees its findings to, captured either side of the Enter pause. */
+  reportPath?: string;
+}
+
+/** The script each lesson's learner is asked to produce, and the files it needs beside it. */
+const LESSON_SCRIPTS: Record<string, LessonScript | undefined> = {
+  // Lesson 001 runs one headless Pi command by hand and builds no script.
+  "001": undefined,
+  "002": {
+    path: "factory/refactor-do.sh",
+    files: { "factory/refactor.md": "refactor prompt\n" },
+    // Not findings: lesson 002's script writes a baseline, and capturing it here
+    // is how the gate sees that it landed where the next lesson will look.
+    reportPath: "factory/refactor-quality-before.txt"
+  },
+  "003": {
+    path: "factory/refactor-validate.sh",
+    files: {
+      "factory/refactor.md": "refactor prompt\n",
+      "factory/refactor-validate.md": "validate prompt\n",
+      "factory/refactor-quality-before.txt": "baseline\n"
+    },
+    reportPath: "factory/refactor-validate-findings.txt"
+  },
+  // Lesson 004 runs the two scripts it already has by hand and builds nothing.
+  "004": undefined,
+  "005": {
+    path: "factory/refactor/run.sh",
+    files: {
+      "factory/refactor/refactor.md": "refactor prompt\n",
+      "factory/refactor/validate.md": "validate prompt\n",
+      "factory/refactor/success.md": "success prompt\n"
+    },
+    reportPath: "factory/refactor/validate-findings.txt"
+  },
+  "006": {
+    path: "factory/refactor/run.sh",
+    files: {
+      "factory/refactor/refactor.md": "refactor prompt\n",
+      "factory/refactor/validate.md": "validate prompt\n",
+      "factory/refactor/success.md": "success prompt\n",
+      "factory/refactor/repair.md": "repair prompt\n"
+    },
+    reportPath: "factory/refactor/validate-findings.txt"
+  }
+};
+
+interface DirectoryScope { directory: string; allowed: string[]; }
+
+/**
+ * Everything the learner's factory may hold at the end of each lesson: what the
+ * lesson creates, what earlier lessons left behind, and what its scripts write
+ * when they run. It is not derivable from `LESSON_SCRIPTS.files`.
+ */
+const DELEGATED_SCOPE: Record<string, DirectoryScope[] | undefined> = {
+  "001": [{ directory: "factory", allowed: [] }],
+  "002": [{ directory: "factory", allowed: ["refactor-do.sh", "refactor-quality-before.txt", "refactor.md"] }],
+  "003": [{ directory: "factory", allowed: ["refactor-do.sh", "refactor-quality-before.txt", "refactor-validate-findings.txt", "refactor-validate.md", "refactor-validate.sh", "refactor.md"] }],
+  // Lesson 004 adds no file of its own, so it inherits the previous lesson's scope.
+  "004": [{ directory: "factory", allowed: ["refactor-do.sh", "refactor-quality-before.txt", "refactor-validate-findings.txt", "refactor-validate.md", "refactor-validate.sh", "refactor.md"] }],
+  // Lesson 005 moves the whole line into `factory/refactor/`, so the parent
+  // directory must hold nothing but that folder — the stale findings file the
+  // lesson asks the learner to delete would show up here.
+  "005": [
+    { directory: "factory", allowed: ["refactor"] },
+    { directory: "factory/refactor", allowed: ["do.sh", "quality-before.txt", "refactor.md", "run.sh", "success.md", "validate-findings.txt", "validate.md", "validate.sh"] }
+  ],
+  "006": [
+    { directory: "factory", allowed: ["refactor"] },
+    { directory: "factory/refactor", allowed: ["do.sh", "quality-before.txt", "refactor.md", "repair.md", "run.sh", "success.md", "validate-findings.txt", "validate.md", "validate.sh"] }
+  ]
+};
+
 const auditable = (events: TutorialEvent[]) => events.filter((event): event is AuditEvent => event.type === "audit");
 
 export async function deterministicGate(scenario: Scenario, workspace: string, trace: SessionTrace): Promise<GateResult> {
   const assertions: Assertion[] = [];
+  // Widened deliberately: the gate grades six lessons, and the scenario type
+  // catches up when the scenario modules are renumbered.
+  const lesson: string = scenario.lesson;
   const events = trace.events;
   const audits = auditable(events);
   const snapshot = events.find((event) => event.type === "snapshot");
@@ -72,8 +156,9 @@ export async function deterministicGate(scenario: Scenario, workspace: string, t
     }));
     const matched = matchesArtifactState(files, scenario.finalState);
     assertions.push({ name: "final artifact state", passed: matched, detail: matched ? "Final artifacts match the active lesson expectations." : "Final artifacts do not match the active lesson expectations." });
-    if (scenario.lesson === "001") {
-      const success = files["factory/success.md"] ?? "";
+    // The line's success criteria arrive in lesson 005, inside the line's own folder.
+    if (lesson === "005") {
+      const success = files["factory/refactor/success.md"] ?? "";
       const checks = [
         /passes? its tests|passes? tests/i,
         /reveals? intention|intention[- ]revealing/i,
@@ -87,55 +172,77 @@ export async function deterministicGate(scenario: Scenario, workspace: string, t
     }
   }
 
+  const lessonScript = LESSON_SCRIPTS[lesson];
   let stub: FactoryStubResult | undefined;
-  try {
-    const factory = await readFile(join(workspace, "factory/run.sh"), "utf8");
-    // Task 8 replaces this call site with the per-lesson script paths and
-    // prompt names. Until then it seeds what the previous fixed harness seeded,
-    // with the stub's new `validate prompt` trigger carried alongside the old
-    // wording so the saved-verdict branch keeps grading real learner artefacts.
-    stub = await runFactoryWithStubs({
-      scriptPath: "factory/run.sh",
-      script: factory,
-      files: {
-        "factory/refactor.md": "refactor prompt\n",
-        "factory/success.md": "success prompt\n",
-        "factory/review.md": "review prompt\nvalidate prompt\n",
-        "factory/repair.md": "repair prompt\n"
-      },
-      validatorOutputs: scenario.lesson === "004" ? ["VERDICT: FAIL\n\nFINDINGS:\n- [FAIL] passes tests: intentional failure\n", "VERDICT: PASS\n\nFINDINGS:\n- [PASS] passes tests: repaired\n"] : undefined,
-      reportPath: "factory/review-report.md"
-    });
-    const piTurns = stub.invocations.filter((entry) => entry.command === "pi");
-    const doerArgs = ["--no-session", "--tools", "read,edit,write,grep,find,ls", "-p"];
-    const reviewerArgs = ["--no-session", "--tools", "read,grep,find,ls,bash", "-p"];
-    assertions.push({ name: "factory syntax", passed: stub.syntaxPassed, detail: stub.syntaxPassed ? "Bash parses run.sh." : "run.sh did not parse." });
-    if (scenario.lesson === "001") {
-      const doer = piTurns[0];
-      const oneShot = piTurns.length === 1 && stub.exitCode === 0;
-      assertions.push({ name: "one-shot doer invocation", passed: oneShot, detail: `${piTurns.length} Pi turn(s), exit=${stub.exitCode}` });
-      assertions.push({ name: "doer announcement", passed: stub.output.includes("Starting doer..."), detail: stub.output });
-      assertions.push({ name: "doer tool boundary", passed: Boolean(doer) && JSON.stringify(doer!.args) === JSON.stringify(doerArgs) && doer!.cwd.endsWith("/calculator") && doer!.stdin.includes("refactor prompt"), detail: doer ? `${doer.cwd}: ${doer.args.join(" ")}` : "Doer Pi stub was not invoked." });
-    } else if (scenario.lesson === "002") {
-      const [doer, reviewer] = piTurns;
-      assertions.push({ name: "doer then reviewer", passed: piTurns.length === 2 && stub.output.includes("Starting doer...") && stub.output.includes("Starting review..."), detail: `${piTurns.length} Pi turn(s)` });
-      assertions.push({ name: "doer tool boundary", passed: Boolean(doer) && JSON.stringify(doer!.args) === JSON.stringify(doerArgs) && doer!.cwd.endsWith("/calculator"), detail: doer ? doer.args.join(" ") : "Doer missing." });
-      assertions.push({ name: "reviewer evidence boundary", passed: Boolean(reviewer) && JSON.stringify(reviewer!.args) === JSON.stringify(reviewerArgs) && reviewer!.cwd.endsWith("/calculator") && reviewer!.stdin.includes("review prompt") && reviewer!.stdin.includes("success prompt"), detail: reviewer ? reviewer.args.join(" ") : "Reviewer missing." });
-    } else if (scenario.lesson === "003") {
-      const [doer, reviewer] = piTurns;
-      assertions.push({ name: "loop pause", passed: stub.paused, detail: stub.paused ? "No second loop began before Enter." : "The loop did not wait for Enter after review." });
-      assertions.push({ name: "loop roles", passed: Boolean(doer) && Boolean(reviewer) && JSON.stringify(doer!.args) === JSON.stringify(doerArgs) && JSON.stringify(reviewer!.args) === JSON.stringify(reviewerArgs) && stub.output.includes("Starting doer iteration...") && stub.output.includes("Starting review..."), detail: `${piTurns.length} Pi turn(s)` });
-    } else if (scenario.lesson === "004") {
-      const repairTurn = piTurns.find((entry) => entry.stdin.includes("repair prompt"));
-      assertions.push({ name: "review report saved", passed: stub.reportBeforeEnter?.includes("VERDICT: FAIL") === true, detail: stub.reportBeforeEnter ?? "No report before Enter." });
-      assertions.push({ name: "failed verdict routes to repair", passed: Boolean(repairTurn) && stub.output.includes("Starting repair iteration..."), detail: repairTurn?.stdin ?? "Repair worker was not invoked after the failed report." });
-      assertions.push({ name: "reviewer tee boundary", passed: piTurns.some((entry) => JSON.stringify(entry.args) === JSON.stringify(reviewerArgs) && entry.stdin.includes("success prompt")), detail: `${piTurns.length} Pi turn(s)` });
+  if (lessonScript) {
+    try {
+      const script = await readFile(join(workspace, lessonScript.path), "utf8");
+      stub = await runFactoryWithStubs({
+        scriptPath: lessonScript.path,
+        script,
+        files: lessonScript.files,
+        reportPath: lessonScript.reportPath,
+        // Lesson 006 is the first lesson to read a verdict, so it is graded on a
+        // failing one; the pass that follows shows a repaired iteration carrying on.
+        validatorOutputs: lesson === "006"
+          ? ["VERDICT: FAIL\n\nFINDINGS:\n- [FAIL] passes tests: intentional failure\n", "VERDICT: PASS\n\nFINDINGS:\n- [PASS] passes tests: repaired\n"]
+          : undefined
+      });
+      const piTurns = stub.invocations.filter((entry) => entry.command === "pi");
+      // Only the turns of the first iteration: a looping script spends more after Enter.
+      const iterationTurns = piTurns.slice(0, stub.callsBeforeEnter);
+      assertions.push({ name: "factory syntax", passed: stub.syntaxPassed, detail: stub.syntaxPassed ? `Bash parses ${lessonScript.path}.` : `${lessonScript.path} did not parse.` });
+
+      if (lesson === "002") {
+        const doer = iterationTurns[0];
+        assertions.push({ name: "one-shot doer invocation", passed: iterationTurns.length === 1 && stub.exitCode === 0, detail: `${iterationTurns.length} Pi turn(s), exit=${stub.exitCode}` });
+        assertions.push({ name: "baseline announcement", passed: stub.output.includes("Recording quality baseline..."), detail: stub.output });
+        assertions.push({ name: "baseline recorded", passed: stub.reportAfterEnter !== undefined, detail: stub.reportAfterEnter === undefined ? "No quality baseline was written beside the script." : "The baseline was recorded before the doer ran." });
+        assertions.push({ name: "doer announcement", passed: stub.output.includes("Starting doer..."), detail: stub.output });
+        assertions.push({ name: "doer tool boundary", passed: Boolean(doer) && JSON.stringify(doer!.args) === JSON.stringify(doerArgs) && doer!.cwd.endsWith("/calculator") && doer!.stdin.includes("refactor prompt"), detail: doer ? `${doer.cwd}: ${doer.args.join(" ")}` : "The doer's Pi stub was not invoked." });
+      } else if (lesson === "003") {
+        const validator = iterationTurns[0];
+        assertions.push({ name: "validation announcement", passed: stub.output.includes("Starting validation..."), detail: stub.output });
+        assertions.push({ name: "validator evidence boundary", passed: Boolean(validator) && JSON.stringify(validator!.args) === JSON.stringify(validatorArgs) && validator!.cwd.endsWith("/calculator") && validator!.stdin.includes("validate prompt") && validator!.stdin.includes("baseline"), detail: validator ? `${validator.cwd}: ${validator.args.join(" ")}` : "The validator's Pi stub was not invoked." });
+        assertions.push({ name: "findings saved", passed: stub.reportAfterEnter?.includes("VERDICT:") === true, detail: stub.reportAfterEnter ?? "No findings file beside the script." });
+        // The guard is the lesson's other half: with no baseline to compare
+        // against, the script must refuse rather than invoke the validator.
+        const { "factory/refactor-quality-before.txt": _baseline, ...withoutBaseline } = lessonScript.files;
+        const guarded = await runFactoryWithStubs({ scriptPath: lessonScript.path, script, files: withoutBaseline });
+        const refused = guarded.exitCode !== 0 && guarded.invocations.every((entry) => entry.command !== "pi");
+        assertions.push({ name: "missing baseline guard", passed: refused, detail: refused ? `Refused with exit=${guarded.exitCode} and no Pi turn.` : `exit=${guarded.exitCode}, ${guarded.invocations.length} invocation(s): ${guarded.output}` });
+      } else if (lesson === "005" || lesson === "006") {
+        const [doer, validator] = iterationTurns;
+        const expectedTurns = lesson === "006" ? 3 : 2;
+        assertions.push({ name: "loop pause", passed: stub.paused, detail: stub.paused ? "No second iteration began before Enter." : "The loop did not wait for Enter after validation." });
+        assertions.push({ name: "iteration turns", passed: iterationTurns.length === expectedTurns, detail: `${iterationTurns.length} Pi turn(s) before the pause, expected ${expectedTurns}` });
+        assertions.push({ name: "line roles", passed: Boolean(doer) && Boolean(validator) && JSON.stringify(doer!.args) === JSON.stringify(doerArgs) && JSON.stringify(validator!.args) === JSON.stringify(validatorArgs) && stub.output.includes("Recording quality baseline...") && stub.output.includes("Starting doer...") && stub.output.includes("Starting validation..."), detail: stub.output });
+        assertions.push({ name: "shared success criteria", passed: iterationTurns.length > 0 && iterationTurns.every((entry) => entry.stdin.includes("success prompt")), detail: `${iterationTurns.filter((entry) => entry.stdin.includes("success prompt")).length}/${iterationTurns.length} Pi turn(s) received the criteria` });
+        assertions.push({ name: "findings saved", passed: stub.reportBeforeEnter?.includes("VERDICT:") === true, detail: stub.reportBeforeEnter ?? "No findings before Enter." });
+        if (lesson === "006") {
+          const repairTurn = iterationTurns.find((entry) => entry.stdin.includes("repair prompt"));
+          assertions.push({ name: "anchored verdict parse", passed: /grep[^\n]*\^VERDICT:/.test(script), detail: /grep[^\n]*\^VERDICT:/.test(script) ? "The verdict is read from the start of a line." : "The verdict pattern is not anchored to the start of a line." });
+          assertions.push({ name: "failed verdict routes to repair", passed: Boolean(repairTurn) && stub.output.includes("Starting repair..."), detail: repairTurn ? repairTurn.args.join(" ") : "The repair machine was not invoked after the failed verdict." });
+          assertions.push({ name: "repair carries the findings", passed: repairTurn?.stdin.includes("VERDICT: FAIL") === true, detail: repairTurn?.stdin ?? "The repair prompt carried no findings." });
+          assertions.push({ name: "repair tool boundary", passed: Boolean(repairTurn) && JSON.stringify(repairTurn!.args) === JSON.stringify(doerArgs) && repairTurn!.cwd.endsWith("/calculator"), detail: repairTurn ? `${repairTurn.cwd}: ${repairTurn.args.join(" ")}` : "The repair machine was not invoked after the failed verdict." });
+        }
+      }
+    } catch (error) {
+      assertions.push({ name: "factory artifact", passed: false, detail: `${lessonScript.path}: ${error instanceof Error ? error.message : "missing"}` });
     }
-    if (scenario.mode === "delegate") {
-      const files = (await readdir(join(workspace, "factory"))).filter((file) => file !== ".gitkeep").sort();
-      const allowed = ["refactor.md", "run.sh", "success.md"];
-      assertions.push({ name: "delegated file scope", passed: JSON.stringify(files) === JSON.stringify(allowed), detail: files.join(", ") || "No factory files created." });
+  }
+
+  const scopes = scenario.mode === "delegate" ? DELEGATED_SCOPE[lesson] : undefined;
+  if (scopes) {
+    for (const scope of scopes) {
+      try {
+        const found = (await readdir(join(workspace, scope.directory))).filter((file) => file !== ".gitkeep").sort();
+        const unexpected = found.filter((file) => !scope.allowed.includes(file));
+        assertions.push({ name: "delegated file scope", passed: unexpected.length === 0, detail: unexpected.length ? `${scope.directory}: unexpected ${unexpected.join(", ")}` : `${scope.directory}: ${found.join(", ") || "no files created"}` });
+      } catch (error) {
+        assertions.push({ name: "delegated file scope", passed: false, detail: `${scope.directory}: ${error instanceof Error ? error.message : "unreadable"}` });
+      }
     }
-  } catch (error) { assertions.push({ name: "factory artifact", passed: false, detail: error instanceof Error ? error.message : "Factory is missing." }); }
+  }
   return { passed: assertions.every((assertion) => assertion.passed), assertions, stub };
 }
