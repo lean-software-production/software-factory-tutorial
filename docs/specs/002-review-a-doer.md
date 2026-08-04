@@ -35,6 +35,14 @@ Keep `factory/success.md`, `factory/refactor.md`, and the one-shot doer invocati
 
 1. **Write the reviewer prompt.** Create `factory/review.md`. Tell the reviewer to inspect the doer's previous change against the supplied `success.md` criteria. It should read the code and diff, run tests and relevant installed complexity or quality tools, and report independent evidence. It must verify preserved behaviour and assess whether the change advances, or at least does not compromise, each criterion. It must not expect one small refactoring to achieve the factory's whole destination, and it must not modify files.
 
+   Name the command rather than the package, so the reviewer quotes output instead of working out how to run a tool. The calculator workspace exposes one quality measurement:
+
+   ```sh
+   node scripts/quality.mjs
+   ```
+
+   It reports complexity and size findings with a file, a line, and a rule name, then unused files, exports, and dependencies — printing both reports even when the first one fails, and exiting non-zero if either reports. Give the reviewer this form rather than `npm run quality`: npm appends its own `command failed` block to a non-zero exit, which a reviewer reads as a broken script rather than as code with findings. Tell the reviewer to cite that output.
+
    Require this response format:
 
    ```text
@@ -70,7 +78,7 @@ From the repository root:
 Verify manually that the reviewer:
 
 - is announced before Pi is invoked, runs after the doer, and does not edit calculator files;
-- can run `npm test` and the quality tools it needs;
+- can run `npm test` and the quality scripts it needs, and cites their output rather than a package name;
 - returns exactly one `PASS` or `FAIL` verdict; and
 - reports a specific pass-or-fail finding for every criterion in `factory/success.md`.
 

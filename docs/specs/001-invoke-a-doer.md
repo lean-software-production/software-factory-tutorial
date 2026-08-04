@@ -27,7 +27,7 @@ flowchart LR
 
 Teach and build this iteration in this order. Complete each small step before moving to the next one:
 
-1. **Define success.** Create `factory/success.md` before creating either agent prompt. Describe, in your own terms, the well-factored calculator the factory should produce after many refactorings. Default to Kent Beck's four rules of simple design: passes its tests, reveals intention, no duplication, and fewest elements. The learner may refine those criteria. For each, name evidence a reviewer can use to tell whether a change preserves or advances it—for example, tests, a diff, imports and dependencies, or an installed complexity tool. Make the criteria a durable strategy for the whole factory, not a checklist for the next refactoring. They should guide the doer's choice of tactic without prescribing it. Help the learner make their criteria evidence-based if they are stuck.
+1. **Define success.** Create `factory/success.md` before creating either agent prompt. Describe, in your own terms, the well-factored calculator the factory should produce after many refactorings. Default to Kent Beck's four rules of simple design: passes its tests, reveals intention, no duplication, and fewest elements. The learner may refine those criteria. For each, name evidence a reviewer can use to tell whether a change preserves or advances it—for example, tests, a diff, imports and dependencies, or the calculator's `npm run quality` check. Evidence should be a command whose output the reviewer can quote, not a package name it has to work out how to run. Make the criteria a durable strategy for the whole factory, not a checklist for the next refactoring. They should guide the doer's choice of tactic without prescribing it. Help the learner make their criteria evidence-based if they are stuck.
 2. **Write the doer prompt.** Create `factory/refactor.md`. Tell the doer to study `../factory/success.md` and use those criteria to choose one small, behaviour-preserving refactoring that moves the calculator towards the desired state. It must edit files directly. Tell it not to run tests, npm, or shell commands, and to keep its response concise.
 3. **Invoke Pi.** Create `factory/run.sh`. Change to the script's directory, then pipe `refactor.md` to Pi running from `calculator/`. Give Pi only file-inspection and file-editing tools; it must not receive its `bash` tool. Use this script:
 
@@ -69,7 +69,7 @@ Then review the change yourself against `factory/success.md`. Inspect the diff a
 (cd calculator && npm test)
 ```
 
-You may also run the installed code-quality tools, such as `cognitive-complexity-ts` or `code-health-meter`, to judge whether the refactoring improved the code. Do not ask the doer to run or interpret these checks.
+You may also run `npm run quality` in `calculator/` to judge whether the refactoring improved the code. Do not ask the doer to run or interpret these checks.
 
 Verify manually that `run.sh` announces the doer before invoking Pi, the doer can study `success.md`, works only in `calculator/`, makes at most one focused change, and cannot invoke a shell tool.
 

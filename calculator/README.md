@@ -37,3 +37,30 @@ cd calculator
 npm install
 npm test
 ```
+
+## Measuring quality
+
+`npm test` says whether behaviour still holds. `npm run quality` says whether the code is getting
+better:
+
+```sh
+node scripts/quality.mjs
+```
+
+`npm run quality` does the same thing. Prefer the direct form in scripts and agent prompts: the
+check exits non-zero whenever it finds something, and npm appends its own `npm error … command
+failed` block to that exit, which reads like the script broke rather than like the code has
+findings. `npm run --silent quality` suppresses that too.
+
+It runs two checks and prints both reports, even when the first one fails, so a single run shows
+the whole picture:
+
+- **ESLint** over `src` — cognitive complexity, cyclomatic complexity, nesting depth, function
+  length, statement count, parameter count, and duplicated branches. Each finding carries a file,
+  a line, and the rule name.
+- **knip** — unused files, exports, and dependencies. This is what catches the leftovers of an
+  extraction: a module the refactoring stopped importing, or an export nothing calls.
+
+The command exits non-zero if either check reports, so a reviewer, human or agent, can quote the
+output as evidence. `npm test` covers a third case for free: `noUnusedLocals` and
+`noUnusedParameters` make unused variables, imports, and parameters a build error.
