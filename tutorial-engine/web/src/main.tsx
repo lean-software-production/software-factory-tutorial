@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import mermaid from "mermaid";
 import { ChoiceIcon } from "./choice-icon.js";
 import { FileExcerptCodeBlock, Markdown } from "./markdown.js";
-import { parseTutorialEvent, serializeBrowserMessage, type BrowserMessage, type RunState, type SessionBootstrap, type TutorialEvent } from "../../src/protocol/events.js";
+import { activityCaption, parseTutorialEvent, serializeBrowserMessage, type BrowserMessage, type RunState, type SessionBootstrap, type TutorialEvent } from "../../src/protocol/events.js";
 import type { ProgressItem } from "../../src/lesson/load.js";
 import "./styles.css";
 
@@ -71,7 +71,7 @@ function TranscriptEvent({ event, send, disabled }: { event: Event; send: (messa
     case "choice": return <ChoiceCard event={event} send={send} disabled={disabled} />;
     case "tool-start": case "tool-progress": case "tool-complete": return null;
     case "tool-error": case "error": return <Card title="Something needs attention" className="error"><p>{event.message}</p>{event.retryable && <p className="muted">You can retry or tell the coach what happened.</p>}</Card>;
-    case "choice-resolved": case "run-state": case "session-state": case "audit": return null;
+    case "choice-resolved": case "run-state": case "activity": case "session-state": case "audit": return null;
   }
 }
 
@@ -88,6 +88,7 @@ function SessionStartCard({ session, send, disabled }: { session: SessionBootstr
 function App() {
   const [title, setTitle] = useState("Tutorial");
   const [state, setState] = useState<RunState>("working");
+  const [activity, setActivity] = useState("waiting for Pi");
   const [events, setEvents] = useState<Event[]>([]);
   const [validationCommands, setValidationCommands] = useState<Array<{ id: string; label: string }>>([]);
   const [progress, setProgress] = useState<ProgressItem[]>([]);
@@ -108,15 +109,16 @@ function App() {
     source.onerror = () => setServerConnection("disconnected");
     source.onmessage = ({ data }) => {
       const event = parseTutorialEvent(data) as WireEvent;
-      if (event.type === "snapshot") { setTitle(event.title); setState(event.runState); setEvents(event.events.reduce(applyEvent, [])); setValidationCommands(event.validationCommands); setProgress(event.progress); setSession(event.session); return; }
+      if (event.type === "snapshot") { setTitle(event.title); setState(event.runState); setActivity(event.activity); setEvents(event.events.reduce(applyEvent, [])); setValidationCommands(event.validationCommands); setProgress(event.progress); setSession(event.session); return; }
       if (event.type === "run-state") setState(event.state);
+      if (event.type === "activity") { setActivity(event.text); return; }
       if (event.type === "session-state") { setSession(event.session); return; }
       setEvents((current) => applyEvent(current, event));
     };
     return () => source.close();
   }, []);
   return <main><header><div><p className="eyebrow">LOCAL TUTORIAL</p><h1>{title}</h1><nav className="progress" aria-label="Tutorial progress">{progress.map((item) => <span key={item.id} className={item.state}>{item.label}</span>)}</nav></div><span className={`state ${serverConnection === "connected" ? state : serverConnection}`}>{serverConnection === "connected" ? state.replace("-", " ") : serverConnection === "connecting" ? "connecting" : "server stopped"}</span></header>
-    <section className="transcript" aria-live="polite">{serverConnection === "disconnected" && <Card title="Tutorial server stopped" className="error server-stopped"><p>The tutorial server is no longer available. Restart it and reopen its URL to continue.</p></Card>}<SessionStartCard session={session} send={send} disabled={!serverConnected} />{events.map((event, index) => <TranscriptEvent key={`${event.type}-${index}`} event={event} send={send} disabled={!serverConnected} />)}{serverConnected && session.state !== "select" && state === "working" && <div className="thinking" role="status"><span aria-hidden="true" />Thinking…</div>}</section>
+    <section className="transcript" aria-live="polite">{serverConnection === "disconnected" && <Card title="Tutorial server stopped" className="error server-stopped"><p>The tutorial server is no longer available. Restart it and reopen its URL to continue.</p></Card>}<SessionStartCard session={session} send={send} disabled={!serverConnected} />{events.map((event, index) => <TranscriptEvent key={`${event.type}-${index}`} event={event} send={send} disabled={!serverConnected} />)}{serverConnected && session.state !== "select" && state === "working" && <div className="thinking" role="status"><span className="spinner" aria-hidden="true" /><span aria-hidden="true">{activityCaption(activity)}</span><span className="visually-hidden">Working…</span></div>}</section>
     {session.state === "active" && <footer><form onSubmit={(event) => { event.preventDefault(); if (text.trim()) { send({ type: "chat", text }); setText(""); } }}><label className="visually-hidden" htmlFor="chat">Message the coach</label><textarea id="chat" disabled={!serverConnected} value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (text.trim()) { send({ type: "chat", text }); setText(""); } } }} placeholder="Ask the coach or steer the current step…" rows={2} /><button type="submit" disabled={!serverConnected}>Send</button></form><div className="secondary"><button onClick={() => send({ type: "abort" })} disabled={!serverConnected || state === "idle"}>Stop</button>{validationCommands.map((command) => <button key={command.id} disabled={!serverConnected} onClick={() => send({ type: "run-validation", commandId: command.id })}>{command.label}</button>)}</div></footer>}
   </main>;
 }

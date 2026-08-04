@@ -7,7 +7,15 @@
 		"source=software-factory-tutorial-state,target=/home/vscode/.tutorial-state,type=volume"
 	],
 	"containerEnv": {
-		"PI_CODING_AGENT_DIR": "/home/vscode/.tutorial-state/pi-agent"
+		"PI_CODING_AGENT_DIR": "/home/vscode/.tutorial-state/pi-agent",
+		// The tutor's model. The `pi -p` doer the lessons drive gets its own,
+		// seeded into the state volume by post-create.sh, so the two stay
+		// independent: the tutor teaches, the doer is meant to be cheap, fast
+		// and fallible. Both values assume the OpenCode Zen provider this image
+		// is built around; a participant who logged in elsewhere falls back to
+		// Pi's own pick, and `npm run setup` reports which. Override for one
+		// shell with `export TUTOR_MODEL=...`.
+		"TUTOR_MODEL": "opencode-go/deepseek-v4-flash"
 	},
 	// An OpenCode Zen key on the host authenticates Pi without an interactive
 	// /login. It lives in remoteEnv, not containerEnv, so rotating the host

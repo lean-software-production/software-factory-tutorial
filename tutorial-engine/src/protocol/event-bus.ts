@@ -1,4 +1,4 @@
-import type { TutorialEvent } from "./events.js";
+import { isTranscriptEvent, type TutorialEvent } from "./events.js";
 
 export type EventListener = (event: TutorialEvent) => void;
 
@@ -16,7 +16,7 @@ export class TutorialEventBus {
   }
 
   publish(event: TutorialEvent): void {
-    if (event.type !== "snapshot" && event.type !== "session-state") this.#events.push(event);
+    if (isTranscriptEvent(event)) this.#events.push(event);
     for (const listener of this.#listeners) listener(event);
   }
 

@@ -1,12 +1,16 @@
 import {
   DefaultResourceLoader,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
   createAgentSession,
   getAgentDir,
+  resolveCliModel,
   type AgentSession,
-  type AgentSessionEvent
+  type AgentSessionEvent,
+  type ScopedModel
 } from "@earendil-works/pi-coding-agent";
+import { isAbsolute, relative } from "node:path";
 import type { LessonDefinition } from "../lesson/contract.js";
 import type { RunState, TutorialEvent } from "../protocol/events.js";
 import { TutorialEventBus } from "../protocol/event-bus.js";
@@ -21,6 +25,39 @@ const TOOL_NAMES = [
   "present_markdown", "present_diagram", "offer_choices", "run_validation", "show_file_excerpt"
 ];
 
+/**
+ * Names the tutor's model, as `provider/model` with an optional `:thinking`
+ * suffix. Deliberately separate from Pi's `/model` default: that one belongs to
+ * the `pi -p` doer the lessons drive, which is meant to be cheap and fast — and
+ * whose mistakes are part of the lesson. The tutor wants the opposite.
+ *
+ * scripts/setup.mjs reports the same resolution to the learner; this module is
+ * the authority for it.
+ */
+export const TUTOR_MODEL_ENV = "TUTOR_MODEL";
+
+/** `model` is left undefined when Pi should choose, which is its documented fallback. */
+export interface TutorModelChoice extends Partial<ScopedModel> {
+  warning?: string;
+}
+
+/** Resolve the tutor's model, preferring a working tutorial over an exact match. */
+export function resolveTutorModel(modelRuntime: ModelRuntime, requested: string | undefined): TutorModelChoice {
+  const wanted = requested?.trim();
+  if (!wanted) return {};
+  const resolved = resolveCliModel({ cliModel: wanted, modelRuntime });
+  if (!resolved.model) {
+    return { warning: `${TUTOR_MODEL_ENV}="${wanted}" did not match a model (${resolved.error ?? "no match"}); letting Pi choose.` };
+  }
+  // resolveCliModel matches against every registered model so that a first-time
+  // --api-key run can name one before auth is stored. The tutor has no such
+  // escape hatch, so an unauthenticated match would only fail at the first turn.
+  if (!modelRuntime.hasConfiguredAuth(resolved.model.provider)) {
+    return { warning: `${TUTOR_MODEL_ENV}="${wanted}" matched ${resolved.model.provider}/${resolved.model.id}, which has no configured auth; letting Pi choose.` };
+  }
+  return { model: resolved.model, thinkingLevel: resolved.thinkingLevel, warning: resolved.warning };
+}
+
 /** Log operational identifiers, but never tool content or learner chat text. */
 function toolDetail(args: unknown): string {
   if (!args || typeof args !== "object") return "";
@@ -28,6 +65,28 @@ function toolDetail(args: unknown): string {
   if (typeof value.path === "string") return ` for ${value.path}`;
   if (typeof value.commandId === "string") return ` for validation ${value.commandId}`;
   return "";
+}
+
+/**
+ * The same identifiers as `toolDetail`, shortened for the learner's spinner:
+ * the workspace prefix is noise on screen, where every path is inside it.
+ * Content and chat text stay out of this for the same reason as the log.
+ */
+export function activityDetail(args: unknown, workspace: string): string {
+  if (!args || typeof args !== "object") return "";
+  const value = args as Record<string, unknown>;
+  // Pi passes some paths absolute and some already relative to the workspace.
+  // Only the absolute ones need shortening; resolving a relative one against
+  // the workspace would depend on the process's working directory.
+  if (typeof value.path === "string") return ` ${isAbsolute(value.path) ? relative(workspace, value.path) || value.path : value.path}`;
+  if (typeof value.commandId === "string") return ` ${value.commandId}`;
+  return "";
+}
+
+/** Keep a caption to a glanceable length: the learner has the log for the rest. */
+export function summarise(actions: readonly string[], limit = 3): string {
+  if (actions.length <= limit) return actions.join(", ");
+  return `${actions.slice(0, limit).join(", ")} and ${actions.length - limit} more`;
 }
 
 export function coachingSystemPrompt(lesson: LessonDefinition): string {
@@ -59,7 +118,9 @@ export class PiTutorialAdapter {
   #activity = "waiting for Pi";
   #workingSince = 0;
   #heartbeat?: NodeJS.Timeout;
-  #toolLabels = new Map<string, string>();
+  #toolLabels = new Map<string, { label: string; display: string }>();
+  /** What the current batch of tools has finished, for the caption after it drains. */
+  #batch: string[] = [];
   #respondingMessages = new Set<string>();
   #supersededChoices = new Set<string>();
 
@@ -102,6 +163,9 @@ export class PiTutorialAdapter {
       setRunState: (state) => adapter.setState(state)
     });
     log.info("Creating Pi agent session.");
+    const modelRuntime = await ModelRuntime.create();
+    const choice = resolveTutorModel(modelRuntime, process.env[TUTOR_MODEL_ENV]);
+    if (choice.warning) log.info(choice.warning);
     const { session } = await createAgentSession({
       cwd: canonicalWorkspace,
       resourceLoader: loader,
@@ -109,16 +173,22 @@ export class PiTutorialAdapter {
       // cwd alone: every filesystem call is checked and audited by the boundary.
       customTools: [...createWorkspaceTools(canonicalWorkspace, adapter.#boundary, (event) => bus.publish(event)), ...tools],
       tools: TOOL_NAMES,
+      modelRuntime,
+      model: choice.model,
+      thinkingLevel: choice.thinkingLevel,
       sessionManager: SessionManager.inMemory(canonicalWorkspace),
       settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } })
     });
     adapter.#session = session;
     session.subscribe((event) => adapter.onPiEvent(event));
-    log.info("Pi agent session created and event monitoring is active.");
+    log.info(`Pi agent session created on ${session.state.model.provider}/${session.state.model.id}; event monitoring is active.`);
     return adapter;
   }
 
   get state(): RunState { return this.#state; }
+
+  /** What the spinner should say, for a browser that connects mid-turn. */
+  get activity(): string { return this.#activity; }
 
   async begin(): Promise<void> {
     this.log.info("Submitting the initial welcome request to Pi.");
@@ -193,7 +263,7 @@ export class PiTutorialAdapter {
     const changed = this.#state !== state;
     this.#state = state;
     if (state === "working") {
-      this.#activity = activity;
+      this.setActivity(activity);
       if (changed) this.startHeartbeat();
     } else {
       this.stopHeartbeat();
@@ -202,11 +272,37 @@ export class PiTutorialAdapter {
     this.#bus.publish({ type: "run-state", state });
   }
 
+  /**
+   * The one line the learner sees under the spinner, and the one the heartbeat
+   * repeats into the log. Phrased so both read well: "running read on
+   * README.md" becomes "Tutor is still running read on README.md (30 seconds)"
+   * in the log and "Running read on README.md…" in the browser.
+   */
+  private setActivity(activity: string): void {
+    if (this.#activity === activity) return;
+    this.#activity = activity;
+    this.#bus.publish({ type: "activity", text: activity });
+  }
+
+  /**
+   * Say what the current batch of tools is doing, or — once it has drained —
+   * what it just did. Individual calls finish in single-digit milliseconds, so
+   * a caption that reverted to "waiting for Pi" the moment a tool ended would
+   * leave the learner staring at that one phrase for the whole lesson while the
+   * log filled with detail.
+   */
+  private describeToolActivity(): void {
+    const running = [...this.#toolLabels.values()].map((entry) => entry.display);
+    if (running.length === 1) return this.setActivity(`running ${running[0]}`);
+    if (running.length > 1) return this.setActivity(`running ${running.length} tools: ${summarise(running)}`);
+    this.setActivity(this.#batch.length > 0 ? `waiting for Pi… ${summarise(this.#batch)}` : "waiting for Pi");
+  }
+
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.#workingSince = Date.now();
     this.#heartbeat = setInterval(() => {
-      this.log.info(`Tutor is still ${this.#activity} (${Math.round((Date.now() - this.#workingSince) / 1_000)} seconds).`);
+      this.log.info(`Tutor is still working: ${this.#activity} (${Math.round((Date.now() - this.#workingSince) / 1_000)} seconds).`);
     }, 15_000);
     this.#heartbeat.unref();
   }
@@ -222,7 +318,7 @@ export class PiTutorialAdapter {
       const messageId = message.id ?? `assistant-${this.#messageCounter}`;
       if (!this.#respondingMessages.has(messageId)) {
         this.#respondingMessages.add(messageId);
-        this.#activity = "receiving Pi's response";
+        this.setActivity("receiving Pi's response");
         this.log.info("Pi started responding.");
       }
       this.#bus.publish({ type: "assistant-delta", messageId, delta: event.assistantMessageEvent.delta });
@@ -242,8 +338,12 @@ export class PiTutorialAdapter {
     if (event.type === "tool_execution_start") {
       const definition = this.#session.getToolDefinition(event.toolName);
       const label = definition?.label ?? event.toolName;
-      this.#toolLabels.set(event.toolCallId, label);
-      this.#activity = `running ${label}`;
+      // Pi issues tools in batches: several start together and all finish a few
+      // milliseconds later. The batch, not the individual call, is the unit the
+      // learner can actually read, so start a fresh one whenever none is open.
+      if (this.#toolLabels.size === 0) this.#batch = [];
+      this.#toolLabels.set(event.toolCallId, { label, display: `${label}${activityDetail(event.args, this.workspace)}` });
+      this.describeToolActivity();
       this.log.info(`Pi started tool “${label}”${toolDetail(event.args)} (${event.toolCallId}).`);
       this.#bus.publish({ type: "tool-start", tool: { id: event.toolCallId, name: event.toolName, label } });
       return;
@@ -255,9 +355,11 @@ export class PiTutorialAdapter {
     }
     if (event.type === "tool_execution_end") {
       const content = event.result?.content?.filter((item: { type: string }) => item.type === "text").map((item: { text?: string }) => item.text ?? "").join("") ?? "";
-      const label = this.#toolLabels.get(event.toolCallId) ?? event.toolName;
+      const entry = this.#toolLabels.get(event.toolCallId);
+      const label = entry?.label ?? event.toolName;
+      if (entry) this.#batch.push(entry.display);
       this.#toolLabels.delete(event.toolCallId);
-      this.#activity = "waiting for Pi";
+      this.describeToolActivity();
       if (event.isError && this.#supersededChoices.delete(event.toolCallId)) {
         this.log.info("Pi choice was superseded by a learner message.");
         this.#bus.publish({ type: "tool-complete", toolId: event.toolCallId, summary: "Choice superseded by learner message." });
