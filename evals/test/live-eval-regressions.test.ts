@@ -139,11 +139,12 @@ describe("live-eval regression coverage", () => {
     } finally { await rm(workspace, { recursive: true, force: true }); }
   }, 30000);
 
-  it("seeds every lesson that builds on an earlier one, and only those", () => {
-    // Lessons 001 and 002 start from nothing; 004 builds nothing; 003, 005 and
-    // 006 all extend or move what Part 1 left behind and must say so.
+  it("seeds every lesson that needs an earlier lesson's artefacts, and only those", () => {
+    // The test is what a lesson *needs* on disk, not what it builds. Lessons 001
+    // and 002 start from nothing. Lesson 004 builds nothing but runs everything
+    // Part 1 left behind, and 003, 005 and 006 extend or move it.
     for (const scenario of allScenarios) {
-      const expected = ["003", "005", "006"].includes(scenario.lesson);
+      const expected = ["003", "004", "005", "006"].includes(scenario.lesson);
       expect(Boolean(scenario.seed && Object.keys(scenario.seed).length), `${scenario.id} seed`).toBe(expected);
     }
   });
