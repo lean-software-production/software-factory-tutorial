@@ -1,66 +1,145 @@
-# Repeat the validation loop
+# Join them into an assembly line
 
-Repeat the doer-and-validator sequence, but leave decisions with the human.
+Give the two agents a boundary, a fixed order, and criteria that outlive a single turn.
 
 ## Key concept
 
-Part 1 completed one validation loop by hand: a doer changed the calculator and a validator assessed that change against `success.md`. This lesson repeats the whole sequence. Bash owns the loop and pauses after each validation so the human can read the verdict before starting another turn.
+Make the move first, then take the name.
 
-Bash does not yet interpret the verdict, choose a repair prompt, or recover automatically.
+The move is small: put the doer and the validator in one folder, and run them in a fixed order. Once
+that is done there is something to point at, and the words are worth having.
 
-## Decision flow
+An **assembly line** is an ordered sequence of **machines**, each machine's output feeding the next.
+A **machine** is an agent running in a non-interactive harness — handed its inputs, run to
+completion, no human in the conversation. A **factory** is the software containing one or more
+lines.
 
-Show this Mermaid diagram when introducing the lesson:
-
-```mermaid
-flowchart TD
-    Start([Start / press Enter]) --> Doer[Doer\nrefactor.md + success.md]
-    Doer --> Validator[Validator\nvalidate.md + success.md]
-    Validator --> Pause[Pause for human validation]
-    Pause --> Start
-
-    classDef start fill:#fef3c7,stroke:#d97706,color:#78350f,stroke-width:2px
-    classDef doer fill:#dbeafe,stroke:#2563eb,color:#172554,stroke-width:2px
-    classDef validator fill:#dcfce7,stroke:#16a34a,color:#14532d,stroke-width:2px
-    classDef pause fill:#fce7f3,stroke:#db2777,color:#831843,stroke-width:2px
-    class Start start
-    class Doer doer
-    class Validator validator
-    class Pause pause
-```
+The learner has been building machines since lesson 001, without the word for it. Every one of them
+was an agent, headless, handed its input by a script. What this lesson adds is not a new kind of
+thing; it is the order they run in, and the edge around them.
 
 ## Implementation order
 
-Keep `factory/refactor.md`, `factory/validate.md`, and `factory/success.md` from the previous lessons. Teach and build this lesson in this order. Complete each small step before moving to the next one:
+Build this lesson in this order. Complete each small step before moving to the next one:
 
-1. **Start the Bash loop.** Update `factory/run.sh`. Keep its setup and both agent invocations, then add the `while true; do ... done` structure that repeats one complete validation loop. Leave a temporary placeholder in the loop body while establishing the structure.
-2. **Add the pause and control flow.** Replace the placeholder with a `read -r -p` pause after the validator has reported its findings. The learner must press Enter before the next turn. Ctrl-C stops the shell and therefore the factory.
-3. **Announce each role.** Before each invocation, announce the role so the learner can follow the sequence. Use these commands inside the loop:
+1. **Give the line an edge.** From the repository root:
 
    ```sh
-   echo "Starting doer iteration..."
-   cat refactor.md | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
-
-   echo "Starting validation..."
-   cat validate.md success.md | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p)
+   mkdir factory/refactor
+   git mv factory/refactor-do.sh       factory/refactor/do.sh
+   git mv factory/refactor-validate.sh factory/refactor/validate.sh
+   git mv factory/refactor.md          factory/refactor/refactor.md
+   git mv factory/refactor-validate.md factory/refactor/validate.md
    ```
 
-The completed `factory/run.sh` loops until the learner stops it: Bash invokes the doer, invokes the validator, then pauses for Enter and human validation before the next validation loop.
+   The `refactor-` prefixes drop because the folder now carries the line's name. Two references
+   inside the scripts still use the old names, so update them: `refactor-validate.md` becomes
+   `validate.md`, and `refactor-validate-findings.txt` becomes `validate-findings.txt`.
 
-## Advanced: substitute another agent
+   Nothing behaves differently after this step, which is the point worth making. What the learner
+   bought is an edge. A second line — one that writes documentation, say — would be a second folder
+   sitting alongside this one, with its own prompts and its own criteria, and a factory is what holds
+   them both. The line had to have an edge before it could be named.
 
-Pi is the default doer and validator. Advanced users may replace either subshell with another CLI harness, but the doer must receive the prompt and criteria, run from `calculator/`, and only edit the kata files. The validator must receive the criteria, run from `calculator/`, inspect the kata and run validation commands, but not edit files. Its authentication, sandboxing, and tool restrictions are your responsibility; do not assume another harness supports Pi's flags or restrictions.
+2. **Define success.** Create `factory/refactor/success.md`. It describes the calculator the line is
+   working towards: not the next refactoring, but what the code should look like after many of them.
+   Have the learner write it in their own terms, and default to Kent Beck's four rules of simple
+   design, in order:
+
+   - passes its tests;
+   - reveals intention;
+   - no duplication;
+   - fewest elements.
+
+   For each rule, name the evidence a validator can quote. Evidence means a command whose output it
+   can paste back — `npm test`, `node scripts/quality.mjs`, a `grep -n` that puts two near-identical
+   passages side by side with their line numbers. It does not mean the name of a tool the validator
+   would have to work out how to install and run. The validator can only quote what it can actually
+   run from `calculator/`.
+
+   These criteria are a strategy for the whole line, not a checklist for the next change. The reason
+   is worth saying out loud. The validator in lesson 003 knew one check — had the change reduced what
+   `node scripts/quality.mjs` reports? — and that was enough while a human read every verdict, because
+   the human supplied everything the check left out. A line that runs unattended has no such human.
+   Its criteria have to outlive a single turn.
+
+3. **Point both prompts at the criteria.** Neither `refactor.md` nor `validate.md` carries its own
+   criteria any more. Both defer to `success.md`, which arrives appended to the prompt when the line
+   runs — the same trick lesson 003 used to hand the validator its baseline. Neither prompt names a
+   path to go and fetch, because both machines run from `calculator/` and neither needs to reach
+   outside it.
+
+   The validator must give one finding for every criterion in `success.md`, in this format:
+
+   ```text
+   VERDICT: PASS
+
+   FINDINGS:
+   - [PASS] <success criterion>: <specific evidence>
+   - [FAIL] <success criterion>: <specific evidence>
+   ```
+
+   Two things to tell it plainly. It must not expect one small refactoring to reach the whole
+   destination — the criteria describe where the line is going, and a single change is one step along
+   that road. And a passing test alone is not a passing verdict: the first rule is one of four, and
+   the other three still need evidence.
+
+4. **Run the line.** Create `factory/refactor/run.sh`:
+
+   ```sh
+   #!/usr/bin/env bash
+   set -euo pipefail
+
+   cd "$(dirname "$0")"
+   while true; do
+     echo "Recording quality baseline..."
+     (cd ../../calculator && node scripts/quality.mjs) > quality-before.txt || true
+     echo "Starting doer iteration..."
+     cat refactor.md success.md | (cd ../../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
+     echo "Starting validation..."
+     cat validate.md success.md \
+       | (cd ../../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
+       | tee validate-findings.txt
+     read -r -p "Press Enter for the next iteration, or Ctrl-C to stop. "
+   done
+   ```
+
+   The line records its own baseline at the top of every pass, so it never needs the guard that
+   `validate.sh` has: it cannot reach the validator without having written `quality-before.txt` a
+   moment earlier. `validate.sh` still needs its guard, because it can still be run on its own.
+
+   Which is the other thing to notice: `do.sh` and `validate.sh` are untouched and still work
+   exactly as they did. The line did not replace them. It ordered them.
+
+   One turn of this loop is an **iteration** — a bounded batch of agent work between check-ins. The
+   `read` is where the line hands control back to the learner, and Ctrl-C at that prompt stops the
+   line.
 
 ## Checks
 
-From the repository root:
+From the repository root, make the new script executable and run it:
 
 ```sh
-./factory/run.sh
+chmod +x factory/refactor/run.sh
+./factory/refactor/run.sh
 ```
 
-After each pause, read the validation report. Verify manually that the console announces the doer and validator in order, the validator reports every success criterion, neither agent has more access than its role requires, and the loop waits for Enter before the next turn.
+Verify by hand that:
+
+- each machine announces itself before Pi is invoked;
+- the doer runs before the validator on every pass;
+- the validator reports one finding per criterion in `success.md`, not just the one it can measure;
+- the loop waits for Enter before starting a second iteration; and
+- `validate-findings.txt` holds the last verdict after the loop pauses.
 
 ## Pressure test
 
-The validator can identify a failure, but its verdict is only terminal text. A human must still decide whether to retry a refactoring or ask the doer to repair it. The next lesson saves the report and lets Bash route failed verdicts to a repair turn.
+The line runs in order, and it stops for the learner between iterations. What it does not do is
+anything at all with what the validator found.
+
+Watch a `FAIL` go past and then press Enter. The next iteration is identical to the one that would
+have followed a `PASS`: same prompt, same baseline, same job. The findings were written to a file and
+read by nobody.
+
+That is lesson 004's copy-paste — the step the learner did with their own hands — still undone. The
+next lesson gives it to the line.
