@@ -1,6 +1,8 @@
 # Software factory tutorial 🏭
 
-You're going to build a small software factory: software that improves a codebase a little at a time and checks its own work.
+You're going to build one assembly line: software that improves a codebase a little at a time and checks its own work.
+
+A software factory is made of lines like it. A real one runs several — one that refactors, one that upgrades dependencies, one that writes the tests nobody got round to — each with its own agents, its own criteria, and its own definition of done, with the factory deciding which runs when. You are building the first, and everything you learn doing it is how you would build the rest.
 
 The tutorial is two pieces of work. **Part 1** builds one agent at a time and runs each of them by hand — a doer that changes the code, then a validator that gathers independent evidence about the change — so you can see what each one contributes before anything is automated. **Part 2** joins them into an assembly line that runs itself and routes a failed verdict back for repair. Repeated safely, that feedback loop converges on a healthier codebase.
 

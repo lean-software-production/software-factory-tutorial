@@ -12,7 +12,7 @@ Part 2 joins those agents into an assembly line that runs itself.
 | [003](003-build-a-validator.md) | Build a validator that checks the change | Todo |
 | [004](004-feed-the-findings-back.md) | Feed the findings back by hand | Todo |
 
-## Part 2 — Build the factory
+## Part 2 — Build the assembly line
 
 | Lesson | Goal | Status |
 | --- | --- | --- |
