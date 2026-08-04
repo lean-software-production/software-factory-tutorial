@@ -90,7 +90,20 @@ export async function deterministicGate(scenario: Scenario, workspace: string, t
   let stub: FactoryStubResult | undefined;
   try {
     const factory = await readFile(join(workspace, "factory/run.sh"), "utf8");
-    stub = await runFactoryWithStubs(factory, scenario.lesson === "004" ? ["VERDICT: FAIL\n\nFINDINGS:\n- [FAIL] passes tests: intentional failure\n", "VERDICT: PASS\n\nFINDINGS:\n- [PASS] passes tests: repaired\n"] : undefined);
+    // Task 8 replaces this call site with the per-lesson script paths and
+    // prompt names. Until then it seeds what the previous fixed harness seeded.
+    stub = await runFactoryWithStubs({
+      scriptPath: "factory/run.sh",
+      script: factory,
+      files: {
+        "factory/refactor.md": "refactor prompt\n",
+        "factory/success.md": "success prompt\n",
+        "factory/review.md": "review prompt\n",
+        "factory/repair.md": "repair prompt\n"
+      },
+      validatorOutputs: scenario.lesson === "004" ? ["VERDICT: FAIL\n\nFINDINGS:\n- [FAIL] passes tests: intentional failure\n", "VERDICT: PASS\n\nFINDINGS:\n- [PASS] passes tests: repaired\n"] : undefined,
+      reportPath: "factory/review-report.md"
+    });
     const piTurns = stub.invocations.filter((entry) => entry.command === "pi");
     const doerArgs = ["--no-session", "--tools", "read,edit,write,grep,find,ls", "-p"];
     const reviewerArgs = ["--no-session", "--tools", "read,grep,find,ls,bash", "-p"];
@@ -112,7 +125,7 @@ export async function deterministicGate(scenario: Scenario, workspace: string, t
       assertions.push({ name: "loop roles", passed: Boolean(doer) && Boolean(reviewer) && JSON.stringify(doer!.args) === JSON.stringify(doerArgs) && JSON.stringify(reviewer!.args) === JSON.stringify(reviewerArgs) && stub.output.includes("Starting doer iteration...") && stub.output.includes("Starting review..."), detail: `${piTurns.length} Pi turn(s)` });
     } else if (scenario.lesson === "004") {
       const repairTurn = piTurns.find((entry) => entry.stdin.includes("repair prompt"));
-      assertions.push({ name: "review report saved", passed: stub.reviewReportBeforeEnter?.includes("VERDICT: FAIL") === true, detail: stub.reviewReportBeforeEnter ?? "No report before Enter." });
+      assertions.push({ name: "review report saved", passed: stub.reportBeforeEnter?.includes("VERDICT: FAIL") === true, detail: stub.reportBeforeEnter ?? "No report before Enter." });
       assertions.push({ name: "failed verdict routes to repair", passed: Boolean(repairTurn) && stub.output.includes("Starting repair iteration..."), detail: repairTurn?.stdin ?? "Repair worker was not invoked after the failed report." });
       assertions.push({ name: "reviewer tee boundary", passed: piTurns.some((entry) => JSON.stringify(entry.args) === JSON.stringify(reviewerArgs) && entry.stdin.includes("success prompt")), detail: `${piTurns.length} Pi turn(s)` });
     }
