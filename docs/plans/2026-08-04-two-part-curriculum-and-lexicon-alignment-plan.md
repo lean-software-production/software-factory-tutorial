@@ -586,15 +586,22 @@ Replace the body of `docs/specs/005-join-them-into-an-assembly-line.md`. It must
 
    ```sh
    mkdir factory/refactor
-   git mv factory/refactor-do.sh       factory/refactor/do.sh
-   git mv factory/refactor-validate.sh factory/refactor/validate.sh
-   git mv factory/refactor.md          factory/refactor/refactor.md
-   git mv factory/refactor-validate.md factory/refactor/validate.md
+   mv factory/refactor-do.sh              factory/refactor/do.sh
+   mv factory/refactor-validate.sh        factory/refactor/validate.sh
+   mv factory/refactor.md                 factory/refactor/refactor.md
+   mv factory/refactor-validate.md        factory/refactor/validate.md
+   mv factory/refactor-quality-before.txt factory/refactor/quality-before.txt
    ```
 
-   The `refactor-` prefixes drop because the folder now carries the line's name. Update the two
-   scripts' references to `refactor-validate.md` and `refactor-validate-findings.txt` accordingly,
-   to `validate.md` and `validate-findings.txt`.
+   Plain `mv`, not `git mv`: `.gitignore` excludes `factory/*`, so none of the learner's work is
+   tracked and `git mv` would fail on every line.
+
+   The `refactor-` prefixes drop because the folder now carries the line's name. Every reference
+   inside the two scripts drops it too — `refactor-validate.md` becomes `validate.md`,
+   `refactor-validate-findings.txt` becomes `validate-findings.txt`, and
+   `refactor-quality-before.txt` becomes `quality-before.txt`. Nothing in the folder should still
+   be called `refactor-` anything except `refactor.md`, which names the doer's job rather than the
+   line.
 
    Explain what this bought: a second line would be a second folder, sitting alongside this one, and
    a factory is what holds them. The line needed an edge before it could be named.
@@ -608,9 +615,25 @@ Replace the body of `docs/specs/005-join-them-into-an-assembly-line.md`. It must
    003 knew one check, which was enough while a human read every verdict. A line that runs
    unattended needs criteria that outlive a single turn.
 
-3. **Point both prompts at the criteria.** Both `refactor.md` and `validate.md` now read
-   `../factory/refactor/success.md` instead of carrying their own criteria. The validator must give
-   one finding for every criterion in `success.md`, in this format:
+3. **Point both prompts at the criteria.** Both `refactor.md` and `validate.md` now defer to
+   `success.md` instead of carrying their own criteria — and because no prompt may tell a model to
+   fetch a path, every script that invokes a machine must concatenate `success.md` onto its prompt.
+   Update both standalone scripts, not only the line:
+
+   ```sh
+   # do.sh
+   cat refactor.md success.md | (cd ../../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
+
+   # validate.sh
+   cat validate.md success.md quality-before.txt \
+     | (cd ../../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
+     | tee validate-findings.txt
+   ```
+
+   Say plainly that this is why the criteria live in a file of their own: three different callers
+   now hand the same criteria to two different machines, and a copy in each prompt would drift.
+
+   The validator must give one finding for every criterion in `success.md`, in this format:
 
    ```text
    VERDICT: PASS
@@ -633,10 +656,10 @@ Replace the body of `docs/specs/005-join-them-into-an-assembly-line.md`. It must
    while true; do
      echo "Recording quality baseline..."
      (cd ../../calculator && node scripts/quality.mjs) > quality-before.txt || true
-     echo "Starting doer iteration..."
+     echo "Starting doer..."
      cat refactor.md success.md | (cd ../../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
      echo "Starting validation..."
-     cat validate.md success.md \
+     cat validate.md success.md quality-before.txt \
        | (cd ../../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
        | tee validate-findings.txt
      read -r -p "Press Enter for the next iteration, or Ctrl-C to stop. "
@@ -644,8 +667,21 @@ Replace the body of `docs/specs/005-join-them-into-an-assembly-line.md`. It must
    ```
 
    Note for the learner that `do.sh` and `validate.sh` still work on their own — the line did not
-   replace them, it ordered them. Note too that one turn of this loop is an **iteration**: a bounded
-   batch of work between check-ins.
+   replace them, it ordered them, and all three now hand the machines the same criteria. Note too
+   that one full turn of this loop — baseline, doer, validator, pause — is an **iteration**: a
+   bounded batch of work between check-ins. Each `echo` names a phase within the iteration, not an
+   iteration of its own.
+
+   Show the learner the folder they have ended up with, so the edge is something they can see:
+
+   ```text
+   factory/refactor/
+     do.sh              validate.sh          run.sh
+     refactor.md        validate.md          success.md
+     quality-before.txt validate-findings.txt
+   ```
+
+   Before running anything, `chmod +x factory/refactor/run.sh`.
 
 **Checks.** Run `./factory/refactor/run.sh`. Verify that each machine announces itself before Pi is
 invoked; the doer runs before the validator on every pass; the validator reports one finding per
@@ -685,7 +721,7 @@ git commit -m "feat: rewrite lesson 005 around the assembly line and shared succ
 
 **Interfaces:**
 - Consumes: `factory/refactor/run.sh`, `success.md`, `validate-findings.txt` from Task 3.
-- Produces: `factory/refactor/repair.md`, and a `run.sh` whose repair turn is announced with `Starting repair iteration...` — the exact string the eval assertions match in Task 8.
+- Produces: `factory/refactor/repair.md`, and a `run.sh` whose repair turn is announced with `Starting repair...` — the exact string the eval assertions match in Task 8.
 
 - [ ] **Step 1: Rewrite the specification**
 
@@ -707,7 +743,7 @@ Replace the body of `docs/specs/006-route-failed-verdicts-to-repair.md` with the
    ```sh
    verdict=$(grep -m1 -o 'VERDICT: \(PASS\|FAIL\)' validate-findings.txt || echo "VERDICT: FAIL")
    if [ "$verdict" = "VERDICT: FAIL" ]; then
-     echo "Starting repair iteration..."
+     echo "Starting repair..."
      cat repair.md success.md validate-findings.txt \
        | (cd ../../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
    fi
@@ -718,7 +754,7 @@ Replace the body of `docs/specs/006-route-failed-verdicts-to-repair.md` with the
 
 **Checks.** Run `./factory/refactor/run.sh` and confirm that a passing verdict starts the next
 refactoring, a failing verdict starts a repair carrying the findings, and the repair machine is
-announced before Pi is invoked.
+announced with `Starting repair...` before Pi is invoked.
 
 **Pressure test.** The line now does by itself what the learner did by hand in lesson 004. Ask them
 what it still cannot do — notice it is going backwards, decide the criteria were wrong, or stop.
@@ -1190,12 +1226,12 @@ Replace the whole `try { const factory = await readFile(...) } catch { ... }` bl
       } else if (scenario.lesson === "005") {
         const [doer, validator] = piTurns;
         assertions.push({ name: "loop pause", passed: stub.paused, detail: stub.paused ? "No second iteration began before Enter." : "The loop did not wait for Enter after validation." });
-        assertions.push({ name: "line roles", passed: Boolean(doer) && Boolean(validator) && JSON.stringify(doer!.args) === JSON.stringify(doerArgs) && JSON.stringify(validator!.args) === JSON.stringify(validatorArgs) && stub.output.includes("Starting doer iteration...") && stub.output.includes("Starting validation..."), detail: `${piTurns.length} Pi turn(s)` });
+        assertions.push({ name: "line roles", passed: Boolean(doer) && Boolean(validator) && JSON.stringify(doer!.args) === JSON.stringify(doerArgs) && JSON.stringify(validator!.args) === JSON.stringify(validatorArgs) && stub.output.includes("Starting doer...") && stub.output.includes("Starting validation..."), detail: `${piTurns.length} Pi turn(s)` });
         assertions.push({ name: "shared success criteria", passed: piTurns.every((entry) => entry.stdin.includes("success prompt")), detail: `${piTurns.length} Pi turn(s)` });
       } else if (scenario.lesson === "006") {
         const repairTurn = piTurns.find((entry) => entry.stdin.includes("repair prompt"));
         assertions.push({ name: "findings saved", passed: stub.reportBeforeEnter?.includes("VERDICT: FAIL") === true, detail: stub.reportBeforeEnter ?? "No findings before Enter." });
-        assertions.push({ name: "failed verdict routes to repair", passed: Boolean(repairTurn) && stub.output.includes("Starting repair iteration..."), detail: repairTurn?.stdin ?? "The repair machine was not invoked after the failed verdict." });
+        assertions.push({ name: "failed verdict routes to repair", passed: Boolean(repairTurn) && stub.output.includes("Starting repair..."), detail: repairTurn?.stdin ?? "The repair machine was not invoked after the failed verdict." });
         assertions.push({ name: "repair carries the findings", passed: repairTurn?.stdin.includes("VERDICT: FAIL") === true, detail: repairTurn?.stdin ?? "Repair prompt had no findings." });
       }
     } catch (error) {
