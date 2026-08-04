@@ -1,4 +1,6 @@
 import type { ArtifactState, CanonicalPatch, FileExpectation, Scenario } from "../lesson-001/scenarios.js";
+import { correctRun as partOneDo, refactor as partOneRefactor, refactorPath as partOneRefactorPath, runPath as partOneDoPath } from "../lesson-002/scenarios.js";
+import { correctValidateRun as partOneValidateSh, validate as partOneValidate, validatePath as partOneValidatePath, validateRunPath as partOneValidateShPath } from "../lesson-003/scenarios.js";
 
 /**
  * Lesson 005 moves everything into `factory/refactor/`, drops the `refactor-`
@@ -105,6 +107,28 @@ The first non-empty line must be exactly \`VERDICT: PASS\` or \`VERDICT: FAIL\`.
 const relocatedDo = correctDo.replace("cat refactor.md success.md |", "cat refactor.md |");
 const relocatedValidateSh = correctValidateSh.replace("cat validate.md success.md quality-before.txt", "cat validate.md quality-before.txt");
 
+/** Flat Part 1 paths, which this lesson exists to empty. */
+const partOneBaselinePath = "factory/refactor-quality-before.txt";
+const partOneFindingsPath = "factory/refactor-validate-findings.txt";
+
+/**
+ * What Part 1 left behind. Lesson 005's first step is a `mv`, so the flat files
+ * have to be in the workspace for there to be anything to move — including the
+ * stale findings file the specification tells the learner to delete.
+ */
+export const partOneSeed: Record<string, string> = {
+  [partOneRefactorPath]: partOneRefactor,
+  [partOneDoPath]: partOneDo,
+  [partOneValidatePath]: partOneValidate,
+  [partOneValidateShPath]: partOneValidateSh,
+  [partOneBaselinePath]: "eslint: 3 findings\nknip: 1 finding\n",
+  [partOneFindingsPath]: "VERDICT: PASS\n\nEVIDENCE:\n- last week's output\n"
+};
+
+/** The `mv` half of the move: every flat path is gone once the folder exists. */
+const partOneRemoved: Record<string, null> = Object.fromEntries(Object.keys(partOneSeed).map((path) => [path, null]));
+const partOneAbsent: ArtifactState = Object.fromEntries(Object.keys(partOneSeed).map((path) => [path, { exists: false }]));
+
 const staleParentDo = relocatedDo.replaceAll("(cd ../../calculator", "(cd ../calculator");
 const unsharedCriteriaRun = correctLineRun.replace("cat refactor.md success.md |", "cat refactor.md |");
 const noPauseRun = correctLineRun.replace(/ {2}read -r -p .*\n/, "");
@@ -151,19 +175,31 @@ export const lesson005FinalState: ArtifactState = {
   [validatePath]: { exists: true, contains: [/VERDICT: PASS/, /VERDICT: FAIL/, /one finding for every criterion/i, /Do not modify any file/i, /passing tests alone/i], excludes: [/success\.md/] },
   [doPath]: { exists: true, contains: [/cat refactor\.md success\.md \|/, /\(cd \.\.\/\.\.\/calculator/, /quality-before\.txt/], excludes: [/\(cd \.\.\/calculator && /, /refactor-quality-before\.txt/] },
   [validateShPath]: { exists: true, contains: [/if \[ ! -f quality-before\.txt \]/, /\.\/do\.sh/, /cat validate\.md success\.md quality-before\.txt/, /tee validate-findings\.txt/], excludes: [/\(cd \.\.\/calculator && /, /refactor-validate/] },
-  [linePath]: lineScriptExpectations
+  [linePath]: lineScriptExpectations,
+  // The folder carries the line's name now, so nothing flat may survive beside
+  // it — which is also what makes the delegated file scope for `factory/` real.
+  ...partOneAbsent
 };
 
 const contains = (path: string, patterns: RegExp[], excludes: RegExp[] = []): ArtifactState => ({ [path]: { exists: true, contains: patterns, excludes } });
 
+/** Where the moved files land, and what the flat paths must have become. */
+const relocatedFiles: Record<string, string | null> = {
+  [refactorPath]: relocatedRefactor, [validatePath]: relocatedValidate,
+  [doPath]: relocatedDo, [validateShPath]: relocatedValidateSh,
+  "factory/refactor/quality-before.txt": "eslint: 3 findings\nknip: 1 finding\n",
+  ...partOneRemoved
+};
+
 const relocateStep = (): CanonicalPatch => ({
   name: "relocate",
-  files: { [refactorPath]: relocatedRefactor, [validatePath]: relocatedValidate, [doPath]: relocatedDo, [validateShPath]: relocatedValidateSh },
-  message: "I've moved the line into its own folder, dropped the prefixes, and fixed the stale names inside the scripts. Please check it.",
-  preconditions: { [doPath]: { exists: false } },
+  files: relocatedFiles,
+  message: "I've moved the line into its own folder, dropped the prefixes, deleted last week's findings, and fixed the stale names inside the scripts. Please check it.",
+  preconditions: { [partOneDoPath]: { exists: true }, [doPath]: { exists: false } },
   expectedState: {
     [doPath]: { exists: true, contains: [/\(cd \.\.\/\.\.\/calculator/, /quality-before\.txt/], excludes: [/\(cd \.\.\/calculator && /, /refactor-quality-before\.txt/] },
-    [validateShPath]: { exists: true, contains: [/\.\/do\.sh/, /tee validate-findings\.txt/], excludes: [/refactor-validate/] }
+    [validateShPath]: { exists: true, contains: [/\.\/do\.sh/, /tee validate-findings\.txt/], excludes: [/refactor-validate/] },
+    ...partOneAbsent
   },
   checkpoint: "guided-step"
 });
@@ -212,7 +248,7 @@ const runRepair = (broken: CanonicalPatch): CanonicalPatch => ({
 const staleParentDefect = (): CanonicalPatch => ({
   name: "defect", files: { ...relocateStep().files, [doPath]: staleParentDo },
   message: "I've moved the line into its own folder. Please give feedback.",
-  preconditions: { [doPath]: { exists: false } },
+  preconditions: { [partOneDoPath]: { exists: true }, [doPath]: { exists: false } },
   expectedState: contains(doPath, [/\(cd \.\.\/calculator && /], [/\(cd \.\.\/\.\.\/calculator/]),
   checkpoint: "guided-step"
 });
@@ -224,14 +260,41 @@ const staleParentRepair = (broken: CanonicalPatch): CanonicalPatch => ({
   checkpoint: "correction"
 });
 
+/**
+ * The likeliest real mistake in a move lesson: the nested folder is written, but
+ * the flat originals are left where they were. The specification spends four
+ * paragraphs on this, and the delegated file scope for `factory/` is the gate
+ * that catches it.
+ */
+const survivingFlatFilesDefect = (): CanonicalPatch => ({
+  name: "defect",
+  files: { ...Object.fromEntries(Object.entries(relocatedFiles).filter(([, contents]) => contents !== null)), ...partOneSeed },
+  message: "I've copied the line into its own folder. Please give feedback.",
+  preconditions: { [partOneDoPath]: { exists: true }, [doPath]: { exists: false } },
+  expectedState: {
+    [doPath]: { exists: true },
+    [partOneDoPath]: { exists: true },
+    [partOneFindingsPath]: { exists: true }
+  },
+  checkpoint: "guided-step"
+});
+const survivingFlatFilesRepair = (broken: CanonicalPatch): CanonicalPatch => ({
+  name: "repair", files: partOneRemoved,
+  message: "I've deleted the originals the copy left behind. Please check it.",
+  preconditions: broken.expectedState,
+  expectedState: partOneAbsent, checkpoint: "correction"
+});
+
 const unsharedDefect = runDefect("unshared-criteria");
 const noPauseDefect = runDefect("no-pause");
 const staleDefect = staleParentDefect();
+const survivingDefect = survivingFlatFilesDefect();
 
 export const lesson005Scenarios: Scenario[] = [
-  { id: "line-agent-led-happy-path", lesson: "005", mode: "delegate", description: "Delegating learner gives the line its own folder, its criteria, and the script that runs it in order.", patches: [], finalState: lesson005FinalState },
-  { id: "line-learner-led-happy-path", lesson: "005", mode: "hands-on", description: "Hands-on learner relocates the line, writes the criteria, points both prompts at them, and adds the run script, one canonical edit at a time.", patches: [relocateStep(), successStep(), criteriaStep(), runStep()], finalState: lesson005FinalState },
-  { id: "mistake-stale-parent-path-after-the-move", lesson: "005", mode: "mistake", description: "Hands-on learner moves the scripts a directory deeper but leaves them reaching for `../calculator`.", expectedMistake: "The relocated script points at a directory that does not exist, which is what running the move once would have caught.", patches: [staleDefect, staleParentRepair(staleDefect), successStep(), criteriaStep(), runStep()], finalState: lesson005FinalState },
-  { id: "mistake-criteria-not-handed-to-the-doer", lesson: "005", mode: "mistake", description: "Hands-on learner writes the criteria but leaves the run script's doer turn sending only `refactor.md`.", expectedMistake: "The doer's prompt defers to criteria nobody hands it, so the machine is asked to work towards something it never receives.", patches: [relocateStep(), successStep(), criteriaStep(), unsharedDefect, runRepair(unsharedDefect)], finalState: lesson005FinalState },
-  { id: "mistake-line-without-enter-pause", lesson: "005", mode: "mistake", description: "Hands-on learner writes the loop without the Enter pause between iterations.", expectedMistake: "The line never hands control back, so it keeps spending machine turns on the calculator with nobody reading the verdicts.", patches: [relocateStep(), successStep(), criteriaStep(), noPauseDefect, runRepair(noPauseDefect)], finalState: lesson005FinalState }
+  { id: "line-agent-led-happy-path", lesson: "005", mode: "delegate", description: "Delegating learner gives the line its own folder, its criteria, and the script that runs it in order.", seed: partOneSeed, patches: [], finalState: lesson005FinalState },
+  { id: "line-learner-led-happy-path", lesson: "005", mode: "hands-on", description: "Hands-on learner moves the line into its own folder, writes the criteria, points both prompts at them, and adds the run script, one canonical edit at a time.", seed: partOneSeed, patches: [relocateStep(), successStep(), criteriaStep(), runStep()], finalState: lesson005FinalState },
+  { id: "mistake-flat-files-survive-the-move", lesson: "005", mode: "mistake", description: "Hands-on learner copies the line into its own folder instead of moving it, leaving the flat Part 1 files and last week's findings beside it.", expectedMistake: "Two copies of every prompt and script now exist, so an edit to one silently leaves the other behind, and the stale findings file sits where the line writes its own.", seed: partOneSeed, patches: [survivingDefect, survivingFlatFilesRepair(survivingDefect), successStep(), criteriaStep(), runStep()], finalState: lesson005FinalState },
+  { id: "mistake-stale-parent-path-after-the-move", lesson: "005", mode: "mistake", description: "Hands-on learner moves the scripts a directory deeper but leaves them reaching for `../calculator`.", expectedMistake: "The relocated script points at a directory that does not exist, which is what running the move once would have caught.", seed: partOneSeed, patches: [staleDefect, staleParentRepair(staleDefect), successStep(), criteriaStep(), runStep()], finalState: lesson005FinalState },
+  { id: "mistake-criteria-not-handed-to-the-doer", lesson: "005", mode: "mistake", description: "Hands-on learner writes the criteria but leaves the run script's doer turn sending only `refactor.md`.", expectedMistake: "The doer's prompt defers to criteria nobody hands it, so the machine is asked to work towards something it never receives.", seed: partOneSeed, patches: [relocateStep(), successStep(), criteriaStep(), unsharedDefect, runRepair(unsharedDefect)], finalState: lesson005FinalState },
+  { id: "mistake-line-without-enter-pause", lesson: "005", mode: "mistake", description: "Hands-on learner writes the loop without the Enter pause between iterations.", expectedMistake: "The line never hands control back, so it keeps spending machine turns on the calculator with nobody reading the verdicts.", seed: partOneSeed, patches: [relocateStep(), successStep(), criteriaStep(), noPauseDefect, runRepair(noPauseDefect)], finalState: lesson005FinalState }
 ];

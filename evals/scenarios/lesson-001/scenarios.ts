@@ -11,8 +11,12 @@ export type ArtifactState = Record<string, FileExpectation>;
 
 export interface CanonicalPatch {
   name: string;
-  /** The only files the deterministic learner changes in this atomic step. */
-  files: Record<string, string>;
+  /**
+   * The only files the deterministic learner changes in this atomic step. A
+   * `null` value deletes the file, which is what lets a lesson that moves its
+   * artefacts model the move rather than only its destination.
+   */
+  files: Record<string, string | null>;
   message: string;
   /** State that must exist immediately before the learner makes this edit. */
   preconditions: ArtifactState;
@@ -26,10 +30,24 @@ export interface Scenario {
   lesson: "001" | "002" | "003" | "004" | "005" | "006";
   mode: LearnerMode;
   description: string;
+  /**
+   * The defect a `mistake` scenario deliberately commits, and which the tutor
+   * must diagnose. It is only meaningful in that mode: the judge prompt states
+   * it as something present in the transcript, and only `mistake` scenarios
+   * score the `mistakeDiagnosis` dimension. Anything a non-mistake scenario
+   * must *avoid* belongs in `description`, as a requirement the judge can grade.
+   */
   expectedMistake?: string;
+  /**
+   * What earlier lessons left in the workspace before this one begins. The
+   * learner copy is created without any `factory/` files, so a lesson that
+   * builds on Part 1 — or, in lesson 005's case, moves it — has to say what it
+   * is building on. Applied before the session starts, by nobody the tutor sees.
+   */
+  seed?: Record<string, string>;
   /** Ordered, small learner edits. `defect` and `repair` retain stable report names. */
   patches: CanonicalPatch[];
-  /** Final file-specific artifact expectations for deterministic offline gates. */
+  /** Final file-specific artefact expectations for deterministic offline gates. */
   finalState?: ArtifactState;
 }
 
@@ -37,9 +55,11 @@ export interface Scenario {
  * Lesson 001 runs one headless Pi command by hand and creates no file, so these
  * scenarios carry no patches and no `finalState`. Nothing deterministic is left
  * on disk to grade: the model-graded judge reads the transcript against
- * `docs/specs/001-run-an-agent-headlessly.md`, so each description names what
- * the tutor must have done and each `expectedMistake` names the specific,
- * observable way the transcript can fail.
+ * `docs/specs/001-run-an-agent-headlessly.md`. None of them sets
+ * `expectedMistake`: the judge prompt states that field as a defect present in
+ * the transcript, so using it for something the tutor must *avoid* would reward
+ * the transcript that commits it. Prohibitions are stated in `description`
+ * instead, as positive requirements the judge can find or fail to find.
  */
 export const scenarios: Scenario[] = [
   {
@@ -53,16 +73,14 @@ export const scenarios: Scenario[] = [
     id: "headless-run-explains-the-flag-without-borrowing-later-vocabulary",
     lesson: "001",
     mode: "hands-on",
-    description: "The learner asks what `-p` does, and the tutor answers with what this lesson has established: Pi does the job and exits, with no human in its conversation. It names the agent, the harness, the job to be done, and the boundary, and it stops there.",
-    expectedMistake: "The tutor reached for vocabulary the learner has not built yet — doer, validator, machine, assembly line, factory, orchestrator, or a diagram of a loop — to explain a single headless command.",
+    description: "The learner asks what `-p` does, and the tutor answers using only what this lesson has established: Pi does the job and exits, with no human in its conversation. Every term it reaches for is one of the four this lesson names — agent, harness, job to be done, boundary — and it explains the flag without introducing any Part 2 vocabulary (doer, validator, machine, assembly line, factory, orchestrator) and without drawing a loop.",
     patches: []
   },
   {
     id: "headless-run-refuses-to-build-a-file",
     lesson: "001",
     mode: "hands-on",
-    description: "The learner offers to write the command into a script or a prompt file, and the tutor declines, holds the lesson to running commands by hand, and says why the first agent is worth meeting before anything wraps it.",
-    expectedMistake: "The tutor let lesson 001 create an artefact, so the learner started building before they had run one agent and read what came back.",
+    description: "The learner offers to write the command into a script or a prompt file, and the tutor declines, keeps the lesson to commands run by hand, and says why meeting one agent matters before anything wraps it. The workspace still holds no file the learner created when the lesson ends.",
     patches: []
   }
 ];

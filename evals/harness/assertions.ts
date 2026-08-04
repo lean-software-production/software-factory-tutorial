@@ -78,8 +78,9 @@ const DELEGATED_SCOPE: Record<string, DirectoryScope[] | undefined> = {
   // Lesson 004 adds no file of its own, so it inherits the previous lesson's scope.
   "004": [{ directory: "factory", allowed: ["refactor-do.sh", "refactor-quality-before.txt", "refactor-validate-findings.txt", "refactor-validate.md", "refactor-validate.sh", "refactor.md"] }],
   // Lesson 005 moves the whole line into `factory/refactor/`, so the parent
-  // directory must hold nothing but that folder — the stale findings file the
-  // lesson asks the learner to delete would show up here.
+  // directory must hold nothing but that folder. Its scenarios seed the flat
+  // Part 1 files, so a learner who copied instead of moving — or who kept the
+  // stale findings file the lesson says to delete — is caught right here.
   "005": [
     { directory: "factory", allowed: ["refactor"] },
     { directory: "factory/refactor", allowed: ["do.sh", "quality-before.txt", "refactor.md", "run.sh", "success.md", "validate-findings.txt", "validate.md", "validate.sh"] }

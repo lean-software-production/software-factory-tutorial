@@ -23,12 +23,24 @@ export async function createWorkspace(repositoryRoot: string, scenarioId: string
   return workspace;
 }
 
-export async function applyPatch(workspace: string, files: Record<string, string>): Promise<void> {
+export async function applyPatch(workspace: string, files: Record<string, string | null>): Promise<void> {
   await Promise.all(Object.entries(files).map(async ([path, content]) => {
     const target = join(workspace, path);
+    // A null deletes: a lesson that moves its artefacts has to be able to say
+    // that the old path is gone, not merely that the new one has arrived.
+    if (content === null) { await rm(target, { force: true }); return; }
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, content, "utf8");
   }));
+}
+
+/**
+ * Put what earlier lessons left behind into the workspace before the session
+ * starts. `createWorkspace` copies no `factory/` file, so without this a lesson
+ * that builds on Part 1 would ask its learner to extend, or move, nothing.
+ */
+export async function seedWorkspace(workspace: string, seed: Record<string, string> | undefined): Promise<void> {
+  if (seed) await applyPatch(workspace, seed);
 }
 
 function matches(pattern: RegExp, content: string): boolean {
@@ -37,9 +49,10 @@ function matches(pattern: RegExp, content: string): boolean {
 }
 
 /** Check file-specific state without treating a healthy file as proof of a defect elsewhere. */
-export function matchesArtifactState(files: Record<string, string>, expected: ArtifactState): boolean {
+export function matchesArtifactState(files: Record<string, string | null>, expected: ArtifactState): boolean {
   return Object.entries(expected).every(([path, expectation]) => {
-    const exists = Object.hasOwn(files, path);
+    // A null is the same absence a patch's null writes: the file is not there.
+    const exists = Object.hasOwn(files, path) && files[path] !== null;
     if (expectation.exists !== undefined && expectation.exists !== exists) return false;
     if (!exists) return !expectation.contains?.length && !expectation.excludes?.length;
     const content = files[path] ?? "";

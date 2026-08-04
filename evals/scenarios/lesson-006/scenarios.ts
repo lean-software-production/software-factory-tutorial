@@ -54,17 +54,12 @@ export const lesson006FinalState: ArtifactState = {
 const contains = (path: string, patterns: RegExp[], excludes: RegExp[] = []): ArtifactState => ({ [path]: { exists: true, contains: patterns, excludes } });
 
 /** What lesson 005 left behind: the whole line, ordered but with nothing reading its verdicts. */
-const lineCarriedForward = (): CanonicalPatch => ({
-  name: "carry-forward",
-  files: {
-    [refactorPath]: refactor, [validatePath]: validate, [successPath]: success,
-    [doPath]: correctDo, [validateShPath]: correctValidateSh, [linePath]: correctLineRun
-  },
-  message: "I've brought the assembly line forward from the previous lesson. Please check it.",
-  preconditions: { [linePath]: { exists: false } },
-  expectedState: { [successPath]: { exists: true }, [linePath]: { exists: true, contains: [/while true; do/], excludes: [/repair\.md/] } },
-  checkpoint: "guided-step"
-});
+export const lesson005Seed: Record<string, string> = {
+  [refactorPath]: refactor, [validatePath]: validate, [successPath]: success,
+  [doPath]: correctDo, [validateShPath]: correctValidateSh, [linePath]: correctLineRun,
+  "factory/refactor/quality-before.txt": "eslint: 3 findings\nknip: 1 finding\n"
+};
+
 const repairPromptStep = (): CanonicalPatch => ({
   name: "repair-prompt", files: { [repairPath]: repair },
   message: "I've written the repair prompt. Please check it.",
@@ -105,9 +100,9 @@ const findinglessDefect = branchDefect("repair-without-findings");
 const passingFallbackDefect = branchDefect("unreadable-verdict-passes");
 
 export const lesson006Scenarios: Scenario[] = [
-  { id: "routing-agent-led-happy-path", lesson: "006", mode: "delegate", description: "Delegating learner adds the repair prompt and the verdict branch that selects it.", patches: [], finalState: lesson006FinalState },
-  { id: "routing-learner-led-happy-path", lesson: "006", mode: "hands-on", description: "Hands-on learner writes the repair prompt, then branches the line on the verdict, one canonical edit at a time.", patches: [lineCarriedForward(), repairPromptStep(), branchStep()], finalState: lesson006FinalState },
-  { id: "mistake-unanchored-verdict-parse", lesson: "006", mode: "mistake", description: "Hands-on learner drops the `^` from the verdict pattern.", expectedMistake: "The pattern now matches a verdict quoted anywhere in a sentence, so a validator that recites its own format above a failing verdict is read as a pass, and the repair the file below it asked for never runs.", patches: [lineCarriedForward(), repairPromptStep(), unanchoredDefect, branchRepair(unanchoredDefect)], finalState: lesson006FinalState },
-  { id: "mistake-repair-without-findings", lesson: "006", mode: "mistake", description: "Hands-on learner invokes the repair machine without appending the validator's findings.", expectedMistake: "The repair machine is asked to answer findings it was never handed, so it has nothing to repair and falls back to guessing.", patches: [lineCarriedForward(), repairPromptStep(), findinglessDefect, branchRepair(findinglessDefect)], finalState: lesson006FinalState },
-  { id: "mistake-unreadable-verdict-treated-as-pass", lesson: "006", mode: "mistake", description: "Hands-on learner makes an unreadable or missing verdict fall back to `VERDICT: PASS`.", expectedMistake: "The line now reads 'I could not tell' as 'everything is fine' and quietly refactors on top of a change nobody checked; the opposite fallback costs at most one repair turn that was not needed.", patches: [lineCarriedForward(), repairPromptStep(), passingFallbackDefect, branchRepair(passingFallbackDefect)], finalState: lesson006FinalState }
+  { id: "routing-agent-led-happy-path", lesson: "006", mode: "delegate", description: "Delegating learner adds the repair prompt and the verdict branch that selects it.", seed: lesson005Seed, patches: [], finalState: lesson006FinalState },
+  { id: "routing-learner-led-happy-path", lesson: "006", mode: "hands-on", description: "Hands-on learner writes the repair prompt, then branches the line on the verdict, one canonical edit at a time.", seed: lesson005Seed, patches: [repairPromptStep(), branchStep()], finalState: lesson006FinalState },
+  { id: "mistake-unanchored-verdict-parse", lesson: "006", mode: "mistake", description: "Hands-on learner drops the `^` from the verdict pattern.", expectedMistake: "The pattern now matches a verdict quoted anywhere in a sentence, so a validator that recites its own format above a failing verdict is read as a pass, and the repair the file below it asked for never runs.", seed: lesson005Seed, patches: [repairPromptStep(), unanchoredDefect, branchRepair(unanchoredDefect)], finalState: lesson006FinalState },
+  { id: "mistake-repair-without-findings", lesson: "006", mode: "mistake", description: "Hands-on learner invokes the repair machine without appending the validator's findings.", expectedMistake: "The repair machine is asked to answer findings it was never handed, so it has nothing to repair and falls back to guessing.", seed: lesson005Seed, patches: [repairPromptStep(), findinglessDefect, branchRepair(findinglessDefect)], finalState: lesson006FinalState },
+  { id: "mistake-unreadable-verdict-treated-as-pass", lesson: "006", mode: "mistake", description: "Hands-on learner makes an unreadable or missing verdict fall back to `VERDICT: PASS`.", expectedMistake: "The line now reads 'I could not tell' as 'everything is fine' and quietly refactors on top of a change nobody checked; the opposite fallback costs at most one repair turn that was not needed.", seed: lesson005Seed, patches: [repairPromptStep(), passingFallbackDefect, branchRepair(passingFallbackDefect)], finalState: lesson006FinalState }
 ];

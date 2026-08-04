@@ -36,7 +36,9 @@ const editableValidateRun = correctValidateRun.replace("read,grep,find,ls,bash",
 const unguardedValidateRun = correctValidateRun.replace(/if \[ ! -f refactor-quality-before\.txt \]; then\n.*\n.*\nfi\n/, "");
 
 export const lesson003FinalState: ArtifactState = {
-  [validatePath]: { exists: true, contains: [/quality\.mjs/, /baseline/, /VERDICT: PASS/, /EVIDENCE/], excludes: [/edit files/i] },
+  // Lesson 006's anchored `grep` rests on the first-non-empty-line promise, so
+  // the prompt that makes it is asserted here rather than assumed downstream.
+  [validatePath]: { exists: true, contains: [/quality\.mjs/, /baseline/, /VERDICT: PASS/, /VERDICT: FAIL/, /first non-empty line/i, /EVIDENCE/], excludes: [/edit files/i] },
   [validateRunPath]: {
     exists: true,
     contains: [/Starting validation/, /--tools read,grep,find,ls,bash -p/, /tee refactor-validate-findings\.txt/, /refactor-quality-before\.txt/],
@@ -44,17 +46,17 @@ export const lesson003FinalState: ArtifactState = {
   }
 };
 
-/** What lesson 002 left behind, which this lesson keeps and validates against. */
+/**
+ * What lesson 002 left behind. The specification opens by telling the learner to
+ * keep it, so it is already in the workspace rather than something they retype.
+ */
+export const lesson002Seed: Record<string, string> = { [refactorPath]: refactor, [doerRunPath]: correctRun };
+
 const doerCarriedForward: ArtifactState = {
   [refactorPath]: { exists: true },
   [doerRunPath]: { exists: true, contains: [/Recording quality baseline/] }
 };
 
-const carryForward = (): CanonicalPatch => ({
-  name: "carry-forward", files: { [refactorPath]: refactor, [doerRunPath]: correctRun },
-  message: "I've brought the doer forward from the previous lesson. Please check it.",
-  preconditions: { [refactorPath]: { exists: false } }, expectedState: doerCarriedForward, checkpoint: "guided-step"
-});
 const promptStep = (): CanonicalPatch => ({
   name: "prompt", files: { [validatePath]: validate },
   message: "I've written the validator prompt. Please check it.",
@@ -87,8 +89,8 @@ const editableDefect = defect("editable-validator");
 const unguardedDefect = defect("missing-baseline-guard");
 
 export const lesson003Scenarios: Scenario[] = [
-  { id: "validator-agent-led-happy-path", lesson: "003", mode: "delegate", description: "Delegating learner completes the validator prompt and its invocation.", patches: [], finalState: lesson003FinalState },
-  { id: "validator-learner-led-happy-path", lesson: "003", mode: "hands-on", description: "Hands-on learner writes the validator prompt and script one canonical edit at a time.", patches: [carryForward(), promptStep(), invokeStep()], finalState: lesson003FinalState },
-  { id: "mistake-validator-can-edit", lesson: "003", mode: "mistake", description: "Hands-on learner gives the validator edit and write tools.", expectedMistake: "The validator can repair what it reports on, so its evidence is no longer independent.", patches: [carryForward(), promptStep(), editableDefect, repair(editableDefect)], finalState: lesson003FinalState },
-  { id: "mistake-missing-baseline-guard", lesson: "003", mode: "mistake", description: "Hands-on learner omits the missing-baseline guard.", expectedMistake: "With no baseline on disk the validator is asked for a comparison it cannot make, and reports an improvement it never measured.", patches: [carryForward(), promptStep(), unguardedDefect, repair(unguardedDefect)], finalState: lesson003FinalState }
+  { id: "validator-agent-led-happy-path", lesson: "003", mode: "delegate", description: "Delegating learner completes the validator prompt and its invocation.", seed: lesson002Seed, patches: [], finalState: lesson003FinalState },
+  { id: "validator-learner-led-happy-path", lesson: "003", mode: "hands-on", description: "Hands-on learner writes the validator prompt and script one canonical edit at a time.", seed: lesson002Seed, patches: [promptStep(), invokeStep()], finalState: lesson003FinalState },
+  { id: "mistake-validator-can-edit", lesson: "003", mode: "mistake", description: "Hands-on learner gives the validator edit and write tools.", expectedMistake: "The validator can repair what it reports on, so its evidence is no longer independent.", seed: lesson002Seed, patches: [promptStep(), editableDefect, repair(editableDefect)], finalState: lesson003FinalState },
+  { id: "mistake-missing-baseline-guard", lesson: "003", mode: "mistake", description: "Hands-on learner omits the missing-baseline guard.", expectedMistake: "With no baseline on disk the validator is asked for a comparison it cannot make, and reports an improvement it never measured.", seed: lesson002Seed, patches: [promptStep(), unguardedDefect, repair(unguardedDefect)], finalState: lesson003FinalState }
 ];

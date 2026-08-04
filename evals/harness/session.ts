@@ -4,7 +4,7 @@ import { loadLesson } from "../../tutorial-engine/src/lesson/load.js";
 import { startLocalServer, type StartedServer } from "../../tutorial-engine/src/server/local-server.js";
 import { parseTutorialEvent, serializeBrowserMessage, type BrowserMessage, type TutorialEvent } from "../../tutorial-engine/src/protocol/events.js";
 import type { CanonicalPatch, Scenario } from "../scenarios/lesson-001/scenarios.js";
-import { activateLesson, applyCanonicalPatch, scrubProcessEnvironment, snapshot } from "./workspace.js";
+import { activateLesson, applyCanonicalPatch, scrubProcessEnvironment, seedWorkspace, snapshot } from "./workspace.js";
 
 const FIRST_OUTPUT_TIMEOUT = 90_000;
 const STEP_TIMEOUT = 120_000;
@@ -237,6 +237,9 @@ export async function runPersonaSession(options: { repositoryRoot: string; works
     // `loadLesson` deliberately chooses the first Todo row, so activate the
     // requested lesson in the temporary learner copy before creating the engine.
     await activateLesson(options.workspace, options.scenario.lesson);
+    // Earlier lessons' artefacts arrive before the engine starts, so the tutor
+    // finds the workspace the learner would actually have carried forward.
+    await seedWorkspace(options.workspace, options.scenario.seed);
     const loaded = await loadLesson(options.workspace);
     server = await startLocalServer({ lesson: loaded.definition, workspace: options.workspace, webRoot: options.webRoot, progress: loaded.progress });
   } catch (error) {

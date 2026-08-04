@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { deterministicGate } from "../harness/assertions.js";
-import { activateLesson, applyCanonicalPatch, matchesArtifactState } from "../harness/workspace.js";
+import { activateLesson, applyCanonicalPatch, matchesArtifactState, seedWorkspace } from "../harness/workspace.js";
 import { advanceHandsOnDriver, beginHandsOnDriver, EvalTimeoutError, foldSnapshotEvents, selectDelegationChoice } from "../harness/session.js";
 import { shouldRetry } from "../harness/retry.js";
 import { scenarios, type Scenario } from "../scenarios/lesson-001/scenarios.js";
@@ -44,7 +44,8 @@ describe("live-eval regression coverage", () => {
 
     const workspace = await mkdtemp(join(tmpdir(), "eval-gate-"));
     try {
-      const finalFiles = Object.assign({}, ...scenario.patches.map((patch) => patch.files)) as Record<string, string>;
+      await seedWorkspace(workspace, scenario.seed);
+      const finalFiles = Object.assign({}, ...scenario.patches.map((patch) => patch.files)) as Record<string, string | null>;
       await applyCanonicalPatch(workspace, { name: "final", files: finalFiles, preconditions: {}, expectedState: scenario.finalState ?? {} });
       const gate = await deterministicGate(scenario, workspace, traceFor(scenario));
       expect(gate.assertions.find((assertion) => assertion.name === "defect snapshot")?.passed).toBe(true);
@@ -82,6 +83,7 @@ describe("live-eval regression coverage", () => {
     // preconditions, so a stale ordering would otherwise pass silently.
     const workspace = await mkdtemp(join(tmpdir(), "eval-chain-"));
     try {
+      await seedWorkspace(workspace, scenario.seed);
       for (const patch of scenario.patches) await applyCanonicalPatch(workspace, patch);
       if (!scenario.finalState) return;
       const files: Record<string, string> = {};
@@ -91,6 +93,59 @@ describe("live-eval regression coverage", () => {
       expect(matchesArtifactState(files, scenario.finalState)).toBe(true);
     } finally { await rm(workspace, { recursive: true, force: true }); }
   });
+
+  it.each(allScenarios.filter((scenario) => scenario.mode === "delegate"))("lets $id reach its final state from what its lesson is seeded with", async (scenario) => {
+    // A delegate scenario carries no patches: the tutor builds the artefacts
+    // live. Offline, the same lesson's hands-on chain is the canonical route,
+    // so seeding and walking it proves the declared finalState is reachable —
+    // and that the delegated file scope permits exactly what the route leaves.
+    const route = allScenarios.find((item) => item.lesson === scenario.lesson && item.mode === "hands-on" && item.patches.length);
+    expect(route, `lesson ${scenario.lesson} has no hands-on route`).toBeDefined();
+    expect(route!.seed, `lesson ${scenario.lesson} seeds its modes differently`).toEqual(scenario.seed);
+    const workspace = await mkdtemp(join(tmpdir(), "eval-delegate-"));
+    try {
+      await seedWorkspace(workspace, scenario.seed);
+      for (const patch of route!.patches) await applyCanonicalPatch(workspace, patch);
+      const gate = await deterministicGate(scenario, workspace, emptyTrace());
+      const failures = gate.assertions.filter((assertion) => !assertion.passed);
+      expect(failures.map((assertion) => `${assertion.name}: ${assertion.detail}`)).toEqual([]);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("seeds every lesson that builds on an earlier one, and only those", () => {
+    // Lessons 001 and 002 start from nothing; 004 builds nothing; 003, 005 and
+    // 006 all extend or move what Part 1 left behind and must say so.
+    for (const scenario of allScenarios) {
+      const expected = ["003", "005", "006"].includes(scenario.lesson);
+      expect(Boolean(scenario.seed && Object.keys(scenario.seed).length), `${scenario.id} seed`).toBe(expected);
+    }
+  });
+
+  it("states expectedMistake only where the judge scores it", () => {
+    // judge.ts prints the field as a defect present in the transcript, and only
+    // mistake scenarios score mistakeDiagnosis. On any other mode it would
+    // reward the transcript that commits the anti-pattern.
+    for (const scenario of allScenarios) {
+      expect(Boolean(scenario.expectedMistake), `${scenario.id} expectedMistake`).toBe(scenario.mode === "mistake");
+    }
+  });
+
+  it("catches a lesson-005 learner who copied the line instead of moving it", async () => {
+    const copied = allScenarios.find((scenario) => scenario.id === "mistake-flat-files-survive-the-move")!;
+    const defect = copied.patches.find((patch) => patch.name === "defect")!;
+    const workspace = await mkdtemp(join(tmpdir(), "eval-copy-"));
+    try {
+      await seedWorkspace(workspace, copied.seed);
+      await applyCanonicalPatch(workspace, defect);
+      const gate = await deterministicGate({ ...copied, mode: "delegate" }, workspace, emptyTrace());
+      const scope = gate.assertions.filter((assertion) => assertion.name === "delegated file scope");
+      expect(scope.some((assertion) => !assertion.passed && assertion.detail.includes("refactor-do.sh"))).toBe(true);
+      // And the repair puts it right.
+      await applyCanonicalPatch(workspace, copied.patches.find((patch) => patch.name === "repair")!);
+      const repaired = await deterministicGate({ ...copied, mode: "delegate" }, workspace, emptyTrace());
+      expect(repaired.assertions.filter((assertion) => assertion.name === "delegated file scope").every((assertion) => assertion.passed)).toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
 
   it("keeps success.md a finalState key of every lesson-005 scenario that has one", () => {
     // The gate reads the criteria out of the files it loaded from finalState's
@@ -102,18 +157,23 @@ describe("live-eval regression coverage", () => {
 
   it("activates the declared lesson only in the disposable workspace", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "eval-lesson-"));
-    const ledger = "| Iteration | Goal | Status |\n| --- | --- | --- |\n| [001](001-invoke-a-doer.md) | One | Todo |\n| [002](002-review-a-doer.md) | Two | Todo |\n";
+    const ledger = [
+      "## Part 1 — The validation loop", "",
+      "| Lesson | Goal | Status |", "| --- | --- | --- |",
+      "| [001](001-run-an-agent-headlessly.md) | Run an agent headlessly | Todo |",
+      "| [002](002-build-a-doer.md) | Build a doer | Todo |", ""
+    ].join("\n");
     await writeFile(join(workspace, "README.md"), "# Test\n");
     await (await import("node:fs/promises")).mkdir(join(workspace, "docs/specs"), { recursive: true });
     await writeFile(join(workspace, "docs/specs/README.md"), ledger);
     try {
       await activateLesson(workspace, "002");
       const activated = await readFile(join(workspace, "docs/specs/README.md"), "utf8");
-      expect(activated).toContain("[001](001-invoke-a-doer.md) | One | Done");
-      expect(activated).toContain("[002](002-review-a-doer.md) | Two | Todo");
-      await writeFile(join(workspace, "docs/specs/001-invoke-a-doer.md"), "obsolete inactive spec", "utf8");
-      await writeFile(join(workspace, "docs/specs/002-review-a-doer.md"), "# Active review spec", "utf8");
-      await expect(loadActiveSpec(workspace, "002")).resolves.toBe("# Active review spec");
+      expect(activated).toContain("[001](001-run-an-agent-headlessly.md) | Run an agent headlessly | Done");
+      expect(activated).toContain("[002](002-build-a-doer.md) | Build a doer | Todo");
+      await writeFile(join(workspace, "docs/specs/001-run-an-agent-headlessly.md"), "obsolete inactive spec", "utf8");
+      await writeFile(join(workspace, "docs/specs/002-build-a-doer.md"), "# Active doer spec", "utf8");
+      await expect(loadActiveSpec(workspace, "002")).resolves.toBe("# Active doer spec");
       expect((await loadLesson(workspace)).progress.find((item) => item.state === "current")?.id).toBe("002");
     } finally {
       await rm(workspace, { recursive: true, force: true });
