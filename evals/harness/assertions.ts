@@ -91,14 +91,16 @@ export async function deterministicGate(scenario: Scenario, workspace: string, t
   try {
     const factory = await readFile(join(workspace, "factory/run.sh"), "utf8");
     // Task 8 replaces this call site with the per-lesson script paths and
-    // prompt names. Until then it seeds what the previous fixed harness seeded.
+    // prompt names. Until then it seeds what the previous fixed harness seeded,
+    // with the stub's new `validate prompt` trigger carried alongside the old
+    // wording so the saved-verdict branch keeps grading real learner artefacts.
     stub = await runFactoryWithStubs({
       scriptPath: "factory/run.sh",
       script: factory,
       files: {
         "factory/refactor.md": "refactor prompt\n",
         "factory/success.md": "success prompt\n",
-        "factory/review.md": "review prompt\n",
+        "factory/review.md": "review prompt\nvalidate prompt\n",
         "factory/repair.md": "repair prompt\n"
       },
       validatorOutputs: scenario.lesson === "004" ? ["VERDICT: FAIL\n\nFINDINGS:\n- [FAIL] passes tests: intentional failure\n", "VERDICT: PASS\n\nFINDINGS:\n- [PASS] passes tests: repaired\n"] : undefined,

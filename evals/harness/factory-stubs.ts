@@ -21,6 +21,8 @@ export interface FactoryStubResult {
   syntaxPassed: boolean;
   invocations: StubInvocation[];
   paused: boolean;
+  /** Model turns spent before Enter was written; every turn, for a script that never pauses. */
+  callsBeforeEnter: number;
   output: string;
   reportBeforeEnter?: string;
   reportAfterEnter?: string;
@@ -44,8 +46,13 @@ function maxPiPerIteration(script: string): number {
   return (script.match(/(^|[\s(;&|])pi\s/g) ?? []).length;
 }
 
-async function countInvocations(log: string): Promise<number> {
-  try { return (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).length; } catch { return 0; }
+async function readInvocations(log: string): Promise<StubInvocation[]> {
+  try { return (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as StubInvocation); } catch { return []; }
+}
+
+/** Counts model turns only, so the tally and `maxPiPerIteration` measure the same thing. */
+async function countPiTurns(log: string): Promise<number> {
+  return (await readInvocations(log)).filter((entry) => entry.command === "pi").length;
 }
 
 /**
@@ -89,7 +96,7 @@ if (!isNpm && input.includes('validate prompt')) {
   const syntaxPassed = await new Promise<boolean>((resolve) => {
     const child = spawn("bash", ["-n", scriptFile]); child.once("close", (code) => resolve(code === 0));
   });
-  if (!syntaxPassed) { await rm(root, { recursive: true, force: true }); return { syntaxPassed, invocations: [], paused: false, output: "", exitCode: 2 }; }
+  if (!syntaxPassed) { await rm(root, { recursive: true, force: true }); return { syntaxPassed, invocations: [], paused: false, callsBeforeEnter: 0, output: "", exitCode: 2 }; }
 
   const child = spawn("bash", [scriptFile], {
     cwd: dirname(scriptFile),
@@ -105,19 +112,22 @@ if (!isNpm && input.includes('validate prompt')) {
   let callsBeforeEnter = 0;
   let waitingAtEnter = false;
   if (pausing) {
-    // Bash does not echo `read -p` when stdin is a pipe, so the pause is
-    // observed rather than announced: wait until the invocation log has stopped
-    // growing for long enough that the script can only be blocked on the Enter.
+    // Bash does not echo `read -p` when stdin is a pipe, so a pause is observed
+    // rather than announced. Settling is the first half of the evidence: wait
+    // until the turn log has stopped growing for long enough that the script is
+    // unlikely to be mid-iteration. Mid-iteration gaps are one process start,
+    // well under this window, but it remains a threshold rather than a proof —
+    // the Enter below is what confirms it.
     let settledPolls = 0;
     for (let tries = 0; tries < 240 && !exited; tries++) {
-      const count = await countInvocations(log);
+      const count = await countPiTurns(log);
       settledPolls = count === callsBeforeEnter ? settledPolls + 1 : 0;
       callsBeforeEnter = count;
-      if (count > 0 && settledPolls >= 12) break;
+      if (settledPolls >= 12) break;
       await wait(25);
     }
-    callsBeforeEnter = await countInvocations(log);
-    // Recorded before the Enter is written, because the script exits soon after.
+    callsBeforeEnter = await countPiTurns(log);
+    // Recorded before the Enter is written, because the script moves on after.
     waitingAtEnter = !exited;
   } else {
     await new Promise<void>((resolve) => {
@@ -131,11 +141,19 @@ if (!isNpm && input.includes('validate prompt')) {
     try { reportBeforeEnter = await readFile(join(root, options.reportPath), "utf8"); } catch { /* absent until the tee runs */ }
   }
 
+  // The second half of the evidence: only a process actually blocked on `read`
+  // resumes when Enter arrives. Spending another turn or finishing is that
+  // acknowledgement; a script that had merely gone quiet does neither.
+  let resumedOnEnter = false;
   if (pausing) {
     child.stdin.write("\n");
-    await wait(200);
-    child.kill("SIGTERM");
+    for (let tries = 0; tries < 60; tries++) {
+      if (exited) { resumedOnEnter = waitingAtEnter; break; }
+      if (await countPiTurns(log) > callsBeforeEnter) { resumedOnEnter = true; break; }
+      await wait(25);
+    }
   }
+  child.kill("SIGTERM");
   const exitCode = await new Promise<number | null>((resolve) => {
     if (child.exitCode !== null) resolve(child.exitCode);
     else child.once("close", (code) => resolve(code));
@@ -144,9 +162,9 @@ if (!isNpm && input.includes('validate prompt')) {
   if (options.reportPath) {
     try { reportAfterEnter = await readFile(join(root, options.reportPath), "utf8"); } catch { /* absent until the tee runs */ }
   }
-  let invocations: StubInvocation[] = [];
-  try { invocations = (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as StubInvocation); } catch { /* no invocation is assertion evidence */ }
-  const paused = waitingAtEnter && callsBeforeEnter > 0 && callsBeforeEnter <= maxPiPerIteration(options.script);
+  const invocations = await readInvocations(log);
+  if (!pausing) callsBeforeEnter = invocations.filter((entry) => entry.command === "pi").length;
+  const paused = waitingAtEnter && resumedOnEnter && callsBeforeEnter <= maxPiPerIteration(options.script);
   await rm(root, { recursive: true, force: true });
-  return { syntaxPassed, invocations, paused, output, reportBeforeEnter, reportAfterEnter, exitCode };
+  return { syntaxPassed, invocations, paused, callsBeforeEnter, output, reportBeforeEnter, reportAfterEnter, exitCode };
 }
