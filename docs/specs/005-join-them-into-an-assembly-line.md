@@ -192,12 +192,22 @@ Verify by hand that:
 
 ## Pressure test
 
-The line runs in order, and it stops for the learner between iterations. What it does not do is
-anything at all with what the validator found.
+The line runs in order, and it is about to be left alone. Before that happens, look at what its
+independence actually rests on.
 
-Watch a `FAIL` go past and then press Enter. The next iteration is identical to the one that would
-have followed a `PASS`: same prompt, same criteria, same job. The findings were written to a file and
-read by nobody.
+The validator does not write to files because `validate.md` tells it not to. It holds the `bash` tool.
+Every other boundary in this tutorial was drawn with `--tools` — the doer cannot run a shell because it
+was never given one — and this one was drawn with a sentence.
 
-That is lesson 004's copy-paste — the step the learner did with their own hands — still undone. The
-next lesson gives it to the line.
+Have the learner check rather than take it on faith. Add one line to `validate.md` asking the validator
+to create `calculator/proof.txt`, run `./factory/refactor/validate.sh`, and then look for the file:
+
+```sh
+ls calculator/proof.txt
+```
+
+It is there. Delete it and remove the line again.
+
+Nothing went wrong, because a person was reading every verdict and would have noticed. That person is
+about to stop reading them. Independence that rests on a prompt is a promise the machine makes to
+itself, and the next lesson replaces it with one the machine cannot break.

@@ -14,11 +14,18 @@ import { lesson003Scenarios } from "./scenarios/lesson-003/scenarios.js";
 import { lesson004Scenarios } from "./scenarios/lesson-004/scenarios.js";
 import { lesson005Scenarios } from "./scenarios/lesson-005/scenarios.js";
 import { lesson006Scenarios } from "./scenarios/lesson-006/scenarios.js";
+import { lesson007Scenarios } from "./scenarios/lesson-007/scenarios.js";
+import { lesson008Scenarios } from "./scenarios/lesson-008/scenarios.js";
+import { lesson009Scenarios } from "./scenarios/lesson-009/scenarios.js";
+import { lesson010Scenarios } from "./scenarios/lesson-010/scenarios.js";
+import { lesson011Scenarios } from "./scenarios/lesson-011/scenarios.js";
+import { lesson012Scenarios } from "./scenarios/lesson-012/scenarios.js";
+import { lesson013Scenarios } from "./scenarios/lesson-013/scenarios.js";
 import type { Scenario } from "./scenarios/lesson-001/scenarios.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const reports = join(root, "evals/reports");
-const allScenarios = [...scenarios, ...lesson002Scenarios, ...lesson003Scenarios, ...lesson004Scenarios, ...lesson005Scenarios, ...lesson006Scenarios];
+const allScenarios = [...scenarios, ...lesson002Scenarios, ...lesson003Scenarios, ...lesson004Scenarios, ...lesson005Scenarios, ...lesson006Scenarios, ...lesson007Scenarios, ...lesson008Scenarios, ...lesson009Scenarios, ...lesson010Scenarios, ...lesson011Scenarios, ...lesson012Scenarios, ...lesson013Scenarios];
 
 function usage(): void {
   console.log(`Live tutorial evals (real model calls; not part of npm test)

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-export interface StubInvocation { command: "pi" | "npm"; args: string[]; cwd: string; stdin: string; }
+export interface StubInvocation { command: "pi" | "npm" | "git"; args: string[]; cwd: string; stdin: string; }
 
 export interface FactoryStubOptions {
   /** Workspace-relative path of the script to run, e.g. "factory/refactor-do.sh". */
@@ -15,6 +15,8 @@ export interface FactoryStubOptions {
   validatorOutputs?: string[];
   /** Workspace-relative file whose contents are captured before and after Enter. */
   reportPath?: string;
+  /** Arguments the script is invoked with, for the operating scripts that take a line name. */
+  args?: string[];
 }
 
 export interface FactoryStubResult {
@@ -78,27 +80,87 @@ export async function runFactoryWithStubs(options: FactoryStubOptions): Promise<
     await writeFile(file, contents);
   }
 
+  // One program stands in for every external command the lessons call. `git`
+  // matters from lesson 007, where the commit station is the first thing on the
+  // line to write something the next run can still see; `--mode json` and
+  // `--mode rpc` matter from 009 and 012, where the line stops reading prose.
   const stub = `#!/usr/bin/env node
 const fs = require('fs');
-const isNpm = process.argv[1].endsWith('npm');
-const input = isNpm ? '' : fs.readFileSync(0, 'utf8');
-const entry = {command: isNpm ? 'npm' : 'pi', args: process.argv.slice(2), cwd: process.cwd(), stdin: input};
-fs.appendFileSync(process.env.EVAL_STUB_LOG, JSON.stringify(entry) + '\\n');
-if (!isNpm && input.includes('validate prompt')) {
-  const outputs = JSON.parse(process.env.EVAL_VALIDATOR_OUTPUTS || '[]');
-  const lines = fs.readFileSync(process.env.EVAL_STUB_LOG, 'utf8').split('\\n').filter(Boolean).map(line => JSON.parse(line));
-  const index = lines.filter(line => line.command === 'pi' && line.stdin.includes('validate prompt')).length - 1;
-  process.stdout.write(outputs[index] || outputs[outputs.length - 1] || 'VERDICT: PASS\\n');
+const name = process.argv[1].split('/').pop();
+const args = process.argv.slice(2);
+const record = (stdin) => fs.appendFileSync(process.env.EVAL_STUB_LOG,
+  JSON.stringify({command: name, args, cwd: process.cwd(), stdin}) + '\\n');
+
+if (name === 'npm') { record(''); process.exit(0); }
+if (name === 'git') {
+  record('');
+  if (args[0] === 'diff') process.stdout.write('diff --git a/src/calc.ts b/src/calc.ts\\n+ stub change\\n');
+  process.exit(0);
 }
+
+const modeAt = args.indexOf('--mode');
+const mode = modeAt >= 0 ? args[modeAt + 1] : 'text';
+
+function reply(input) {
+  if (input.includes('validate prompt')) {
+    const outputs = JSON.parse(process.env.EVAL_VALIDATOR_OUTPUTS || '[]');
+    const lines = fs.readFileSync(process.env.EVAL_STUB_LOG, 'utf8').split('\\n').filter(Boolean).map(line => JSON.parse(line));
+    const index = lines.filter(line => line.command === 'pi' && line.stdin.includes('validate prompt')).length - 1;
+    return outputs[index] || outputs[outputs.length - 1] || 'VERDICT: PASS\\n';
+  }
+  if (input.includes('commit prompt')) return 'Extract the duplicated formatting branch\\n\\nMoves one copy into the formatter, towards no duplication.\\n';
+  return '';
+}
+
+/** The subset of Pi's event stream the lessons actually read back. */
+function emit(text) {
+  const message = {role: 'assistant', content: [{type: 'text', text}],
+    usage: {input: 100, output: 50, cost: {input: 0.0003, output: 0.0007, total: 0.001}}};
+  const write = (event) => process.stdout.write(JSON.stringify(event) + '\\n');
+  write({type: 'agent_start'});
+  write({type: 'tool_execution_start', toolCallId: 'call_1', toolName: 'read', args: {path: 'src/calc.ts'}});
+  write({type: 'message_update', message, assistantMessageEvent: {type: 'text_delta', contentIndex: 0, delta: text}});
+  write({type: 'message_end', message});
+  write({type: 'agent_end', messages: [message]});
+}
+
+if (mode === 'rpc') {
+  // stdin is a fifo held open by another process, so it cannot be read to EOF.
+  let buffer = '';
+  process.stdin.on('data', (chunk) => {
+    buffer += chunk;
+    let index;
+    while ((index = buffer.indexOf('\\n')) >= 0) {
+      const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);
+      if (!line.trim()) continue;
+      let command; try { command = JSON.parse(line); } catch { continue; }
+      if (command.type !== 'prompt') continue;
+      record(command.message || '');
+      emit(reply(command.message || ''));
+      process.exit(0);
+    }
+  });
+  return;
+}
+
+const input = fs.readFileSync(0, 'utf8');
+record(input);
+if (mode === 'json') emit(reply(input));
+else process.stdout.write(reply(input));
 `;
-  await Promise.all([writeFile(join(bin, "pi"), stub), writeFile(join(bin, "npm"), stub)]);
-  await Promise.all([chmod(join(bin, "pi"), 0o755), chmod(join(bin, "npm"), 0o755)]);
+  await Promise.all(["pi", "npm", "git"].map((command) => writeFile(join(bin, command), stub)));
+  await Promise.all(["pi", "npm", "git"].map((command) => chmod(join(bin, command), 0o755)));
   const syntaxPassed = await new Promise<boolean>((resolve) => {
     const child = spawn("bash", ["-n", scriptFile]); child.once("close", (code) => resolve(code === 0));
   });
   if (!syntaxPassed) { await rm(root, { recursive: true, force: true }); return { syntaxPassed, invocations: [], paused: false, callsBeforeEnter: 0, output: "", exitCode: 2 }; }
 
-  const child = spawn("bash", [scriptFile], {
+  // Own process group. From lesson 010 a script leaves children of its own —
+  // a `tail -f` in a pipeline, a model process and a `sleep` on a fifo — and
+  // signalling only Bash leaves them holding the pipe this harness is reading,
+  // so `close` never fires and the run hangs until the test times out.
+  const child = spawn("bash", [scriptFile, ...(options.args ?? [])], {
+    detached: true,
     cwd: dirname(scriptFile),
     env: { PATH: `${bin}:${process.env.PATH ?? ""}`, EVAL_STUB_LOG: log, EVAL_VALIDATOR_OUTPUTS: JSON.stringify(validatorOutputs), HOME: root, CI: "1", NO_COLOR: "1" },
     stdio: ["pipe", "pipe", "pipe"]
@@ -164,7 +226,9 @@ if (!isNpm && input.includes('validate prompt')) {
       await wait(25);
     }
   }
-  child.kill("SIGTERM");
+  if (child.pid !== undefined && child.exitCode === null) {
+    try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
+  }
   const exitCode = await new Promise<number | null>((resolve) => {
     if (child.exitCode !== null) resolve(child.exitCode);
     else child.once("close", (code) => resolve(code));

@@ -4,7 +4,7 @@ You're going to build one assembly line: software that improves a codebase a lit
 
 A software factory is made of lines like it. A real one runs several — one that refactors, one that upgrades dependencies, one that writes the tests nobody got round to — each with its own agents, its own criteria, and its own definition of done, with the factory deciding which runs when. You are building the first, and everything you learn doing it is how you would build the rest.
 
-The tutorial is two pieces of work. **Part 1** builds one agent at a time and runs each of them by hand — a doer that changes the code, then a validator that gathers independent evidence about the change — so you can see what each one contributes before anything is automated. **Part 2** joins them into an assembly line that runs itself and routes a failed verdict back for repair. Repeated safely, that feedback loop converges on a healthier codebase.
+The tutorial is two pieces of work. **Part 1** builds one agent at a time and runs each of them by hand — a doer that changes the code, then a validator that gathers independent evidence about the change — so you can see what each one contributes before anything is automated. **Part 2** joins them into an assembly line, takes you out of the loop, and then builds the instruments you need to operate something you are no longer driving: a record of what it did, a live view of what it is doing, a way to ask about a finished run, and a way to say something to a machine while it works.
 
 ## About the calculator
 
@@ -16,7 +16,9 @@ See the calculator's [README](./calculator/README.md) for more details.
 
 You begin with a single headless `pi -p` command that reads the calculator and answers a question. It creates no files and there is no loop yet. From there you build a doer that changes the code, then a validator that checks the change against written criteria, then carry the validator's findings back to the doer by hand. Only once you have run that loop yourself do you automate it.
 
-Six lessons: 001–004 are Part 1, 005–006 are Part 2. Each part is a separate piece of homework, and the tutor stops at the end of lesson 004 so you can choose whether to carry straight on.
+Thirteen lessons: 001–004 are Part 1, 005–013 are Part 2. Each part is a separate piece of homework, and the tutor stops at the end of lesson 004 so you can choose whether to carry straight on.
+
+The two parts are comparable homework, but not comparable in length. Part 2 is roughly twice the lessons, because automating something you were doing by hand is the easy half — the other half is being able to see what it did once you stopped watching, and neither half is optional. Every lesson in it is the same size as a lesson in Part 1, and there are simply more of them.
 
 ## Setup
 
@@ -95,7 +97,7 @@ chmod +x factory/refactor-do.sh
 ./factory/refactor-do.sh
 ```
 
-Lesson 005 moves the whole line into `factory/refactor/`, and from then on you run `./factory/refactor/run.sh`. The lessons use Pi as the default doer. Advanced users may substitute another CLI harness when it preserves the doer requirements described in each lesson.
+Lesson 005 moves the whole line into `factory/refactor/`, and from then on you run `./factory/refactor/run.sh`. From lesson 010 you also build scripts that sit one level up, in `factory/` itself, for watching and questioning a line while it runs — those want a second terminal of their own, and lesson 012 wants a third. The lessons use Pi as the default doer. Advanced users may substitute another CLI harness when it preserves the doer requirements described in each lesson.
 
 ## Resume a tutorial
 
