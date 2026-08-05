@@ -94,17 +94,24 @@ Build this lesson in this order. Complete each small step before moving to the n
      cat commit.md success.md validate-findings.txt evidence.txt \
        | (cd ../../calculator && pi --no-session --tools read,grep,find,ls -p) \
        > commit-message.txt
-     (cd ../../calculator && git add -- . && git commit -q -F "$PWD/commit-message.txt")
+     message="$PWD/commit-message.txt"
+     (cd ../../calculator && git add -- . && git commit -q -F "$message")
    fi
    ```
 
    Each machine gets its inputs in the order it was taught to expect them: its job, the criteria, then
    whatever it is working from. Leave the findings out of repair and it has nothing to repair.
 
-   `run.sh` has already done `cd "$(dirname "$0")"`, so `$PWD` is the line's folder and the message file
-   resolves from inside `calculator/` without any further gymnastics. `git add -- .` from inside
-   `calculator/` stages that directory and nothing else, and `factory/` is gitignored, so nothing the
-   learner wrote by hand can be swept into a commit.
+   That `message=` line is not ceremony, and it is worth being precise about why. `run.sh` has already
+   done `cd "$(dirname "$0")"`, so `$PWD` is the line's folder — but only until the subshell runs
+   `cd ../../calculator`. A shell expands each command's arguments when that command is about to run,
+   not when it reads the line, so a `"$PWD/commit-message.txt"` written inside the subshell would be
+   expanded *after* the `cd` and resolve to `calculator/commit-message.txt`, which does not exist. The
+   commit would fail, `set -e` would end the run, and the staging done by `git add` would be left
+   behind. Capturing the path into `message` first pins it while `$PWD` still means the line's folder.
+
+   `git add -- .` from inside `calculator/` stages that directory and nothing else, and `factory/` is
+   gitignored, so nothing the learner wrote by hand can be swept into a commit.
 
    That block goes after the validation phase and before the `read`. The first three lines of `run.sh`
    are unchanged and are not repeated here; keep them.
@@ -125,6 +132,13 @@ it would commit it.
 Anchored, the pattern can only match a line that opens with `VERDICT:`, so prose about verdicts is
 invisible to it however the validator phrases its reasoning. `-m1` then stops at the first such line,
 and `-o` trims it to the verdict itself.
+
+Be exact about `-m1`, because it is easy to read as more than it is: it stops after the first matching
+**line**, not the first match. With `-o`, a single line carrying two verdicts prints both, and
+`$verdict` becomes a two-line string that equals neither `VERDICT: PASS` nor `VERDICT: FAIL` — which
+sends it down the `else` arm and commits. The anchor is what makes that unreachable in practice, since
+a line can only open with `VERDICT:` once. Both halves of the pattern are load-bearing, and neither
+covers for the other.
 
 Be clear about what that rests on, because it is this lesson's real subject. The anchor works because
 lesson 005 told the validator to open its response with `VERDICT:` on the first non-empty line, and for
@@ -195,8 +209,13 @@ bash -c 'printf "must be VERDICT: PASS or VERDICT: FAIL, and mine is:\nVERDICT: 
 ```
 
 Both must print `VERDICT: FAIL`, the second from its verdict line rather than from the sentence above
-it. Delete `d.txt` afterwards. Drop the `^` from either command and watch the second one change its
-mind — that is the whole reason the anchor is there.
+it. Delete `d.txt` afterwards.
+
+Now drop the `^` from the second command and run it again. It prints two lines — `VERDICT: PASS` from
+the sentence, then `VERDICT: FAIL` from the actual verdict — because `-m1` stopped at the first
+matching line and `-o` printed every match on it. That is the whole reason the anchor is there, and it
+is worse than a misread verdict: `$verdict` is now a two-line string matching neither arm's test, so
+the line takes the `else` and commits a change it was told had failed.
 
 There is a second way to get an unreadable verdict, and it is more common than a model wandering from
 its format: **Pi exits 0 when the model call itself fails.** A rate limit or a provider error produces a

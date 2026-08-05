@@ -31,7 +31,8 @@ const branch = `  verdict=$(grep -m1 -o '^VERDICT: \\(PASS\\|FAIL\\)' validate-f
     cat commit.md success.md validate-findings.txt evidence.txt \\
       | (cd ../../calculator && pi --no-session --tools read,grep,find,ls -p) \\
       > commit-message.txt
-    (cd ../../calculator && git add -- . && git commit -q -F "$PWD/commit-message.txt")
+    message="$PWD/commit-message.txt"
+    (cd ../../calculator && git add -- . && git commit -q -F "$message")
   fi
 `;
 
@@ -42,7 +43,7 @@ const findinglessRepairRun = correctBranchedRun.replace("cat repair.md success.m
 const passingFallbackRun = correctBranchedRun.replace(`|| echo "VERDICT: FAIL")`, `|| echo "VERDICT: PASS")`);
 /** The commit station handed a shell, so it commits itself rather than writing a message. */
 const shellCommitRun = correctBranchedRun
-  .replace("      | (cd ../../calculator && pi --no-session --tools read,grep,find,ls -p) \\\n      > commit-message.txt\n    (cd ../../calculator && git add -- . && git commit -q -F \"$PWD/commit-message.txt\")\n",
+  .replace("      | (cd ../../calculator && pi --no-session --tools read,grep,find,ls -p) \\\n      > commit-message.txt\n    message=\"$PWD/commit-message.txt\"\n    (cd ../../calculator && git add -- . && git commit -q -F \"$message\")\n",
     "      | (cd ../../calculator && pi --no-session --tools read,grep,find,ls,bash -p)\n");
 /** A commit on every pass, including the failing ones. */
 const alwaysCommitRun = correctBranchedRun.replace(/ {2}else\n/, "  fi\n  if true; then\n");
@@ -58,11 +59,18 @@ const branchedRunExpectations: FileExpectation = {
     /Starting commit/,
     /cat commit\.md success\.md validate-findings\.txt evidence\.txt/,
     /> commit-message\.txt/,
+    /message="\$PWD\/commit-message\.txt"/,
     /git add -- \./,
-    /git commit -q -F/,
+    /git commit -q -F "\$message"/,
     /read -r -p/
   ],
-  excludes: [/\(cd \.\.\/calculator && /, /read,edit,write,grep,find,ls -p\) \\\n {6}> commit-message/]
+  // `$PWD` inside the subshell expands after its `cd`, so it would resolve to
+  // `calculator/` and the commit would fail; the path must be captured first.
+  excludes: [
+    /\(cd \.\.\/calculator && /,
+    /read,edit,write,grep,find,ls -p\) \\\n {6}> commit-message/,
+    /git commit -q -F "\$PWD\//
+  ]
 };
 
 export const lesson007FinalState: ArtifactState = {

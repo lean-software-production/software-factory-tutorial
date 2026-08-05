@@ -18,7 +18,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.2.0 <25"
   },
   "scripts": {
     "dev": "npm run build:web && tsx src/cli.ts",

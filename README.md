@@ -22,11 +22,15 @@ The two parts are comparable homework, but not comparable in length. Part 2 is r
 
 ## Setup
 
-You need Node.js 22.19 or later, npm 11 or later, a browser, and an authenticated `pi` on your `PATH`. Use Vim or any other editor; Docker and VS Code are not required.
+You need Node.js 24.2 or later on the 24.x line, npm 11 or later, a browser, and an authenticated `pi` on your `PATH`. Use Vim or any other editor; Docker and VS Code are not required.
 
-Node 22 still bundles npm 10, which cannot record the `libc` field this repository's lockfile
-uses and quietly strips it on every install. `npm install` warns when it is too old; upgrade
-with `npm install -g npm@11`.
+The Node floor is not arbitrary, and neither is the ceiling. Below 24.2 the `npm run setup`
+preflight silently does nothing, so it never tells you whether Pi is authenticated. And on
+Node 23 the runtime prints an experimental-feature warning to stderr that makes the
+calculator's own test suite fail before you have touched a line of it — which would then fail
+the first success criterion on every verdict the tutorial teaches you to trust. Odd-numbered
+Node releases are Current rather than LTS, and that is where such warnings appear; this
+tutorial is tested on 24.x. Node 24 bundles npm 11, so a current Node gets you both.
 
 From the repository root:
 
