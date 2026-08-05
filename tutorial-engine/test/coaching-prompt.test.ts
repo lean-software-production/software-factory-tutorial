@@ -56,6 +56,24 @@ describe("coachingSystemPrompt", () => {
     expect(prompt).toContain("offer a choice between pausing for now and continuing to the next lesson");
   });
 
+  it("names the terminal each command belongs in once more than one is in play", () => {
+    // From lesson 010 the line keeps a terminal busy while the learner watches
+    // or steers it from another. A watcher typed into the occupied terminal
+    // prints nothing, which reads as a broken lesson rather than a wrong window.
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("second terminal at the repository root");
+    expect(prompt).toContain("Name which terminal each command belongs in");
+  });
+
+  it("does not invent an artefact for a lesson that builds nothing", () => {
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("creates no files");
+    expect(prompt).toContain("do not offer to build anything");
+    expect(prompt).toContain("questions the learner answers in their own words");
+  });
+
   it("holds the learner at the end of Part 1 with the stronger, more specific beat", () => {
     const prompt = coachingSystemPrompt(lesson);
 
