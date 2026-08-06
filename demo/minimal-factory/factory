@@ -63,11 +63,38 @@ if [ "${#missing[@]}" -gt 0 ]; then
   exit 2
 fi
 
+# --- ...starting from green ---------------------------------------------------
+
+# The line's whole judgement of a change is "do the tests still pass". Starting
+# from a red suite means every round fails for a reason no station can fix, and
+# nothing stops it except the round cap — ten model calls later. Ten seconds
+# here is cheaper than finding out at the end.
+printf '\n'
+note "factory: checking the calculator starts green…"
+baseline="$("$ROOT/stations/test-runner")"
+case "$baseline" in
+  "TESTS: PASS"*)
+    ok "$baseline"
+    ;;
+  *)
+    fail "the calculator's tests do not pass yet — $baseline"
+    note "The line cannot tell a break it caused from one that was already here."
+    note "Full report: ${RUN#"$REPO"/}/test-report.txt"
+    note "If the failure mentions an ExperimentalWarning on stderr, it is node:"
+    note "    node --version    # this needs 24.2 or newer"
+    exit 2
+    ;;
+esac
+
 # --- Hand off -----------------------------------------------------------------
 
 printf '\n'
 note "factory: target ${target#"$REPO"/}"
-note "factory: calculator/ is clean, pi $(pi --version), jq $(jq --version)"
+# pi 0.74 prints --version to stderr, 0.83 to stdout, and a version manager's
+# shim may print a banner ahead of either. Take both streams and pick the last
+# thing shaped like a version.
+pi_version="$(pi --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1)"
+note "factory: calculator/ is clean, pi ${pi_version:-unknown}, jq $(jq --version)"
 flow factory orchestrator
 
 exec "$ROOT/orchestrator" "$target"

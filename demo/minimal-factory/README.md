@@ -8,6 +8,11 @@ commit at the end if the work was any good.
 ./factory ../../calculator/src/index.ts
 ```
 
+**Node 24.2 or newer.** The calculator's own test suite fails on Node 23 — an
+experimental-feature warning on stderr trips an assertion — and this line judges
+every change by whether that suite passes, so an old Node makes every round fail
+for a reason no station can fix. `factory` checks before it spends anything.
+
 This is a demo, not a lesson. The tutorial in `docs/specs/` builds each of these
 pieces one at a time and explains why each one is shaped the way it is; this
 builds all of them at once, badly, so you can see the shape. Read it *after*
@@ -99,8 +104,9 @@ allowlist by construction rather than by inspection.
 
 ## Running it cheaply
 
-The harnesses are pinned to `anthropic/claude-opus-5`. To watch the wiring work
-without paying frontier prices for it:
+The harnesses are pinned to `anthropic/claude-opus-4-7` — the newest Opus that both
+pi 0.74 and 0.83 have in their catalogue, so the pin does not depend on which pi you
+have. To watch the wiring work without paying frontier prices for it:
 
 ```sh
 FACTORY_MODEL=anthropic/claude-haiku-4-5 FACTORY_MAX_ROUNDS=2 ./factory ../../calculator/src/index.ts
@@ -117,7 +123,7 @@ caught it. Wall-clock is a crude bound and it is the only one available.
 ## What it costs
 
 A clean run is three model calls. Measured on this calculator: **$0.13** on
-Opus 5, **$0.05** on Haiku 4.5. A run that heals costs more per round, and the
+Opus 4.7, **$0.05** on Haiku 4.5. A run that heals costs more per round, and the
 worst case the cap allows is ten calls.
 
 The total is printed at the end of every run, and the per-station cost as each

@@ -8,5 +8,5 @@
 # The test results reach it as text, produced by a deterministic station it does
 # not control.
 TOOLS="read,grep,find,ls"
-MODEL="anthropic/claude-opus-5"
+MODEL="anthropic/claude-opus-4-7"
 EXTENSION=""

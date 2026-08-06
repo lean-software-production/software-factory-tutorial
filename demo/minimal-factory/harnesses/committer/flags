@@ -8,5 +8,5 @@
 # `bash` on a real working tree is a much larger thing to trust than a station
 # that returns a paragraph.
 TOOLS="read,grep,find,ls"
-MODEL="anthropic/claude-opus-5"
+MODEL="anthropic/claude-opus-4-7"
 EXTENSION=""
