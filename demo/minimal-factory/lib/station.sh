@@ -30,6 +30,7 @@ fi
 TOOLS=""
 MODEL=""
 EXTENSION=""
+SUMMARISE="no"
 # shellcheck source=/dev/null
 . "$H/flags"
 
@@ -54,7 +55,8 @@ MODEL="${FACTORY_MODEL:-$MODEL}"
 # more.
 STATION_TIMEOUT="${FACTORY_STATION_TIMEOUT:-10m}"
 
-flow orchestrator "$harness" "$TOOLS · ${MODEL#*/}"
+rail_start "$harness" "${MODEL#*/} · $TOOLS"
+started=$(date +%s%N)
 spin_start "$harness running"
 
 # The station must not take the run down with it, so its exit code is captured
@@ -74,19 +76,28 @@ spin_stop
 # it is the failure this demo is most likely to hit: a station that cannot solve
 # the problem it was given does not stop, it keeps trying. One healer here spent
 # a million tokens rewriting the build rather than concluding it was stuck.
+took=$(elapsed "$started")
+
 if [ "$status" -eq 124 ]; then
-  fail "$harness ran past ${STATION_TIMEOUT} and was stopped"
-  note "  Partial record in ${events#"$REPO"/}"
+  rail_fail "ran past $STATION_TIMEOUT and was stopped" "$took"
+  rail_note "partial record in ${events#"$REPO"/}"
   exit 124
 fi
 
 if [ "$status" -ne 0 ]; then
-  fail "$harness failed (exit $status)"
+  rail_fail "failed (exit $status)" "$took"
   head -n 20 "$events.err" >&2
   exit "$status"
 fi
 
 tokens=$("$ROOT/lib/tokens-of.sh" "$events")
 cost=$("$ROOT/lib/cost-of.sh" "$events")
-ok "$(printf '%s finished — %s tokens, $%.2f' "$harness" "$tokens" "$cost")"
-flow "$harness" orchestrator
+rail_ok "$(printf '%s tok · $%.2f' "$tokens" "$cost")" "$took"
+
+# Only the stations that produce prose about a change need a model to compress
+# it. A test result, a verdict and a commit subject are facts the line already
+# holds — paying to have those summarised would be paying twice for one answer.
+if [ "$SUMMARISE" = "yes" ]; then
+  summary="$("$ROOT/lib/summarise.sh" "$events" "${events%.jsonl}-summary.jsonl")"
+  [ -n "$summary" ] && rail_note "$summary"
+fi

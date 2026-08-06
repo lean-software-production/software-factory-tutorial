@@ -31,7 +31,7 @@ fi
 
 # vitest's own count, when it got far enough to produce one. A build failure has
 # no test line, and the tail below is what says so.
-summary=$(grep -E '^\s*Tests+\s' "$raw" | tail -n 1)
+summary=$(grep -E '^\s*Tests+\s' "$raw" | tail -n 1 | tr -s ' ' | sed 's/^ *//; s/ *$//')
 
 {
   echo "$verdict"
@@ -41,5 +41,5 @@ summary=$(grep -E '^\s*Tests+\s' "$raw" | tail -n 1)
   tail -n 60 "$raw"
 } > "$report"
 
-echo "$verdict${summary:+ — $(echo "$summary" | tr -s ' ')}"
+echo "$verdict${summary:+ — $summary}"
 exit 0

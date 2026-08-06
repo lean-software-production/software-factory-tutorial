@@ -1,0 +1,15 @@
+# The summariser's harness.
+#
+# An instrument, not a station. A station moves the work forward and the commit
+# would differ without it; delete this one and the commit is byte-identical. All
+# it does is read what the line already wrote and say it shorter.
+#
+# `--no-tools` is what makes that a fact rather than a claim. It has no read, no
+# edit, no shell, no way to reach the repository at all. It sees the text it is
+# handed and nothing else, which is the whole of what it needs, and means an
+# instrument can never become a station by accident.
+#
+# Haiku because compressing two paragraphs into a sentence is not the hard part
+# of this line, and it happens between every station a human is waiting on.
+TOOLS=""
+MODEL="anthropic/claude-haiku-4-5"

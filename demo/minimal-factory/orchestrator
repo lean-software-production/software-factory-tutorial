@@ -38,29 +38,45 @@ total_so_far() { "$ROOT/lib/cost-of.sh" "$EVENTS"/*.jsonl; }
 # Run after every station that can write. Nothing downstream sees a change the
 # guard has not already narrowed to the target file.
 guard_scope() {
-  local strayed
-  flow orchestrator scope-guard "deterministic · no model"
+  local strayed started took
+  rail_start scope-guard "deterministic"
+  started=$(date +%s%N)
   strayed=$("$ROOT/stations/scope-guard" "$in_calculator")
+  took=$(elapsed "$started")
   if [ -n "$strayed" ]; then
-    warn "reverted $(printf '%s\n' "$strayed" | wc -l) change(s) outside the target:"
-    printf '%s\n' "$strayed" | sed 's/^/        /'
+    rail_warn "reverted $(printf '%s\n' "$strayed" | wc -l) outside the target" "$took"
+    while IFS= read -r path; do rail_note "$path"; done <<< "$strayed"
   else
-    ok "nothing touched outside the target"
+    rail_ok "nothing outside the target" "$took"
   fi
-  flow scope-guard orchestrator
+}
+
+# run_tests LABEL — the deterministic station, on the rail
+run_tests() {
+  local started took
+  rail_start "$1" "deterministic"
+  started=$(date +%s%N)
+  tests_said="$("$ROOT/stations/test-runner")"
+  took=$(elapsed "$started")
+  case "$tests_said" in
+    "TESTS: PASS"*) rail_ok   "${tests_said#TESTS: PASS — }" "$took" ;;
+    *)              rail_fail "${tests_said#TESTS: FAIL — }" "$took" ;;
+  esac
 }
 
 report_total() {
-  local files=("$EVENTS"/*.jsonl)
-  printf '\n'
-  printf 'Total: $%.2f across %d model stations, %d validation round(s).\n' \
-    "$(total_so_far)" "${#files[@]}" "$1"
-  note "records in ${EVENTS#"$REPO"/}"
+  local files=("$EVENTS"/*.jsonl) rounds="round"
+  [ "$1" -eq 1 ] || rounds="rounds"
+  printf '  %s%d model calls · $%.2f · %d %s · %s%s\n' \
+    "$C_DIM" "${#files[@]}" "$(total_so_far)" "$1" "$rounds" "$(elapsed "$RUN_STARTED")" "$C_OFF"
+  printf '  %srecords in %s%s\n' "$C_DIM" "${EVENTS#"$REPO"/}" "$C_OFF"
 }
 
-note "target: $in_calculator"
-note "cap: $MAX_ROUNDS validation rounds"
-printf '\n'
+RUN_STARTED=$(date +%s%N)
+cap_label="rounds"
+[ "$MAX_ROUNDS" -eq 1 ] && cap_label="round"
+rail_head "line" "$(printf '%s · cap %d %s' "$in_calculator" "$MAX_ROUNDS" "$cap_label")"
+rail_gap
 
 # --- Can the line start? ------------------------------------------------------
 
@@ -71,17 +87,15 @@ printf '\n'
 #
 # This belongs to the line rather than to the factory. It is the line's own
 # standard, checked by the line's own station, and it costs nothing.
-flow orchestrator test-runner "deterministic · no model · baseline"
-baseline="$("$ROOT/stations/test-runner")"
-flow test-runner orchestrator
+run_tests baseline
 
-case "$baseline" in
-  "TESTS: PASS"*)
-    ok "$baseline — the line can start"
-    ;;
+case "$tests_said" in
+  "TESTS: PASS"*) ;;
   *)
-    fail "$baseline — the line cannot start"
-    note "It could not tell a break it caused from one that was already here."
+    rail_note "the line cannot start"
+    printf '\n'
+    fail "the calculator's tests do not pass yet"
+    note "The line could not tell a break it caused from one already here."
     note "Full report: ${RUN#"$REPO"/}/test-report.txt"
     if grep -q "ExperimentalWarning" "$RUN/test-report.txt" 2>/dev/null; then
       note ""
@@ -95,27 +109,25 @@ case "$baseline" in
     exit 2
     ;;
 esac
-printf '\n'
+rail_gap
 
 # --- The doer -----------------------------------------------------------------
 
 "$ROOT/lib/station.sh" doer "$EVENTS/0-doer.jsonl" "$RUN/target.md"
 "$ROOT/lib/text-of.sh" "$EVENTS/0-doer.jsonl" > "$RUN/doer-report.txt"
-note "$(sed 's/^/    /' "$RUN/doer-report.txt")"
-printf '\n'
+rail_gap
 guard_scope
-printf '\n'
+rail_gap
 
 # --- Validate, heal, validate again -------------------------------------------
 
 round=1
 while :; do
 
-  flow orchestrator test-runner "deterministic · no model"
-  ok "$("$ROOT/stations/test-runner")"
-  flow test-runner orchestrator
+  rail_start "round $round/$MAX_ROUNDS"
+
+  run_tests tests
   "$ROOT/lib/material.sh" "The test report" "$RUN/test-report.txt" > "$RUN/tests.md"
-  printf '\n'
 
   git -C "$REPO" diff -- calculator > "$RUN/diff.txt"
   "$ROOT/lib/material.sh" "The diff" "$RUN/diff.txt" > "$RUN/diff.md"
@@ -124,17 +136,17 @@ while :; do
     "$RUN/target.md" "$RUN/diff.md" "$RUN/tests.md"
   "$ROOT/lib/text-of.sh" "$EVENTS/$round-validator.jsonl" > "$RUN/findings.txt"
 
+  # The validator's summary is its verdict. Nothing to compress.
   verdict=$("$ROOT/lib/verdict-of.sh" "$RUN/findings.txt")
-  printf '\n'
-
   if [ "$verdict" = "VERDICT: PASS" ]; then
-    ok "$verdict — round $round of $MAX_ROUNDS"
+    rail_note "${verdict#VERDICT: }"
+    rail_gap
     break
   fi
-
-  warn "$verdict — round $round of $MAX_ROUNDS"
+  rail_note "${verdict#VERDICT: }"
 
   if [ "$round" -ge "$MAX_ROUNDS" ]; then
+    rail_end
     printf '\n'
     fail "gave up after $MAX_ROUNDS validation rounds. Nothing was committed."
     note "The change is still in your working tree. To discard it:"
@@ -144,23 +156,21 @@ while :; do
     exit 1
   fi
 
-  printf '\n'
+  rail_gap
   "$ROOT/lib/material.sh" "The validator's findings" "$RUN/findings.txt" \
     > "$RUN/findings.md"
   "$ROOT/lib/station.sh" healer "$EVENTS/$round-healer.jsonl" \
     "$RUN/target.md" "$RUN/findings.md" "$RUN/tests.md"
   "$ROOT/lib/text-of.sh" "$EVENTS/$round-healer.jsonl" > "$RUN/healer-report.txt"
-  note "$(sed 's/^/    /' "$RUN/healer-report.txt")"
-  printf '\n'
+  rail_gap
   guard_scope
-  printf '\n'
+  rail_gap
 
   round=$((round + 1))
 done
 
 # --- The commit ---------------------------------------------------------------
 
-printf '\n'
 "$ROOT/lib/material.sh" "The validator's findings" "$RUN/findings.txt" \
   > "$RUN/findings.md"
 "$ROOT/lib/station.sh" committer "$EVENTS/$round-committer.jsonl" \
@@ -171,6 +181,11 @@ printf '\n'
 # `-- calculator` is what keeps it to the work the line actually did.
 git -C "$REPO" add -- calculator
 git -C "$REPO" commit -q -F "$RUN/commit-message.txt"
-ok "committed $(git -C "$REPO" rev-parse --short HEAD) — $(git -C "$REPO" log -1 --format=%s)"
 
+# The committer's summary is the commit it produced — a sha and a subject the
+# line already holds, so no model is asked to describe what git can state.
+rail_note "$(git -C "$REPO" rev-parse --short HEAD) $(git -C "$REPO" log -1 --format=%s)"
+rail_end
+
+printf '\n'
 report_total "$round"

@@ -69,7 +69,6 @@ fi
 # --- Hand off -----------------------------------------------------------------
 
 printf '\n'
-note "factory: target ${target#"$REPO"/}"
 
 # pi 0.74 prints --version to stderr, 0.83 to stdout, and a version manager's
 # shim may print a banner ahead of either, so take both streams and pick the
@@ -82,19 +81,20 @@ note "factory: target ${target#"$REPO"/}"
 pi_version="$("$PI" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1 || true)"
 pi_where="on PATH"
 [ "$PI" != "pi" ] && pi_where="${PI#"$REPO"/}"
-note "factory: calculator/ is clean, pi ${pi_version:-unknown} ($pi_where), jq $(jq --version)"
+
+rail_head "factory" "${target#"$REPO"/}"
+rail_head "" "$(printf 'clean tree · pi %s (%s) · jq %s' \
+  "${pi_version:-unknown}" "$pi_where" "$(jq --version | sed 's/^jq-//')")"
+printf '\n'
 
 # Not `exec`. The factory hands the job to the line and stays to hear how it
-# went — the last message of a run should come from the thing you started, not
-# from whatever it happened to hand off to.
-flow factory orchestrator
+# went — the last line of a run should come from the thing you started, not from
+# whatever it happened to hand off to.
 set +e
 "$ROOT/orchestrator" "$target"
 outcome=$?
 set -e
 
-printf '\n'
-flow orchestrator factory
 case "$outcome" in
   0) ok "the line ran to a commit" ;;
   1) warn "the line ran and committed nothing" ;;
