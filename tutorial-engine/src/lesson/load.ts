@@ -1,9 +1,10 @@
 import { readFile, realpath } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import type { LessonDefinition } from "./contract.js";
-import { LessonProgressStore } from "./progress-store.js";
+import { LessonProgressStore, type LessonProgress } from "./progress-store.js";
+import { seedPartTwo } from "./seed.js";
 
-export type ProgressState = "done" | "current" | "upcoming";
+export type ProgressState = "done" | "skipped" | "current" | "upcoming";
 export interface ProgressItem { id: string; label: string; state: ProgressState; part?: string; spec?: string; }
 
 export interface LoadedLesson {
@@ -34,12 +35,14 @@ function lessonRowCells(line: string): string[] | undefined {
 }
 
 /**
- * Turn the ledger's lesson rows into the outline, with `completed` deciding
- * which are done. The first lesson not in `completed` is the one the learner is
- * on, so a gap — lesson 004 finished but 003 somehow not — still leaves 003
- * current rather than skipping it.
+ * Turn the ledger's lesson rows into the outline. `completed` marks lessons the
+ * learner finished and `skipped` those they jumped by starting at Part 2; the
+ * first lesson in neither is the one they are on. A gap — lesson 004 finished
+ * but 003 somehow not — leaves 003 current rather than skipping past it.
  */
-export function readProgress(ledger: string, completed: ReadonlySet<string> = new Set()): ProgressItem[] {
+export function readProgress(ledger: string, progress: Partial<LessonProgress> = {}): ProgressItem[] {
+  const completed = progress.completed ?? new Set<string>();
+  const skipped = progress.skipped ?? new Set<string>();
   const entries: Array<{ id: string; label: string; part?: string; spec?: string }> = [];
   let part: string | undefined;
 
@@ -60,6 +63,7 @@ export function readProgress(ledger: string, completed: ReadonlySet<string> = ne
     ...entries.map((entry) => {
       const item = { id: entry.id, label: entry.label, part: entry.part, spec: entry.spec };
       if (completed.has(entry.id)) return { ...item, state: "done" as const };
+      if (skipped.has(entry.id)) return { ...item, state: "skipped" as const };
       if (!foundCurrent) { foundCurrent = true; return { ...item, state: "current" as const }; }
       return { ...item, state: "upcoming" as const };
     })
@@ -93,8 +97,8 @@ export async function loadLesson(directory: string): Promise<LoadedLesson> {
     workspace,
     validationCommands: [],
   };
-  const completed = await new LessonProgressStore(workspace).read();
-  return { definition, workspace, progress: readProgress(ledger, completed) };
+  const progress = await new LessonProgressStore(workspace).read();
+  return { definition, workspace, progress: readProgress(ledger, progress) };
 }
 
 /**
@@ -108,6 +112,30 @@ export async function markCurrentLessonDone(workspace: string): Promise<{ progre
   const ledger = await readFile(ledgerPath(workspace), "utf8");
   const current = currentLesson(readProgress(ledger, await store.read()));
   if (!current) return undefined;
-  const completed = await store.add(current.id);
-  return { progress: readProgress(ledger, completed), id: current.id };
+  const progress = await store.add(current.id);
+  return { progress: readProgress(ledger, progress), id: current.id };
+}
+
+/**
+ * The lessons a learner starting at Part 2 jumps over: everything before the
+ * first lesson of the second part. Derived from the ledger's part headings
+ * rather than hardcoded, so renumbering the curriculum cannot strand this.
+ */
+export function lessonsBeforePartTwo(ledger: string): string[] {
+  const lessons = readProgress(ledger).slice(1);
+  const firstPart = lessons[0]?.part;
+  const partTwo = lessons.findIndex((item) => item.part !== firstPart);
+  return partTwo < 0 ? [] : lessons.slice(0, partTwo).map((item) => item.id);
+}
+
+/**
+ * Start the learner at Part 2: seed what Part 1 would have left in `factory/`,
+ * and record its lessons as skipped rather than done.
+ */
+export async function skipToPartTwo(workspace: string): Promise<{ progress: ProgressItem[]; seeded: string[]; skipped: string[] }> {
+  const ledger = await readFile(ledgerPath(workspace), "utf8");
+  const skipped = lessonsBeforePartTwo(ledger);
+  const seeded = await seedPartTwo(workspace);
+  await new LessonProgressStore(workspace).write({ completed: [], skipped });
+  return { progress: readProgress(ledger, { skipped: new Set(skipped) }), seeded, skipped };
 }

@@ -89,7 +89,7 @@ export function summarise(actions: readonly string[], limit = 3): string {
   return `${actions.slice(0, limit).join(", ")} and ${actions.length - limit} more`;
 }
 
-export function coachingSystemPrompt(lesson: LessonDefinition, currentSpec?: string): string {
+export function coachingSystemPrompt(lesson: LessonDefinition, currentSpec?: string, skippedPartOne = false): string {
   // How far the learner has got is the engine's to know: it lives in factory/,
   // outside the curriculum, and naming the file here saves the tutor working it
   // out. Without one — an exhausted or unreadable ledger — fall back to asking
@@ -98,9 +98,16 @@ export function coachingSystemPrompt(lesson: LessonDefinition, currentSpec?: str
     ? `then ${currentSpec}, which is the specification for the lesson the learner is on`
     : "then the first specification the learner has not finished";
 
+  // A learner who skipped Part 1 has its output in factory/ without having
+  // built it. Opening as though they wrote those files would be the tutorial
+  // lying to them on its first screen.
+  const skipped = skippedPartOne
+    ? "\n\nThis learner skipped Part 1, so the files it builds were copied into factory/ for them. Before the current lesson, show them what is there and what each file does, in a few sentences: they have not seen these before and the lesson assumes they have. Say plainly that Part 1 builds these by hand and they can go back to it. Do not pretend they wrote them, and do not re-teach Part 1.\n"
+    : "";
+
   return `You are a patient tutorial tutor for "${lesson.title}". The learner is building agents that improve code and check each other's work; the kata is their raw material.
 
-At the beginning, silently read README.md, then docs/specs/README.md, ${routing}. The ledger and specifications are your routing information, not the learner's lesson: do not mention the ledger, lesson numbers, or those file paths unless the learner asks. Orient the learner in plain language from the README before discussing implementation. Read no calculator source until the current spec requires it. Introduce only the vocabulary the current specification uses; a later lesson's words are that lesson's to teach.
+At the beginning, silently read README.md, then docs/specs/README.md, ${routing}. The ledger and specifications are your routing information, not the learner's lesson: do not mention the ledger, lesson numbers, or those file paths unless the learner asks. Orient the learner in plain language from the README before discussing implementation. Read no calculator source until the current spec requires it. Introduce only the vocabulary the current specification uses; a later lesson's words are that lesson's to teach.${skipped}
 
 If the current specification contains a Mermaid diagram, reproduce it with present_diagram and its text fallback at the point that specification places it. When the specification says when to show a diagram, that instruction governs: do not bring it forward into the opening orientation.
 
@@ -150,7 +157,7 @@ export class PiTutorialAdapter {
     this.validation = new ValidationRunner(lesson.validationCommands, workspace);
   }
 
-  static async create(lesson: LessonDefinition, workspace: string, bus: TutorialEventBus, log: TutorialLogger, currentSpec?: string): Promise<PiTutorialAdapter> {
+  static async create(lesson: LessonDefinition, workspace: string, bus: TutorialEventBus, log: TutorialLogger, currentSpec?: string, skippedPartOne = false): Promise<PiTutorialAdapter> {
     log.info(`Resolving tutorial workspace ${workspace}.`);
     const boundary = await WorkspaceBoundary.create(workspace);
     const canonicalWorkspace = boundary.root;
@@ -159,7 +166,7 @@ export class PiTutorialAdapter {
     const loader = new DefaultResourceLoader({
       cwd: canonicalWorkspace,
       agentDir: getAgentDir(),
-      systemPromptOverride: () => coachingSystemPrompt(lesson, currentSpec),
+      systemPromptOverride: () => coachingSystemPrompt(lesson, currentSpec, skippedPartOne),
       appendSystemPromptOverride: () => [],
       noExtensions: true,
       noSkills: true,

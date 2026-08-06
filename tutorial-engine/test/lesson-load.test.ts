@@ -64,7 +64,7 @@ const ledger = [
 describe("readProgress", () => {
   it("takes the outline's shape from the ledger and its state from the finished set", () => {
     const states = (completed: string[]) =>
-      readProgress(ledger, new Set(completed)).slice(1).map((item) => [item.id, item.state]);
+      readProgress(ledger, { completed: new Set(completed) }).slice(1).map((item) => [item.id, item.state]);
 
     expect(states([])).toEqual([["001", "current"], ["002", "upcoming"]]);
     expect(states(["001"])).toEqual([["001", "done"], ["002", "current"]]);
@@ -75,7 +75,7 @@ describe("readProgress", () => {
     // A ledger row can only be finished through the tool, but a hand-edited
     // progress file should not be able to strand the learner past a lesson
     // they have not done.
-    expect(readProgress(ledger, new Set(["002"])).slice(1).map((item) => [item.id, item.state]))
+    expect(readProgress(ledger, { completed: new Set(["002"]) }).slice(1).map((item) => [item.id, item.state]))
       .toEqual([["001", "current"], ["002", "done"]]);
   });
 
@@ -98,7 +98,7 @@ describe("readProgress", () => {
 
   it("carries each lesson's specification filename for routing the tutor", () => {
     expect(currentSpecPath(readProgress(ledger))).toBe("docs/specs/001-first.md");
-    expect(currentSpecPath(readProgress(ledger, new Set(["001"])))).toBe("docs/specs/002-second.md");
-    expect(currentSpecPath(readProgress(ledger, new Set(["001", "002"])))).toBeUndefined();
+    expect(currentSpecPath(readProgress(ledger, { completed: new Set(["001"]) }))).toBe("docs/specs/002-second.md");
+    expect(currentSpecPath(readProgress(ledger, { completed: new Set(["001", "002"]) }))).toBeUndefined();
   });
 });

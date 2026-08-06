@@ -14,7 +14,7 @@ describe("LessonProgressStore", () => {
   });
 
   it("treats a learner who has not started as having finished nothing", async () => {
-    expect([...await (await store()).read()]).toEqual([]);
+    expect([...(await (await store()).read()).completed]).toEqual([]);
   });
 
   it("round-trips finished lessons, creating factory/ if the learner has none yet", async () => {
@@ -23,8 +23,8 @@ describe("LessonProgressStore", () => {
     await progress.add("001");
     await progress.add("002");
 
-    expect([...await progress.read()]).toEqual(["001", "002"]);
-    expect(JSON.parse(await readFile(progress.path, "utf8"))).toEqual({ completed: ["001", "002"] });
+    expect([...(await progress.read()).completed]).toEqual(["001", "002"]);
+    expect(JSON.parse(await readFile(progress.path, "utf8"))).toEqual({ completed: ["001", "002"], skipped: [] });
   });
 
   it("records a lesson once however often it is added", async () => {
@@ -33,7 +33,7 @@ describe("LessonProgressStore", () => {
     await progress.add("001");
     await progress.add("001");
 
-    expect([...await progress.read()]).toEqual(["001"]);
+    expect([...(await progress.read()).completed]).toEqual(["001"]);
   });
 
   it("starts the learner over rather than refusing to open when the file is corrupt", async () => {
@@ -44,7 +44,7 @@ describe("LessonProgressStore", () => {
     await mkdir(join(progress.path, ".."), { recursive: true });
     await writeFile(progress.path, "{ not json", "utf8");
 
-    expect([...await progress.read()]).toEqual([]);
+    expect([...(await progress.read()).completed]).toEqual([]);
   });
 
   it("ignores entries that are not lesson ids", async () => {
@@ -52,6 +52,6 @@ describe("LessonProgressStore", () => {
     await mkdir(join(progress.path, ".."), { recursive: true });
     await writeFile(progress.path, JSON.stringify({ completed: ["001", 2, null, "003"] }), "utf8");
 
-    expect([...await progress.read()]).toEqual(["001", "003"]);
+    expect([...(await progress.read()).completed]).toEqual(["001", "003"]);
   });
 });

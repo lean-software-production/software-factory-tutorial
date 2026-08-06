@@ -31,6 +31,18 @@ describe("coachingSystemPrompt", () => {
     expect(prompt).toContain("then the first specification the learner has not finished");
   });
 
+  it("briefs a learner who skipped Part 1 on the files they did not build", () => {
+    const prompt = coachingSystemPrompt(lesson, "docs/specs/005-join-them-into-an-assembly-line.md", true);
+
+    expect(prompt).toContain("This learner skipped Part 1");
+    expect(prompt).toContain("Do not pretend they wrote them");
+    expect(prompt).toContain("they can go back to it");
+  });
+
+  it("says nothing about skipping to a learner who is working through Part 1", () => {
+    expect(coachingSystemPrompt(lesson, "docs/specs/002-build-a-doer.md")).not.toContain("skipped Part 1");
+  });
+
   it("teaches the mechanism where a specification states a principle figuratively", () => {
     // The coach paraphrases specs faithfully, so a figurative payoff sentence
     // reaches the learner intact — lesson 006 shipped one that described the

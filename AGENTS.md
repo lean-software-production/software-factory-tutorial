@@ -44,3 +44,13 @@ their factory, their transcript — belongs under `factory/`. Anything the same 
 the repository. Writing progress back into the ledger would hand everyone who clones the tutorial a
 copy that claims to be part finished, so the ledger's rows carry a specification link and a goal, and
 no status.
+
+## Changing a Part 1 lesson means changing the Part 2 seed
+
+`docs/seeds/part-2/` holds what lessons 002 to 004 leave in `factory/`, so a learner who chooses
+"Start at Part 2" finds what lesson 005 expects to move. Change what those lessons have the learner
+write, and change the seed to match — the two are the same artefact taught two ways.
+
+`seed.test.ts` reads lesson 005's `mv` commands and fails if the seed does not supply every source
+path they name. That catches a renamed file, not a rewritten one, so the content is still yours to
+keep honest.

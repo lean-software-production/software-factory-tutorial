@@ -85,7 +85,8 @@ export function activityCaption(activity: string): string {
 }
 
 export type BrowserMessage =
-  | { type: "start-session"; mode: "resume" | "fresh" }
+  /** `part-2` clears factory/, seeds Part 1's output, and opens the first Part 2 lesson. */
+  | { type: "start-session"; mode: "resume" | "fresh" | "part-2" }
   | { type: "chat"; text: string; delivery?: "steer" | "followUp" }
   | { type: "choose"; choiceId: string; optionId: string }
   | { type: "abort" }
@@ -95,7 +96,7 @@ export function isBrowserMessage(value: unknown): value is BrowserMessage {
   if (!value || typeof value !== "object" || typeof (value as { type?: unknown }).type !== "string") return false;
   const message = value as Record<string, unknown>;
   if (message.type === "abort") return true;
-  if (message.type === "start-session") return message.mode === "resume" || message.mode === "fresh";
+  if (message.type === "start-session") return message.mode === "resume" || message.mode === "fresh" || message.mode === "part-2";
   if (message.type === "chat") return typeof message.text === "string" && message.text.length <= 12_000 && (message.delivery === undefined || message.delivery === "steer" || message.delivery === "followUp");
   if (message.type === "choose") return typeof message.choiceId === "string" && typeof message.optionId === "string";
   return message.type === "run-validation" && typeof message.commandId === "string";

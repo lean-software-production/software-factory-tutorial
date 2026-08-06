@@ -13,6 +13,19 @@ const PROGRESS_NAME = "tutorial-progress.json";
  * state that belongs to one person lives there. `resetFactory` clears it along
  * with the transcript, which is what starting over should mean.
  */
+/**
+ * Lessons the learner finished, and lessons they jumped over by starting at
+ * Part 2. Kept apart so the outline can say which is which: a skipped lesson is
+ * not one they did.
+ */
+export interface LessonProgress {
+  completed: Set<string>;
+  skipped: Set<string>;
+}
+
+const ids = (value: unknown): Set<string> =>
+  Array.isArray(value) ? new Set(value.filter((id): id is string => typeof id === "string")) : new Set();
+
 export class LessonProgressStore {
   readonly path: string;
 
@@ -21,37 +34,36 @@ export class LessonProgressStore {
   }
 
   /**
-   * The finished lesson ids. A missing file means a learner who has not started,
-   * and an unreadable one is treated the same way: losing the highlight's
-   * position is a smaller failure than refusing to open the tutorial at all.
+   * A missing file means a learner who has not started, and an unreadable one is
+   * treated the same way: losing the highlight's position is a smaller failure
+   * than refusing to open the tutorial at all.
    */
-  async read(): Promise<Set<string>> {
+  async read(): Promise<LessonProgress> {
     let contents: string;
     try {
       contents = await readFile(this.path, "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Set();
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { completed: new Set(), skipped: new Set() };
       throw error;
     }
     try {
-      const parsed: unknown = JSON.parse(contents);
-      const completed = (parsed as { completed?: unknown })?.completed;
-      if (!Array.isArray(completed)) return new Set();
-      return new Set(completed.filter((id): id is string => typeof id === "string"));
+      const parsed = JSON.parse(contents) as { completed?: unknown; skipped?: unknown };
+      return { completed: ids(parsed?.completed), skipped: ids(parsed?.skipped) };
     } catch {
-      return new Set();
+      return { completed: new Set(), skipped: new Set() };
     }
   }
 
-  async write(completed: Iterable<string>): Promise<void> {
+  async write(progress: { completed: Iterable<string>; skipped?: Iterable<string> }): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true });
-    await writeFile(this.path, `${JSON.stringify({ completed: [...completed] }, null, 2)}\n`, "utf8");
+    const document = { completed: [...progress.completed], skipped: [...progress.skipped ?? []] };
+    await writeFile(this.path, `${JSON.stringify(document, null, 2)}\n`, "utf8");
   }
 
-  async add(id: string): Promise<Set<string>> {
-    const completed = await this.read();
-    completed.add(id);
-    await this.write(completed);
-    return completed;
+  async add(id: string): Promise<LessonProgress> {
+    const progress = await this.read();
+    progress.completed.add(id);
+    await this.write(progress);
+    return progress;
   }
 }
