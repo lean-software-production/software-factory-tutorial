@@ -80,8 +80,15 @@ case "$baseline" in
     fail "the calculator's tests do not pass yet — $baseline"
     note "The line cannot tell a break it caused from one that was already here."
     note "Full report: ${RUN#"$REPO"/}/test-report.txt"
-    note "If the failure mentions an ExperimentalWarning on stderr, it is node:"
-    note "    node --version    # this needs 24.2 or newer"
+    if grep -q "ExperimentalWarning" "$RUN/test-report.txt" 2>/dev/null; then
+      note ""
+      note "That is a node version problem, and probably not the node you think."
+      note "The failing test spawns npx from the repository root, so what matters"
+      note "is what node resolves to *there*, not in your shell:"
+      note "    (cd $REPO && node --version)    # needs 24.2 or newer"
+      note "With a version manager, pin it in a file the whole repository is"
+      note "under — a pin inside demo/minimal-factory/ does not reach the root."
+    fi
     exit 2
     ;;
 esac
