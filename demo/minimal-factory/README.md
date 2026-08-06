@@ -135,14 +135,14 @@ To undo a run: `git reset --soft HEAD~1`, then `git restore --staged --worktree 
 
 ## What this demo does not have
 
-The tutorial builds all of these properly; the demo skips every one.
+Part 2 of the tutorial builds all of these properly; the demo skips every one.
 
 - **No live view.** You see a station start and finish. What it is doing while it
-  runs is invisible until it is over. That is lesson 010's problem.
+  runs is invisible until it is over.
 - **No steering.** A station that has started cannot be redirected, only waited
-  out or timed out. Lesson 012.
+  out or timed out.
 - **No ledger.** The events are on disk and nothing asks them anything except the
-  cost and token totals. Lesson 011.
+  cost and token totals.
 - **No read boundary.** `--tools` controls *which* tools a station has, not what
   paths they reach. Every station here can read anything the user running it can
   read — one of them found and read this demo's own source mid-run. `pi` ships no
