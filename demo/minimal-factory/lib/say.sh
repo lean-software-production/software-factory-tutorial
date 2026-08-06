@@ -29,23 +29,33 @@ fi
 RAIL_NAME=14   # width of the station-name column
 RAIL_TEXT=32   # width of the result column, before the elapsed time
 
+# How deep the current station sits. A round contains its stations, so they are
+# drawn inside it rather than beside it. Exported because `station.sh` is a
+# separate process that sources this file fresh, and it has to draw at whatever
+# depth the orchestrator left it at.
+RAIL_PREFIX="${RAIL_PREFIX-}"
+export RAIL_PREFIX
+
+rail_in()  { RAIL_PREFIX="$RAIL_PREFIX│  "; export RAIL_PREFIX; }
+rail_out() { RAIL_PREFIX="${RAIL_PREFIX%│  }"; export RAIL_PREFIX; }
+
 rail_head() { printf '%s%-7s%s %s\n' "$C_BOLD" "$1" "$C_OFF" "$2"; }
-rail_gap()  { printf '│\n'; }
-rail_end()  { printf '│\n'; }
+rail_gap()  { printf '%s│\n' "$RAIL_PREFIX"; }
+rail_end()  { printf '%s│\n' "$RAIL_PREFIX"; }
 
 # rail_start NAME [detail] — a station begins
 rail_start() {
   if [ $# -ge 2 ] && [ -n "$2" ]; then
-    printf '├─ %s%-*s%s %s%s%s\n' \
+    printf '%s├─ %s%-*s%s %s%s%s\n' "$RAIL_PREFIX" \
       "$C_BOLD" "$RAIL_NAME" "$1" "$C_OFF" "$C_DIM" "$2" "$C_OFF"
   else
-    printf '├─ %s%s%s\n' "$C_BOLD" "$1" "$C_OFF"
+    printf '%s├─ %s%s%s\n' "$RAIL_PREFIX" "$C_BOLD" "$1" "$C_OFF"
   fi
 }
 
 # rail_note TEXT — a continuation line under the station above
 rail_note() {
-  printf '│  %-*s %s%s%s\n' "$RAIL_NAME" "" "$C_DIM" "$1" "$C_OFF"
+  printf '%s│  %-*s %s%s%s\n' "$RAIL_PREFIX" "$RAIL_NAME" "" "$C_DIM" "$1" "$C_OFF"
 }
 
 # rail_ok/warn/fail TEXT [elapsed] — a station's result
@@ -56,14 +66,16 @@ rail_fail() { _rail_result "$C_ERR✗$C_OFF"  "$1" "${2:-}"; }
 _rail_result() {
   local glyph="$1" text="$2" elapsed="${3:-}" pad
   if [ -z "$elapsed" ]; then
-    printf '│  %-*s %s %s\n' "$RAIL_NAME" "" "$glyph" "$text"
+    printf '%s│  %-*s %s %s\n' "$RAIL_PREFIX" "$RAIL_NAME" "" "$glyph" "$text"
     return
   fi
   # Pad against the *plain* text: the glyph carries escape sequences, and %-*s
-  # would count those as characters and misalign every coloured line.
-  pad=$(( RAIL_TEXT - ${#text} ))
+  # would count those as characters and misalign every coloured line. Indenting
+  # also eats width, so the elapsed column pulls left as the rail gets deeper
+  # and every station's time stays in one column.
+  pad=$(( RAIL_TEXT - ${#text} - ${#RAIL_PREFIX} ))
   [ "$pad" -lt 1 ] && pad=1
-  printf '│  %-*s %s %s%*s%s%s%s\n' \
+  printf '%s│  %-*s %s %s%*s%s%s%s\n' "$RAIL_PREFIX" \
     "$RAIL_NAME" "" "$glyph" "$text" "$pad" "" "$C_DIM" "$elapsed" "$C_OFF"
 }
 

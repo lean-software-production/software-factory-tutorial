@@ -125,6 +125,7 @@ round=1
 while :; do
 
   rail_start "round $round/$MAX_ROUNDS"
+  rail_in
 
   run_tests tests
   "$ROOT/lib/material.sh" "The test report" "$RUN/test-report.txt" > "$RUN/tests.md"
@@ -138,14 +139,16 @@ while :; do
 
   # The validator's summary is its verdict. Nothing to compress.
   verdict=$("$ROOT/lib/verdict-of.sh" "$RUN/findings.txt")
+  rail_note "${verdict#VERDICT: }"
+
   if [ "$verdict" = "VERDICT: PASS" ]; then
-    rail_note "${verdict#VERDICT: }"
+    rail_out
     rail_gap
     break
   fi
-  rail_note "${verdict#VERDICT: }"
 
   if [ "$round" -ge "$MAX_ROUNDS" ]; then
+    rail_out
     rail_end
     printf '\n'
     fail "gave up after $MAX_ROUNDS validation rounds. Nothing was committed."
@@ -164,6 +167,7 @@ while :; do
   "$ROOT/lib/text-of.sh" "$EVENTS/$round-healer.jsonl" > "$RUN/healer-report.txt"
   rail_gap
   guard_scope
+  rail_out
   rail_gap
 
   round=$((round + 1))
