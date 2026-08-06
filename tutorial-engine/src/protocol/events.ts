@@ -38,6 +38,8 @@ export interface SessionBootstrap {
 export type TutorialEvent =
   | { type: "snapshot"; title: string; runState: RunState; activity: string; events: TutorialEvent[]; validationCommands: Array<{ id: string; label: string }>; progress: ProgressItem[]; session: SessionBootstrap }
   | { type: "session-state"; session: SessionBootstrap }
+  /** The lesson outline after a lesson was finished. Status, not transcript. */
+  | { type: "progress"; progress: ProgressItem[] }
   | { type: "run-state"; state: RunState }
   /** What the tutor is doing right now, for the spinner. Status, not transcript: see `TRANSIENT_EVENTS`. */
   | { type: "activity"; text: string }
@@ -61,7 +63,7 @@ export type TutorialEvent =
  * kept in the bus history and never written to the session log, so a resumed
  * session cannot replay a stale "reading README.md" as though it just happened.
  */
-const TRANSIENT_EVENTS = new Set<TutorialEvent["type"]>(["snapshot", "session-state", "activity"]);
+const TRANSIENT_EVENTS = new Set<TutorialEvent["type"]>(["snapshot", "session-state", "activity", "progress"]);
 
 export function isTranscriptEvent(event: TutorialEvent): boolean {
   return !TRANSIENT_EVENTS.has(event.type);
@@ -83,7 +85,8 @@ export function activityCaption(activity: string): string {
 }
 
 export type BrowserMessage =
-  | { type: "start-session"; mode: "resume" | "fresh" }
+  /** `part-2` clears factory/, seeds Part 1's output, and opens the first Part 2 lesson. */
+  | { type: "start-session"; mode: "resume" | "fresh" | "part-2" }
   | { type: "chat"; text: string; delivery?: "steer" | "followUp" }
   | { type: "choose"; choiceId: string; optionId: string }
   | { type: "abort" }
@@ -93,7 +96,7 @@ export function isBrowserMessage(value: unknown): value is BrowserMessage {
   if (!value || typeof value !== "object" || typeof (value as { type?: unknown }).type !== "string") return false;
   const message = value as Record<string, unknown>;
   if (message.type === "abort") return true;
-  if (message.type === "start-session") return message.mode === "resume" || message.mode === "fresh";
+  if (message.type === "start-session") return message.mode === "resume" || message.mode === "fresh" || message.mode === "part-2";
   if (message.type === "chat") return typeof message.text === "string" && message.text.length <= 12_000 && (message.delivery === undefined || message.delivery === "steer" || message.delivery === "followUp");
   if (message.type === "choose") return typeof message.choiceId === "string" && typeof message.optionId === "string";
   return message.type === "run-validation" && typeof message.commandId === "string";

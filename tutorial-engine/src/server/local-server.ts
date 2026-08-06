@@ -3,7 +3,8 @@ import { access } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import type { LessonDefinition } from "../lesson/contract.js";
-import type { ProgressItem } from "../lesson/load.js";
+import { ensureLineBranch } from "../lesson/branch.js";
+import { currentSpecPath, loadProgress, skipToPartTwo, type ProgressItem } from "../lesson/load.js";
 import { PiTutorialAdapter } from "../agent/pi-adapter.js";
 import { TutorialEventBus } from "../protocol/event-bus.js";
 import { isBrowserMessage, type BrowserMessage, type RunState, type SessionBootstrap, type TutorialEvent } from "../protocol/events.js";
@@ -92,7 +93,10 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
   const hasSavedSession = await sessionLog.exists();
   let adapter: PiTutorialAdapter | undefined;
   let runState: RunState = "idle";
-  let bootstrap: SessionBootstrap = { state: hasSavedSession ? "select" : "starting", hasSavedSession };
+  // Always a choice, saved session or not: starting at Part 2 is a decision a
+  // first-time learner makes, and auto-starting would hide it from exactly the
+  // people who want it.
+  let bootstrap: SessionBootstrap = { state: "select", hasSavedSession };
   let persistenceUnsubscribe: (() => void) | undefined;
   let startPromise: Promise<void> | undefined;
   const clients = new Set<ServerResponse>();
@@ -100,24 +104,49 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
 
   const publishBootstrap = () => bus.publish({ type: "session-state", session: bootstrap });
 
-  const startSession = (mode: "resume" | "fresh", reset = false): Promise<void> => {
+  // A `progress` event is transient, so it is never replayed from history. Hold
+  // the latest here instead, or a refreshed browser would be sent the outline as
+  // it stood when the server started.
+  let progress = options.progress;
+  bus.subscribe((event) => { if (event.type === "progress") progress = event.progress; });
+
+  const startSession = (mode: "resume" | "fresh" | "part-2", reset = false): Promise<void> => {
     if (startPromise) return startPromise;
     startPromise = (async () => {
       bootstrap = { ...bootstrap, state: "starting" };
       runState = "working";
       publishBootstrap();
+      // From lesson 007 the line commits to the calculator, which has no
+      // repository of its own. Do this before the tutor begins so no commit can
+      // land on the branch the learner cloned.
+      await ensureLineBranch(options.workspace, log);
       if (mode === "resume") {
         const history = await sessionLog.read();
         bus.restore(history.map((event) => event.type === "choice" ? { ...event, historical: true } : event));
+      } else if (mode === "part-2") {
+        // Part 2's first lesson moves files Part 1 builds, so skipping means
+        // seeding that output, not only moving the outline's highlight.
+        log.info("Starting at Part 2: clearing factory/ and seeding Part 1's output.");
+        await resetFactory(options.workspace);
+        await sessionLog.clear();
+        const skip = await skipToPartTwo(options.workspace);
+        log.info(`Seeded ${skip.seeded.join(", ")}; marked ${skip.skipped.join(", ")} skipped.`);
+        bus.publish({ type: "progress", progress: skip.progress });
       } else if (reset) {
         log.info("Starting over: removing learner artifacts from factory/.");
         await resetFactory(options.workspace);
         await sessionLog.clear();
+        // Progress lives in factory/, so starting over returns the learner to
+        // the first lesson. Republish so the header agrees with the tutor.
+        bus.publish({ type: "progress", progress: await loadProgress(options.workspace) });
       }
       bootstrap = { state: "active", hasSavedSession: false };
       persistenceUnsubscribe = bus.subscribe((event) => sessionLog.append(event));
       log.info(`Creating ${mode === "resume" ? "resumed" : "new"} tutor session; this may contact Pi's configured provider.`);
-      adapter = await PiTutorialAdapter.create(options.lesson, options.workspace, bus, log);
+      // Resolved here rather than at startup so a session begun after several
+      // lessons — or started over, which clears factory/ — routes to the lesson
+      // the learner is actually on.
+      adapter = await PiTutorialAdapter.create(options.lesson, options.workspace, bus, log, currentSpecPath(progress), progress.some((item) => item.state === "skipped"));
       publishBootstrap();
       void (mode === "resume" ? adapter.resume() : adapter.begin());
     })().catch((error) => {
@@ -156,7 +185,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (request.method === "GET" && isRoute(url.pathname, "events")) {
       response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-      writeEvent(response, { type: "snapshot", title: options.lesson.title, runState: adapter?.state ?? runState, activity: adapter?.activity ?? "waiting for Pi", events: [...bus.history()], validationCommands: options.lesson.validationCommands.map(({ id, label }) => ({ id, label })), progress: options.progress, session: bootstrap });
+      writeEvent(response, { type: "snapshot", title: options.lesson.title, runState: adapter?.state ?? runState, activity: adapter?.activity ?? "waiting for Pi", events: [...bus.history()], validationCommands: options.lesson.validationCommands.map(({ id, label }) => ({ id, label })), progress, session: bootstrap });
       clients.add(response);
       log.info(`Browser connected to the event stream (${clients.size} client${clients.size === 1 ? "" : "s"}).`);
       const keepAlive = setInterval(() => response.write(": keepalive\n\n"), 20_000);
@@ -223,7 +252,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
     ? `Listening only on ${url}.`
     : `Listening on ${url}, and on ${host}:${address.port} from other machines.`);
   if (hasSavedSession) log.info(`Saved tutorial session found at ${sessionLog.path}; waiting for learner choice.`);
-  else void startSession("fresh");
+  else log.info("No saved session; waiting for the learner to choose where to begin.");
   return {
     url,
     port: address.port,

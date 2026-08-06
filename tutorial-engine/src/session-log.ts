@@ -1,8 +1,15 @@
-import { appendFile, readdir, readFile, rm } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { isTranscriptEvent, parseTutorialEvent, type TutorialEvent } from "./protocol/events.js";
 
 const SESSION_LOG_NAME = "tutorial-session.jsonl";
+
+/**
+ * Everything the engine keeps for itself, under one directory the learner never
+ * has to look in. It sits inside `factory/` so starting over clears it with the
+ * rest, and being one directory means one ignore rule covers it.
+ */
+export const ENGINE_STATE_DIRECTORY = ".tmp";
 
 /**
  * Append-only browser transcript storage. It deliberately records protocol events,
@@ -13,7 +20,7 @@ export class TutorialSessionLog {
   #writes: Promise<void> = Promise.resolve();
 
   constructor(workspace: string) {
-    this.path = resolve(workspace, "factory", SESSION_LOG_NAME);
+    this.path = resolve(workspace, "factory", ENGINE_STATE_DIRECTORY, SESSION_LOG_NAME);
   }
 
   async exists(): Promise<boolean> {
@@ -51,6 +58,9 @@ export class TutorialSessionLog {
   append(event: TutorialEvent): void {
     if (!isTranscriptEvent(event)) return;
     this.#writes = this.#writes.then(async () => {
+      // The engine's directory is created on demand: factory/ ships with only a
+      // .gitkeep, and starting over removes everything below it.
+      await mkdir(dirname(this.path), { recursive: true });
       await appendFile(this.path, `${JSON.stringify(event)}\n`, "utf8");
     });
   }

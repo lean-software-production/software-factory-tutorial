@@ -5,7 +5,7 @@
   "description": "A browser-led tutorial for building software validation loops.",
   "type": "module",
   "engines": {
-    "node": ">=22.19.0",
+    "node": ">=24.2.0 <25",
     "npm": ">=11.0.0"
   },
   "workspaces": [
@@ -22,6 +22,6 @@
     "check": "npm run test:onboarding && npm run check:eval && npm run test:eval && npm run --workspace=tutorial-engine check && npm run --workspace=calculator test"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.83.0"
+    "@earendil-works/pi-coding-agent": "0.84.0"
   }
 }

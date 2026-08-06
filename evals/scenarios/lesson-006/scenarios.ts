@@ -1,108 +1,180 @@
 import type { ArtifactState, CanonicalPatch, FileExpectation, Scenario } from "../lesson-001/scenarios.js";
 import {
   correctDo, correctLineRun, correctValidateSh, doPath, lesson005FinalState, linePath,
-  refactor, refactorPath, success, successPath, validate, validatePath, validateShPath
+  refactor, refactorPath, success, successPath, validate as validate005, validatePath, validateShPath
 } from "../lesson-005/scenarios.js";
 
-export const repairPath = "factory/refactor/repair.md";
+export const evidencePath = "factory/refactor/evidence.txt";
 
-export const repair = `The success criteria the line is working towards, and the validator's findings on the change just made, are appended below.
-
-Make the smallest change that addresses the failed findings. Do not start a new refactoring, and do not go looking for other things worth improving.
-
-Edit files directly. Do not run tests, npm, or shell commands. Keep your response concise.
+/**
+ * The harness gathers what the validator can no longer run. Indented for the
+ * loop body in `run.sh` and flush for `validate.sh`, which is why it is built
+ * once and re-indented rather than written twice.
+ */
+const evidence = (indent: string) => `${indent}echo "Gathering evidence..."
+${indent}{
+${indent}  echo "=== QUALITY BEFORE (recorded before the doer ran) ==="
+${indent}  cat quality-before.txt
+${indent}  echo
+${indent}  echo "=== QUALITY NOW ==="
+${indent}  (cd ../../calculator && node scripts/quality.mjs) || true
+${indent}  echo
+${indent}  echo "=== TESTS ==="
+${indent}  (cd ../../calculator && npm test 2>&1) || true
+${indent}  echo
+${indent}  echo "=== WORKING DIFF ==="
+${indent}  (cd ../../calculator && git diff -- .)
+${indent}} > evidence.txt
 `;
 
-const verdictBranch = `  verdict=$(grep -m1 -o '^VERDICT: \\(PASS\\|FAIL\\)' validate-findings.txt || echo "VERDICT: FAIL")
-  if [ "$verdict" = "VERDICT: FAIL" ]; then
-    echo "Starting repair..."
-    cat repair.md success.md validate-findings.txt \\
-      | (cd ../../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
-  fi
+/** The validator no longer runs anything, so its prompt stops telling it to. */
+export const readOnlyValidate = `The success criteria the line is working towards, and the evidence gathered about the change just made, are appended below in labelled sections.
+
+Report whether the change was a single behaviour-preserving refactoring that moves the calculator towards those criteria. Work only from the evidence appended below; you cannot run commands, and nothing else about this change is available to you. Quote what the evidence actually says.
+
+Answer in exactly this format, with the verdict on the first non-empty line:
+
+VERDICT: PASS
+
+FINDINGS:
+- [PASS] <success criterion>: <specific evidence>
+- [FAIL] <success criterion>: <specific evidence>
+
+The first non-empty line must be exactly \`VERDICT: PASS\` or \`VERDICT: FAIL\`. Give one finding for every criterion appended below. Do not expect one small refactoring to reach the whole destination, and passing tests alone are not a passing verdict.
 `;
 
-export const correctRoutingRun = correctLineRun.replace("  read -r -p", `${verdictBranch}  read -r -p`);
+export const correctReadOnlyValidateSh = `#!/usr/bin/env bash
+set -euo pipefail
 
-const unanchoredRoutingRun = correctRoutingRun.replace("'^VERDICT: ", "'VERDICT: ");
-const findinglessRepairRun = correctRoutingRun.replace("cat repair.md success.md validate-findings.txt", "cat repair.md success.md");
-const unreadableVerdictPassesRun = correctRoutingRun.replace(`|| echo "VERDICT: FAIL")`, `|| echo "VERDICT: PASS")`);
+cd "$(dirname "$0")"
+if [ ! -f quality-before.txt ]; then
+  echo "No quality baseline. Run ./do.sh first." >&2
+  exit 1
+fi
+${evidence("")}echo "Starting validation..."
+cat validate.md success.md evidence.txt \\
+  | (cd ../../calculator && pi --no-session --tools read,grep,find,ls -p) \\
+  | tee validate-findings.txt
+`;
 
-const routingScriptExpectations: FileExpectation = {
+export const correctReadOnlyRun = `#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+while true; do
+  echo "Recording quality baseline..."
+  (cd ../../calculator && node scripts/quality.mjs) > quality-before.txt || true
+  echo "Starting doer..."
+  cat refactor.md success.md | (cd ../../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
+${evidence("  ")}  echo "Starting validation..."
+  cat validate.md success.md evidence.txt \\
+    | (cd ../../calculator && pi --no-session --tools read,grep,find,ls -p) \\
+    | tee validate-findings.txt
+  read -r -p "Press Enter for the next iteration, or Ctrl-C to stop. "
+done
+`;
+
+/** The boundary left as a sentence: `bash` is still there, and the prompt still asks. */
+const keptShellRun = correctReadOnlyRun.replace("--tools read,grep,find,ls -p", "--tools read,grep,find,ls,bash -p");
+/** Evidence gathered but never handed over, so the prompt defers to nothing. */
+const uncarriedEvidenceRun = correctReadOnlyRun.replace("cat validate.md success.md evidence.txt", "cat validate.md success.md");
+/** Unlabelled sections: two quality reports the validator cannot tell apart. */
+const unlabelledEvidenceRun = correctReadOnlyRun
+  .replace(/ {4}echo "=== [A-Z ()a-z]+ ==="\n/g, "")
+  .replace(/ {4}echo\n/g, "");
+
+const readOnlyRunExpectations: FileExpectation = {
   exists: true,
   contains: [
     /while true; do/,
-    /Recording quality baseline/,
-    /Starting doer/,
-    /Starting validation/,
+    /Gathering evidence/,
+    /=== QUALITY BEFORE/,
+    /=== QUALITY NOW/,
+    /=== TESTS/,
+    /=== WORKING DIFF/,
+    /git diff -- \./,
+    /npm test/,
+    /\} > evidence\.txt/,
+    /cat validate\.md success\.md evidence\.txt/,
+    /--tools read,grep,find,ls -p/,
     /tee validate-findings\.txt/,
-    // The anchor and the failing fallback are the two halves of the parse's correctness.
-    /grep -m1 -o '\^VERDICT: /,
-    /\|\| echo "VERDICT: FAIL"/,
-    /Starting repair/,
-    /cat repair\.md success\.md validate-findings\.txt/,
     /read -r -p/
   ],
-  excludes: [/\(cd \.\.\/calculator && /, /^\s*else$/m]
+  // The shell is the point: the validator must not be able to run anything.
+  excludes: [/read,grep,find,ls,bash/, /\(cd \.\.\/calculator && /]
+};
+
+const readOnlyValidateShExpectations: FileExpectation = {
+  exists: true,
+  contains: [/if \[ ! -f quality-before\.txt \]/, /Gathering evidence/, /git diff -- \./, /cat validate\.md success\.md evidence\.txt/, /--tools read,grep,find,ls -p/],
+  excludes: [/read,grep,find,ls,bash/, /\(cd \.\.\/calculator && /]
 };
 
 export const lesson006FinalState: ArtifactState = {
   ...lesson005FinalState,
-  [repairPath]: { exists: true, contains: [/smallest/i, /appended below/i, /Do not run tests, npm, or shell commands/], excludes: [/success\.md/, /validate-findings\.txt/] },
-  [linePath]: routingScriptExpectations
+  [validatePath]: {
+    exists: true,
+    contains: [/VERDICT: PASS/, /VERDICT: FAIL/, /appended below/i, /one finding for every criterion/i, /cannot run commands|you cannot run/i],
+    // The old prompt told the validator to run things and forbade it from
+    // modifying files. Both belong to a boundary drawn with sentences.
+    excludes: [/Run the evidence each criterion names/i, /do not run shell commands that modify files/i]
+  },
+  [validateShPath]: readOnlyValidateShExpectations,
+  [linePath]: readOnlyRunExpectations
 };
 
 const contains = (path: string, patterns: RegExp[], excludes: RegExp[] = []): ArtifactState => ({ [path]: { exists: true, contains: patterns, excludes } });
 
-/** What lesson 005 left behind: the whole line, ordered but with nothing reading its verdicts. */
+/** What lesson 005 left behind: the whole line, ordered, with a validator that is only asked to behave. */
 export const lesson005Seed: Record<string, string> = {
-  [refactorPath]: refactor, [validatePath]: validate, [successPath]: success,
+  [refactorPath]: refactor, [validatePath]: validate005, [successPath]: success,
   [doPath]: correctDo, [validateShPath]: correctValidateSh, [linePath]: correctLineRun,
   "factory/refactor/quality-before.txt": "eslint: 3 findings\nknip: 1 finding\n"
 };
 
-const repairPromptStep = (): CanonicalPatch => ({
-  name: "repair-prompt", files: { [repairPath]: repair },
-  message: "I've written the repair prompt. Please check it.",
-  preconditions: { [linePath]: { exists: true }, [repairPath]: { exists: false } },
-  expectedState: { [repairPath]: lesson006FinalState[repairPath]! }, checkpoint: "guided-step"
+const promptStep = (): CanonicalPatch => ({
+  name: "read-only-prompt", files: { [validatePath]: readOnlyValidate },
+  message: "I've rewritten the validator's prompt to work from appended evidence. Please check it.",
+  preconditions: { [linePath]: { exists: true }, [validatePath]: { exists: true, contains: [/Run the evidence each criterion names/i] } },
+  expectedState: { [validatePath]: lesson006FinalState[validatePath]! }, checkpoint: "guided-step"
 });
-const branchStep = (): CanonicalPatch => ({
-  name: "branch", files: { [linePath]: correctRoutingRun },
-  message: "I've added the verdict branch. Please check it.",
-  preconditions: { [repairPath]: { exists: true }, [linePath]: { exists: true, excludes: [/repair\.md/] } },
-  expectedState: { [linePath]: routingScriptExpectations }, checkpoint: "guided-step"
+const harnessStep = (): CanonicalPatch => ({
+  name: "gather-evidence", files: { [linePath]: correctReadOnlyRun, [validateShPath]: correctReadOnlyValidateSh },
+  message: "I've moved the evidence gathering into the harness and taken bash away from the validator. Please check it.",
+  preconditions: { [validatePath]: { exists: true, contains: [/cannot run commands|you cannot run/i] }, [linePath]: { exists: true, contains: [/read,grep,find,ls,bash/] } },
+  expectedState: { [linePath]: readOnlyRunExpectations, [validateShPath]: readOnlyValidateShExpectations }, checkpoint: "guided-step"
 });
 
-const branchDefect = (name: "unanchored-verdict" | "repair-without-findings" | "unreadable-verdict-passes"): CanonicalPatch => ({
+const harnessDefect = (name: "kept-shell" | "uncarried-evidence" | "unlabelled-evidence"): CanonicalPatch => ({
   name: "defect",
   files: {
-    [linePath]: name === "unanchored-verdict" ? unanchoredRoutingRun
-      : name === "repair-without-findings" ? findinglessRepairRun : unreadableVerdictPassesRun
+    [linePath]: name === "kept-shell" ? keptShellRun : name === "uncarried-evidence" ? uncarriedEvidenceRun : unlabelledEvidenceRun,
+    [validateShPath]: correctReadOnlyValidateSh
   },
-  message: "I've added the verdict branch. Please give feedback.",
-  preconditions: { [repairPath]: { exists: true }, [linePath]: { exists: true, excludes: [/repair\.md/] } },
-  expectedState: name === "unanchored-verdict"
-    ? contains(linePath, [/grep -m1 -o 'VERDICT: /], [/'\^VERDICT: /])
-    : name === "repair-without-findings"
-      ? contains(linePath, [/cat repair\.md success\.md \\\n/], [/cat repair\.md success\.md validate-findings\.txt/])
-      : contains(linePath, [/\|\| echo "VERDICT: PASS"/], [/\|\| echo "VERDICT: FAIL"/]),
+  message: "I've moved the evidence gathering into the harness. Please give feedback.",
+  preconditions: { [validatePath]: { exists: true, contains: [/cannot run commands|you cannot run/i] }, [linePath]: { exists: true, contains: [/read,grep,find,ls,bash/] } },
+  expectedState: name === "kept-shell"
+    ? contains(linePath, [/--tools read,grep,find,ls,bash -p/])
+    : name === "uncarried-evidence"
+      ? contains(linePath, [/cat validate\.md success\.md \\\n/], [/cat validate\.md success\.md evidence\.txt/])
+      : contains(linePath, [/\} > evidence\.txt/], [/=== QUALITY NOW/]),
   checkpoint: "guided-step"
 });
-const branchRepair = (broken: CanonicalPatch): CanonicalPatch => ({
-  name: "repair", files: { [linePath]: correctRoutingRun },
+const harnessRepair = (broken: CanonicalPatch): CanonicalPatch => ({
+  name: "repair", files: { [linePath]: correctReadOnlyRun, [validateShPath]: correctReadOnlyValidateSh },
   message: "I've applied the smallest repair. Please check it.",
   preconditions: broken.expectedState,
-  expectedState: { [linePath]: routingScriptExpectations }, checkpoint: "correction"
+  expectedState: { [linePath]: readOnlyRunExpectations }, checkpoint: "correction"
 });
 
-const unanchoredDefect = branchDefect("unanchored-verdict");
-const findinglessDefect = branchDefect("repair-without-findings");
-const passingFallbackDefect = branchDefect("unreadable-verdict-passes");
+const keptShellDefect = harnessDefect("kept-shell");
+const uncarriedDefect = harnessDefect("uncarried-evidence");
+const unlabelledDefect = harnessDefect("unlabelled-evidence");
 
 export const lesson006Scenarios: Scenario[] = [
-  { id: "routing-agent-led-happy-path", lesson: "006", mode: "delegate", description: "Delegating learner adds the repair prompt and the verdict branch that selects it.", seed: lesson005Seed, patches: [], finalState: lesson006FinalState },
-  { id: "routing-learner-led-happy-path", lesson: "006", mode: "hands-on", description: "Hands-on learner writes the repair prompt, then branches the line on the verdict, one canonical edit at a time.", seed: lesson005Seed, patches: [repairPromptStep(), branchStep()], finalState: lesson006FinalState },
-  { id: "mistake-unanchored-verdict-parse", lesson: "006", mode: "mistake", description: "Hands-on learner drops the `^` from the verdict pattern.", expectedMistake: "The pattern now matches a verdict quoted anywhere in a sentence, so a validator that recites its own format above a failing verdict is read as a pass, and the repair the file below it asked for never runs.", seed: lesson005Seed, patches: [repairPromptStep(), unanchoredDefect, branchRepair(unanchoredDefect)], finalState: lesson006FinalState },
-  { id: "mistake-repair-without-findings", lesson: "006", mode: "mistake", description: "Hands-on learner invokes the repair machine without appending the validator's findings.", expectedMistake: "The repair machine is asked to answer findings it was never handed, so it has nothing to repair and falls back to guessing.", seed: lesson005Seed, patches: [repairPromptStep(), findinglessDefect, branchRepair(findinglessDefect)], finalState: lesson006FinalState },
-  { id: "mistake-unreadable-verdict-treated-as-pass", lesson: "006", mode: "mistake", description: "Hands-on learner makes an unreadable or missing verdict fall back to `VERDICT: PASS`.", expectedMistake: "The line now reads 'I could not tell' as 'everything is fine' and quietly refactors on top of a change nobody checked; the opposite fallback costs at most one repair turn that was not needed.", seed: lesson005Seed, patches: [repairPromptStep(), passingFallbackDefect, branchRepair(passingFallbackDefect)], finalState: lesson006FinalState }
+  { id: "read-only-agent-led-happy-path", lesson: "006", mode: "delegate", description: "Delegating learner narrows the validator's tools and moves its evidence gathering into the harness.", seed: lesson005Seed, patches: [], finalState: lesson006FinalState },
+  { id: "read-only-learner-led-happy-path", lesson: "006", mode: "hands-on", description: "Hands-on learner rewrites the validator's prompt to work from appended evidence, then gathers that evidence in the harness and takes the shell away, one canonical edit at a time.", seed: lesson005Seed, patches: [promptStep(), harnessStep()], finalState: lesson006FinalState },
+  { id: "mistake-validator-keeps-its-shell", lesson: "006", mode: "mistake", description: "Hands-on learner gathers the evidence in the harness but leaves `bash` in the validator's toolset.", expectedMistake: "The evidence now arrives appended and the validator can still run anything it likes, so the boundary is still a sentence in a prompt rather than a property of the harness — which is the one thing this lesson exists to change.", seed: lesson005Seed, patches: [promptStep(), keptShellDefect, harnessRepair(keptShellDefect)], finalState: lesson006FinalState },
+  { id: "mistake-evidence-never-handed-over", lesson: "006", mode: "mistake", description: "Hands-on learner writes `evidence.txt` but does not append it to the validator's prompt.", expectedMistake: "The prompt defers to evidence appended below and nothing is appended, so a validator that can no longer gather anything itself is asked to report on a change it cannot see.", seed: lesson005Seed, patches: [promptStep(), uncarriedDefect, harnessRepair(uncarriedDefect)], finalState: lesson006FinalState },
+  { id: "mistake-evidence-sections-unlabelled", lesson: "006", mode: "mistake", description: "Hands-on learner concatenates the evidence without its section headers.", expectedMistake: "Two of the blocks are quality reports, so without labels the validator cannot tell the baseline from the current state and has no way to say whether anything improved.", seed: lesson005Seed, patches: [promptStep(), unlabelledDefect, harnessRepair(unlabelledDefect)], finalState: lesson006FinalState }
 ];

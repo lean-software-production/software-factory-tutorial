@@ -16,6 +16,44 @@ describe("coachingSystemPrompt", () => {
     expect(prompt).toContain("small code snippet");
   });
 
+  it("names the current specification, so the tutor never resolves progress itself", () => {
+    // Progress lives in factory/, outside the ledger the tutor can read, so the
+    // engine has to say which lesson the learner is on.
+    const prompt = coachingSystemPrompt(lesson, "docs/specs/006-put-the-validator-on-a-read-only-harness.md");
+
+    expect(prompt).toContain("then docs/specs/006-put-the-validator-on-a-read-only-harness.md, which is the specification for the lesson the learner is on");
+    expect(prompt).not.toContain("the first specification whose ledger status is Todo");
+  });
+
+  it("falls back to the first unfinished lesson when there is no current specification", () => {
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("then the first specification the learner has not finished");
+  });
+
+  it("briefs a learner who skipped Part 1 on the files they did not build", () => {
+    const prompt = coachingSystemPrompt(lesson, "docs/specs/005-join-them-into-an-assembly-line.md", true);
+
+    expect(prompt).toContain("This learner skipped Part 1");
+    expect(prompt).toContain("Do not pretend they wrote them");
+    expect(prompt).toContain("they can go back to it");
+  });
+
+  it("says nothing about skipping to a learner who is working through Part 1", () => {
+    expect(coachingSystemPrompt(lesson, "docs/specs/002-build-a-doer.md")).not.toContain("skipped Part 1");
+  });
+
+  it("teaches the mechanism where a specification states a principle figuratively", () => {
+    // The coach paraphrases specs faithfully, so a figurative payoff sentence
+    // reaches the learner intact — lesson 006 shipped one that described the
+    // harness as carrying evidence to a machine that could not reach for it.
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("teach the mechanism instead");
+    expect(prompt).toContain("which capability was removed");
+    expect(prompt).toContain("never stack two of them in one sentence");
+  });
+
   it("defaults generated success criteria to Kent Beck's four rules", () => {
     const prompt = coachingSystemPrompt(lesson);
 
@@ -54,6 +92,34 @@ describe("coachingSystemPrompt", () => {
 
     expect(prompt).toContain("At the end of every lesson, stop there.");
     expect(prompt).toContain("offer a choice between pausing for now and continuing to the next lesson");
+  });
+
+  it("records the lesson as finished before offering the choice, so pausing still advances the outline", () => {
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("use complete_lesson once, and then offer a choice");
+    expect(prompt).toContain("record it before the choice, not after");
+    // The Part 1 ending replaces the ordinary closing beat wholesale, so it has
+    // to carry the bookkeeping too or the outline stalls at the part boundary.
+    expect(prompt).toContain("use complete_lesson, and offer a choice between finishing for now");
+  });
+
+  it("names the terminal each command belongs in once more than one is in play", () => {
+    // From lesson 010 the line keeps a terminal busy while the learner watches
+    // or steers it from another. A watcher typed into the occupied terminal
+    // prints nothing, which reads as a broken lesson rather than a wrong window.
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("second terminal at the repository root");
+    expect(prompt).toContain("Name which terminal each command belongs in");
+  });
+
+  it("does not invent an artefact for a lesson that builds nothing", () => {
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("creates no files");
+    expect(prompt).toContain("do not offer to build anything");
+    expect(prompt).toContain("questions the learner answers in their own words");
   });
 
   it("holds the learner at the end of Part 1 with the stronger, more specific beat", () => {

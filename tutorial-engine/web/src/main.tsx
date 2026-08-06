@@ -82,7 +82,13 @@ function ChoiceCard({ event, send, disabled }: { event: Extract<Event, { type: "
 
 function SessionStartCard({ session, send, disabled }: { session: SessionBootstrap; send: (message: BrowserMessage) => void; disabled: boolean }) {
   if (session.state !== "select") return null;
-  return <Card title="Continue this tutorial?" className="choice"><p>A saved session was found. Resume keeps the factory files and shows the earlier transcript. Starting again removes everything in <code>factory/</code>.</p><div className="options"><button disabled={disabled} onClick={() => send({ type: "start-session", mode: "resume" })}><span className="choice-option-label"><ChoiceIcon category="do" /><strong>Resume saved session</strong></span></button><button disabled={disabled} onClick={() => send({ type: "start-session", mode: "fresh" })}><span className="choice-option-label"><ChoiceIcon category="restart" /><strong>Start again</strong></span><span className="choice-option-description">Deletes factory/* and begins from the first step.</span></button></div></Card>;
+  const partTwo = <button disabled={disabled} onClick={() => send({ type: "start-session", mode: "part-2" })}><span className="choice-option-label"><ChoiceIcon category="automate" /><strong>Start at Part 2</strong></span><span className="choice-option-description">Copies Part 1's finished files into factory/ and begins the assembly line. Part 1 builds those by hand.</span></button>;
+  // Offered saved session or not: a first-time learner is the one most likely to
+  // want Part 2, and they have no saved session to be asked about.
+  if (!session.hasSavedSession) {
+    return <Card title="Where would you like to begin?" className="choice"><p>Part 1 builds one agent at a time and runs everything by hand. Part 2 joins them into an assembly line, and can start from Part 1's finished files.</p><div className="options"><button disabled={disabled} onClick={() => send({ type: "start-session", mode: "fresh" })}><span className="choice-option-label"><ChoiceIcon category="do" /><strong>Start at the beginning</strong></span><span className="choice-option-description">Builds everything yourself, from the first step.</span></button>{partTwo}</div></Card>;
+  }
+  return <Card title="Continue this tutorial?" className="choice"><p>A saved session was found. Resume keeps the factory files and shows the earlier transcript. The other options remove everything in <code>factory/</code>.</p><div className="options"><button disabled={disabled} onClick={() => send({ type: "start-session", mode: "resume" })}><span className="choice-option-label"><ChoiceIcon category="do" /><strong>Resume saved session</strong></span></button><button disabled={disabled} onClick={() => send({ type: "start-session", mode: "fresh" })}><span className="choice-option-label"><ChoiceIcon category="restart" /><strong>Start again</strong></span><span className="choice-option-description">Deletes factory/* and begins from the first step.</span></button>{partTwo}</div></Card>;
 }
 
 function App() {
@@ -109,6 +115,7 @@ function App() {
     source.onerror = () => setServerConnection("disconnected");
     source.onmessage = ({ data }) => {
       const event = parseTutorialEvent(data) as WireEvent;
+      if (event.type === "progress") { setProgress(event.progress); return; }
       if (event.type === "snapshot") { setTitle(event.title); setState(event.runState); setActivity(event.activity); setEvents(event.events.reduce(applyEvent, [])); setValidationCommands(event.validationCommands); setProgress(event.progress); setSession(event.session); return; }
       if (event.type === "run-state") setState(event.state);
       if (event.type === "activity") { setActivity(event.text); return; }

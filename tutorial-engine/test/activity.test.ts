@@ -63,6 +63,9 @@ describe("activity events", () => {
     expect(isTranscriptEvent({ type: "user-message", markdown: "hello" })).toBe(true);
     expect(isTranscriptEvent(activity)).toBe(false);
     expect(isTranscriptEvent({ type: "session-state", session: { state: "active", hasSavedSession: false } })).toBe(false);
+    // The outline is state, not transcript: replaying it from a resumed session
+    // would restore the highlight as it stood when that lesson was recorded.
+    expect(isTranscriptEvent({ type: "progress", progress: [] })).toBe(false);
   });
 });
 

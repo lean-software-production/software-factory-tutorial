@@ -11,13 +11,20 @@ import { lesson002Scenarios } from "../scenarios/lesson-002/scenarios.js";
 import { lesson003Scenarios } from "../scenarios/lesson-003/scenarios.js";
 import { lesson004Scenarios } from "../scenarios/lesson-004/scenarios.js";
 import { lesson005Scenarios } from "../scenarios/lesson-005/scenarios.js";
-import { lesson006Scenarios } from "../scenarios/lesson-006/scenarios.js";
+import { correctReadOnlyRun, lesson006Scenarios } from "../scenarios/lesson-006/scenarios.js";
+import { correctBranchedRun, lesson007Scenarios } from "../scenarios/lesson-007/scenarios.js";
+import { lesson008Scenarios } from "../scenarios/lesson-008/scenarios.js";
+import { lesson009Scenarios } from "../scenarios/lesson-009/scenarios.js";
+import { lesson010Scenarios } from "../scenarios/lesson-010/scenarios.js";
+import { lesson011Scenarios } from "../scenarios/lesson-011/scenarios.js";
+import { lesson012Scenarios } from "../scenarios/lesson-012/scenarios.js";
+import { lesson013Scenarios } from "../scenarios/lesson-013/scenarios.js";
 import { loadActiveSpec } from "../harness/judge.js";
 import type { SessionTrace } from "../harness/session.js";
 import { loadLesson } from "../../tutorial-engine/src/lesson/load.js";
 import type { ChoiceIconCategory } from "../../tutorial-engine/src/protocol/events.js";
 
-const allScenarios = [...scenarios, ...lesson002Scenarios, ...lesson003Scenarios, ...lesson004Scenarios, ...lesson005Scenarios, ...lesson006Scenarios];
+const allScenarios = [...scenarios, ...lesson002Scenarios, ...lesson003Scenarios, ...lesson004Scenarios, ...lesson005Scenarios, ...lesson006Scenarios, ...lesson007Scenarios, ...lesson008Scenarios, ...lesson009Scenarios, ...lesson010Scenarios, ...lesson011Scenarios, ...lesson012Scenarios, ...lesson013Scenarios];
 const mistakeScenarios = allScenarios.filter((scenario) => scenario.mode === "mistake");
 
 function traceFor(scenario: Scenario): SessionTrace {
@@ -72,9 +79,12 @@ describe("live-eval regression coverage", () => {
     expect(happy.patches.every((patch) => Object.keys(patch.files).length === 1)).toBe(true);
   });
 
-  it("covers all six lessons, and grades the two that build nothing by transcript alone", () => {
-    expect([...new Set(allScenarios.map((scenario) => scenario.lesson))].sort()).toEqual(["001", "002", "003", "004", "005", "006"]);
-    for (const scenario of allScenarios.filter((item) => item.lesson === "001" || item.lesson === "004")) {
+  it("covers all thirteen lessons, and grades the three that build nothing by transcript alone", () => {
+    expect([...new Set(allScenarios.map((scenario) => scenario.lesson))].sort())
+      .toEqual(["001", "002", "003", "004", "005", "006", "007", "008", "009", "010", "011", "012", "013"]);
+    // 001 runs one command, 004 runs what Part 1 left it, and 013 names what
+    // Part 2 already built. None of them produces an artefact to grade.
+    for (const scenario of allScenarios.filter((item) => ["001", "004", "013"].includes(item.lesson))) {
       expect(scenario.patches, scenario.id).toEqual([]);
       expect(scenario.finalState, scenario.id).toBeUndefined();
       expect(scenario.description.length, scenario.id).toBeGreaterThan(80);
@@ -83,7 +93,7 @@ describe("live-eval regression coverage", () => {
 
   it.each(allScenarios.filter((scenario) => scenario.mode === "hands-on" && scenario.patches.length === 0))(
     "drives $id to completion on the tutor's own stopping point", (scenario) => {
-      // Lessons 001 and 004 build nothing, so there is no last patch to end on.
+      // Lessons 001, 004 and 013 build nothing, so there is no last patch to end on.
       // Without a route of its own such a scenario can only end in a protocol
       // error, whatever the tutor does, which is how seven of them shipped.
       const choice = (id: string, icons: ChoiceIconCategory[]) => ({
@@ -142,11 +152,12 @@ describe("live-eval regression coverage", () => {
   }, 30000);
 
   it("seeds every lesson that needs an earlier lesson's artefacts, and only those", () => {
-    // The test is what a lesson *needs* on disk, not what it builds. Lessons 001
-    // and 002 start from nothing. Lesson 004 builds nothing but runs everything
-    // Part 1 left behind, and 003, 005 and 006 extend or move it.
+    // The test is what a lesson *needs* on disk, not what it builds. Only 001
+    // and 002 start from nothing: 004 builds nothing but runs everything Part 1
+    // left behind, 005 moves it, and every lesson after that extends the line
+    // or the factory around it.
     for (const scenario of allScenarios) {
-      const expected = ["003", "004", "005", "006"].includes(scenario.lesson);
+      const expected = !["001", "002"].includes(scenario.lesson);
       expect(Boolean(scenario.seed && Object.keys(scenario.seed).length), `${scenario.id} seed`).toBe(expected);
     }
   });
@@ -189,18 +200,20 @@ describe("live-eval regression coverage", () => {
     const workspace = await mkdtemp(join(tmpdir(), "eval-lesson-"));
     const ledger = [
       "## Part 1 — The validation loop", "",
-      "| Lesson | Goal | Status |", "| --- | --- | --- |",
-      "| [001](001-run-an-agent-headlessly.md) | Run an agent headlessly | Todo |",
-      "| [002](002-build-a-doer.md) | Build a doer | Todo |", ""
+      "| Lesson | Goal |", "| --- | --- |",
+      "| [001](001-run-an-agent-headlessly.md) | Run an agent headlessly |",
+      "| [002](002-build-a-doer.md) | Build a doer |", ""
     ].join("\n");
     await writeFile(join(workspace, "README.md"), "# Test\n");
     await (await import("node:fs/promises")).mkdir(join(workspace, "docs/specs"), { recursive: true });
     await writeFile(join(workspace, "docs/specs/README.md"), ledger);
     try {
       await activateLesson(workspace, "002");
-      const activated = await readFile(join(workspace, "docs/specs/README.md"), "utf8");
-      expect(activated).toContain("[001](001-run-an-agent-headlessly.md) | Run an agent headlessly | Done");
-      expect(activated).toContain("[002](002-build-a-doer.md) | Build a doer | Todo");
+      // The ledger is curriculum: activating a lesson records progress in the
+      // workspace, and leaves the shipped file exactly as it was.
+      expect(await readFile(join(workspace, "docs/specs/README.md"), "utf8")).toBe(ledger);
+      expect(JSON.parse(await readFile(join(workspace, "factory/.tmp/tutorial-progress.json"), "utf8")))
+        .toEqual({ completed: ["001"], skipped: [] });
       await writeFile(join(workspace, "docs/specs/001-run-an-agent-headlessly.md"), "obsolete inactive spec", "utf8");
       await writeFile(join(workspace, "docs/specs/002-build-a-doer.md"), "# Active doer spec", "utf8");
       await expect(loadActiveSpec(workspace, "002")).resolves.toBe("# Active doer spec");
@@ -460,17 +473,6 @@ while true; do
 done
 `;
 
-const canonicalRoutingScript = canonicalLineScript.replace(
-  `  read -r -p`,
-  `  verdict=$(grep -m1 -o '^VERDICT: \\(PASS\\|FAIL\\)' validate-findings.txt || echo "VERDICT: FAIL")
-  if [ "$verdict" = "VERDICT: FAIL" ]; then
-    echo "Starting repair..."
-    cat repair.md success.md validate-findings.txt \\
-      | (cd ../../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
-  fi
-  read -r -p`
-);
-
 const canonicalSuccess = `# Success criteria
 
 These criteria describe the destination for many small refactorings, not a checklist for one turn.
@@ -649,35 +651,66 @@ describe("deterministicGate per-lesson factory assertions", () => {
     } finally { await rm(workspace, { recursive: true, force: true }); }
   }, 30000);
 
-  it("grades the lesson 006 verdict branch", async () => {
-    const workspace = await workspaceWith({ "factory/refactor/run.sh": canonicalRoutingScript });
+  it("grades the lesson 006 read-only harness", async () => {
+    const workspace = await workspaceWith({ "factory/refactor/run.sh": correctReadOnlyRun });
     try {
       const gate = await deterministicGate(gateScenario("006", "hands-on"), workspace, emptyTrace());
-      for (const name of ["factory syntax", "loop pause", "iteration turns", "line roles", "shared success criteria", "findings saved", "anchored verdict parse", "failed verdict routes to repair", "repair carries the findings", "repair tool boundary"]) {
-        expect(passed(gate, name)).toBe(true);
+      for (const name of ["factory syntax", "loop pause", "iteration turns", "doer unchanged", "validator has no shell", "evidence announced", "harness gathers the diff", "harness gathers the tests", "evidence carried and labelled", "findings saved"]) {
+        expect(passed(gate, name), name).toBe(true);
       }
-      expect(gate.stub?.callsBeforeEnter).toBe(3);
-      expect(gate.stub?.reportBeforeEnter).toContain("VERDICT: FAIL");
     } finally { await rm(workspace, { recursive: true, force: true }); }
   }, 30000);
 
-  it("fails the lesson 006 gate when the verdict pattern loses its anchor", async () => {
-    const workspace = await workspaceWith({ "factory/refactor/run.sh": canonicalRoutingScript.replace("'^VERDICT:", "'VERDICT:") });
+  it("fails the lesson 006 gate when the validator keeps its shell", async () => {
+    const workspace = await workspaceWith({
+      "factory/refactor/run.sh": correctReadOnlyRun.replace("--tools read,grep,find,ls -p", "--tools read,grep,find,ls,bash -p")
+    });
     try {
       const gate = await deterministicGate(gateScenario("006", "hands-on"), workspace, emptyTrace());
+      expect(passed(gate, "validator has no shell")).not.toBe(true);
+      // The evidence still reaches it; only the boundary is wrong.
+      expect(passed(gate, "evidence carried and labelled")).toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("fails the lesson 006 gate when the evidence is never handed over", async () => {
+    const workspace = await workspaceWith({
+      "factory/refactor/run.sh": correctReadOnlyRun.replace("cat validate.md success.md evidence.txt", "cat validate.md success.md")
+    });
+    try {
+      const gate = await deterministicGate(gateScenario("006", "hands-on"), workspace, emptyTrace());
+      expect(passed(gate, "evidence carried and labelled")).not.toBe(true);
+      expect(passed(gate, "validator has no shell")).toBe(true);
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 30000);
+
+  it("grades the lesson 007 verdict branch and commit station", async () => {
+    const workspace = await workspaceWith({ "factory/refactor/run.sh": correctBranchedRun });
+    try {
+      const gate = await deterministicGate(gateScenario("007", "hands-on"), workspace, emptyTrace());
+      for (const name of ["factory syntax", "loop pause", "anchored verdict parse", "failing fallback", "doer boundary", "validator has no shell", "shared success criteria", "passing verdict commits", "commit station writes only", "deterministic commit", "failed verdict routes to repair", "repair carries the findings", "repair tool boundary", "failed verdict does not commit"]) {
+        expect(passed(gate, name), name).toBe(true);
+      }
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+  }, 60000);
+
+  it("fails the lesson 007 gate when the verdict pattern loses its anchor", async () => {
+    const workspace = await workspaceWith({ "factory/refactor/run.sh": correctBranchedRun.replace("'^VERDICT:", "'VERDICT:") });
+    try {
+      const gate = await deterministicGate(gateScenario("007", "hands-on"), workspace, emptyTrace());
       expect(passed(gate, "anchored verdict parse")).not.toBe(true);
       expect(passed(gate, "failed verdict routes to repair")).toBe(true);
     } finally { await rm(workspace, { recursive: true, force: true }); }
-  }, 30000);
+  }, 60000);
 
-  it("fails the lesson 006 gate when a failing verdict starts no repair", async () => {
-    const workspace = await workspaceWith({ "factory/refactor/run.sh": canonicalLineScript });
+  it("fails the lesson 007 gate when a failing verdict starts no repair", async () => {
+    const workspace = await workspaceWith({ "factory/refactor/run.sh": correctReadOnlyRun });
     try {
-      const gate = await deterministicGate(gateScenario("006", "hands-on"), workspace, emptyTrace());
+      const gate = await deterministicGate(gateScenario("007", "hands-on"), workspace, emptyTrace());
       expect(passed(gate, "failed verdict routes to repair")).not.toBe(true);
-      expect(passed(gate, "iteration turns")).not.toBe(true);
+      expect(passed(gate, "passing verdict commits")).not.toBe(true);
     } finally { await rm(workspace, { recursive: true, force: true }); }
-  }, 30000);
+  }, 60000);
 });
 
 describe("deterministicGate delegated file scope", () => {
@@ -687,7 +720,8 @@ describe("deterministicGate delegated file scope", () => {
     "002": ["factory/refactor-do.sh", "factory/refactor-quality-before.txt", "factory/refactor.md"],
     "003": ["factory/refactor-do.sh", "factory/refactor-quality-before.txt", "factory/refactor-validate-findings.txt", "factory/refactor-validate.md", "factory/refactor-validate.sh", "factory/refactor.md"],
     "005": ["factory/refactor/do.sh", "factory/refactor/quality-before.txt", "factory/refactor/refactor.md", "factory/refactor/run.sh", "factory/refactor/success.md", "factory/refactor/validate-findings.txt", "factory/refactor/validate.md", "factory/refactor/validate.sh"],
-    "006": ["factory/refactor/do.sh", "factory/refactor/quality-before.txt", "factory/refactor/refactor.md", "factory/refactor/repair.md", "factory/refactor/run.sh", "factory/refactor/success.md", "factory/refactor/validate-findings.txt", "factory/refactor/validate.md", "factory/refactor/validate.sh"]
+    "006": ["factory/refactor/do.sh", "factory/refactor/evidence.txt", "factory/refactor/quality-before.txt", "factory/refactor/refactor.md", "factory/refactor/run.sh", "factory/refactor/success.md", "factory/refactor/validate-findings.txt", "factory/refactor/validate.md", "factory/refactor/validate.sh"],
+    "007": ["factory/refactor/commit-message.txt", "factory/refactor/commit.md", "factory/refactor/do.sh", "factory/refactor/evidence.txt", "factory/refactor/quality-before.txt", "factory/refactor/refactor.md", "factory/refactor/repair.md", "factory/refactor/run.sh", "factory/refactor/success.md", "factory/refactor/validate-findings.txt", "factory/refactor/validate.md", "factory/refactor/validate.sh"]
   };
 
   it.each(Object.keys(scopeFiles))("accepts exactly what lesson %s leaves behind", async (lesson) => {

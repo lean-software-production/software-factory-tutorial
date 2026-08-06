@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { readProgress } from "../../tutorial-engine/src/lesson/load.js";
+import { LessonProgressStore } from "../../tutorial-engine/src/lesson/progress-store.js";
 import type { TutorialEvent } from "../../tutorial-engine/src/protocol/events.js";
 import type { Scenario } from "../scenarios/lesson-001/scenarios.js";
 import type { GateResult } from "./assertions.js";
@@ -87,19 +89,16 @@ export async function runJudgeCalibration(directory: string): Promise<Array<{ fi
   return results;
 }
 
+/**
+ * The specification the workspace is actually on, checked against the one the
+ * scenario asked for. Progress comes from `factory/.tmp/`, the same place the
+ * engine reads it, so this cannot drift from what the tutor would open.
+ */
 export async function loadActiveSpec(workspace: string, lesson: string): Promise<string> {
   const ledger = await readFile(join(workspace, "docs/specs/README.md"), "utf8");
-  const rows = ledger.split(/\r?\n/).filter((line) => line.trimStart().startsWith("|"));
-  for (const row of rows) {
-    const cells = row.split("|").slice(1, -1).map((cell) => cell.trim());
-    if (cells.length < 3 || !["Todo", "Done"].includes(cells[2] ?? "")) continue;
-    if (cells[2] === "Done") continue;
-    const link = cells[0]?.match(/\[([^\]]+)\]\(([^)]+)\)/);
-    const id = link?.[1] ?? cells[0];
-    const href = link?.[2];
-    if (!href) throw new Error(`Active ledger row for lesson '${id}' has no specification link.`);
-    if (id !== lesson) throw new Error(`Workspace active lesson is '${id}', not requested lesson '${lesson}'.`);
-    return readFile(resolve(workspace, "docs/specs", href), "utf8");
-  }
-  throw new Error(`Active specification for lesson '${lesson}' was not found in docs/specs/README.md.`);
+  const progress = readProgress(ledger, await new LessonProgressStore(workspace).read());
+  const current = progress.find((item) => item.state === "current");
+  if (!current?.spec) throw new Error(`Active specification for lesson '${lesson}' was not found in docs/specs/README.md.`);
+  if (current.id !== lesson) throw new Error(`Workspace active lesson is '${current.id}', not requested lesson '${lesson}'.`);
+  return readFile(resolve(workspace, "docs/specs", current.spec), "utf8");
 }

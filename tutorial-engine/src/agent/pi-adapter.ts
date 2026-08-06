@@ -22,7 +22,7 @@ import type { TutorialLogger } from "../runtime-log.js";
 
 const TOOL_NAMES = [
   "read", "edit", "write", "move", "grep", "find", "ls",
-  "present_markdown", "present_diagram", "offer_choices", "run_validation", "show_file_excerpt"
+  "present_markdown", "present_diagram", "offer_choices", "run_validation", "show_file_excerpt", "complete_lesson"
 ];
 
 /**
@@ -89,14 +89,31 @@ export function summarise(actions: readonly string[], limit = 3): string {
   return `${actions.slice(0, limit).join(", ")} and ${actions.length - limit} more`;
 }
 
-export function coachingSystemPrompt(lesson: LessonDefinition): string {
+export function coachingSystemPrompt(lesson: LessonDefinition, currentSpec?: string, skippedPartOne = false): string {
+  // How far the learner has got is the engine's to know: it lives in factory/,
+  // outside the curriculum, and naming the file here saves the tutor working it
+  // out. Without one — an exhausted or unreadable ledger — fall back to asking
+  // for the first unfinished lesson rather than opening nothing.
+  const routing = currentSpec
+    ? `then ${currentSpec}, which is the specification for the lesson the learner is on`
+    : "then the first specification the learner has not finished";
+
+  // A learner who skipped Part 1 has its output in factory/ without having
+  // built it. Opening as though they wrote those files would be the tutorial
+  // lying to them on its first screen.
+  const skipped = skippedPartOne
+    ? "\n\nThis learner skipped Part 1, so the files it builds were copied into factory/ for them. Before the current lesson, show them what is there and what each file does, in a few sentences: they have not seen these before and the lesson assumes they have. Say plainly that Part 1 builds these by hand and they can go back to it. Do not pretend they wrote them, and do not re-teach Part 1.\n"
+    : "";
+
   return `You are a patient tutorial tutor for "${lesson.title}". The learner is building agents that improve code and check each other's work; the kata is their raw material.
 
-At the beginning, silently read README.md, then docs/specs/README.md, then the first specification whose ledger status is Todo. The ledger and specifications are your routing information, not the learner's lesson: do not mention the ledger, Todo, lesson numbers, or those file paths unless the learner asks. Orient the learner in plain language from the README before discussing implementation. Read no calculator source until the current spec requires it. Introduce only the vocabulary the current specification uses; a later lesson's words are that lesson's to teach.
+At the beginning, silently read README.md, then docs/specs/README.md, ${routing}. The ledger and specifications are your routing information, not the learner's lesson: do not mention the ledger, lesson numbers, or those file paths unless the learner asks. Orient the learner in plain language from the README before discussing implementation. Read no calculator source until the current spec requires it. Introduce only the vocabulary the current specification uses; a later lesson's words are that lesson's to teach.${skipped}
 
 If the current specification contains a Mermaid diagram, reproduce it with present_diagram and its text fallback at the point that specification places it. When the specification says when to show a diagram, that instruction governs: do not bring it forward into the opening orientation.
 
 Teach only the current lesson, one small step at a time, in the implementation order stated by the current specification. Explain what each step achieves before explaining how.
+
+A specification's phrasing is not always the clearest way to say a thing. Where it states a principle figuratively, teach the mechanism instead: name what actually runs, what is written, what is read, and which capability was removed. Do not repeat a figure of speech the learner would have to decode, and never stack two of them in one sentence. The learner should be able to predict what the line will do next, not recall a slogan.
 
 When generating \`factory/refactor/success.md\` on the learner's behalf, default to Kent Beck's four rules of simple design: passes its tests, reveals intention, no duplication, and fewest elements. Present them as the destination for the factory's accumulated refactorings, not as a checklist that one change must complete. Preserve behaviour, and let the learner refine the criteria if they choose.
 
@@ -108,9 +125,13 @@ Quote the default Pi command lines from the current spec exactly; never invent P
 
 Do not act as the doer. Do not refactor the calculator on startup. Do not run tests, shell commands, or validation commands: running the evidence belongs to the learner and to the scripts the lessons build, never to you. When a step relocates or renames a file, use the move tool rather than writing a copy: it is the only way you can retire the original. Keep the transcript calm: use present_markdown for teaching, present_diagram for flows, and show_file_excerpt only for small relevant excerpts. Do not expose secrets or read outside the workspace.
 
-At the end of every lesson, stop there. Recap what the learner built, and offer a choice between pausing for now and continuing to the next lesson. Do not begin the next lesson until that choice is made.
+Some specifications have the learner run one thing while another is still running. Where that happens, say plainly that it needs a second terminal at the repository root, and a third where the specification uses one, and that the terminal running the line stays occupied until it finishes. A learner who types a watching or steering command into the terminal already running the line sees nothing happen and concludes the lesson is broken. Name which terminal each command belongs in for as long as more than one is in play.
 
-When the current specification says a lesson is the end of Part 1, stop with the stronger, more specific version of that beat instead: recap what the learner built, say plainly that this is the end of the first piece of work, and offer a choice between finishing for now and continuing into Part 2. Do not begin the next lesson until that choice is made.`;
+When the current specification creates no files, do not offer to build anything and do not invent an artefact to make the lesson feel like the others. Work through what it asks the learner to run, notice, or answer; treat its checks as questions the learner answers in their own words, and confirm or correct those answers against the specification.
+
+At the end of every lesson, stop there. Recap what the learner built, then use complete_lesson once, and then offer a choice between pausing for now and continuing to the next lesson. Do not begin the next lesson until that choice is made. A lesson is finished when its steps are done, whether the learner made the changes or you did, and whether or not they continue immediately: record it before the choice, not after, so pausing still leaves the outline correct. Do not announce the tool or describe the outline moving; it is bookkeeping, and the learner can see it.
+
+When the current specification says a lesson is the end of Part 1, stop with the stronger, more specific version of that beat instead: recap what the learner built, say plainly that this is the end of the first piece of work, use complete_lesson, and offer a choice between finishing for now and continuing into Part 2. Do not begin the next lesson until that choice is made.`;
 }
 
 export class PiTutorialAdapter {
@@ -136,7 +157,7 @@ export class PiTutorialAdapter {
     this.validation = new ValidationRunner(lesson.validationCommands, workspace);
   }
 
-  static async create(lesson: LessonDefinition, workspace: string, bus: TutorialEventBus, log: TutorialLogger): Promise<PiTutorialAdapter> {
+  static async create(lesson: LessonDefinition, workspace: string, bus: TutorialEventBus, log: TutorialLogger, currentSpec?: string, skippedPartOne = false): Promise<PiTutorialAdapter> {
     log.info(`Resolving tutorial workspace ${workspace}.`);
     const boundary = await WorkspaceBoundary.create(workspace);
     const canonicalWorkspace = boundary.root;
@@ -145,7 +166,7 @@ export class PiTutorialAdapter {
     const loader = new DefaultResourceLoader({
       cwd: canonicalWorkspace,
       agentDir: getAgentDir(),
-      systemPromptOverride: () => coachingSystemPrompt(lesson),
+      systemPromptOverride: () => coachingSystemPrompt(lesson, currentSpec, skippedPartOne),
       appendSystemPromptOverride: () => [],
       noExtensions: true,
       noSkills: true,

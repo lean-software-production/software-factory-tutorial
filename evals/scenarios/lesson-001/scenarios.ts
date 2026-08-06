@@ -27,7 +27,7 @@ export interface CanonicalPatch {
 
 export interface Scenario {
   id: string;
-  lesson: "001" | "002" | "003" | "004" | "005" | "006";
+  lesson: "001" | "002" | "003" | "004" | "005" | "006" | "007" | "008" | "009" | "010" | "011" | "012" | "013";
   mode: LearnerMode;
   description: string;
   /**

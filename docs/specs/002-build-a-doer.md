@@ -20,8 +20,9 @@ Teach and build this lesson in this order. Complete each small step before movin
    set -euo pipefail
 
    cd "$(dirname "$0")"
+   mkdir -p .tmp
    echo "Recording quality baseline..."
-   (cd ../calculator && node scripts/quality.mjs) > refactor-quality-before.txt || true
+   (cd ../calculator && node scripts/quality.mjs) > .tmp/refactor-quality-before.txt || true
    echo "Starting doer..."
    cat refactor.md | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
    ```

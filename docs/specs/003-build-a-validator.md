@@ -44,14 +44,15 @@ in this order:
    set -euo pipefail
 
    cd "$(dirname "$0")"
-   if [ ! -f refactor-quality-before.txt ]; then
+   mkdir -p .tmp
+   if [ ! -f .tmp/refactor-quality-before.txt ]; then
      echo "No quality baseline. Run ./refactor-do.sh first." >&2
      exit 1
    fi
    echo "Starting validation..."
-   cat refactor-validate.md refactor-quality-before.txt \
+   cat refactor-validate.md .tmp/refactor-quality-before.txt \
      | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
-     | tee refactor-validate-findings.txt
+     | tee .tmp/refactor-validate-findings.txt
    ```
 
    The validator gets `bash` so it can run the quality check, and no `edit` or `write` so it cannot
@@ -92,7 +93,7 @@ Then check the guard. The run above left a baseline behind, so delete it and run
 own:
 
 ```sh
-rm factory/refactor-quality-before.txt
+rm factory/.tmp/refactor-quality-before.txt
 ./factory/refactor-validate.sh
 ```
 

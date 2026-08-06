@@ -11,11 +11,12 @@
 FROM mcr.microsoft.com/devcontainers/base:bookworm
 
 ARG TARGETARCH
-# package.json requires node >=22.19.0. Same pin as the projects image.
-ARG NODE_VERSION=22.22.3
-# Node 22 bundles npm 10, which silently strips the `libc` field this
-# repository's lockfile uses. The README tells participants to upgrade; the
-# image does it for them.
+# package.json requires node >=24.2.0 <25. Below 24.2 the `npm run setup`
+# preflight silently no-ops, and Node 23 emits an experimental-feature warning
+# on stderr that fails the calculator's own test suite.
+ARG NODE_VERSION=24.19.0
+# Node 24 already bundles npm 11; pinning it keeps the image reproducible rather
+# than inheriting whatever the Node tarball happened to ship.
 ARG NPM_VERSION=11.19.0
 # Pinned to the version this repository depends on, so the globally installed
 # `pi` the lessons call matches the SDK the tutor engine imports.
@@ -35,8 +36,8 @@ RUN apt-get update \
 # Layer 2: Node.js (sha-verified tarball)
 # -----------------------------------------------------------------------------
 RUN case "${TARGETARCH}" in \
-      amd64) node_arch=x64; node_sha=2e5d13569282d016861fae7c8f935e741693c269101a5bebcf761a5376d1f99f ;; \
-      arm64) node_arch=arm64; node_sha=1c4a9933a5e45bc88f54f70b5f91232c127ec49f1a5989d23fb85824c7adf9b7 ;; \
+      amd64) node_arch=x64; node_sha=14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647 ;; \
+      arm64) node_arch=arm64; node_sha=01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc ;; \
       *) echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
     && archive="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \

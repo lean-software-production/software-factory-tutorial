@@ -9,8 +9,8 @@ runs fine on a host that already meets the prerequisites in the top-level
 
 | Piece | Version | Why |
 | --- | --- | --- |
-| Node.js | 22.22.3 | `package.json` requires `>=22.19.0` |
-| npm | 11.19.0 | Node 22 bundles npm 10, which strips the lockfile's `libc` field |
+| Node.js | 24.19.0 | `package.json` requires `>=24.2.0 <25`: below 24.2 the setup preflight silently no-ops, and Node 23 warns on stderr in a way that fails the calculator's tests |
+| npm | 11.19.0 | Node 24 already bundles npm 11; pinning keeps the image reproducible |
 | Pi CLI | 0.83.0 | The tutor engine's SDK and the factory doer the lessons call as `pi -p` |
 
 Nothing else. No Python, no Bun, no second coding agent — the tutorial needs none

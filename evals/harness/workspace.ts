@@ -1,6 +1,8 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
+import { readProgress } from "../../tutorial-engine/src/lesson/load.js";
+import { LessonProgressStore } from "../../tutorial-engine/src/lesson/progress-store.js";
 import type { ArtifactState, CanonicalPatch } from "../scenarios/lesson-001/scenarios.js";
 
 const excludedNames = new Set([".git", "node_modules", "dist", ".env", ".env.local"]);
@@ -78,27 +80,19 @@ export async function applyCanonicalPatch(workspace: string, patch: CanonicalPat
   if (!matchesArtifactState(after, patch.expectedState)) throw new Error(`Canonical patch '${patch.name}' did not produce its expected state.`);
 }
 
-/** Make `lesson` the first Todo row in the copied learner workspace, never in the source checkout. */
+/**
+ * Start a scenario at one lesson by recording every earlier lesson as finished.
+ *
+ * Progress lives in `factory/.tmp/`, not in the ledger: the ledger is curriculum
+ * and the same for everyone, so a scenario that wrote `Done` into it would be
+ * editing the tutorial rather than the workspace it runs in.
+ */
 export async function activateLesson(workspace: string, lesson: string): Promise<void> {
-  const ledgerPath = join(workspace, "docs/specs/README.md");
-  const ledger = await readFile(ledgerPath, "utf8");
-  let found = false;
-  const rewritten = ledger.split(/(\r?\n)/).map((line) => {
-    const cells = line.split("|");
-    const id = cells[1]?.trim().match(/\[([^\]]+)\]/)?.[1];
-    if (!id) return line;
-    if (id === lesson) {
-      found = true;
-      cells[cells.length - 2] = " Todo ";
-    } else if (!found) {
-      cells[cells.length - 2] = " Done ";
-    } else {
-      cells[cells.length - 2] = " Todo ";
-    }
-    return cells.join("|");
-  }).join("");
-  if (!found) throw new Error(`Lesson '${lesson}' is not present in the workspace ledger.`);
-  await writeFile(ledgerPath, rewritten, "utf8");
+  const ledger = await readFile(join(workspace, "docs/specs/README.md"), "utf8");
+  const lessons = readProgress(ledger).slice(1).map((item) => item.id);
+  const index = lessons.indexOf(lesson);
+  if (index < 0) throw new Error(`Lesson '${lesson}' is not present in the workspace ledger.`);
+  await new LessonProgressStore(workspace).write({ completed: lessons.slice(0, index) });
 }
 
 export async function snapshot(workspace: string, label: string, destination: string): Promise<Record<string, string>> {

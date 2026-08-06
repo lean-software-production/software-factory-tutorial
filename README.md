@@ -4,7 +4,7 @@ You're going to build one assembly line: software that improves a codebase a lit
 
 A software factory is made of lines like it. A real one runs several — one that refactors, one that upgrades dependencies, one that writes the tests nobody got round to — each with its own agents, its own criteria, and its own definition of done, with the factory deciding which runs when. You are building the first, and everything you learn doing it is how you would build the rest.
 
-The tutorial is two pieces of work. **Part 1** builds one agent at a time and runs each of them by hand — a doer that changes the code, then a validator that gathers independent evidence about the change — so you can see what each one contributes before anything is automated. **Part 2** joins them into an assembly line that runs itself and routes a failed verdict back for repair. Repeated safely, that feedback loop converges on a healthier codebase.
+The tutorial is two pieces of work. **Part 1** builds one agent at a time and runs each of them by hand — a doer that changes the code, then a validator that gathers independent evidence about the change — so you can see what each one contributes before anything is automated. **Part 2** joins them into an assembly line, takes you out of the loop, and then builds the instruments you need to operate something you are no longer driving: a record of what it did, a live view of what it is doing, a way to ask about a finished run, and a way to say something to a machine while it works.
 
 ## About the calculator
 
@@ -16,15 +16,21 @@ See the calculator's [README](./calculator/README.md) for more details.
 
 You begin with a single headless `pi -p` command that reads the calculator and answers a question. It creates no files and there is no loop yet. From there you build a doer that changes the code, then a validator that checks the change against written criteria, then carry the validator's findings back to the doer by hand. Only once you have run that loop yourself do you automate it.
 
-Six lessons: 001–004 are Part 1, 005–006 are Part 2. Each part is a separate piece of homework, and the tutor stops at the end of lesson 004 so you can choose whether to carry straight on.
+Thirteen lessons: 001–004 are Part 1, 005–013 are Part 2. Each part is a separate piece of homework, and the tutor stops at the end of lesson 004 so you can choose whether to carry straight on.
+
+The two parts are comparable homework, but not comparable in length. Part 2 is roughly twice the lessons, because automating something you were doing by hand is the easy half — the other half is being able to see what it did once you stopped watching, and neither half is optional. Every lesson in it is the same size as a lesson in Part 1, and there are simply more of them.
 
 ## Setup
 
-You need Node.js 22.19 or later, npm 11 or later, a browser, and an authenticated `pi` on your `PATH`. Use Vim or any other editor; Docker and VS Code are not required.
+You need Node.js 24.2 or later on the 24.x line, npm 11 or later, a browser, and an authenticated `pi` on your `PATH`. Use Vim or any other editor; Docker and VS Code are not required.
 
-Node 22 still bundles npm 10, which cannot record the `libc` field this repository's lockfile
-uses and quietly strips it on every install. `npm install` warns when it is too old; upgrade
-with `npm install -g npm@11`.
+The Node floor is not arbitrary, and neither is the ceiling. Below 24.2 the `npm run setup`
+preflight silently does nothing, so it never tells you whether Pi is authenticated. And on
+Node 23 the runtime prints an experimental-feature warning to stderr that makes the
+calculator's own test suite fail before you have touched a line of it — which would then fail
+the first success criterion on every verdict the tutorial teaches you to trust. Odd-numbered
+Node releases are Current rather than LTS, and that is where such warnings appear; this
+tutorial is tested on 24.x. Node 24 bundles npm 11, so a current Node gets you both.
 
 From the repository root:
 
@@ -95,11 +101,17 @@ chmod +x factory/refactor-do.sh
 ./factory/refactor-do.sh
 ```
 
-Lesson 005 moves the whole line into `factory/refactor/`, and from then on you run `./factory/refactor/run.sh`. The lessons use Pi as the default doer. Advanced users may substitute another CLI harness when it preserves the doer requirements described in each lesson.
+Lesson 005 moves the whole line into `factory/refactor/`, and from then on you run `./factory/refactor/run.sh`. From lesson 010 you also build scripts that sit one level up, in `factory/` itself, for watching and questioning a line while it runs — those want a second terminal of their own, and lesson 012 wants a third. The lessons use Pi as the default doer. Advanced users may substitute another CLI harness when it preserves the doer requirements described in each lesson.
 
-## Resume a tutorial
+## Where to begin, and how to resume
 
-The tutor saves its browser transcript in `factory/tutorial-session.jsonl`. When you run `npm run tutorial` again, it offers to resume the saved transcript or start again. Resume keeps your factory files and asks a fresh tutor process to inspect them before continuing. Start again deletes everything in `factory/` and begins from the first step.
+The first time you run `npm run tutorial`, it asks where to start. Start at the beginning to build everything yourself. Start at Part 2 to skip the first four lessons: it copies the files those lessons build into `factory/` and opens the assembly line, so you get Part 2 without having written Part 1 by hand.
+
+After that, running it again offers to resume as well. Resume keeps your factory files and asks a fresh tutor process to inspect them before continuing. The other two options delete everything in `factory/` first.
+
+The tutor keeps its own state — the transcript, and how far you have got — in `factory/.tmp/`, along with everything your line regenerates on each run. That directory is ignored by git; the scripts and prompts you write are not, so your own work is yours to commit if you want to keep it.
+
+Each session moves you onto a branch of its own, named `factory-line-` and the date and time. From lesson 007 your line commits to the calculator, and from 008 it does so without asking, so those commits land there rather than on the branch you cloned.
 
 ## Inspiration
 
