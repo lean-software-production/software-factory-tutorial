@@ -3,7 +3,10 @@
 **/.subagents/
 *.log
 *.swp
-factory/*
-!factory/.gitkeep
+# factory/ holds the learner's own work, and is tracked so a mistake is
+# recoverable. Everything that is not theirs to keep goes in a .tmp/ beside the
+# script that writes it: the engine's state, and the evidence, findings,
+# baselines, commit messages and iteration records a run regenerates.
+factory/**/.tmp/
 .local/
 evals/reports/

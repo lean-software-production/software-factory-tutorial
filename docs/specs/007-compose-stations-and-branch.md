@@ -80,20 +80,20 @@ Build this lesson in this order. Complete each small step before moving to the n
 
    Its tools are `read,grep,find,ls`. It cannot commit, and it is not meant to.
 
-3. **Branch on the verdict.** `run.sh` takes the first line of `validate-findings.txt` that *begins*
+3. **Branch on the verdict.** `run.sh` takes the first line of `.tmp/validate-findings.txt` that *begins*
    with `VERDICT: PASS` or `VERDICT: FAIL`, and chooses what happens next:
 
    ```sh
-   verdict=$(grep -m1 -o '^VERDICT: \(PASS\|FAIL\)' validate-findings.txt || echo "VERDICT: FAIL")
+   verdict=$(grep -m1 -o '^VERDICT: \(PASS\|FAIL\)' .tmp/validate-findings.txt || echo "VERDICT: FAIL")
    if [ "$verdict" = "VERDICT: FAIL" ]; then
      echo "Starting repair..."
-     cat repair.md success.md validate-findings.txt \
+     cat repair.md success.md .tmp/validate-findings.txt \
        | (cd ../../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
    else
      echo "Starting commit..."
-     cat commit.md success.md validate-findings.txt evidence.txt \
+     cat commit.md success.md .tmp/validate-findings.txt .tmp/evidence.txt \
        | (cd ../../calculator && pi --no-session --tools read,grep,find,ls -p) \
-       > commit-message.txt
+       > .tmp/commit-message.txt
      message="$PWD/commit-message.txt"
      (cd ../../calculator && git add -- . && git commit -q -F "$message")
    fi
@@ -110,8 +110,10 @@ Build this lesson in this order. Complete each small step before moving to the n
    commit would fail, `set -e` would end the run, and the staging done by `git add` would be left
    behind. Capturing the path into `message` first pins it while `$PWD` still means the line's folder.
 
-   `git add -- .` from inside `calculator/` stages that directory and nothing else, and `factory/` is
-   gitignored, so nothing the learner wrote by hand can be swept into a commit.
+   `git add -- .` from inside `calculator/` stages that directory and nothing else. That pathspec is
+   what keeps the learner's own work out of a machine's commit: `factory/` is tracked too, and a bare
+   `git add` from anywhere in the repository would sweep the line's own source into the change it is
+   supposed to be recording.
 
    That block goes after the validation phase and before the `read`. The first three lines of `run.sh`
    are unchanged and are not repeated here; keep them.

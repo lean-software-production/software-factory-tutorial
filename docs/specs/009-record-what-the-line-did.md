@@ -25,10 +25,11 @@ Build this lesson in this order. Complete each small step before moving to the n
 1. **Give the line somewhere to put the record.** At the top of `run.sh`, after the `cd`:
 
    ```sh
-   mkdir -p events
+   mkdir -p .tmp/events
    ```
 
-   `factory/` is gitignored, so the record stays out of the repository without anything further.
+   The repository ignores the data files a run regenerates, and the record is one of them, so it
+   stays out without anything further. The scripts and prompts beside it are tracked.
 
 2. **Switch every station to `--mode json` and keep its output.** Each of the four Pi invocations gains
    the flag and writes to a file named for the iteration and the station:
@@ -38,7 +39,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    cat refactor.md success.md \
      | (cd ../../calculator && pi --no-session --mode json \
          --tools read,edit,write,grep,find,ls -p) \
-     > "events/$iteration-do.jsonl"
+     > ".tmp/events/$iteration-do.jsonl"
    ```
 
    The same shape for `validate`, `repair` and `commit`, each with the tools it already had.
@@ -58,8 +59,8 @@ Build this lesson in this order. Complete each small step before moving to the n
    ```
 
    ```sh
-   text_of "events/$iteration-validate.jsonl" > validate-findings.txt
-   text_of "events/$iteration-commit.jsonl"   > commit-message.txt
+   text_of ".tmp/events/$iteration-validate.jsonl" > .tmp/validate-findings.txt
+   text_of ".tmp/events/$iteration-commit.jsonl"   > .tmp/commit-message.txt
    ```
 
    The `agent_end` event carries every message the run generated, which is why the helper reads that
@@ -115,7 +116,7 @@ ls factory/refactor/events/
 Verify by hand that:
 
 - there is one `.jsonl` file per station per iteration, named for both;
-- `validate-findings.txt` still opens with `VERDICT: PASS` or `VERDICT: FAIL` on its first non-empty
+- `.tmp/validate-findings.txt` still opens with `VERDICT: PASS` or `VERDICT: FAIL` on its first non-empty
   line, and the branch still routes on it;
 - `git log -1` shows a commit message with no JSON in it;
 - the two `jq` queries above return a plausible tool tally and a cost; and

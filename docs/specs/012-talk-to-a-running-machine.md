@@ -32,14 +32,14 @@ Build this lesson in this order. Complete each small step before moving to the n
    mkfifo control
    (cd ../../calculator && pi --no-session --mode rpc \
        --tools read,edit,write,grep,find,ls) \
-     < control > "events/$iteration-do.jsonl" &
+     < control > ".tmp/events/$iteration-do.jsonl" &
    doer=$!
    sleep infinity > control &
    holder=$!
 
    jq -cn --arg m "$(cat refactor.md success.md)" '{type:"prompt",message:$m}' > control
 
-   until grep -q '"type":"agent_end"' "events/$iteration-do.jsonl"; do sleep 1; done
+   until grep -q '"type":"agent_end"' ".tmp/events/$iteration-do.jsonl"; do sleep 1; done
 
    kill "$holder" "$doer" 2>/dev/null || true
    rm -f control

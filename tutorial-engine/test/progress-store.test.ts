@@ -7,10 +7,10 @@ import { LessonProgressStore } from "../src/lesson/progress-store.js";
 const store = async () => new LessonProgressStore(await mkdtemp(join(tmpdir(), "progress-store-")));
 
 describe("LessonProgressStore", () => {
-  it("keeps progress in factory/, which is gitignored and reset with the transcript", async () => {
+  it("keeps progress in the engine's own corner of factory/, cleared when the learner starts over", async () => {
     const progress = await store();
 
-    expect(progress.path.endsWith(join("factory", "tutorial-progress.json"))).toBe(true);
+    expect(progress.path.endsWith(join("factory", ".tmp", "tutorial-progress.json"))).toBe(true);
   });
 
   it("treats a learner who has not started as having finished nothing", async () => {

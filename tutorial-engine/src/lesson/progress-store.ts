@@ -1,18 +1,9 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { ENGINE_STATE_DIRECTORY } from "../session-log.js";
 
 const PROGRESS_NAME = "tutorial-progress.json";
 
-/**
- * Which lessons the learner has finished, kept beside the session transcript in
- * `factory/` rather than in the ledger.
- *
- * The ledger is curriculum and ships in the repository, so writing progress
- * into it would hand everyone who clones a tutorial that claims to be part
- * done. `factory/` is gitignored and already holds the learner's own work, so
- * state that belongs to one person lives there. `resetFactory` clears it along
- * with the transcript, which is what starting over should mean.
- */
 /**
  * Lessons the learner finished, and lessons they jumped over by starting at
  * Part 2. Kept apart so the outline can say which is which: a skipped lesson is
@@ -26,11 +17,21 @@ export interface LessonProgress {
 const ids = (value: unknown): Set<string> =>
   Array.isArray(value) ? new Set(value.filter((id): id is string => typeof id === "string")) : new Set();
 
+/**
+ * Which lessons the learner has finished, kept with the session transcript
+ * rather than in the ledger.
+ *
+ * The ledger is curriculum and ships in the repository, so writing progress
+ * into it would hand everyone who clones a tutorial that claims to be part
+ * done. This belongs to one learner, so it sits in `factory/.tmp/` — the
+ * engine's own corner of the learner's factory. `resetFactory` clears it along
+ * with everything else, which is what starting over should mean.
+ */
 export class LessonProgressStore {
   readonly path: string;
 
   constructor(workspace: string) {
-    this.path = resolve(workspace, "factory", PROGRESS_NAME);
+    this.path = resolve(workspace, "factory", ENGINE_STATE_DIRECTORY, PROGRESS_NAME);
   }
 
   /**

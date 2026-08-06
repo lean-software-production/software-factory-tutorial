@@ -1,5 +1,5 @@
 import { copyFile, mkdir, readdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 
 /** Where the shipped Part 2 seed lives, relative to the tutorial workspace. */
 export const PART_TWO_SEED = "docs/seeds/part-2";
@@ -17,15 +17,20 @@ export const PART_TWO_SEED = "docs/seeds/part-2";
 export async function seedPartTwo(workspace: string): Promise<string[]> {
   const from = resolve(workspace, PART_TWO_SEED);
   const factory = resolve(workspace, "factory");
-  await mkdir(factory, { recursive: true });
 
-  const entries = await readdir(from, { withFileTypes: true });
+  // Copied with its shape intact: the quality baseline belongs in .tmp/, where
+  // lesson 005 expects to find it and where a run would have written it.
+  const entries = await readdir(from, { withFileTypes: true, recursive: true });
   const files = entries
     .filter((entry) => entry.isFile() && entry.name !== "README.md")
-    .map((entry) => entry.name)
+    .map((entry) => relative(from, resolve(entry.parentPath, entry.name)))
     .sort();
 
-  // copyFile preserves the executable bit, which do.sh and validate.sh need.
-  await Promise.all(files.map((name) => copyFile(resolve(from, name), resolve(factory, name))));
+  for (const name of files) {
+    const destination = resolve(factory, name);
+    await mkdir(dirname(destination), { recursive: true });
+    // copyFile preserves the executable bit, which do.sh and validate.sh need.
+    await copyFile(resolve(from, name), destination);
+  }
   return files;
 }

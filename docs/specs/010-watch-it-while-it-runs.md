@@ -24,7 +24,7 @@ factory/
   refactor/         ← the assembly line
     run.sh          ← the orchestrator
     ...
-    events/
+    .tmp/events/
 ```
 
 A **factory** is the software containing one or more assembly lines and the orchestrator that manages

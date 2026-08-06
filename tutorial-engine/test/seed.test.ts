@@ -95,7 +95,7 @@ describe("skipToPartTwo", () => {
 
     // Skipped is recorded apart from completed, so nothing later can mistake a
     // jumped lesson for one the learner did.
-    expect(JSON.parse(await readFile(join(workspace, "factory/tutorial-progress.json"), "utf8")))
+    expect(JSON.parse(await readFile(join(workspace, "factory/.tmp/tutorial-progress.json"), "utf8")))
       .toEqual({ completed: [], skipped: ["001", "002"] });
   });
 

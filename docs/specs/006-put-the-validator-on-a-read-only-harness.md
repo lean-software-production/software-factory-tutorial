@@ -35,7 +35,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    echo "Gathering evidence..."
    {
      echo "=== QUALITY BEFORE (recorded before the doer ran) ==="
-     cat quality-before.txt
+     cat .tmp/quality-before.txt
      echo
      echo "=== QUALITY NOW ==="
      (cd ../../calculator && node scripts/quality.mjs) || true
@@ -45,7 +45,7 @@ Build this lesson in this order. Complete each small step before moving to the n
      echo
      echo "=== WORKING DIFF ==="
      (cd ../../calculator && git diff -- .)
-   } > evidence.txt
+   } > .tmp/evidence.txt
    ```
 
    Three details are worth stopping on.
@@ -56,7 +56,8 @@ Build this lesson in this order. Complete each small step before moving to the n
 
    `git diff -- .` rather than `git diff`, because `git diff` on its own reports the whole repository
    whatever directory it runs in, and the learner's own `factory/` work would otherwise be swept into
-   the validator's context. It happens to be gitignored, but relying on that is relying on an accident.
+   the validator's context. The scripts and prompts in `factory/` are tracked, so that pathspec is the
+   only thing keeping them out: this is a boundary drawn by the argument, not by an accident.
 
    `|| true` on the two commands that report findings by exiting non-zero, because `set -e` would
    otherwise end the run at exactly the moment there was something to report.
@@ -66,12 +67,12 @@ Build this lesson in this order. Complete each small step before moving to the n
 
    ```sh
    echo "Starting validation..."
-   cat validate.md success.md evidence.txt \
+   cat validate.md success.md .tmp/evidence.txt \
      | (cd ../../calculator && pi --no-session --tools read,grep,find,ls -p) \
-     | tee validate-findings.txt
+     | tee .tmp/validate-findings.txt
    ```
 
-   `quality-before.txt` no longer goes to the validator directly — it goes into `evidence.txt`, under a
+   `.tmp/quality-before.txt` no longer goes to the validator directly — it goes into `.tmp/evidence.txt`, under a
    label, along with everything else.
 
 3. **Rewrite the validator's prompt.** `validate.md` currently instructs the validator to read the
@@ -124,7 +125,7 @@ From the repository root, run a doer turn and then a validation turn:
 Verify by hand that:
 
 - the harness announces the evidence-gathering step before it happens;
-- `factory/refactor/evidence.txt` exists and contains four labelled sections;
+- `factory/refactor/.tmp/evidence.txt` exists and contains four labelled sections;
 - the verdict still opens with `VERDICT: PASS` or `VERDICT: FAIL` on its first non-empty line;
 - the findings quote the output the harness gathered, rather than describing commands the validator
   claims to have run; and

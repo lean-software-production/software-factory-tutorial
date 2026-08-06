@@ -17,8 +17,8 @@ factory/                    ← the factory
     run.sh                  ← the orchestrator
     do.sh  validate.sh
     refactor.md  validate.md  repair.md  commit.md  success.md
-    quality-before.txt  evidence.txt  validate-findings.txt
-    events/                 ← the record
+    .tmp/quality-before.txt  .tmp/evidence.txt  .tmp/validate-findings.txt
+    .tmp/events/                 ← the record
 ```
 
 **The orchestrator is `run.sh`, and it has been since lesson 007.** The lexicon gives the role five

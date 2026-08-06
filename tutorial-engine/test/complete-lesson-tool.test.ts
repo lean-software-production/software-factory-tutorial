@@ -47,7 +47,7 @@ describe("complete_lesson", () => {
 
     await tool.execute("call-1", {}, new AbortController().signal, undefined);
 
-    expect(JSON.parse(await readFile(join(workspace, "factory/tutorial-progress.json"), "utf8")))
+    expect(JSON.parse(await readFile(join(workspace, "factory/.tmp/tutorial-progress.json"), "utf8")))
       .toEqual({ completed: ["001"], skipped: [] });
 
     const progress = events.find((event) => event.type === "progress");
@@ -72,7 +72,7 @@ describe("complete_lesson", () => {
     await tool.execute("call-1", {}, new AbortController().signal, undefined);
 
     const audit = events.find((event) => event.type === "audit");
-    expect(audit).toMatchObject({ tool: "complete_lesson", mutation: true, outcome: "ok", paths: ["factory/tutorial-progress.json"] });
+    expect(audit).toMatchObject({ tool: "complete_lesson", mutation: true, outcome: "ok", paths: ["factory/.tmp/tutorial-progress.json"] });
   });
 
   it("is harmless when called again after the last lesson", async () => {
@@ -85,7 +85,7 @@ describe("complete_lesson", () => {
 
     // Nothing left to advance: no duplicate id is recorded, and no outline
     // event is sent that would move the highlight past the end.
-    expect(JSON.parse(await readFile(join(workspace, "factory/tutorial-progress.json"), "utf8")))
+    expect(JSON.parse(await readFile(join(workspace, "factory/.tmp/tutorial-progress.json"), "utf8")))
       .toEqual({ completed: ["001", "002"], skipped: [] });
     expect(extra.details).toMatchObject({ changed: false });
     expect(events.filter((event) => event.type === "progress")).toHaveLength(2);

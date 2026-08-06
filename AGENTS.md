@@ -33,17 +33,26 @@ The `## What this costs` section exists to state a trade honestly. Do not soften
 both halves — the guarantee and the limitation — should be stated plainly enough that a learner could
 argue with them.
 
-## Learner state belongs in factory/, never in the curriculum
+## Learner state belongs in factory/.tmp/, never in the curriculum
 
 `docs/specs/README.md` lists the lessons and nothing about any particular learner. How far someone has
-got lives in `factory/tutorial-progress.json`, beside the session transcript: `factory/` is gitignored,
-so one person's progress cannot be committed, and `resetFactory` clears it when they start over.
+got lives in `factory/.tmp/tutorial-progress.json`, beside the session transcript. Writing progress
+back into the ledger would hand everyone who clones the tutorial a copy that claims to be part
+finished, so the ledger's rows carry a specification link and a goal, and no status.
 
-This is a rule about direction, not just about one file. Anything true of a single learner — progress,
-their factory, their transcript — belongs under `factory/`. Anything the same for everyone belongs in
-the repository. Writing progress back into the ledger would hand everyone who clones the tutorial a
-copy that claims to be part finished, so the ledger's rows carry a specification link and a goal, and
-no status.
+`factory/` sorts into three kinds, and the split is what `.gitignore` encodes:
+
+- **The learner's line** — every `.sh` and `.md` they write — is **tracked**, so their own work
+  survives a mistake and can be committed if they want it kept.
+- **Everything else** goes in a `.tmp/` beside the script that writes it, and one rule —
+  `factory/**/.tmp/` — ignores all of it. That covers the engine's state in `factory/.tmp/` and the
+  evidence, findings, baselines, commit messages and iteration records a run regenerates. Committing
+  those would churn the history every run.
+
+So a lesson that writes anything a run recreates writes it to `.tmp/`, whatever its name or format.
+Scripts `cd "$(dirname "$0")"` before doing anything, so the path is just `.tmp/evidence.txt`, and a
+learner who builds a second line gets the same rule without a second `.gitignore` entry. A script that
+writes there needs `mkdir -p .tmp` after its `cd`: `resetFactory` clears the directory away.
 
 ## Changing a Part 1 lesson means changing the Part 2 seed
 

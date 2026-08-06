@@ -25,18 +25,18 @@ Build this lesson in this order. Complete each small step before moving to the n
 1. **Give the line an edge.** From the repository root:
 
    ```sh
-   mkdir factory/refactor
-   mv factory/refactor-do.sh              factory/refactor/do.sh
-   mv factory/refactor-validate.sh        factory/refactor/validate.sh
-   mv factory/refactor.md                 factory/refactor/refactor.md
-   mv factory/refactor-validate.md        factory/refactor/validate.md
-   mv factory/refactor-quality-before.txt factory/refactor/quality-before.txt
+   mkdir -p factory/refactor/.tmp
+   mv factory/refactor-do.sh                   factory/refactor/do.sh
+   mv factory/refactor-validate.sh             factory/refactor/validate.sh
+   mv factory/refactor.md                      factory/refactor/refactor.md
+   mv factory/refactor-validate.md             factory/refactor/validate.md
+   mv factory/.tmp/refactor-quality-before.txt factory/refactor/.tmp/quality-before.txt
    ```
 
-   That is plain `mv`, not `git mv`: `factory/` is git-ignored, so none of the learner's work is
-   tracked and there is nothing for git to move.
+   That is plain `mv`, not `git mv`: nothing in `factory/` has been committed yet, so there is
+   nothing in git's index for `git mv` to move.
 
-   Lesson 004 also left `factory/refactor-validate-findings.txt` behind. Delete it; it is last
+   Lesson 004 also left `factory/.tmp/refactor-validate-findings.txt` behind. Delete it; it is last
    week's output, and the line writes its own.
 
    The `refactor-` prefixes drop because the folder now carries the line's name. Nothing inside the
@@ -47,10 +47,10 @@ Build this lesson in this order. Complete each small step before moving to the n
 
    - both scripts sit one directory deeper, so each `(cd ../calculator && ...)` becomes
      `(cd ../../calculator && ...)`;
-   - `refactor-quality-before.txt` becomes `quality-before.txt`, in the line that writes it and in
+   - `.tmp/refactor-quality-before.txt` becomes `.tmp/quality-before.txt`, in the line that writes it and in
      `validate.sh`'s guard;
-   - `refactor-validate.md` becomes `validate.md`, and `refactor-validate-findings.txt` becomes
-     `validate-findings.txt`;
+   - `refactor-validate.md` becomes `validate.md`, and `.tmp/refactor-validate-findings.txt` becomes
+     `.tmp/validate-findings.txt`;
    - the guard's message now names the script the learner would actually run: `./do.sh`.
 
    Run `./factory/refactor/do.sh` and `./factory/refactor/validate.sh` once from the repository root
@@ -98,9 +98,9 @@ Build this lesson in this order. Complete each small step before moving to the n
    and `validate.sh`:
 
    ```sh
-   cat validate.md success.md quality-before.txt \
+   cat validate.md success.md .tmp/quality-before.txt \
      | (cd ../../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
-     | tee validate-findings.txt
+     | tee .tmp/validate-findings.txt
    ```
 
    Miss either one and that script goes on sending a prompt that defers to criteria nobody hands it.
@@ -132,21 +132,22 @@ Build this lesson in this order. Complete each small step before moving to the n
    set -euo pipefail
 
    cd "$(dirname "$0")"
+   mkdir -p .tmp
    while true; do
      echo "Recording quality baseline..."
-     (cd ../../calculator && node scripts/quality.mjs) > quality-before.txt || true
+     (cd ../../calculator && node scripts/quality.mjs) > .tmp/quality-before.txt || true
      echo "Starting doer..."
      cat refactor.md success.md | (cd ../../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)
      echo "Starting validation..."
-     cat validate.md success.md quality-before.txt \
+     cat validate.md success.md .tmp/quality-before.txt \
        | (cd ../../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
-       | tee validate-findings.txt
+       | tee .tmp/validate-findings.txt
      read -r -p "Press Enter for the next iteration, or Ctrl-C to stop. "
    done
    ```
 
    The validator's `cat` carries three files, in the order the validator was taught to expect them:
-   its job, the criteria, then the baseline it is comparing against. Leave `quality-before.txt` out
+   its job, the criteria, then the baseline it is comparing against. Leave `.tmp/quality-before.txt` out
    and the instruction in `validate.md` to compare against the baseline below would point at
    nothing.
 
@@ -168,7 +169,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    factory/refactor/
      do.sh              validate.sh          run.sh
      refactor.md        validate.md          success.md
-     quality-before.txt validate-findings.txt
+     .tmp/quality-before.txt .tmp/validate-findings.txt
    ```
 
    Three scripts, three prompts, and the two files the machines pass between them.
@@ -188,7 +189,7 @@ Verify by hand that:
 - the doer runs before the validator on every pass;
 - the validator reports one finding per criterion in `success.md`, not just the one it can measure;
 - the loop waits for Enter before starting a second iteration; and
-- `validate-findings.txt` holds the last verdict after the loop pauses.
+- `.tmp/validate-findings.txt` holds the last verdict after the loop pauses.
 
 ## Pressure test
 

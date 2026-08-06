@@ -40,7 +40,7 @@ No new files. Run this cycle, in this order:
 
    ```sh
    (cd factory \
-     && cat refactor.md refactor-validate-findings.txt \
+     && cat refactor.md .tmp/refactor-validate-findings.txt \
      | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
    ```
 
