@@ -154,6 +154,27 @@ The summariser's own events land in `run/events/` with everyone else's, so the
 total at the end includes what the watching cost. An instrument you are not
 billed for is an instrument you have stopped counting.
 
+## Watching a station spend
+
+While a station runs, the status line under it updates about once a second:
+
+```
+│  ⠹ doer… · 16k tok · $0.021 · edit
+```
+
+`--mode json` flushes each event as it happens, so the record is readable while
+the station writing it is still running. You do not have to wait for a station to
+finish to learn what it has cost, and `tool_execution_start` names what it is
+doing right now — over one doer run that reads
+`read → read → edit → read → run_tests`.
+
+The counting is the one subtle part, and `lib/live-of.sh` carries the note.
+`message_update` events are successive *snapshots of the same message*, so
+summing them would count one message a dozen times over. What is true is that
+every ended message is final and the message in flight is worth its latest
+snapshot — so the tally is a completed total plus one live figure, reset at each
+`message_end`.
+
 ## The rail
 
 An earlier version printed `orchestrator → doer` on the way out and
@@ -195,6 +216,7 @@ allowlist by construction rather than by inspection.
 | `extensions/run-tests-tool.ts` | The `run_tests` tool. Loaded via `-e`; `pi` handles the TypeScript through jiti, so there is no build step. |
 | `lib/station.sh` | The only `pi` invocation. |
 | `lib/say.sh` | The rail, the status line, the clock. |
+| `lib/live-of.sh` | What a station has spent *so far*, read from the record while it is still being written. |
 | `lib/*.sh` | One script per question: what did it say, what did it cost, how many tokens, which way does it branch, what is this material. |
 | `run/` | Everything a run writes about itself. Gitignored, wiped at the start of each run. |
 
@@ -250,8 +272,9 @@ To undo a run: `git reset --soft HEAD~1`, then `git restore --staged --worktree 
 
 Part 2 of the tutorial builds all of these properly; the demo skips every one.
 
-- **No live view.** You see a station start and finish, and how long it took.
-  What it was doing while it ran is invisible until it is over.
+- **No live transcript.** The status line tells you what a running station has
+  spent and which tool it is in, but not what it is *saying*. The words arrive
+  when it finishes.
 - **No steering.** A station that has started cannot be redirected, only waited
   out or timed out.
 - **No ledger.** The events are on disk and nothing asks them anything except the

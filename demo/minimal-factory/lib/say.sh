@@ -96,7 +96,13 @@ elapsed() {
 
 SPINNER_PID=""
 
-# spin_start LABEL — an in-place status line, replaced by whatever is printed next.
+# spin_start LABEL [events.jsonl] — an in-place status line, replaced by whatever
+# is printed next.
+#
+# Given an events file, the line also reports what the station has spent so far
+# and what it is doing right now. `--mode json` flushes each event as it happens,
+# so the record can be read while the station writing it is still running — the
+# station does not have to finish before you learn what it cost.
 spin_start() {
   # Nothing when the output is not a terminal. There is no cursor to rewind, so
   # a status line would be a permanent line — and it would land between a
@@ -108,9 +114,20 @@ spin_start() {
   (
     frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
     i=0
+    tick=0
+    live=""
     while :; do
-      printf '\r\033[K  %s %s…' "${frames[i]}" "$1"
+      # The spinner turns ten times a second; the tally is re-read once. Parsing
+      # a growing JSONL file is not free, and a cost that updates ten times a
+      # second is not more informative than one that updates once.
+      if [ -n "${2:-}" ] && [ "$(( tick % 10 ))" -eq 0 ] && [ -s "$2" ]; then
+        live="$("$ROOT/lib/live-of.sh" "$2")"
+      fi
+      printf '\r\033[K%s│  %-*s %s %s…%s%s' \
+        "$RAIL_PREFIX" "$RAIL_NAME" "" "${frames[i]}" "$1" \
+        "${live:+ · }" "$live"
       i=$(( (i + 1) % ${#frames[@]} ))
+      tick=$(( tick + 1 ))
       sleep 0.1
     done
   ) &

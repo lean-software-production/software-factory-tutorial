@@ -57,7 +57,8 @@ STATION_TIMEOUT="${FACTORY_STATION_TIMEOUT:-10m}"
 
 rail_start "$harness" "${MODEL#*/} · $TOOLS"
 started=$(date +%s%N)
-spin_start "$harness running"
+: > "$events"          # so the live reader has a file to watch from the first tick
+spin_start "$harness" "$events"
 
 # The station must not take the run down with it, so its exit code is captured
 # rather than allowed to trip `set -e`. A failed station is reported, not hidden.
