@@ -73,7 +73,7 @@ export const scenarios: Scenario[] = [
     id: "headless-run-explains-the-flag-without-borrowing-later-vocabulary",
     lesson: "001",
     mode: "hands-on",
-    description: "The learner asks what `-p` does, and the tutor answers using only what this lesson has established: it asks explicitly for a headless run, in which Pi does the job and exits with no human in its conversation. It does not claim the flag is what makes this command headless — a job piped in on standard input runs headlessly with or without it. Every term it reaches for is one of the four this lesson names — agent, harness, job to be done, boundary — and it explains the flag without introducing any Part 2 vocabulary (doer, validator, machine, assembly line, factory, orchestrator) and without drawing a loop.",
+    description: "The learner asks what `-p` does, and the tutor answers using only what this lesson has established: it asks explicitly for a headless run, in which Pi does the job and exits with no human in its conversation. It does not claim the flag is what makes this command headless — a job piped in on standard input runs headlessly with or without it. Every term it reaches for is one of the four this lesson names — agent, harness, job to be done, boundary — and it explains the flag without introducing any Part 2 vocabulary (doer, validator, station, assembly line, factory, orchestrator) and without drawing a loop.",
     patches: []
   },
   {

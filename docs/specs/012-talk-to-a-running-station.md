@@ -1,20 +1,20 @@
-# Talk to a running machine
+# Talk to a running station
 
 Give one station a channel, and say something to it while it works.
 
 ## Key concept
 
-Headless has meant one thing since lesson 001: no human in the conversation while the machine works.
-The learner has read that as *the machine cannot be spoken to*, which is not what it says and not what
+Headless has meant one thing since lesson 001: no human in the conversation while the station works.
+The learner has read that as *the station cannot be spoken to*, which is not what it says and not what
 is true.
 
-Pi's third output mode changes what standard input is for. With `-p`, stdin is the prompt: the machine
+Pi's third output mode changes what standard input is for. With `-p`, stdin is the prompt: the station
 reads it, does the job, and exits. With `--mode rpc`, **stdin is a command channel** — the process stays
 alive and reads JSON commands one per line, for as long as something keeps the channel open.
 
 One of those commands is `steer`, and the docs are precise about when it lands: the message is
 delivered after the current assistant turn finishes executing its tool calls, and before the next model
-call. Not an interruption, and not a queue for later. The machine finishes what it is doing, and then
+call. Not an interruption, and not a queue for later. The station finishes what it is doing, and then
 what the learner said is in its context.
 
 Nobody is in the conversation. Something can still be put into it.
@@ -75,7 +75,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    Say plainly why this is in the lesson rather than left as an exercise. Every previous station exited
    on its own when its work was done. This one exits when someone tells it to, and a learner who
    Ctrl-Cs out of a run without this trap has left a model process and a `sleep` running on their
-   machine with nothing to stop them.
+   station with nothing to stop them.
 
 4. **Write the steering tool.** Create `factory/steer.sh`, beside `watch.sh` and `ask.sh`:
 
@@ -100,7 +100,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    which parses as a whole object, and the station sits waiting for an instruction it has already been
    given. It fails silently, which is what makes it worth saying before the learner meets it.
 
-5. **Show the machine's replies.** `watch.sh` currently reports tool calls, which is no use for reading
+5. **Show the station's replies.** `watch.sh` currently reports tool calls, which is no use for reading
    an answer. Extend its `jq` so the assistant's words come through too:
 
    ```sh
@@ -123,18 +123,18 @@ Build this lesson in this order. Complete each small step before moving to the n
    The answer arrives in the watcher.
 
    **Steer early.** A steering message is delivered after the current assistant turn finishes its tool
-   calls and before the next model call, so a machine with no next model call never receives one. Steer
+   calls and before the next model call, so a station with no next model call never receives one. Steer
    a station that is about to finish and the command is accepted, queued, and then thrown away when the
    station exits — no error, no warning, and `queue_update` in the record showing it still pending. The
    learner should send one steer in the first seconds of a turn and one just before it ends, and see the
-   difference. Steering is a conversation with a machine that is still working, not a way to recall one
+   difference. Steering is a conversation with a station that is still working, not a way to recall one
    that has finished.
 
 ## Why this needs no daemon
 
 The learner has three terminals, and each one does exactly one blocking thing: the first runs the line,
 the second follows a file, the third writes a line to a pipe and exits. Nothing has to read the
-learner's typing and wait for a machine to finish at the same time, which is the only genuinely awkward
+learner's typing and wait for a station to finish at the same time, which is the only genuinely awkward
 thing about this shape.
 
 A daemon exists to connect a short-lived command to a handle held inside some other process. Here the
@@ -176,15 +176,15 @@ that iteration is nearly empty. Put it back.
 
 ## Pressure test
 
-The learner can now talk to a machine while it works. They can ask it what it is doing and tell it to
+The learner can now talk to a station while it works. They can ask it what it is doing and tell it to
 do something else, and the record shows both.
 
-One machine.
+One station.
 
 Everything above it is still deaf. `run.sh` decided which station would run, decided this iteration
 would be a refactoring rather than a repair, and will decide in a moment whether the run is over — and
 there is nothing to say to it. It has been making those choices since lesson 007, and every one of them
 was made by code the learner wrote and cannot address.
 
-The thing choosing which machine runs next has no voice at all. The last lesson is about what that
+The thing choosing which station runs next has no voice at all. The last lesson is about what that
 leaves the learner doing.

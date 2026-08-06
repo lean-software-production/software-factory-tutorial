@@ -23,10 +23,11 @@ Concretely, when writing a lesson's **Key concept**:
   mechanism and its reason: *X does this, because Y can no longer do that.*
 - **Say why, not just what.** A boundary lesson should name the capability that was removed and the
   consequence that follows, so the learner can predict the behaviour rather than recall a slogan.
-- **Use the lexicon, and only what is already defined.** `machine`, `harness`, `doer`, `validator`,
-  `orchestrator`, `station` and `line` have definitions — `machine` in lesson 005, for instance.
-  Introducing a fresh noun for an already-named thing reads as a new concept. A later lesson's
-  vocabulary belongs to that lesson.
+- **Use [`docs/GLOSSARY.md`](docs/GLOSSARY.md), and only what is already defined.** It lists every
+  term the tutorial teaches and the lesson that introduces it, along with the words this tutorial
+  deliberately does not use. Introducing a fresh noun for an already-named thing reads as a new
+  concept. A later lesson's vocabulary belongs to that lesson, so check what a term's lesson number
+  is before reaching for it. A new term means a new row there.
 - **Prose wraps at 100 columns**, matching the existing specs.
 
 The `## What this costs` section exists to state a trade honestly. Do not soften it into a footnote:

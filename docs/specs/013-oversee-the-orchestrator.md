@@ -22,7 +22,7 @@ factory/                    ← the factory
 ```
 
 **The orchestrator is `run.sh`, and it has been since lesson 007.** The lexicon gives the role five
-jobs: starting a line, handing each machine its inputs, choosing what runs next where the graph
+jobs: starting a line, handing each station its inputs, choosing what runs next where the graph
 branches, handling failures, and deciding when the line is finished. The learner wrote every one of
 them. The branch arrived in 007, the ending in 008, and the rest has been there since 005.
 
@@ -49,13 +49,13 @@ follows.
 ## What the line took over
 
 Lesson 004 left the learner doing three jobs by hand: deciding what runs next, carrying evidence between
-machines, and judging when to stop. Walk through each one and find it in the code.
+stations, and judging when to stop. Walk through each one and find it in the code.
 
 - **Deciding what runs next** is the `grep` and the `if` in 007. It is worth saying again that this
   works because the validator promises to open its response with `VERDICT:`, and the orchestrator
   recognises a shape rather than understanding a verdict.
 - **Carrying evidence** is the `cat` in front of every station, the evidence block in 006, and the
-  `text_of` helper in 009. No machine on this line has ever gone looking for its own inputs.
+  `text_of` helper in 009. No station on this line has ever gone looking for its own inputs.
 - **Judging when to stop** is the two counters in 008.
 
 Three jobs, three pieces of shell, all of them the learner's.
@@ -85,7 +85,7 @@ but no number in `success.md` says what a criterion is worth. Comparing what the
 it achieved is not a comparison the line can make, because only one of those two things is written
 down.
 
-**It cannot be told any of this.** 012 gave the learner a channel to a machine. There is no channel to
+**It cannot be told any of this.** 012 gave the learner a channel to a station. There is no channel to
 the orchestrator: its decisions are `if` statements, and the way to change its mind is to stop it and
 edit the file. That is not a defect to be fixed — it is what it means for routing to be deterministic —
 but it is worth knowing which of the two things in front of them can be argued with.
@@ -97,7 +97,7 @@ The learner should be able to answer these from what they have built, in their o
 - Which file is the orchestrator, and which of its lines does each of the five orchestrator jobs?
 - Which parts of `factory/` would still work if a second line appeared tomorrow, and which would not?
 - Where would a second line go, and what would it need of its own?
-- Which machine on this line has no tools at all, and why does that not limit it?
+- Which station on this line has no tools at all, and why does that not limit it?
 - Given a `[FAIL]` on the same criterion in five consecutive iterations, what are the two explanations,
   and how would they tell them apart?
 - What is the most expensive thing this line could do while they were not watching, and what in the
@@ -112,7 +112,7 @@ something real, and somewhere in there it may spend twenty iterations circling a
 gather evidence for, repairing towards a target it cannot reach. Both look identical from inside the
 line: a verdict, a repair, a fresh refactoring, a verdict.
 
-The difference between those two runs is not in the record, and no machine here can find it.
+The difference between those two runs is not in the record, and no station here can find it.
 
 That is the job the learner is left with, and it is not a smaller job than the one they started with.
 The line has taken over the mechanical part of the work — routing it, carrying it, recording it,

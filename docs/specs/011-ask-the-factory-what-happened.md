@@ -8,7 +8,7 @@ The learner has spent two lessons reading the record with `jq`, which answers th
 thought to ask in the form they thought to ask them. "What did it cost" is a sum. "Is this line
 converging, or has it rewritten the same function four times" is not.
 
-There is a machine that is good at that, and they built one in lesson 001.
+There is a station that is good at that, and they built one in lesson 001.
 
 ```sh
 echo "Describe what this calculator does, in three sentences." \
@@ -19,7 +19,7 @@ Nothing about that command changes here except what it is pointed at. The harnes
 still arrives on stdin, the boundary is still read-only. **The line's record is raw material like any
 other, and an agent reads it the way the first agent the learner ever ran read the calculator.**
 
-This machine needs no tools at all — the first one on this line that gets none. Everything it works
+This station needs no tools at all — the first one on this line that gets none. Everything it works
 from is handed to it, which is the pattern lesson 006 established when it took `bash` away from the
 validator and carried the evidence in instead. Applied a third time, it stops looking like a trick.
 
@@ -51,7 +51,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    } | pi --no-session --no-tools -p
    ```
 
-   The question goes first and the evidence after it, in the order every other machine on this line has
+   The question goes first and the evidence after it, in the order every other station on this line has
    been taught to expect. "Answer only from what is in it" is there because a model asked about a
    refactoring will happily tell you about refactoring in general.
 
@@ -79,7 +79,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    ```
 
    Have the learner check an answer against the record by hand before trusting the next one. This
-   machine has exactly the same standing as every other machine on the line: it is a model, it can be
+   station has exactly the same standing as every other station on the line: it is a model, it can be
    wrong, and nothing here validates it.
 
 ## Checks
@@ -111,6 +111,6 @@ the mistake being made. They can watch the next tool call land in the wrong file
 
 What they cannot do is say anything to it.
 
-Every machine on this line has been handed its job at the moment it started and then left alone until
+Every station on this line has been handed its job at the moment it started and then left alone until
 it finished. That was the definition of headless in lesson 001, and it has been true of everything
-since. The only control the learner has over a machine that is running is to kill it.
+since. The only control the learner has over a station that is running is to kill it.

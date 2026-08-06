@@ -9,12 +9,12 @@ Make the move first, then take the name.
 The move is small: put the doer and the validator in one folder, and run them in a fixed order. Once
 that is done there is something to point at, and the words are worth having.
 
-An **assembly line** is an ordered sequence of **machines**, each machine's output feeding the next.
-A **machine** is an agent running in a non-interactive harness — handed its inputs, run to
+An **assembly line** is an ordered sequence of **stations**, each station's output feeding the next.
+A **station** is an agent running in a non-interactive harness — handed its inputs, run to
 completion, no human in the conversation. A **factory** is the software containing one or more
 lines.
 
-The learner has been building machines since lesson 001, without the word for it. Every one of them
+The learner has been building stations since lesson 001, without the word for it. Every one of them
 was an agent, headless, handed its input by a script. What this lesson adds is not a new kind of
 thing; it is the order they run in, and the edge around them.
 
@@ -86,7 +86,7 @@ Build this lesson in this order. Complete each small step before moving to the n
 3. **Point both prompts at the criteria.** Neither `refactor.md` nor `validate.md` carries its own
    criteria any more. Both defer to `success.md`, which arrives appended to the prompt — the same
    trick lesson 003 used to hand the validator its baseline. Neither prompt names a path to go and
-   fetch, because both machines run from `calculator/` and neither needs to reach outside it.
+   fetch, because both stations run from `calculator/` and neither needs to reach outside it.
 
    Which means every caller has to hand the criteria over, and there are now three of them. Update
    `do.sh`:
@@ -106,7 +106,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    Miss either one and that script goes on sending a prompt that defers to criteria nobody hands it.
 
    This is the reason the criteria live in a file of their own rather than inside the two prompts:
-   three callers now hand the same criteria to two machines, and a copy in each prompt would drift.
+   three callers now hand the same criteria to two stations, and a copy in each prompt would drift.
    One of them would be edited, the other would not, and the doer and the validator would quietly
    stop working towards the same thing.
 
@@ -172,7 +172,7 @@ Build this lesson in this order. Complete each small step before moving to the n
      .tmp/quality-before.txt .tmp/validate-findings.txt
    ```
 
-   Three scripts, three prompts, and the two files the machines pass between them.
+   Three scripts, three prompts, and the two files the stations pass between them.
 
 ## Checks
 
@@ -185,7 +185,7 @@ chmod +x factory/refactor/run.sh
 
 Verify by hand that:
 
-- each machine announces itself before Pi is invoked;
+- each station announces itself before Pi is invoked;
 - the doer runs before the validator on every pass;
 - the validator reports one finding per criterion in `success.md`, not just the one it can measure;
 - the loop waits for Enter before starting a second iteration; and
@@ -210,5 +210,5 @@ ls calculator/proof.txt
 It is there. Delete it and remove the line again.
 
 Nothing went wrong, because a person was reading every verdict and would have noticed. That person is
-about to stop reading them. Independence that rests on a prompt is a promise the machine makes to
-itself, and the next lesson replaces it with one the machine cannot break.
+about to stop reading them. Independence that rests on a prompt is a promise the station makes to
+itself, and the next lesson replaces it with one the station cannot break.
