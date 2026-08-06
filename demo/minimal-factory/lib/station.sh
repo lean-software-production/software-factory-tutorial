@@ -62,7 +62,7 @@ spin_start "$harness running"
 set +e
 cat "$H/prompt.md" "$ROOT/criteria.md" "$@" \
   | (cd "$CALC" && timeout "$STATION_TIMEOUT" \
-        pi --no-session --mode json \
+        "$PI" --no-session --mode json \
         --model "$MODEL" --tools "$TOOLS" "${ext_args[@]}" -p) \
   > "$events" 2> "$events.err"
 status=$?

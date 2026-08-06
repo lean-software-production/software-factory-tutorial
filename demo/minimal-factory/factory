@@ -53,55 +53,51 @@ fi
 # --- ...and the tools to do it ------------------------------------------------
 
 missing=()
-for tool in pi jq node npm git; do
+for tool in jq node npm git; do
   if ! command -v "$tool" > /dev/null 2>&1; then
     missing+=("$tool")
   fi
 done
+if [ ! -x "$PI" ] && ! command -v "$PI" > /dev/null 2>&1; then
+  missing+=("pi")
+fi
 if [ "${#missing[@]}" -gt 0 ]; then
   fail "missing required tools: ${missing[*]}"
   exit 2
 fi
 
-# --- ...starting from green ---------------------------------------------------
-
-# The line's whole judgement of a change is "do the tests still pass". Starting
-# from a red suite means every round fails for a reason no station can fix, and
-# nothing stops it except the round cap — ten model calls later. Ten seconds
-# here is cheaper than finding out at the end.
-printf '\n'
-note "factory: checking the calculator starts green…"
-baseline="$("$ROOT/stations/test-runner")"
-case "$baseline" in
-  "TESTS: PASS"*)
-    ok "$baseline"
-    ;;
-  *)
-    fail "the calculator's tests do not pass yet — $baseline"
-    note "The line cannot tell a break it caused from one that was already here."
-    note "Full report: ${RUN#"$REPO"/}/test-report.txt"
-    if grep -q "ExperimentalWarning" "$RUN/test-report.txt" 2>/dev/null; then
-      note ""
-      note "That is a node version problem, and probably not the node you think."
-      note "The failing test spawns npx from the repository root, so what matters"
-      note "is what node resolves to *there*, not in your shell:"
-      note "    (cd $REPO && node --version)    # needs 24.2 or newer"
-      note "With a version manager, pin it in a file the whole repository is"
-      note "under — a pin inside demo/minimal-factory/ does not reach the root."
-    fi
-    exit 2
-    ;;
-esac
-
 # --- Hand off -----------------------------------------------------------------
 
 printf '\n'
 note "factory: target ${target#"$REPO"/}"
-# pi 0.74 prints --version to stderr, 0.83 to stdout, and a version manager's
-# shim may print a banner ahead of either. Take both streams and pick the last
-# thing shaped like a version.
-pi_version="$(pi --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1)"
-note "factory: calculator/ is clean, pi ${pi_version:-unknown}, jq $(jq --version)"
-flow factory orchestrator
 
-exec "$ROOT/orchestrator" "$target"
+# pi 0.74 prints --version to stderr, 0.83 to stdout, and a version manager's
+# shim may print a banner ahead of either, so take both streams and pick the
+# last thing shaped like a version.
+#
+# `|| true` is not decoration. Under `set -e` a failed command substitution ends
+# the script, and `grep` fails when it matches nothing — so a pi that prints no
+# version at all would kill the run here, silently, with no message. Reporting a
+# version is not important enough to stop for.
+pi_version="$("$PI" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1 || true)"
+pi_where="on PATH"
+[ "$PI" != "pi" ] && pi_where="${PI#"$REPO"/}"
+note "factory: calculator/ is clean, pi ${pi_version:-unknown} ($pi_where), jq $(jq --version)"
+
+# Not `exec`. The factory hands the job to the line and stays to hear how it
+# went — the last message of a run should come from the thing you started, not
+# from whatever it happened to hand off to.
+flow factory orchestrator
+set +e
+"$ROOT/orchestrator" "$target"
+outcome=$?
+set -e
+
+printf '\n'
+flow orchestrator factory
+case "$outcome" in
+  0) ok "the line ran to a commit" ;;
+  1) warn "the line ran and committed nothing" ;;
+  *) fail "the line did not start" ;;
+esac
+exit "$outcome"

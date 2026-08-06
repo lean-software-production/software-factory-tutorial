@@ -62,6 +62,41 @@ note "target: $in_calculator"
 note "cap: $MAX_ROUNDS validation rounds"
 printf '\n'
 
+# --- Can the line start? ------------------------------------------------------
+
+# The line's whole judgement of a change is "do the tests still pass", so it has
+# to know they passed before anyone touched anything. Starting from a red suite
+# means every round fails for a reason no station can fix, and nothing stops it
+# but the round cap — ten model calls later.
+#
+# This belongs to the line rather than to the factory. It is the line's own
+# standard, checked by the line's own station, and it costs nothing.
+flow orchestrator test-runner "deterministic · no model · baseline"
+baseline="$("$ROOT/stations/test-runner")"
+flow test-runner orchestrator
+
+case "$baseline" in
+  "TESTS: PASS"*)
+    ok "$baseline — the line can start"
+    ;;
+  *)
+    fail "$baseline — the line cannot start"
+    note "It could not tell a break it caused from one that was already here."
+    note "Full report: ${RUN#"$REPO"/}/test-report.txt"
+    if grep -q "ExperimentalWarning" "$RUN/test-report.txt" 2>/dev/null; then
+      note ""
+      note "That is a node version problem, and probably not the node you think."
+      note "The failing test spawns npx from the repository root, so what matters"
+      note "is what node resolves to *there*, not in your shell:"
+      note "    (cd $REPO && node --version)    # needs 24.2 or newer"
+      note "With a version manager, pin it in a file the whole repository is"
+      note "under — a pin inside demo/minimal-factory/ does not reach the root."
+    fi
+    exit 2
+    ;;
+esac
+printf '\n'
+
 # --- The doer -----------------------------------------------------------------
 
 "$ROOT/lib/station.sh" doer "$EVENTS/0-doer.jsonl" "$RUN/target.md"

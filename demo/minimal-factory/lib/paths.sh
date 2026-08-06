@@ -13,3 +13,15 @@ REPO="$(cd "$ROOT/../.." && pwd)"
 CALC="$REPO/calculator"
 RUN="$ROOT/run"
 EVENTS="$RUN/events"
+
+# Prefer the pi this repository depends on over whatever the shell resolves.
+#
+# `pi` on PATH is whichever one a version manager happens to pick, and a version
+# manager pins tools per language runtime — so changing the node this repository
+# uses can silently change, or remove, the pi it gets. package.json names the
+# version the lessons were written against; use that one when it is installed.
+if [ -x "$REPO/node_modules/.bin/pi" ]; then
+  PI="$REPO/node_modules/.bin/pi"
+else
+  PI="pi"
+fi
