@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# The factory: the one command you run.
+#
+# It owns the checks that must happen before anything is spent — the argument is
+# a file, the file is somewhere this line is allowed to work, the tree is clean,
+# the tools exist — and then hands the job to the orchestrator. Nothing here
+# calls a model. A preflight that costs money is a preflight you skip.
+#
+# Usage: factory <file-in-calculator>
+set -euo pipefail
+
+. "$(dirname "$0")/lib/paths.sh"
+. "$ROOT/lib/say.sh"
+
+if [ $# -ne 1 ]; then
+  echo "usage: factory <file-in-calculator>" >&2
+  echo "example: ./factory ../../calculator/src/index.ts" >&2
+  exit 2
+fi
+
+# --- The argument is a file ---------------------------------------------------
+
+if [ ! -f "$1" ]; then
+  fail "not a file: $1"
+  exit 2
+fi
+target="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+
+# --- ...somewhere this line is allowed to work --------------------------------
+
+case "$target" in
+  "$CALC"/*) ;;
+  *)
+    fail "target must be inside $CALC"
+    note "This demo refactors the tutorial's calculator and nothing else."
+    exit 2
+    ;;
+esac
+
+# --- ...with nothing already in the way ---------------------------------------
+
+# The committer stages all of `calculator/`. Uncommitted work there would be
+# swept into the line's commit as though a station had done it, so a dirty tree
+# is refused rather than worked around.
+if [ -n "$(git -C "$REPO" status --porcelain -- calculator)" ]; then
+  fail "calculator/ has uncommitted changes"
+  note "The line commits everything under calculator/, so it needs a clean start."
+  note "Commit or stash them first:"
+  note "    git -C $REPO status -- calculator"
+  exit 2
+fi
+
+# --- ...and the tools to do it ------------------------------------------------
+
+missing=()
+for tool in pi jq node npm git; do
+  if ! command -v "$tool" > /dev/null 2>&1; then
+    missing+=("$tool")
+  fi
+done
+if [ "${#missing[@]}" -gt 0 ]; then
+  fail "missing required tools: ${missing[*]}"
+  exit 2
+fi
+
+# --- Hand off -----------------------------------------------------------------
+
+printf '\n'
+note "factory: target ${target#"$REPO"/}"
+note "factory: calculator/ is clean, pi $(pi --version), jq $(jq --version)"
+flow factory orchestrator
+
+exec "$ROOT/orchestrator" "$target"

@@ -1,0 +1,12 @@
+# The committer's harness.
+#
+# It writes the commit message. It does not commit — it cannot, having no shell
+# and no git. The orchestrator takes the message and runs the commit itself.
+#
+# That split is deliberate. Writing a sentence about a change is a job for a
+# model; deciding that a repository gets written to is not, and a station with
+# `bash` on a real working tree is a much larger thing to trust than a station
+# that returns a paragraph.
+TOOLS="read,grep,find,ls"
+MODEL="anthropic/claude-opus-5"
+EXTENSION=""

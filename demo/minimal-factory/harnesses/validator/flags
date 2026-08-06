@@ -1,0 +1,12 @@
+# The validator's harness.
+#
+# It can read and it can change nothing — no edit, no write, and no way to run
+# anything at all, including the tests. That is not a limitation to work around;
+# it is the reason its verdict is worth reading. A station that could rerun the
+# evidence could also rerun it until it liked the answer.
+#
+# The test results reach it as text, produced by a deterministic station it does
+# not control.
+TOOLS="read,grep,find,ls"
+MODEL="anthropic/claude-opus-5"
+EXTENSION=""

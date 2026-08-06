@@ -1,0 +1,12 @@
+# The healer's harness.
+#
+# Same tools as the doer, and deliberately not the same station. Its prompt is
+# the difference, and the difference matters: the doer is told to find something
+# worth improving, so handing it a list of findings gives it one more thing
+# competing with the job it was already given, and on a loop it starts something
+# new instead of fixing what failed.
+#
+# Give a machine one job. Repair is not the doer's job.
+TOOLS="read,edit,write,grep,find,ls,run_tests"
+MODEL="anthropic/claude-opus-5"
+EXTENSION="extensions/run-tests-tool.ts"

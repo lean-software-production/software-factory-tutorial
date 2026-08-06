@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# A station with no model in it.
+#
+# Not every station on a line needs to be an agent. This one runs the
+# calculator's own test suite and writes down what happened. It is the only
+# thing on the line that produces evidence, and it is deterministic on purpose:
+# the validator's judgement is worth something because the facts it judges were
+# not produced by anything with an opinion.
+#
+# It always exits 0. A failing test is a result, not an error — the report is the
+# output. Exiting non-zero here would trip `set -e` in the orchestrator and end
+# the run at exactly the moment the line is supposed to start healing.
+#
+# Usage: test-runner
+set -uo pipefail
+
+. "$(dirname "$0")/../lib/paths.sh"
+
+mkdir -p "$RUN"
+report="$RUN/test-report.txt"
+raw="$RUN/test-output.txt"
+
+(cd "$CALC" && npm test) > "$raw" 2>&1
+status=$?
+
+if [ "$status" -eq 0 ]; then
+  verdict="TESTS: PASS"
+else
+  verdict="TESTS: FAIL"
+fi
+
+# vitest's own count, when it got far enough to produce one. A build failure has
+# no test line, and the tail below is what says so.
+summary=$(grep -E '^\s*Tests+\s' "$raw" | tail -n 1)
+
+{
+  echo "$verdict"
+  [ -n "$summary" ] && echo "$summary"
+  echo
+  echo "--- npm test, last 60 lines ---"
+  tail -n 60 "$raw"
+} > "$report"
+
+echo "$verdict${summary:+ — $(echo "$summary" | tr -s ' ')}"
+exit 0

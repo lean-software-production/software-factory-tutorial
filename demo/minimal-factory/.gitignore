@@ -1,0 +1,4 @@
+# Everything a run writes about itself: the event records, the materials the
+# orchestrator assembled, the findings, the commit message. Regenerated every
+# run and never worth committing.
+run/

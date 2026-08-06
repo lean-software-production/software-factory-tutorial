@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# A second station with no model in it: put back anything a writing station
+# touched that was not its target.
+#
+# This exists because of something a run actually did. The healer was told, in
+# writing, to change only the target file. It changed `package.json`, wrote three
+# new files, and explained at length why that was the right thing to do. The
+# prompt asked; nothing enforced.
+#
+# That is the difference this demo is really about. A boundary a station is asked
+# to respect is a preference. A boundary drawn in code it cannot reach is a fact.
+# The doer has no `bash` because its harness withholds the tool — that boundary
+# holds. "Only touch one file" cannot be drawn that way, because the tool that
+# edits the target is the same tool that edits everything else, so it is drawn
+# here instead: afterwards, deterministically, by something with no opinion.
+#
+# Prints the paths it reverted, one per line, and exits 0 either way. A station
+# that strayed is a fact for the caller to report, not an error.
+#
+# Usage: scope-guard <target-path-relative-to-calculator>
+set -uo pipefail
+
+. "$(dirname "$0")/../lib/paths.sh"
+
+target="calculator/$1"
+strayed=()
+
+# -z keeps paths NUL-separated, so nothing here depends on how git would quote a
+# filename. A rename emits a second record holding just the old path; those have
+# no status field, and the check below skips them rather than mangling them.
+while IFS= read -r -d '' record; do
+  [ "${record:2:1}" = " " ] || continue
+  path="${record:3}"
+  [ "$path" = "$target" ] && continue
+  strayed+=("$path")
+done < <(git -C "$REPO" status --porcelain -z -- calculator)
+
+[ "${#strayed[@]}" -eq 0 ] && exit 0
+
+for path in "${strayed[@]}"; do
+  # git only ever reported paths under calculator/, but this script deletes
+  # things, so it re-checks rather than trusting that.
+  case "$path" in
+    calculator/*) ;;
+    *) continue ;;
+  esac
+
+  if git -C "$REPO" ls-files --error-unmatch -- "$path" > /dev/null 2>&1; then
+    git -C "$REPO" restore -- "$path"
+  else
+    rm -rf -- "${REPO:?}/$path"
+  fi
+  echo "$path"
+done
+
+exit 0

@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# The orchestrator: one doer pass, then validate-and-heal until the change is
+# acceptable or the line gives up.
+#
+#   doer ─► ┌─ test-runner ─► validator ─► healer ─┐
+#           └──────────────────────────────────────┘  up to MAX_ROUNDS times
+#                            └─► committer
+#
+# It runs no model itself. Every decision it makes is made from a file some
+# station wrote: the test report, the verdict, the commit message. That is the
+# whole trick — the orchestrator is deterministic, and the parts that are not
+# deterministic are the parts it can read the output of.
+#
+# Usage: orchestrator <absolute-path-to-target-file>
+#        (run `factory <file>` instead; it does the checks this assumes)
+set -euo pipefail
+
+. "$(dirname "$0")/lib/paths.sh"
+. "$ROOT/lib/say.sh"
+
+target="$1"
+in_calculator="${target#"$CALC"/}"
+MAX_ROUNDS="${FACTORY_MAX_ROUNDS:-5}"
+
+trap spin_stop EXIT INT TERM
+
+# A fresh run keeps no records from the last one, so the totals at the end are
+# this run's totals.
+rm -rf "$RUN"
+mkdir -p "$EVENTS"
+
+"$ROOT/lib/material.sh" "The target" /dev/stdin > "$RUN/target.md" <<EOF
+The file to change is \`$in_calculator\`, relative to your working directory.
+EOF
+
+total_so_far() { "$ROOT/lib/cost-of.sh" "$EVENTS"/*.jsonl; }
+
+# Run after every station that can write. Nothing downstream sees a change the
+# guard has not already narrowed to the target file.
+guard_scope() {
+  local strayed
+  flow orchestrator scope-guard "deterministic · no model"
+  strayed=$("$ROOT/stations/scope-guard" "$in_calculator")
+  if [ -n "$strayed" ]; then
+    warn "reverted $(printf '%s\n' "$strayed" | wc -l) change(s) outside the target:"
+    printf '%s\n' "$strayed" | sed 's/^/        /'
+  else
+    ok "nothing touched outside the target"
+  fi
+  flow scope-guard orchestrator
+}
+
+report_total() {
+  local files=("$EVENTS"/*.jsonl)
+  printf '\n'
+  printf 'Total: $%.2f across %d model stations, %d validation round(s).\n' \
+    "$(total_so_far)" "${#files[@]}" "$1"
+  note "records in ${EVENTS#"$REPO"/}"
+}
+
+note "target: $in_calculator"
+note "cap: $MAX_ROUNDS validation rounds"
+printf '\n'
+
+# --- The doer -----------------------------------------------------------------
+
+"$ROOT/lib/station.sh" doer "$EVENTS/0-doer.jsonl" "$RUN/target.md"
+"$ROOT/lib/text-of.sh" "$EVENTS/0-doer.jsonl" > "$RUN/doer-report.txt"
+note "$(sed 's/^/    /' "$RUN/doer-report.txt")"
+printf '\n'
+guard_scope
+printf '\n'
+
+# --- Validate, heal, validate again -------------------------------------------
+
+round=1
+while :; do
+
+  flow orchestrator test-runner "deterministic · no model"
+  ok "$("$ROOT/stations/test-runner")"
+  flow test-runner orchestrator
+  "$ROOT/lib/material.sh" "The test report" "$RUN/test-report.txt" > "$RUN/tests.md"
+  printf '\n'
+
+  git -C "$REPO" diff -- calculator > "$RUN/diff.txt"
+  "$ROOT/lib/material.sh" "The diff" "$RUN/diff.txt" > "$RUN/diff.md"
+
+  "$ROOT/lib/station.sh" validator "$EVENTS/$round-validator.jsonl" \
+    "$RUN/target.md" "$RUN/diff.md" "$RUN/tests.md"
+  "$ROOT/lib/text-of.sh" "$EVENTS/$round-validator.jsonl" > "$RUN/findings.txt"
+
+  verdict=$("$ROOT/lib/verdict-of.sh" "$RUN/findings.txt")
+  printf '\n'
+
+  if [ "$verdict" = "VERDICT: PASS" ]; then
+    ok "$verdict — round $round of $MAX_ROUNDS"
+    break
+  fi
+
+  warn "$verdict — round $round of $MAX_ROUNDS"
+
+  if [ "$round" -ge "$MAX_ROUNDS" ]; then
+    printf '\n'
+    fail "gave up after $MAX_ROUNDS validation rounds. Nothing was committed."
+    note "The change is still in your working tree. To discard it:"
+    note "    git -C $REPO restore -- calculator"
+    note "The last findings are in ${RUN#"$REPO"/}/findings.txt"
+    report_total "$round"
+    exit 1
+  fi
+
+  printf '\n'
+  "$ROOT/lib/material.sh" "The validator's findings" "$RUN/findings.txt" \
+    > "$RUN/findings.md"
+  "$ROOT/lib/station.sh" healer "$EVENTS/$round-healer.jsonl" \
+    "$RUN/target.md" "$RUN/findings.md" "$RUN/tests.md"
+  "$ROOT/lib/text-of.sh" "$EVENTS/$round-healer.jsonl" > "$RUN/healer-report.txt"
+  note "$(sed 's/^/    /' "$RUN/healer-report.txt")"
+  printf '\n'
+  guard_scope
+  printf '\n'
+
+  round=$((round + 1))
+done
+
+# --- The commit ---------------------------------------------------------------
+
+printf '\n'
+"$ROOT/lib/material.sh" "The validator's findings" "$RUN/findings.txt" \
+  > "$RUN/findings.md"
+"$ROOT/lib/station.sh" committer "$EVENTS/$round-committer.jsonl" \
+  "$RUN/target.md" "$RUN/diff.md" "$RUN/findings.md"
+"$ROOT/lib/text-of.sh" "$EVENTS/$round-committer.jsonl" > "$RUN/commit-message.txt"
+
+# The committer wrote the message; the commit itself is the orchestrator's, and
+# `-- calculator` is what keeps it to the work the line actually did.
+git -C "$REPO" add -- calculator
+git -C "$REPO" commit -q -F "$RUN/commit-message.txt"
+ok "committed $(git -C "$REPO" rev-parse --short HEAD) — $(git -C "$REPO" log -1 --format=%s)"
+
+report_total "$round"
