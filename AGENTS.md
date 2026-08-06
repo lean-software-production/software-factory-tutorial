@@ -54,6 +54,18 @@ Scripts `cd "$(dirname "$0")"` before doing anything, so the path is just `.tmp/
 learner who builds a second line gets the same rule without a second `.gitignore` entry. A script that
 writes there needs `mkdir -p .tmp` after its `cd`: `resetFactory` clears the directory away.
 
+## The line commits to a branch of its own, one per session
+
+From lesson 007 the line commits to the calculator, and from 008 it does so unattended. `calculator/`
+has no repository of its own, so those commits land in the learner's clone of the tutorial. The engine
+switches to `factory-line-<date>-<time>` when a session starts (`ensureLineBranch`), which keeps the
+branch they cloned pullable and makes a run easy to throw away.
+
+One branch per session, stamped to the minute, and each is cut from wherever the last one left off —
+so the calculator keeps the work already done to it, and the branch a learner was on last week is
+still there to go back to. It never fails a session over any of this: a workspace that is not a
+repository still gets a working tutorial.
+
 ## Changing a Part 1 lesson means changing the Part 2 seed
 
 `docs/seeds/part-2/` holds what lessons 002 to 004 leave in `factory/`, so a learner who chooses

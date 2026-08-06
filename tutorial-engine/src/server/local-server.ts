@@ -3,6 +3,7 @@ import { access } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import type { LessonDefinition } from "../lesson/contract.js";
+import { ensureLineBranch } from "../lesson/branch.js";
 import { currentSpecPath, loadProgress, skipToPartTwo, type ProgressItem } from "../lesson/load.js";
 import { PiTutorialAdapter } from "../agent/pi-adapter.js";
 import { TutorialEventBus } from "../protocol/event-bus.js";
@@ -115,6 +116,10 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
       bootstrap = { ...bootstrap, state: "starting" };
       runState = "working";
       publishBootstrap();
+      // From lesson 007 the line commits to the calculator, which has no
+      // repository of its own. Do this before the tutor begins so no commit can
+      // land on the branch the learner cloned.
+      await ensureLineBranch(options.workspace, log);
       if (mode === "resume") {
         const history = await sessionLog.read();
         bus.restore(history.map((event) => event.type === "choice" ? { ...event, historical: true } : event));
