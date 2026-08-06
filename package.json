@@ -22,6 +22,6 @@
     "check": "npm run test:onboarding && npm run check:eval && npm run test:eval && npm run --workspace=tutorial-engine check && npm run --workspace=calculator test"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.83.0"
+    "@earendil-works/pi-coding-agent": "0.84.0"
   }
 }

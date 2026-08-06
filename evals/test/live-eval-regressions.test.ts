@@ -200,18 +200,20 @@ describe("live-eval regression coverage", () => {
     const workspace = await mkdtemp(join(tmpdir(), "eval-lesson-"));
     const ledger = [
       "## Part 1 — The validation loop", "",
-      "| Lesson | Goal | Status |", "| --- | --- | --- |",
-      "| [001](001-run-an-agent-headlessly.md) | Run an agent headlessly | Todo |",
-      "| [002](002-build-a-doer.md) | Build a doer | Todo |", ""
+      "| Lesson | Goal |", "| --- | --- |",
+      "| [001](001-run-an-agent-headlessly.md) | Run an agent headlessly |",
+      "| [002](002-build-a-doer.md) | Build a doer |", ""
     ].join("\n");
     await writeFile(join(workspace, "README.md"), "# Test\n");
     await (await import("node:fs/promises")).mkdir(join(workspace, "docs/specs"), { recursive: true });
     await writeFile(join(workspace, "docs/specs/README.md"), ledger);
     try {
       await activateLesson(workspace, "002");
-      const activated = await readFile(join(workspace, "docs/specs/README.md"), "utf8");
-      expect(activated).toContain("[001](001-run-an-agent-headlessly.md) | Run an agent headlessly | Done");
-      expect(activated).toContain("[002](002-build-a-doer.md) | Build a doer | Todo");
+      // The ledger is curriculum: activating a lesson records progress in the
+      // workspace, and leaves the shipped file exactly as it was.
+      expect(await readFile(join(workspace, "docs/specs/README.md"), "utf8")).toBe(ledger);
+      expect(JSON.parse(await readFile(join(workspace, "factory/.tmp/tutorial-progress.json"), "utf8")))
+        .toEqual({ completed: ["001"], skipped: [] });
       await writeFile(join(workspace, "docs/specs/001-run-an-agent-headlessly.md"), "obsolete inactive spec", "utf8");
       await writeFile(join(workspace, "docs/specs/002-build-a-doer.md"), "# Active doer spec", "utf8");
       await expect(loadActiveSpec(workspace, "002")).resolves.toBe("# Active doer spec");
