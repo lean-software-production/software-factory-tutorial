@@ -39,13 +39,17 @@ export function evaluateSpokenExpression(source: string): number {
     throw new Error("Could not work that out.");
   };
 
+  const consume = (expected: string): void => {
+    if (pieces[place++] !== expected) fail();
+  };
+
   const read = (): number => {
     const word = pieces[place++];
     if (!word) fail();
 
     if (word === "(") {
       const inside = read();
-      if (pieces[place++] !== ")") fail();
+      consume(")");
       return inside;
     }
 
@@ -58,28 +62,28 @@ export function evaluateSpokenExpression(source: string): number {
     // purpose, leaving several safe seams for the refactoring lesson.
     if (word === "add") {
       const first = read();
-      if (pieces[place++] !== "and") fail();
+      consume("and");
       const second = read();
       return first + second;
     }
 
     if (word === "subtract") {
       const first = read();
-      if (pieces[place++] !== "from") fail();
+      consume("from");
       const second = read();
       return second - first;
     }
 
     if (word === "multiply") {
       const first = read();
-      if (pieces[place++] !== "by") fail();
+      consume("by");
       const second = read();
       return first * second;
     }
 
     if (word === "divide") {
       const first = read();
-      if (pieces[place++] !== "by") fail();
+      consume("by");
       const second = read();
       if (second === 0) fail();
       return first / second;
