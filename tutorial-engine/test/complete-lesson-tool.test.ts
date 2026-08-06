@@ -13,10 +13,10 @@ const ledger = [
   "",
   "## Part 1 — First part",
   "",
-  "| Lesson | Goal | Status |",
-  "| --- | --- | --- |",
-  "| [001](001-first.md) | First step | Todo |",
-  "| [002](002-second.md) | Second step | Todo |",
+  "| Lesson | Goal |",
+  "| --- | --- |",
+  "| [001](001-first.md) | First step |",
+  "| [002](002-second.md) | Second step |",
   ""
 ].join("\n");
 
@@ -42,18 +42,28 @@ async function harness() {
 }
 
 describe("complete_lesson", () => {
-  it("writes Done to the ledger and publishes the advanced outline", async () => {
+  it("records the lesson in factory/ and publishes the advanced outline", async () => {
     const { workspace, events, tool } = await harness();
 
     await tool.execute("call-1", {}, new AbortController().signal, undefined);
 
-    expect(await readFile(join(workspace, "docs/specs/README.md"), "utf8"))
-      .toContain("| [001](001-first.md) | First step | Done |");
+    expect(JSON.parse(await readFile(join(workspace, "factory/tutorial-progress.json"), "utf8")))
+      .toEqual({ completed: ["001"] });
 
     const progress = events.find((event) => event.type === "progress");
     expect(progress).toBeDefined();
     expect(progress?.type === "progress" && progress.progress.slice(1).map((item) => item.state))
       .toEqual(["done", "current"]);
+  });
+
+  it("leaves the ledger exactly as it shipped, so a clone starts at lesson one", async () => {
+    const { workspace, tool } = await harness();
+
+    await tool.execute("call-1", {}, new AbortController().signal, undefined);
+
+    // The curriculum is version-controlled and the same for everyone; only
+    // factory/ knows how far this learner has got.
+    expect(await readFile(join(workspace, "docs/specs/README.md"), "utf8")).toBe(ledger);
   });
 
   it("records the write in the audit trail as a mutation", async () => {
@@ -62,7 +72,7 @@ describe("complete_lesson", () => {
     await tool.execute("call-1", {}, new AbortController().signal, undefined);
 
     const audit = events.find((event) => event.type === "audit");
-    expect(audit).toMatchObject({ tool: "complete_lesson", mutation: true, outcome: "ok", paths: ["docs/specs/README.md"] });
+    expect(audit).toMatchObject({ tool: "complete_lesson", mutation: true, outcome: "ok", paths: ["factory/tutorial-progress.json"] });
   });
 
   it("is harmless when called again after the last lesson", async () => {
@@ -73,9 +83,10 @@ describe("complete_lesson", () => {
     await tool.execute("call-2", {}, signal, undefined);
     const extra = await tool.execute("call-3", {}, signal, undefined);
 
-    // Nothing left to advance: the ledger stands, and no outline event is sent
-    // that would move the highlight past the end.
-    expect(await readFile(join(workspace, "docs/specs/README.md"), "utf8")).not.toContain("Todo");
+    // Nothing left to advance: no duplicate id is recorded, and no outline
+    // event is sent that would move the highlight past the end.
+    expect(JSON.parse(await readFile(join(workspace, "factory/tutorial-progress.json"), "utf8")))
+      .toEqual({ completed: ["001", "002"] });
     expect(extra.details).toMatchObject({ changed: false });
     expect(events.filter((event) => event.type === "progress")).toHaveLength(2);
   });

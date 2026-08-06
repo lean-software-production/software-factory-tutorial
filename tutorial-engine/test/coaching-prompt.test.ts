@@ -16,6 +16,21 @@ describe("coachingSystemPrompt", () => {
     expect(prompt).toContain("small code snippet");
   });
 
+  it("names the current specification, so the tutor never resolves progress itself", () => {
+    // Progress lives in factory/, outside the ledger the tutor can read, so the
+    // engine has to say which lesson the learner is on.
+    const prompt = coachingSystemPrompt(lesson, "docs/specs/006-put-the-validator-on-a-read-only-harness.md");
+
+    expect(prompt).toContain("then docs/specs/006-put-the-validator-on-a-read-only-harness.md, which is the specification for the lesson the learner is on");
+    expect(prompt).not.toContain("the first specification whose ledger status is Todo");
+  });
+
+  it("falls back to the first unfinished lesson when there is no current specification", () => {
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("then the first specification the learner has not finished");
+  });
+
   it("teaches the mechanism where a specification states a principle figuratively", () => {
     // The coach paraphrases specs faithfully, so a figurative payoff sentence
     // reaches the learner intact — lesson 006 shipped one that described the

@@ -144,7 +144,7 @@ export function createTutorialTools(deps: TutorialToolDependencies): ToolDefinit
     async execute(id) {
       const completed = await markCurrentLessonDone(deps.workspace);
       const details: { changed: boolean; id?: string } = completed ? { changed: true, id: completed.id } : { changed: false };
-      deps.emit({ type: "audit", id, tool: "complete_lesson", paths: ["docs/specs/README.md"], mutation: completed !== undefined, outcome: "ok" });
+      deps.emit({ type: "audit", id, tool: "complete_lesson", paths: ["factory/tutorial-progress.json"], mutation: completed !== undefined, outcome: "ok" });
       if (completed) deps.emit({ type: "progress", progress: completed.progress });
       const summary = completed ? `Recorded lesson ${completed.id} as finished.` : "Every lesson is already finished; the outline is unchanged.";
       return { content: [{ type: "text", text: summary }], details };

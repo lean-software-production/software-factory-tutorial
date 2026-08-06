@@ -32,3 +32,15 @@ Concretely, when writing a lesson's **Key concept**:
 The `## What this costs` section exists to state a trade honestly. Do not soften it into a footnote:
 both halves — the guarantee and the limitation — should be stated plainly enough that a learner could
 argue with them.
+
+## Learner state belongs in factory/, never in the curriculum
+
+`docs/specs/README.md` lists the lessons and nothing about any particular learner. How far someone has
+got lives in `factory/tutorial-progress.json`, beside the session transcript: `factory/` is gitignored,
+so one person's progress cannot be committed, and `resetFactory` clears it when they start over.
+
+This is a rule about direction, not just about one file. Anything true of a single learner — progress,
+their factory, their transcript — belongs under `factory/`. Anything the same for everyone belongs in
+the repository. Writing progress back into the ledger would hand everyone who clones the tutorial a
+copy that claims to be part finished, so the ledger's rows carry a specification link and a goal, and
+no status.

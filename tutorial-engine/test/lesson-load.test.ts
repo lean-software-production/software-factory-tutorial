@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { completeCurrentLesson, loadLesson, readProgress } from "../src/lesson/load.js";
+import { currentSpecPath, loadLesson, readProgress } from "../src/lesson/load.js";
 
 const fixture = fileURLToPath(new URL("./fixtures/sample-lesson", import.meta.url));
 const tutorialRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -13,8 +13,8 @@ describe("loadLesson", () => {
     expect(loaded.definition.validationCommands).toEqual([]);
     expect(loaded.progress).toEqual([
       { id: "orientation", label: "Orientation", state: "done" },
-      { id: "001", label: "Fixture step", state: "current", part: "Part 1 — First part" },
-      { id: "002", label: "Second fixture step", state: "upcoming", part: "Part 2 — Second part" },
+      { id: "001", label: "Fixture step", state: "current", part: "Part 1 — First part", spec: "001.md" },
+      { id: "002", label: "Second fixture step", state: "upcoming", part: "Part 2 — Second part", spec: "002.md" },
     ]);
   });
 
@@ -54,44 +54,51 @@ const ledger = [
   "",
   "## Part 1 — First part",
   "",
-  "| Lesson | Goal | Status |",
-  "| --- | --- | --- |",
-  "| [001](001-first.md) | First step | Todo |",
-  "| [002](002-second.md) | Second step | Todo |",
+  "| Lesson | Goal |",
+  "| --- | --- |",
+  "| [001](001-first.md) | First step |",
+  "| [002](002-second.md) | Second step |",
   ""
 ].join("\n");
 
-describe("completeCurrentLesson", () => {
-  it("advances the current lesson to the next still-Todo row", () => {
-    const first = completeCurrentLesson(ledger);
-    expect(first?.id).toBe("001");
-    const states = first!.progress.slice(1).map((item) => [item.id, item.state]);
-    expect(states).toEqual([["001", "done"], ["002", "current"]]);
+describe("readProgress", () => {
+  it("takes the outline's shape from the ledger and its state from the finished set", () => {
+    const states = (completed: string[]) =>
+      readProgress(ledger, new Set(completed)).slice(1).map((item) => [item.id, item.state]);
 
-    const second = completeCurrentLesson(first!.ledger);
-    expect(second?.id).toBe("002");
-    expect(second!.progress.slice(1).map((item) => item.state)).toEqual(["done", "done"]);
+    expect(states([])).toEqual([["001", "current"], ["002", "upcoming"]]);
+    expect(states(["001"])).toEqual([["001", "done"], ["002", "current"]]);
+    expect(states(["001", "002"])).toEqual([["001", "done"], ["002", "done"]]);
   });
 
-  it("changes only the status cell, leaving the rest of the row byte-identical", () => {
-    const before = ledger.split("\n");
-    const after = completeCurrentLesson(ledger)!.ledger.split("\n");
-    const changed = before.map((line, index) => [line, after[index]]).filter(([a, b]) => a !== b);
-
-    expect(changed).toEqual([[
-      "| [001](001-first.md) | First step | Todo |",
-      "| [001](001-first.md) | First step | Done |"
-    ]]);
+  it("leaves an earlier unfinished lesson current rather than skipping to the gap", () => {
+    // A ledger row can only be finished through the tool, but a hand-edited
+    // progress file should not be able to strand the learner past a lesson
+    // they have not done.
+    expect(readProgress(ledger, new Set(["002"])).slice(1).map((item) => [item.id, item.state]))
+      .toEqual([["001", "current"], ["002", "done"]]);
   });
 
-  it("reports nothing to do once every lesson is finished", () => {
-    const done = ledger.replaceAll("Todo", "Done");
-    expect(completeCurrentLesson(done)).toBeUndefined();
-    expect(readProgress(done).some((item) => item.state === "current")).toBe(false);
+  it("reads state only from the finished set, even if a status column reappears", () => {
+    // The ledger used to carry a Status cell. Should one come back, it must not
+    // be able to claim a lesson is done: the curriculum ships to everyone, and
+    // only factory/ knows about this learner.
+    const withStatus = ledger
+      .replace("| Lesson | Goal |", "| Lesson | Goal | Status |")
+      .replace("| --- | --- |", "| --- | --- | --- |")
+      .replace("| [001](001-first.md) | First step |", "| [001](001-first.md) | First step | Done |");
+
+    expect(readProgress(withStatus).slice(1).map((item) => [item.id, item.state]))
+      .toEqual([["001", "current"], ["002", "upcoming"]]);
   });
 
-  it("leaves a ledger with no lesson rows alone rather than corrupting the prose", () => {
-    const prose = "# Lessons\n\nNo table yet.\n";
-    expect(completeCurrentLesson(prose)).toBeUndefined();
+  it("skips header and separator rows, which carry no specification link", () => {
+    expect(readProgress(ledger).slice(1).map((item) => item.id)).toEqual(["001", "002"]);
+  });
+
+  it("carries each lesson's specification filename for routing the tutor", () => {
+    expect(currentSpecPath(readProgress(ledger))).toBe("docs/specs/001-first.md");
+    expect(currentSpecPath(readProgress(ledger, new Set(["001"])))).toBe("docs/specs/002-second.md");
+    expect(currentSpecPath(readProgress(ledger, new Set(["001", "002"])))).toBeUndefined();
   });
 });

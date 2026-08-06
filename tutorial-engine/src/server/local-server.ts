@@ -3,7 +3,7 @@ import { access } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import type { LessonDefinition } from "../lesson/contract.js";
-import type { ProgressItem } from "../lesson/load.js";
+import { currentSpecPath, loadProgress, type ProgressItem } from "../lesson/load.js";
 import { PiTutorialAdapter } from "../agent/pi-adapter.js";
 import { TutorialEventBus } from "../protocol/event-bus.js";
 import { isBrowserMessage, type BrowserMessage, type RunState, type SessionBootstrap, type TutorialEvent } from "../protocol/events.js";
@@ -119,11 +119,17 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
         log.info("Starting over: removing learner artifacts from factory/.");
         await resetFactory(options.workspace);
         await sessionLog.clear();
+        // Progress lives in factory/, so starting over returns the learner to
+        // the first lesson. Republish so the header agrees with the tutor.
+        bus.publish({ type: "progress", progress: await loadProgress(options.workspace) });
       }
       bootstrap = { state: "active", hasSavedSession: false };
       persistenceUnsubscribe = bus.subscribe((event) => sessionLog.append(event));
       log.info(`Creating ${mode === "resume" ? "resumed" : "new"} tutor session; this may contact Pi's configured provider.`);
-      adapter = await PiTutorialAdapter.create(options.lesson, options.workspace, bus, log);
+      // Resolved here rather than at startup so a session begun after several
+      // lessons — or started over, which clears factory/ — routes to the lesson
+      // the learner is actually on.
+      adapter = await PiTutorialAdapter.create(options.lesson, options.workspace, bus, log, currentSpecPath(progress));
       publishBootstrap();
       void (mode === "resume" ? adapter.resume() : adapter.begin());
     })().catch((error) => {
