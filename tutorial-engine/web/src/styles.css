@@ -7,6 +7,11 @@ button, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 main { width: min(820px, calc(100% - 32px)); margin: 0 auto; min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
+/* A grid or flex child will not shrink below the intrinsic width of its content
+   unless it is told it may. Without this, one long line inside a card widened
+   the card, the transcript and the page itself, and the overflow rules on
+   .markdown and pre never got the chance to scroll or wrap anything. */
+main > *, .transcript > *, header > * { min-width: 0; }
 header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 24px 0 16px; border-bottom: 1px solid #d9d7cf; position: sticky; top: 0; background: #f6f5f1; z-index: 1; }
 h1 { font-size: 1.25rem; margin: 0; font-weight: 650; letter-spacing: -.02em; }
 .eyebrow { font-size: .68rem; letter-spacing: .12em; font-weight: 700; color: #706f67; margin: 0 0 4px; }
