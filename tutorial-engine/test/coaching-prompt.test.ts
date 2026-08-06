@@ -16,6 +16,17 @@ describe("coachingSystemPrompt", () => {
     expect(prompt).toContain("small code snippet");
   });
 
+  it("teaches the mechanism where a specification states a principle figuratively", () => {
+    // The coach paraphrases specs faithfully, so a figurative payoff sentence
+    // reaches the learner intact — lesson 006 shipped one that described the
+    // harness as carrying evidence to a machine that could not reach for it.
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("teach the mechanism instead");
+    expect(prompt).toContain("which capability was removed");
+    expect(prompt).toContain("never stack two of them in one sentence");
+  });
+
   it("defaults generated success criteria to Kent Beck's four rules", () => {
     const prompt = coachingSystemPrompt(lesson);
 

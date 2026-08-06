@@ -21,8 +21,8 @@ results, and it needs to see the diff — and it can no longer run any of them.
 
 The answer is a move the learner has already made once. Lesson 003 did not tell the validator where to
 find the quality baseline; it concatenated the baseline onto the prompt. The same pattern, applied to
-everything the validator used to run for itself: **the harness gathers the evidence and carries it to a
-machine that cannot reach for it.**
+everything the validator used to run for itself: **the harness runs the commands and appends their
+output to the prompt, because the validator can no longer run them itself.**
 
 ## Implementation order
 
