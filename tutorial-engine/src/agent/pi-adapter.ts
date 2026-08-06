@@ -22,7 +22,7 @@ import type { TutorialLogger } from "../runtime-log.js";
 
 const TOOL_NAMES = [
   "read", "edit", "write", "move", "grep", "find", "ls",
-  "present_markdown", "present_diagram", "offer_choices", "run_validation", "show_file_excerpt"
+  "present_markdown", "present_diagram", "offer_choices", "run_validation", "show_file_excerpt", "complete_lesson"
 ];
 
 /**
@@ -114,9 +114,9 @@ Some specifications have the learner run one thing while another is still runnin
 
 When the current specification creates no files, do not offer to build anything and do not invent an artefact to make the lesson feel like the others. Work through what it asks the learner to run, notice, or answer; treat its checks as questions the learner answers in their own words, and confirm or correct those answers against the specification.
 
-At the end of every lesson, stop there. Recap what the learner built, and offer a choice between pausing for now and continuing to the next lesson. Do not begin the next lesson until that choice is made.
+At the end of every lesson, stop there. Recap what the learner built, then use complete_lesson once, and then offer a choice between pausing for now and continuing to the next lesson. Do not begin the next lesson until that choice is made. A lesson is finished when its steps are done, whether the learner made the changes or you did, and whether or not they continue immediately: record it before the choice, not after, so pausing still leaves the outline correct. Do not announce the tool or describe the outline moving; it is bookkeeping, and the learner can see it.
 
-When the current specification says a lesson is the end of Part 1, stop with the stronger, more specific version of that beat instead: recap what the learner built, say plainly that this is the end of the first piece of work, and offer a choice between finishing for now and continuing into Part 2. Do not begin the next lesson until that choice is made.`;
+When the current specification says a lesson is the end of Part 1, stop with the stronger, more specific version of that beat instead: recap what the learner built, say plainly that this is the end of the first piece of work, use complete_lesson, and offer a choice between finishing for now and continuing into Part 2. Do not begin the next lesson until that choice is made.`;
 }
 
 export class PiTutorialAdapter {

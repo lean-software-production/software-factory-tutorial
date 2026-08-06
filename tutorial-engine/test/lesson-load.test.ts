@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { loadLesson } from "../src/lesson/load.js";
+import { completeCurrentLesson, loadLesson, readProgress } from "../src/lesson/load.js";
 
 const fixture = fileURLToPath(new URL("./fixtures/sample-lesson", import.meta.url));
 const tutorialRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -46,5 +46,52 @@ describe("loadLesson", () => {
       .toEqual(["001", "002", "003", "004"]);
     expect(lessons.filter((item) => item.part === byPart[1]).map((item) => item.id))
       .toEqual(["005", "006", "007", "008", "009", "010", "011", "012", "013"]);
+  });
+});
+
+const ledger = [
+  "# Lessons",
+  "",
+  "## Part 1 — First part",
+  "",
+  "| Lesson | Goal | Status |",
+  "| --- | --- | --- |",
+  "| [001](001-first.md) | First step | Todo |",
+  "| [002](002-second.md) | Second step | Todo |",
+  ""
+].join("\n");
+
+describe("completeCurrentLesson", () => {
+  it("advances the current lesson to the next still-Todo row", () => {
+    const first = completeCurrentLesson(ledger);
+    expect(first?.id).toBe("001");
+    const states = first!.progress.slice(1).map((item) => [item.id, item.state]);
+    expect(states).toEqual([["001", "done"], ["002", "current"]]);
+
+    const second = completeCurrentLesson(first!.ledger);
+    expect(second?.id).toBe("002");
+    expect(second!.progress.slice(1).map((item) => item.state)).toEqual(["done", "done"]);
+  });
+
+  it("changes only the status cell, leaving the rest of the row byte-identical", () => {
+    const before = ledger.split("\n");
+    const after = completeCurrentLesson(ledger)!.ledger.split("\n");
+    const changed = before.map((line, index) => [line, after[index]]).filter(([a, b]) => a !== b);
+
+    expect(changed).toEqual([[
+      "| [001](001-first.md) | First step | Todo |",
+      "| [001](001-first.md) | First step | Done |"
+    ]]);
+  });
+
+  it("reports nothing to do once every lesson is finished", () => {
+    const done = ledger.replaceAll("Todo", "Done");
+    expect(completeCurrentLesson(done)).toBeUndefined();
+    expect(readProgress(done).some((item) => item.state === "current")).toBe(false);
+  });
+
+  it("leaves a ledger with no lesson rows alone rather than corrupting the prose", () => {
+    const prose = "# Lessons\n\nNo table yet.\n";
+    expect(completeCurrentLesson(prose)).toBeUndefined();
   });
 });

@@ -67,6 +67,16 @@ describe("coachingSystemPrompt", () => {
     expect(prompt).toContain("offer a choice between pausing for now and continuing to the next lesson");
   });
 
+  it("records the lesson as finished before offering the choice, so pausing still advances the outline", () => {
+    const prompt = coachingSystemPrompt(lesson);
+
+    expect(prompt).toContain("use complete_lesson once, and then offer a choice");
+    expect(prompt).toContain("record it before the choice, not after");
+    // The Part 1 ending replaces the ordinary closing beat wholesale, so it has
+    // to carry the bookkeeping too or the outline stalls at the part boundary.
+    expect(prompt).toContain("use complete_lesson, and offer a choice between finishing for now");
+  });
+
   it("names the terminal each command belongs in once more than one is in play", () => {
     // From lesson 010 the line keeps a terminal busy while the learner watches
     // or steers it from another. A watcher typed into the occupied terminal

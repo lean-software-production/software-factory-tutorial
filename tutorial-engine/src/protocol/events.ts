@@ -38,6 +38,8 @@ export interface SessionBootstrap {
 export type TutorialEvent =
   | { type: "snapshot"; title: string; runState: RunState; activity: string; events: TutorialEvent[]; validationCommands: Array<{ id: string; label: string }>; progress: ProgressItem[]; session: SessionBootstrap }
   | { type: "session-state"; session: SessionBootstrap }
+  /** The lesson outline after a lesson was finished. Status, not transcript. */
+  | { type: "progress"; progress: ProgressItem[] }
   | { type: "run-state"; state: RunState }
   /** What the tutor is doing right now, for the spinner. Status, not transcript: see `TRANSIENT_EVENTS`. */
   | { type: "activity"; text: string }
@@ -61,7 +63,7 @@ export type TutorialEvent =
  * kept in the bus history and never written to the session log, so a resumed
  * session cannot replay a stale "reading README.md" as though it just happened.
  */
-const TRANSIENT_EVENTS = new Set<TutorialEvent["type"]>(["snapshot", "session-state", "activity"]);
+const TRANSIENT_EVENTS = new Set<TutorialEvent["type"]>(["snapshot", "session-state", "activity", "progress"]);
 
 export function isTranscriptEvent(event: TutorialEvent): boolean {
   return !TRANSIENT_EVENTS.has(event.type);

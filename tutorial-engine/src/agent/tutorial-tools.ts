@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { LessonDefinition } from "../lesson/contract.js";
+import { markCurrentLessonDone } from "../lesson/load.js";
 import type { ChoiceOption, TutorialEvent } from "../protocol/events.js";
 import type { ValidationRunner } from "../validation/runner.js";
 import { ChoiceManager } from "./choice-manager.js";
@@ -134,5 +135,21 @@ export function createTutorialTools(deps: TutorialToolDependencies): ToolDefinit
     }
   });
 
-  return [presentMarkdown, presentDiagram, offerChoices, runValidation, showFileExcerpt];
+  const completeLesson = defineTool({
+    name: "complete_lesson",
+    label: "Complete lesson",
+    description: "Record the current lesson as finished, which advances the outline in the page header. Use it once, after the closing recap and before offering the choice to continue. It takes no arguments: the lesson being finished is the one the learner is on.",
+    executionMode: "sequential",
+    parameters: Type.Object({}),
+    async execute(id) {
+      const completed = await markCurrentLessonDone(deps.workspace);
+      const details: { changed: boolean; id?: string } = completed ? { changed: true, id: completed.id } : { changed: false };
+      deps.emit({ type: "audit", id, tool: "complete_lesson", paths: ["docs/specs/README.md"], mutation: completed !== undefined, outcome: "ok" });
+      if (completed) deps.emit({ type: "progress", progress: completed.progress });
+      const summary = completed ? `Recorded lesson ${completed.id} as finished.` : "Every lesson is already finished; the outline is unchanged.";
+      return { content: [{ type: "text", text: summary }], details };
+    }
+  });
+
+  return [presentMarkdown, presentDiagram, offerChoices, runValidation, showFileExcerpt, completeLesson];
 }
