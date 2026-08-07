@@ -24,5 +24,5 @@ needed to operate it.
 | [009](009-record-what-the-line-did.md) | Record what the line did |
 | [010](010-watch-it-while-it-runs.md) | Watch it while it runs |
 | [011](011-ask-the-factory-what-happened.md) | Ask the factory what happened |
-| [012](012-talk-to-a-running-machine.md) | Talk to a running machine |
+| [012](012-talk-to-a-running-station.md) | Talk to a running station |
 | [013](013-oversee-the-orchestrator.md) | Oversee the orchestrator |

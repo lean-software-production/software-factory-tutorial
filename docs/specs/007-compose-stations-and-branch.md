@@ -11,15 +11,15 @@ Everything built so far runs the same sequence whatever happens. Baseline, doer,
 pause — a `FAIL` scrolls past and the next iteration is identical to the one that would have followed a
 `PASS`. The graph is a straight line because nothing on it has ever looked at a result.
 
-Now it branches. Deciding which machine runs next is the **orchestrator**'s job, and here `run.sh` is
+Now it branches. Deciding which station runs next is the **orchestrator**'s job, and here `run.sh` is
 doing it. In lesson 004 the learner was the orchestrator; this lesson is where the routing part of that
 job moves into software.
 
 This is not an extension of what an assembly line is. The line has been "an ordered sequence of
-machines, arranged as a directed graph… the graph may branch" since the words arrived in lesson 005.
+stations, arranged as a directed graph… the graph may branch" since the words arrived in lesson 005.
 This is the first lesson in which it becomes what the word already meant.
 
-Two machines join the line, and between them they make a second point: **a station is its job, its
+Two stations join the line, and between them they make a second point: **a station is its job, its
 boundary, and its contract — not its tool, and not necessarily a model.**
 
 ```mermaid
@@ -58,13 +58,13 @@ Build this lesson in this order. Complete each small step before moving to the n
 
    The obvious question is why the doer's own prompt will not do, when lesson 004 handed it the findings
    and it behaved. The answer is that a human chose to run it that way, once. `refactor.md` tells a
-   machine to find something worth improving and improve it; hand that machine some findings and they
+   station to find something worth improving and improve it; hand that station some findings and they
    become one more thing in its context, competing with the job it was actually given. On an unattended
-   loop it will pick something new most times it is asked. Give a machine one job, and repair's job is
+   loop it will pick something new most times it is asked. Give a station one job, and repair's job is
    not the doer's job.
 
    Keep the prohibition on running checks for the same reason the doer has it. The validator holds the
-   only judgement on this line, and a machine that grades its own work has no reason to report a
+   only judgement on this line, and a station that grades its own work has no reason to report a
    problem with it.
 
    Like every other prompt on the line, `repair.md` names no path to go and fetch. Its inputs — the
@@ -99,7 +99,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    fi
    ```
 
-   Each machine gets its inputs in the order it was taught to expect them: its job, the criteria, then
+   Each station gets its inputs in the order it was taught to expect them: its job, the criteria, then
    whatever it is working from. Leave the findings out of repair and it has nothing to repair.
 
    That `message=` line is not ceremony, and it is worth being precise about why. `run.sh` has already
@@ -111,7 +111,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    behind. Capturing the path into `message` first pins it while `$PWD` still means the line's folder.
 
    `git add -- .` from inside `calculator/` stages that directory and nothing else. That pathspec is
-   what keeps the learner's own work out of a machine's commit: `factory/` is tracked too, and a bare
+   what keeps the learner's own work out of a station's commit: `factory/` is tracked too, and a bare
    `git add` from anywhere in the repository would sweep the line's own source into the change it is
    supposed to be recording.
 
@@ -146,11 +146,11 @@ Be clear about what that rests on, because it is this lesson's real subject. The
 lesson 005 told the validator to open its response with `VERDICT:` on the first non-empty line, and for
 no other reason. The orchestrator does not understand the verdict; it recognises a shape, and the shape
 is a promise the validator makes and could break. Every branch in every line the learner builds after
-this one will rest on some agreement of that kind between a machine that writes and a machine that
+this one will rest on some agreement of that kind between a station that writes and a station that
 reads.
 
 **Then look at the commit station in that light.** Its output goes straight into `git commit -F`. If
-that machine opens with "Here's the commit message:", the sentence is now in the repository's history.
+that station opens with "Here's the commit message:", the sentence is now in the repository's history.
 Same species of promise, equally load-bearing, and defended by nothing at all — there is no anchor to
 save it. Unlike a misrouted verdict, which the next iteration overwrites, this failure is permanent and
 visible in `git log` for as long as the repository exists.
@@ -159,12 +159,12 @@ visible in `git log` for as long as the repository exists.
 
 Four lines, and they carry the lesson's second idea.
 
-A **machine** is an agent running in a non-interactive harness, and the lexicon is explicit that "the
-internals can be a model call or ordinary deterministic code; from the assembly line's point of view it
-makes no difference". The commit station is both at once. Choosing what to say about a change is
-judgement, and a model does it. Staging files and writing history is not judgement, and `git` does it.
+A **station** is an agent running in a non-interactive harness, and its internals can be a model call
+or ordinary deterministic code: from the line's point of view it makes no difference. The commit
+station is both at once. Choosing what to say about a change is judgement, and a model does it.
+Staging files and writing history is not judgement, and `git` does it.
 
-There was never a reason to hand `bash` to a machine so that it could run two commands the script
+There was never a reason to hand `bash` to the model so that it could run two commands the script
 already knows how to run. A station is a job with a boundary, and this one's boundary is that it
 writes text.
 
@@ -192,7 +192,7 @@ From the repository root:
 Verify by hand that:
 
 - a failing verdict starts a repair, announced with `Starting repair...` before Pi is invoked;
-- the repair machine is handed the findings — the validator's own words are in what was piped to it;
+- the repair station is handed the findings — the validator's own words are in what was piped to it;
 - a failing verdict produces **no** commit;
 - a passing verdict starts a commit, announced with `Starting commit...`, and `git log -1` shows a
   message that describes the change rather than announcing itself;
@@ -234,7 +234,7 @@ size.
 ## Pressure test
 
 The line now does two of the three things the learner did by hand in lesson 004. It reads a verdict and
-chooses what runs next, and it carries the evidence from the validator to the machine that needs it.
+chooses what runs next, and it carries the evidence from the validator to the station that needs it.
 
 Lesson 004 named a third: judging when to stop. That one has not moved.
 

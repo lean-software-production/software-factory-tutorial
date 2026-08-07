@@ -4,7 +4,7 @@ You're going to build one assembly line: software that improves a codebase a lit
 
 A software factory is made of lines like it. A real one runs several — one that refactors, one that upgrades dependencies, one that writes the tests nobody got round to — each with its own agents, its own criteria, and its own definition of done, with the factory deciding which runs when. You are building the first, and everything you learn doing it is how you would build the rest.
 
-The tutorial is two pieces of work. **Part 1** builds one agent at a time and runs each of them by hand — a doer that changes the code, then a validator that gathers independent evidence about the change — so you can see what each one contributes before anything is automated. **Part 2** joins them into an assembly line, takes you out of the loop, and then builds the instruments you need to operate something you are no longer driving: a record of what it did, a live view of what it is doing, a way to ask about a finished run, and a way to say something to a machine while it works.
+The tutorial is two pieces of work. **Part 1** builds one agent at a time and runs each of them by hand — a doer that changes the code, then a validator that gathers independent evidence about the change — so you can see what each one contributes before anything is automated. **Part 2** joins them into an assembly line, takes you out of the loop, and then builds the instruments you need to operate something you are no longer driving: a record of what it did, a live view of what it is doing, a way to ask about a finished run, and a way to say something to a station while it works.
 
 ## About the calculator
 

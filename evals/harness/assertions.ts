@@ -388,9 +388,9 @@ export async function deterministicGate(scenario: Scenario, workspace: string, t
         const failingTurns = failing.invocations.filter((entry) => entry.command === "pi");
         const repairTurn = failingTurns.find((entry) => entry.stdin.includes("repair prompt"));
         const committedOnFailure = failing.invocations.some((entry) => entry.command === "git" && entry.args[0] === "commit");
-        assertions.push({ name: "failed verdict routes to repair", passed: Boolean(repairTurn) && failing.output.includes("Starting repair..."), detail: repairTurn ? repairTurn.args.join(" ") : "The repair machine was not invoked after the failed verdict." });
+        assertions.push({ name: "failed verdict routes to repair", passed: Boolean(repairTurn) && failing.output.includes("Starting repair..."), detail: repairTurn ? repairTurn.args.join(" ") : "The repair station was not invoked after the failed verdict." });
         assertions.push({ name: "repair carries the findings", passed: repairTurn?.stdin.includes("VERDICT: FAIL") === true, detail: repairTurn?.stdin ?? "The repair prompt carried no findings." });
-        assertions.push({ name: "repair tool boundary", passed: same(repairTurn?.args, lesson === "012" || json ? jsonDoerArgs : doerArgs) && repairTurn?.cwd.endsWith("/calculator") === true, detail: repairTurn ? `${repairTurn.cwd}: ${repairTurn.args.join(" ")}` : "The repair machine was not invoked." });
+        assertions.push({ name: "repair tool boundary", passed: same(repairTurn?.args, lesson === "012" || json ? jsonDoerArgs : doerArgs) && repairTurn?.cwd.endsWith("/calculator") === true, detail: repairTurn ? `${repairTurn.cwd}: ${repairTurn.args.join(" ")}` : "The repair station was not invoked." });
         if (lesson === "007") {
           assertions.push({ name: "failed verdict does not commit", passed: !committedOnFailure, detail: committedOnFailure ? "A failing verdict produced a commit." : "No commit followed the failing verdict." });
         }

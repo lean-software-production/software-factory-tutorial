@@ -52,7 +52,7 @@ export const lesson013Scenarios: Scenario[] = [
     lesson: "013",
     mode: "hands-on",
     seed: lesson012Seed,
-    description: "The tutor is specific about what the line cannot do rather than reassuring: it cannot notice it is going backwards, cannot tell whether a repair worked on its own, cannot weigh cost against achievement, and cannot be argued with the way a running machine can. It ends by saying the remaining job is not smaller than the one the learner started with, and does not suggest a further lesson would remove it.",
+    description: "The tutor is specific about what the line cannot do rather than reassuring: it cannot notice it is going backwards, cannot tell whether a repair worked on its own, cannot weigh cost against achievement, and cannot be argued with the way a running station can. It ends by saying the remaining job is not smaller than the one the learner started with, and does not suggest a further lesson would remove it.",
     patches: []
   }
 ];

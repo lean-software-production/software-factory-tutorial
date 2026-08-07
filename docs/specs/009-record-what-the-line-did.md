@@ -11,7 +11,7 @@ Pi's `--mode` flag chooses who its output is for. `text`, the default, is prose 
 emits the same run as a stream of JSON lines — one per event — with the model's words inside them
 alongside every tool call, every turn boundary, and the token usage and cost of every message.
 
-That is the whole of the lesson: **a machine's output has a reader, and choosing the reader changes the
+That is the whole of the lesson: **a station's output has a reader, and choosing the reader changes the
 format.** The line gets a record it can be asked questions about, and it pays for it by giving up the
 view the learner has had since lesson 001.
 
@@ -48,7 +48,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    validator's verdict drove the branch through `tee`, and the commit station's message went straight
    into a file. Neither works now, because both files would hold JSON.
 
-   Add one helper near the top of `run.sh`, and use it wherever the line needs a machine's words:
+   Add one helper near the top of `run.sh`, and use it wherever the line needs a station's words:
 
    ```sh
    text_of() {
