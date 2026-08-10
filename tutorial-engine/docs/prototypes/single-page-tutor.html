@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Single-page tutor — prototype</title>
+  <style>
+    :root {
+      --ink: #1f2933;
+      --muted: #63707c;
+      --paper: #fbfaf6;
+      --ground: #f0eee7;
+      --line: #dedbd0;
+      --blue: #2459a8;
+      --blue-pale: #eaf1fd;
+      --green: #1f735b;
+      --green-pale: #e5f3ec;
+      --amber: #8b5a00;
+      --amber-pale: #fbf0d8;
+      --purple: #6946a8;
+      --purple-pale: #f0ebfb;
+      --red: #a23f3f;
+      --shadow: 0 1px 2px rgb(28 33 38 / .06), 0 10px 30px rgb(28 33 38 / .05);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; color: var(--ink); background: var(--ground); line-height: 1.58; }
+    button { font: inherit; cursor: pointer; }
+    code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    code { font-size: .91em; padding: .1em .32em; border-radius: 4px; background: #f0eee8; }
+
+    .shell { display: grid; grid-template-columns: 265px minmax(0, 1fr); max-width: 1480px; min-height: 100vh; margin: 0 auto; }
+    aside { position: sticky; top: 0; align-self: start; height: 100vh; padding: 30px 25px; overflow-y: auto; border-right: 1px solid var(--line); background: #e8e5db; }
+    .brand { display: flex; gap: 10px; align-items: center; margin-bottom: 34px; color: #33404b; font-size: .82rem; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+    .brand-mark { display: grid; width: 28px; height: 28px; place-items: center; color: white; border-radius: 8px; background: var(--blue); box-shadow: 0 2px 0 rgb(0 0 0 / .1); }
+    .toc-title { margin: 0 0 8px; color: var(--muted); font-size: .71rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .curriculum { display: grid; gap: 3px; }.curriculum .part-name { margin: 17px 0 4px; color: #77776f; font-size: .66rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }.lesson-nav { margin: 0; }.lesson-nav summary { display: block; list-style: none; cursor: pointer; }.lesson-nav summary::-webkit-details-marker { display: none; }.lesson-row { display: block; width: 100%; padding: 7px 8px; color: #59616a; border-radius: 6px; font-size: .77rem; line-height: 1.25; text-decoration: none; }.lesson-row:hover { background: rgb(255 255 255 / .52); }.lesson-row.done::before { margin-right: 7px; color: var(--green); content: "✓"; }.lesson-row.current::before { margin-right: 7px; color: var(--blue); content: "●"; }.lesson-row.ahead::before { margin-right: 7px; color: #aaa79d; content: "○"; }.lesson-nav[open] > summary .lesson-row { color: #173f78; background: #d7e5fb; font-weight: 750; }.lesson-nav .lesson-outline { display: grid; gap: 2px; margin: 5px 0 8px 16px; padding-left: 9px; border-left: 1px solid #b6cce9; }.lesson-nav .lesson-outline a { padding: 5px 7px; color: #68717a; border-radius: 4px; font-size: .7rem; line-height: 1.22; text-decoration: none; }.lesson-nav .lesson-outline a:hover { background: rgb(255 255 255 / .5); }.lesson-nav .lesson-outline a[aria-current="true"] { color: #173f78; font-weight: 750; }
+    .toc { display: grid; gap: 3px; }
+    .toc a { display: block; padding: 8px 10px; color: #5d656b; border-radius: 7px; font-size: .84rem; line-height: 1.28; text-decoration: none; transition: background .15s, color .15s; }
+    .toc a:hover { color: var(--ink); background: rgb(255 255 255 / .55); }
+    .toc a[aria-current="true"] { color: #173f78; background: #d7e5fb; font-weight: 700; }
+    .toc a[data-progress]::after { float: right; margin-left: 6px; font-size: .76rem; }.toc a[data-progress="done"]::after { color: var(--green); content: "✓"; }.toc a[data-progress="current"]::after { color: var(--blue); content: "●"; }.toc a[data-progress="ahead"]::after { color: #aaa79d; content: "○"; }
+    .toc .toc-kind { display: block; margin-bottom: 1px; color: #898c89; font-size: .64rem; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+    .toc a[aria-current="true"] .toc-kind { color: var(--blue); }
+
+    main { position: relative; background-color: #fafaf3; background-image: linear-gradient(rgb(151 178 192 / .18) 1px, transparent 1px), linear-gradient(90deg, rgb(151 178 192 / .18) 1px, transparent 1px); background-position: center top; background-size: 25px 25px; }
+    .page { position: relative; width: min(790px, calc(100% - 72px)); margin: 0 auto; padding: 12vh 0 180px; }
+    .page::before { position: absolute; z-index: 0; top: 0; bottom: 0; left: -43px; width: 1px; background: rgb(191 93 93 / .34); content: ""; }
+    .page > * { position: relative; z-index: 1; }
+    .page > header { display: flex; min-height: 76vh; flex-direction: column; justify-content: center; }
+    .eyebrow { margin: 0 0 11px; color: var(--blue); font-size: .73rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { max-width: 680px; margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: clamp(2.4rem, 5vw, 4.35rem); font-weight: 500; line-height: .98; letter-spacing: -.055em; }
+    .dek { max-width: 690px; margin: 31px 0 0; color: #4c5964; font: 1.34rem/1.6 Georgia, "Times New Roman", serif; }
+    .lesson-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 30px; }
+    .chip { padding: 5px 9px; color: #56616a; border: 1px solid var(--line); border-radius: 999px; background: white; font-size: .73rem; font-weight: 650; }
+
+    section { scroll-margin-top: 34px; margin-top: 11rem; }
+    .section-label { margin: 0 0 9px; color: var(--muted); font-size: .7rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    section[data-learning-state="ahead"] { position: relative; padding-top: 3rem; border-top: 1px dashed #d9d5ca; }
+    section[data-learning-state="ahead"]::after { position: absolute; z-index: 2; inset: 0 -4vw -2rem; border-radius: 14px; background: rgb(251 250 246 / .43); box-shadow: inset 0 0 0 1px rgb(231 228 219 / .38); content: ""; pointer-events: none; }
+    h2 { margin: 0 0 17px; font-family: Georgia, "Times New Roman", serif; font-size: clamp(1.75rem, 3vw, 2.35rem); font-weight: 500; letter-spacing: -.035em; line-height: 1.08; }
+    h3 { margin: 0 0 8px; font-size: 1rem; }
+    p { max-width: 720px; margin: 0 0 22px; }
+    section > p:not(.section-label), .prose-callout p, .reflection p, .lesson-end > p:not(.section-label) { font: 1.17rem/1.72 Georgia, "Times New Roman", serif; }
+    strong { color: #17222b; }
+    .prose-callout { margin: 27px 0 0; padding: 18px 20px 18px 22px; border-left: 3px solid var(--blue); border-radius: 0 8px 8px 0; background: var(--blue-pale); }
+    .prose-callout p:last-child { margin-bottom: 0; }
+
+    .story-scene { display: grid; grid-template-columns: minmax(0, .86fr) minmax(310px, 1.14fr); gap: clamp(25px, 6vw, 72px); min-height: 125vh; margin: 55px -8vw 10px 0; }
+    .story-copy { padding-top: 11vh; }.story-step { min-height: 33vh; }.story-step p { color: #52616d; font: 1.09rem/1.7 Georgia, "Times New Roman", serif; }.story-step strong { color: var(--ink); }
+    .story-visual { position: sticky; top: 17vh; align-self: start; }
+    .diagram { display: grid; grid-template-columns: 1fr 46px 1fr 46px 1fr; align-items: center; gap: 6px; margin: 0 0 6px; padding: 22px; border: 1px solid #d9e2f0; border-radius: 12px; background: #f8fbff; }
+    .node { min-height: 95px; display: grid; place-items: center; padding: 12px; border: 1px solid #9db9df; border-radius: 9px; color: #183863; background: #e7f0ff; font-size: .88rem; font-weight: 700; text-align: center; }
+    .node.evidence { border-color: #9fcbb8; color: #15513f; background: #e4f5ec; }
+    .story-scene .node, .story-scene .arrow { transition: opacity .45s ease, transform .45s ease; }
+    .story-scene[data-stage="1"] .evidence, .story-scene[data-stage="1"] .reader, .story-scene[data-stage="1"] .arrow { opacity: .18; transform: translateY(8px); }
+    .story-scene[data-stage="2"] .reader, .story-scene[data-stage="2"] .arrow:last-of-type { opacity: .18; transform: translateY(8px); }
+    .node.harness { border-color: #d9c188; color: #6c4b08; background: #fff5dc; }
+    .arrow { color: #8293a5; font-size: 1.7rem; text-align: center; }
+    .caption { color: var(--muted); font-size: .78rem; }
+
+    .mode { margin-top: 34px; overflow: hidden; border: 1px solid #d6d8cf; border-radius: 3px; background: rgb(255 255 252 / .92); box-shadow: 2px 3px 0 rgb(53 65 69 / .06), 0 10px 25px rgb(28 33 38 / .035); }
+    .mode-head { display: flex; gap: 12px; align-items: flex-start; padding: 17px 19px; border-bottom: 1px solid var(--line); }
+    .mode-icon { display: grid; flex: none; width: 29px; height: 29px; place-items: center; border-radius: 7px; font-size: .9rem; }
+    .mode-head p { margin: 2px 0 0; color: var(--muted); font-size: .84rem; }
+    .mode-body { padding: 19px; }
+    .tag { display: inline-block; margin-bottom: 7px; color: var(--blue); font-size: .66rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+    .guided .mode-icon { color: var(--blue); background: var(--blue-pale); }
+    .practice .mode-icon { color: var(--green); background: var(--green-pale); }
+    .experiment .mode-icon { color: var(--amber); background: var(--amber-pale); }
+    .quiz .mode-icon { color: var(--purple); background: var(--purple-pale); }
+
+    .file-target { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 12px 13px; border: 1px solid #dce4ed; border-radius: 8px; background: #f7faff; }
+    .file-target code { padding: 0; color: #244767; background: none; font-size: .82rem; }
+    .watch { flex: none; color: #67727b; font-size: .73rem; white-space: nowrap; }
+    .watch::before { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: #b2b8b8; content: ""; }
+    .watch.detected { color: #1f735b; font-weight: 700; }.watch.detected::before { background: #31a475; box-shadow: 0 0 0 3px #d8f1e6; }
+    pre { margin: 15px 0; padding: 16px; overflow: auto; border-radius: 8px; color: #dbe9fb; background: #17212b; font-size: .81rem; line-height: 1.57; }
+    pre .muted-code { color: #8493a0; }.comment { color: #86a8c6; }
+    .action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 16px; }
+    .button { padding: 8px 11px; color: #1c4c8f; border: 1px solid #9cb9df; border-radius: 7px; background: #f7fbff; font-size: .78rem; font-weight: 700; }
+    .button:hover { background: #e9f2ff; }.button.secondary { color: #59636c; border-color: #d2d0c8; background: #fff; }
+    .helper { color: var(--muted); font-size: .78rem; }
+    .next-ready { display: none; margin-top: 15px; padding: 11px 13px; color: #185942; border-radius: 7px; background: var(--green-pale); font-size: .84rem; }.next-ready.visible { display: block; }
+
+    .terminal { border-color: #cfe1d7; }.terminal .mode-head { background: #fbfffc; }.command { position: relative; padding-top: 34px; }.command::before { position: absolute; top: 12px; left: 16px; color: #8ca5b6; content: "TERMINAL — REPOSITORY ROOT"; font-size: .62rem; font-weight: 800; letter-spacing: .1em; }
+    .expected { display: grid; grid-template-columns: auto 1fr; gap: 12px; margin-top: 16px; padding: 12px 13px; border-radius: 8px; background: #f3faf6; }.expected b { color: var(--green); font-size: .76rem; letter-spacing: .05em; text-transform: uppercase; }.expected p { margin: 0; color: #4d6259; font-size: .84rem; }
+
+    .choice-grid { display: grid; gap: 9px; margin-top: 15px; }.choice { display: flex; gap: 11px; align-items: flex-start; width: 100%; padding: 12px; color: var(--ink); border: 1px solid #ddd9cf; border-radius: 8px; background: #fffefa; text-align: left; }.choice:hover { border-color: #a997d1; background: #fbf9ff; }.choice.selected { border-color: var(--purple); background: var(--purple-pale); }.choice .letter { display: grid; flex: none; width: 23px; height: 23px; place-items: center; color: #7154a7; border: 1px solid #bcaee1; border-radius: 50%; font-size: .72rem; font-weight: 800; }.choice span:last-child { font-size: .87rem; }.quiz-result { min-height: 24px; margin: 13px 0 0; color: #5f6780; font-size: .84rem; }.quiz-result.correct { color: #236c54; font-weight: 650; }.quiz-result.incorrect { color: #9a4942; }
+
+    .experiment-list { margin: 0; padding-left: 21px; }.experiment-list li { margin: 7px 0; }.warning { margin-top: 15px; padding: 12px 13px; border-radius: 7px; color: #6c4b08; background: var(--amber-pale); font-size: .84rem; }
+    .reflection { padding: 31px; border-radius: 13px; color: #eef3f7; background: #203241; }.reflection .section-label { color: #a9c1d5; }.reflection h2 { color: white; }.reflection p { color: #d4dfe7; }.reflection .question { margin-top: 20px; padding: 16px; border: 1px solid #4a6173; border-radius: 8px; background: #293e4e; color: #fff; font-family: Georgia, "Times New Roman", serif; font-size: 1.12rem; }
+    .lesson-chapter { display: flex; min-height: 82vh; flex-direction: column; justify-content: center; margin-top: 11rem; padding: 11vh 0; border-top: 1px solid #cad4d6; }.lesson-chapter .chapter-number { margin: 0 0 12px; color: var(--blue); font-size: .75rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }.lesson-chapter .chapter-goal { max-width: 600px; color: #52616d; font: 1.25rem/1.65 Georgia, "Times New Roman", serif; }
+    .lesson-end { margin-top: 48px; padding-top: 25px; border-top: 1px solid var(--line); }.lesson-end p { color: var(--muted); }.continue { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }.continue button { padding: 10px 14px; border-radius: 7px; font-size: .84rem; font-weight: 700; }.continue .primary { color: white; border: 1px solid #254c82; background: var(--blue); }.continue .plain { color: #45515b; border: 1px solid #ccc9c0; background: white; }
+
+    @media (max-width: 840px) {
+      .shell { display: block; }.page { width: min(720px, calc(100% - 38px)); padding-top: 46px; }.page::before { display: none; }.page > header { min-height: 62vh; } section { margin-top: 7rem; } aside { position: sticky; z-index: 3; width: 100%; height: auto; padding: 12px 19px; border-right: 0; border-bottom: 1px solid var(--line); }.brand { display: inline-flex; margin: 0 18px 0 0; }.toc-title, .toc .toc-kind, .position, .workbook-toggle { display: none; }.toc { display: inline-flex; max-width: calc(100% - 168px); overflow-x: auto; vertical-align: middle; white-space: nowrap; }.toc a { padding: 6px 8px; font-size: .74rem; }.workbook-map { display: none !important; }.story-scene { display: block; min-height: auto; margin-right: 0; }.story-copy { padding-top: 0; }.story-step { min-height: auto; margin: 32px 0; }.story-visual { position: static; }.diagram { grid-template-columns: 1fr; }.arrow { transform: rotate(90deg); }.file-target { align-items: flex-start; flex-direction: column; gap: 5px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside aria-label="Lesson navigation">
+      <div class="brand"><span class="brand-mark">↗</span> Software factory</div>
+      <p class="toc-title">Workbook</p>
+      <nav class="curriculum" aria-label="Workbook navigation">
+        <p class="part-name">Part 1 · The validation loop</p>
+        <details class="lesson-nav" data-lesson-nav="001"><summary><a class="lesson-row done" href="#lesson-001">001 · Run an agent headlessly</a></summary></details>
+        <details class="lesson-nav" data-lesson-nav="002"><summary><a class="lesson-row done" href="#lesson-002">002 · Build a doer</a></summary></details>
+        <details class="lesson-nav" data-lesson-nav="003"><summary><a class="lesson-row done" href="#lesson-003">003 · Build a validator</a></summary></details>
+        <details class="lesson-nav" data-lesson-nav="004"><summary><a class="lesson-row done" href="#lesson-004">004 · Feed the findings back</a></summary></details>
+        <p class="part-name">Part 2 · Build the factory</p>
+        <details class="lesson-nav" data-lesson-nav="005"><summary><a class="lesson-row done" href="#lesson-005">005 · Join them into a line</a></summary><nav class="lesson-outline"><a href="#lesson-005">The line gets an edge</a><a href="#lesson-005">Define success</a></nav></details>
+        <details class="lesson-nav" data-lesson-nav="006" open><summary><a class="lesson-row current" href="#lesson-006">006 · Read-only validator</a></summary><nav class="lesson-outline"><a href="#lesson-006">The change in the harness</a><a href="#build" aria-current="true">Gather the evidence</a><a href="#run">Run and inspect</a><a href="#experiment">Try to break it</a><a href="#check">Explain the trade-off</a><a href="#reflect">Pressure test</a></nav></details>
+        <details class="lesson-nav" data-lesson-nav="007"><summary><a class="lesson-row ahead" href="#lesson-007">007 · Compose and branch</a></summary><nav class="lesson-outline"><a href="#lesson-007">Read the verdict</a><a href="#lesson-007">Route repair or commit</a></nav></details>
+        <details class="lesson-nav" data-lesson-nav="008"><summary><a class="lesson-row ahead" href="#lesson-008">008 · Take the pause off</a></summary></details>
+        <details class="lesson-nav" data-lesson-nav="009"><summary><a class="lesson-row ahead" href="#lesson-009">009 · Record what happened</a></summary></details>
+        <details class="lesson-nav" data-lesson-nav="010"><summary><a class="lesson-row ahead" href="#lesson-010">010 · Watch it while it runs</a></summary></details>
+        <details class="lesson-nav" data-lesson-nav="011"><summary><a class="lesson-row ahead" href="#lesson-011">011 · Ask what happened</a></summary></details>
+        <details class="lesson-nav" data-lesson-nav="012"><summary><a class="lesson-row ahead" href="#lesson-012">012 · Talk to a station</a></summary></details>
+        <details class="lesson-nav" data-lesson-nav="013"><summary><a class="lesson-row ahead" href="#lesson-013">013 · Oversee the orchestrator</a></summary></details>
+      </nav>
+    </aside>
+
+    <main>
+      <article class="page">
+        <header id="lesson-006" data-lesson-chapter="006" data-title="Make a boundary you own">
+          <p class="eyebrow">Part 2 · Build the factory</p>
+          <h1>Make a boundary you own.</h1>
+          <p class="dek">The validator must judge the work without being able to alter it. In this lesson, the harness gathers the evidence and the validator reads it.</p>
+          <div class="lesson-meta"><span class="chip">About 25 minutes</span><span class="chip">Your editor + terminal</span><span class="chip">One focused change</span></div>
+        </header>
+
+        <section id="concept" data-title="The change in the harness">
+          <p class="section-label">The idea</p>
+          <h2>Take away the capability, then supply what it needed.</h2>
+          <p>The validator previously had <code>bash</code>. Its prompt told it not to modify files, but the harness still gave it a way to do so. That is a promise, not an enforced boundary.</p>
+          <p>Remove <code>bash</code>. The validator can no longer run a test, a quality report, or a diff. The harness runs those commands instead and appends their labelled output to the prompt.</p>
+          <div class="prose-callout"><p><strong>The harness runs the commands and appends their output to the prompt, because the validator can no longer run them itself.</strong></p></div>
+          <div class="story-scene" data-stage="1" aria-label="Scroll through the three stages of the evidence boundary.">
+            <div class="story-copy">
+              <div class="story-step" data-stage="1"><p><strong>First, the harness runs the checks it knows about.</strong> That work is deterministic: quality, tests, and the calculator-only diff.</p></div>
+              <div class="story-step" data-stage="2"><p><strong>Then it gives each result a name.</strong> The evidence file tells the validator what it is reading and what came before the doer ran.</p></div>
+              <div class="story-step" data-stage="3"><p><strong>Only then does the validator read and judge.</strong> It can search the calculator if a finding needs context, but it cannot execute a new command.</p></div>
+            </div>
+            <div class="story-visual">
+              <div class="diagram" role="img" aria-label="The harness gathers evidence, which is passed to a read-only validator.">
+                <div class="node harness">Harness<br><small>runs known checks</small></div><div class="arrow">→</div>
+                <div class="node evidence">Evidence file<br><small>labelled sections</small></div><div class="arrow">→</div>
+                <div class="node reader">Validator<br><small>reads and judges</small></div>
+              </div>
+              <p class="caption">The illustration changes as each part of the argument enters view.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="build" data-title="Gather the evidence" data-learning-state="current">
+          <p class="section-label">Practice · external editor</p>
+          <h2>Write the evidence block once.</h2>
+          <p>Open <code>factory/refactor/validate.sh</code> in your editor. Before the validator starts, add a block that records the old quality report, current quality report, tests, and calculator-only diff.</p>
+          <div class="mode guided">
+            <div class="mode-head"><span class="mode-icon">✎</span><div><span class="tag">Guided edit</span><h3>Add a labelled evidence file</h3><p>Make this one step, then come back. The page notices the save; it does not need to own your editor.</p></div></div>
+            <div class="mode-body">
+              <div class="file-target"><code>factory/refactor/validate.sh</code><span class="watch" id="file-watch">Waiting for a relevant save</span></div>
+              <pre><span class="comment"># Put this before “Starting validation...”</span>
+echo "Gathering evidence..."
+{
+  echo "=== QUALITY BEFORE (recorded before the doer ran) ==="
+  cat .tmp/quality-before.txt
+  <span class="muted-code"># quality now, tests, and calculator-only diff follow</span>
+} &gt; .tmp/evidence.txt</pre>
+              <div class="action-row"><button class="button" type="button" id="simulate-save">Prototype: simulate editor save</button><button class="button secondary" type="button">Show the complete block</button><span class="helper">In the real tutor, this becomes a filesystem-watch event.</span></div>
+              <div class="next-ready" id="save-ready">Change detected. Next, run the doer and validator from your terminal.</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="run" data-title="Run and inspect" data-learning-state="ahead">
+          <p class="section-label">Practice · terminal</p>
+          <h2>Run it where you already work.</h2>
+          <p>Stay in the repository root. Your terminal remains the place that executes the line; this page makes the command, expected result, and next observation unambiguous.</p>
+          <div class="mode practice terminal">
+            <div class="mode-head"><span class="mode-icon">›_</span><div><span class="tag">Run and observe</span><h3>Exercise the changed harness</h3><p>First make a doer turn. Then let the validator judge the result from the evidence it was given.</p></div></div>
+            <div class="mode-body">
+              <pre class="command">./factory/refactor/do.sh
+./factory/refactor/validate.sh</pre>
+              <div class="expected"><b>Look for</b><p>“Gathering evidence...” appears before validation. Then <code>.tmp/evidence.txt</code> contains four labelled sections, and the findings open with a verdict.</p></div>
+              <div class="action-row"><button class="button secondary" type="button">I ran this — show me what to inspect</button><span class="helper">Eventually this block can embed a scoped terminal without changing the lesson.</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="experiment" data-title="Try to break it" data-learning-state="ahead">
+          <p class="section-label">Boundary experiment</p>
+          <h2>Ask the validator to do the forbidden thing.</h2>
+          <p>A check should show the property it claims to provide. Temporarily add a sentence to <code>validate.md</code> asking the validator to create <code>calculator/proof.txt</code>.</p>
+          <div class="mode experiment">
+            <div class="mode-head"><span class="mode-icon">⚗</span><div><span class="tag">Intentional failure</span><h3>Make a prediction before you run it</h3><p>This is not a normal validation pass. You are testing the boundary itself.</p></div></div>
+            <div class="mode-body">
+              <ol class="experiment-list"><li>Predict: with no <code>bash</code>, can the validator create the file?</li><li>Run <code>./factory/refactor/validate.sh</code>.</li><li>Check <code>ls calculator/proof.txt</code>.</li><li>Remove the temporary instruction again.</li></ol>
+              <p class="warning"><strong>Expected result:</strong> there is no proof file. The prompt asked for one, but the harness did not give the validator a capability that could create it.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="check" data-title="Explain the trade-off" data-learning-state="ahead">
+          <p class="section-label">Check your understanding</p>
+          <h2>What did the boundary buy, and what did it cost?</h2>
+          <p>Choose the best account before revealing the explanation.</p>
+          <div class="mode quiz">
+            <div class="mode-head"><span class="mode-icon">?</span><div><span class="tag">Quick check</span><h3>Why is the validator’s evidence set closed?</h3><p>One answer describes both halves of the trade-off.</p></div></div>
+            <div class="mode-body">
+              <div class="choice-grid" id="quiz-options">
+                <button class="choice" data-answer="wrong" type="button"><span class="letter">A</span><span>The validator is more trustworthy because its prompt says it must be honest.</span></button>
+                <button class="choice" data-answer="correct" type="button"><span class="letter">B</span><span>The validator cannot alter the work, but it also cannot investigate a check the harness author did not capture.</span></button>
+                <button class="choice" data-answer="wrong" type="button"><span class="letter">C</span><span>The validator has all the same powers as before, but the evidence file makes its output easier to read.</span></button>
+              </div>
+              <p class="quiz-result" id="quiz-result" aria-live="polite"></p>
+            </div>
+          </div>
+        </section>
+
+        <section id="reflect" data-title="What still does not happen" class="reflection" data-learning-state="ahead">
+          <p class="section-label">Pressure test</p>
+          <h2>The line can now judge without grading its own work.</h2>
+          <p>Watch a failing verdict go past. The next iteration still starts a fresh refactoring with the same prompt and criteria. The findings are written down, but no station reads them to decide what should happen next.</p>
+          <div class="question">What did you do by hand in lesson 004 that the line still does not do?</div>
+        </section>
+
+        <footer class="lesson-end">
+          <p class="section-label">Lesson complete</p>
+          <h2>You moved the evidence, not the trust.</h2>
+          <p>The validator can inspect the calculator and judge labelled evidence, but it cannot run a command that changes the work. Next, the line needs to read that verdict and route the work accordingly.</p>
+          <div class="continue"><button class="primary" type="button">Continue to compose stations →</button><button class="plain" type="button">Finish for now</button></div>
+        </footer>
+
+        <section id="lesson-007" class="lesson-chapter" data-lesson-chapter="007" data-learning-state="ahead" data-title="Compose stations and branch">
+          <p class="chapter-number">Lesson 007 · Ahead</p>
+          <h2>Compose stations, and branch.</h2>
+          <p class="chapter-goal">The next chapter gives the line a decision: a failed verdict goes to repair; a passing verdict becomes a commit. Its detail is here to read, but the work remains ahead of the learner.</p>
+        </section>
+      </article>
+    </main>
+  </div>
+
+  <script>
+    const sections = [...document.querySelectorAll('header[id], section[id]')];
+    const links = [...document.querySelectorAll('.lesson-nav .lesson-outline a')];
+    const lessonNavs = [...document.querySelectorAll('[data-lesson-nav]')];
+    let current = sections[0];
+
+    function lessonFor(section) {
+      return section.dataset.lessonChapter ?? "006";
+    }
+
+    function setCurrent(section) {
+      current = section;
+      const lessonId = lessonFor(section);
+      lessonNavs.forEach(nav => { nav.open = nav.dataset.lessonNav === lessonId; });
+      links.forEach(link => link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + section.id)));
+    }
+
+    const observer = new IntersectionObserver(entries => {
+      const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (visible[0]) setCurrent(visible[0].target);
+    }, { rootMargin: '-18% 0px -68% 0px', threshold: 0 });
+    sections.forEach(section => observer.observe(section));
+    setCurrent(current);
+
+    const storyScene = document.querySelector('.story-scene');
+    const storyObserver = new IntersectionObserver(entries => {
+      const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+      if (visible[0]) storyScene.dataset.stage = visible[0].target.dataset.stage;
+    }, { rootMargin: '-28% 0px -35% 0px', threshold: [0, .35, .7] });
+    document.querySelectorAll('.story-step').forEach(step => storyObserver.observe(step));
+
+    document.getElementById('simulate-save').addEventListener('click', () => {
+      document.getElementById('file-watch').classList.add('detected');
+      document.getElementById('file-watch').textContent = 'Change detected';
+      document.getElementById('save-ready').classList.add('visible');
+    });
+    document.querySelectorAll('#quiz-options .choice').forEach(button => button.addEventListener('click', () => {
+      document.querySelectorAll('#quiz-options .choice').forEach(option => option.classList.remove('selected'));
+      button.classList.add('selected');
+      const result = document.getElementById('quiz-result');
+      if (button.dataset.answer === 'correct') {
+        result.className = 'quiz-result correct';
+        result.textContent = 'Exactly. Removing the capability gives the guarantee; limiting the evidence to what the harness captured is the cost.';
+      } else {
+        result.className = 'quiz-result incorrect';
+        result.textContent = 'Not quite. Look for the answer that names both the enforced capability boundary and its limitation.';
+      }
+    }));
+  </script>
+</body>
+</html>
