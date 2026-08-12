@@ -78,9 +78,8 @@ function WorkbookIntroduction({ state, refresh }: { state: State; refresh(state:
   return <section className="workbook-intro" aria-label="Workbook introduction">
     <header><h1>{state.workbook.title}</h1></header>
     {renderMarkdown(state.introduction)}
-    <div ref={setSentinel} className="introduction-end">
-      {state.introductionComplete ? <p className="next-ready">The first lesson is ready below.</p> : <button className="button primary" onClick={() => completeIntroduction().then(refresh)}>Ready to continue</button>}
-    </div>
+    {state.introductionComplete ? <p className="next-ready">The first lesson is ready below.</p> : <button className="button primary introduction-continue" onClick={() => completeIntroduction().then(refresh)}>Ready to continue</button>}
+    <div ref={setSentinel} className="introduction-end" aria-hidden="true" />
   </section>;
 }
 
