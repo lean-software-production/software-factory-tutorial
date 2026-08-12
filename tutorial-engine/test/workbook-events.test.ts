@@ -1,14 +1,28 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkbookEventStore, nowEvent, project } from "../src/workbook/events.js";
-import { fileURLToPath } from "node:url";
-import { loadWorkbookLesson } from "../src/workbook/load.js";
+import type { WorkbookLesson } from "../src/workbook/contract.js";
 
-const workspaceRoot = fileURLToPath(new URL("../../", import.meta.url));
-const lesson001 = await loadWorkbookLesson(resolve(workspaceRoot, "lessons/01-the-validation-loop/01-run-an-agent-headlessly"), "01-the-validation-loop/01-run-an-agent-headlessly");
-if (!lesson001) throw new Error("Missing workbook lesson 001 fixture.");
+/**
+ * A minimal in-memory lesson: enough shape for the projection to advance
+ * through, with synthetic ids so these tests exercise projection alone and
+ * never depend on the root curriculum's words, paths, or block order.
+ */
+const LESSON_ID = "part/lesson";
+const lesson: WorkbookLesson = {
+  id: LESSON_ID,
+  hero: { title: "Hero", dek: "Dek", meta: [] },
+  opening: { sectionLabel: "Label", heading: "Heading", markdown: "Body", outcomes: [] },
+  blocks: [
+    { id: "narrate", type: "narrative", title: "Narrate", markdown: "Body" },
+    { id: "first-practice", type: "terminal-practice", title: "First", required: true, command: "c1", context: "x", expectedObservation: "o", help: {} },
+    { id: "second-practice", type: "terminal-practice", title: "Second", required: true, command: "c2", context: "x", expectedObservation: "o", help: {} },
+    { id: "reflect", type: "reflection", title: "Reflect", required: true, prompt: "?" },
+    { id: "finish", type: "lesson-transition", title: "Finish", required: true, label: "Finish", markdown: "Body" },
+  ],
+};
 
 let dirs: string[] = [];
 async function workspace() { const dir = await mkdtemp(resolve(tmpdir(), "workbook-")); dirs.push(dir); return dir; }
@@ -16,42 +30,42 @@ afterEach(async () => { await Promise.all(dirs.map((dir) => rm(dir, { recursive:
 
 describe("workbook event projection", () => {
   it("keeps unexpected output as evidence without completing the active block", () => {
-    const events = [nowEvent({ type: "unexpected_output_submitted", lessonId: "01-the-validation-loop/01-run-an-agent-headlessly", blockId: "run-supplied-command", evidence: "pi not found" })];
-    const state = project(events, lesson001);
-    expect(state.activeBlockId).toBe("run-supplied-command");
-    expect(state.blocks.find((block) => block.id === "run-supplied-command")?.completed).toBe(false);
-    expect(state.unexpected["run-supplied-command"]).toEqual(["pi not found"]);
+    const events = [nowEvent({ type: "unexpected_output_submitted", lessonId: LESSON_ID, blockId: "first-practice", evidence: "command not found" })];
+    const state = project(events, lesson);
+    expect(state.activeBlockId).toBe("first-practice");
+    expect(state.blocks.find((block) => block.id === "first-practice")?.completed).toBe(false);
+    expect(state.unexpected["first-practice"]).toEqual(["command not found"]);
   });
 
   it("emerges blocks through the active activity and advances through completion", () => {
-    expect(project([], lesson001).blocks.map((block) => [block.id, block.emerged])).toEqual([
-      ["orientation", true], ["run-supplied-command", true], ["change-job", false], ["reflection", false], ["transition", false]
+    expect(project([], lesson).blocks.map((block) => [block.id, block.emerged])).toEqual([
+      ["narrate", true], ["first-practice", true], ["second-practice", false], ["reflect", false], ["finish", false]
     ]);
     const events = [
-      nowEvent({ type: "observation_acknowledged", lessonId: "01-the-validation-loop/01-run-an-agent-headlessly", blockId: "run-supplied-command" }),
-      nowEvent({ type: "observation_acknowledged", lessonId: "01-the-validation-loop/01-run-an-agent-headlessly", blockId: "change-job" }),
-      nowEvent({ type: "reflection_submitted", lessonId: "01-the-validation-loop/01-run-an-agent-headlessly", blockId: "reflection", response: "probably wrong is still participation" }),
+      nowEvent({ type: "observation_acknowledged", lessonId: LESSON_ID, blockId: "first-practice" }),
+      nowEvent({ type: "observation_acknowledged", lessonId: LESSON_ID, blockId: "second-practice" }),
+      nowEvent({ type: "reflection_submitted", lessonId: LESSON_ID, blockId: "reflect", response: "a reflection" }),
     ];
-    expect(project(events, lesson001).activeBlockId).toBe("transition");
-    expect(project(events, lesson001).blocks.map((block) => block.emerged)).toEqual([true, true, true, true, true]);
-    expect(project([...events, nowEvent({ type: "lesson_transitioned", lessonId: "01-the-validation-loop/01-run-an-agent-headlessly", blockId: "transition" })], lesson001).completedLessons).toEqual(["01-the-validation-loop/01-run-an-agent-headlessly"]);
+    expect(project(events, lesson).activeBlockId).toBe("finish");
+    expect(project(events, lesson).blocks.map((block) => block.emerged)).toEqual([true, true, true, true, true]);
+    expect(project([...events, nowEvent({ type: "lesson_transitioned", lessonId: LESSON_ID, blockId: "finish" })], lesson).completedLessons).toEqual([LESSON_ID]);
   });
 
   it("rebuilds resume state from JSONL events, not projection cache or scroll position", async () => {
     const dir = await workspace(); const store = new WorkbookEventStore(dir);
-    await store.append(nowEvent({ type: "observation_acknowledged", lessonId: "01-the-validation-loop/01-run-an-agent-headlessly", blockId: "run-supplied-command" }));
-    await store.writeProjection({ activeLessonId: "01-the-validation-loop/01-run-an-agent-headlessly", activeBlockId: "wrong", completedLessons: [], blocks: [], unexpected: {}, reflections: {} });
-    expect(project(await store.read(), lesson001).activeBlockId).toBe("change-job");
+    await store.append(nowEvent({ type: "observation_acknowledged", lessonId: LESSON_ID, blockId: "first-practice" }));
+    await store.writeProjection({ activeLessonId: LESSON_ID, activeBlockId: "wrong", completedLessons: [], blocks: [], unexpected: {}, reflections: {} });
+    expect(project(await store.read(), lesson).activeBlockId).toBe("second-practice");
   });
 
   it("writes workbook events in the tutor's neutral state directory", async () => {
     const dir = await workspace(); const store = new WorkbookEventStore(dir);
-    await store.append(nowEvent({ type: "observation_acknowledged", lessonId: "01-the-validation-loop/01-run-an-agent-headlessly", blockId: "run-supplied-command" }));
+    await store.append(nowEvent({ type: "observation_acknowledged", lessonId: LESSON_ID, blockId: "first-practice" }));
     expect(store.eventPath).toContain(".tutorial/.tmp/workbook/events.jsonl");
     expect(await readFile(store.eventPath, "utf8")).toContain("observation_acknowledged");
   });
 
   it("has no event that lets unrelated file changes complete terminal practice", () => {
-    expect(project([{ type: "file_change_observed", at: new Date().toISOString(), lessonId: "01-the-validation-loop/01-run-an-agent-headlessly", blockId: "run-supplied-command" } as any], lesson001).activeBlockId).toBe("run-supplied-command");
+    expect(project([{ type: "file_change_observed", at: new Date().toISOString(), lessonId: LESSON_ID, blockId: "first-practice" } as any], lesson).activeBlockId).toBe("first-practice");
   });
 });
