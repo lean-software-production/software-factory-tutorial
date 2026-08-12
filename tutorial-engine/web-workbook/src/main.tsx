@@ -90,8 +90,8 @@ function App() {
   useEffect(() => { if (state) document.title = state.workbook.title; }, [state?.workbook.title]);
   useEffect(() => {
     if (!state?.introductionComplete) return;
-    document.getElementById(state.progress.activeBlockId)?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [state?.introductionComplete, state?.progress.activeBlockId]);
+    document.getElementById(`lesson-${state.progress.activeLessonId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [state?.introductionComplete, state?.progress.activeLessonId]);
   useEffect(() => {
     if (!state) return;
     const headings = [...document.querySelectorAll<HTMLElement>(".chapter")];
