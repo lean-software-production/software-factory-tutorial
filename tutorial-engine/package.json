@@ -22,14 +22,16 @@
   },
   "scripts": {
     "dev": "npm run build:web && tsx src/cli.ts",
-    "build": "npm run build:server && npm run build:web",
+    "build": "npm run build:server && npm run build:web && npm run build:web:workbook",
     "build:server": "tsc -p tsconfig.json",
     "build:web": "vite build",
     "start": "node dist/cli.js",
     "test": "vitest run --root .",
     "browser:smoke": "tsx test/browser-smoke.mts",
     "check": "tsc --noEmit && npm run test",
-    "prepublishOnly": "npm run build && npm run check"
+    "prepublishOnly": "npm run build && npm run check",
+    "dev:workbook": "npm run build:web:workbook && tsx src/workbook/cli.ts",
+    "build:web:workbook": "vite build --config vite.workbook.config.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.0",

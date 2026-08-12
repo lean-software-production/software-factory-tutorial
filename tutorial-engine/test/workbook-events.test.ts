@@ -1,0 +1,51 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { LessonProgressStore } from "../src/lesson/progress-store.js";
+import { WorkbookEventStore, nowEvent, project } from "../src/workbook/events.js";
+import { lesson001 } from "../src/workbook/lesson-001.js";
+
+let dirs: string[] = [];
+async function workspace() { const dir = await mkdtemp(resolve(tmpdir(), "workbook-")); dirs.push(dir); return dir; }
+afterEach(async () => { await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))); dirs = []; });
+
+describe("workbook event projection", () => {
+  it("keeps unexpected output as evidence without completing the active block", () => {
+    const events = [nowEvent({ type: "unexpected_output_submitted", lessonId: "001", blockId: "run-supplied-command", evidence: "pi not found" })];
+    const state = project(events, lesson001);
+    expect(state.activeBlockId).toBe("run-supplied-command");
+    expect(state.blocks.find((block) => block.id === "run-supplied-command")?.completed).toBe(false);
+    expect(state.unexpected["run-supplied-command"]).toEqual(["pi not found"]);
+  });
+
+  it("advances through acknowledgement, reflection participation, and explicit transition", () => {
+    const events = [
+      nowEvent({ type: "observation_acknowledged", lessonId: "001", blockId: "run-supplied-command" }),
+      nowEvent({ type: "observation_acknowledged", lessonId: "001", blockId: "change-job" }),
+      nowEvent({ type: "reflection_submitted", lessonId: "001", blockId: "reflection", response: "probably wrong is still participation" }),
+    ];
+    expect(project(events, lesson001).activeBlockId).toBe("transition");
+    expect(project([...events, nowEvent({ type: "lesson_transitioned", lessonId: "001", blockId: "transition" })], lesson001).completedLessons).toEqual(["001"]);
+  });
+
+  it("rebuilds resume state from JSONL events, not projection cache or scroll position", async () => {
+    const dir = await workspace(); const store = new WorkbookEventStore(dir);
+    await store.append(nowEvent({ type: "observation_acknowledged", lessonId: "001", blockId: "run-supplied-command" }));
+    await store.writeProjection({ activeLessonId: "001", activeBlockId: "wrong", completedLessons: [], blocks: [], unexpected: {}, reflections: {} });
+    expect(project(await store.read(), lesson001).activeBlockId).toBe("change-job");
+  });
+
+  it("writes only under factory/.tmp/workbook and stays separate from legacy progress", async () => {
+    const dir = await workspace(); const store = new WorkbookEventStore(dir);
+    await store.append(nowEvent({ type: "observation_acknowledged", lessonId: "001", blockId: "run-supplied-command" }));
+    await new LessonProgressStore(dir).write({ completed: ["001"], skipped: [] });
+    expect(store.eventPath).toContain("factory/.tmp/workbook/events.jsonl");
+    expect(await readFile(store.eventPath, "utf8")).toContain("observation_acknowledged");
+    expect(await readFile(resolve(dir, "factory/.tmp/tutorial-progress.json"), "utf8")).toContain("completed");
+  });
+
+  it("has no event that lets unrelated file changes complete terminal practice", () => {
+    expect(project([{ type: "file_change_observed", at: new Date().toISOString(), lessonId: "001", blockId: "run-supplied-command" } as any], lesson001).activeBlockId).toBe("run-supplied-command");
+  });
+});

@@ -1,0 +1,92 @@
+import { createReadStream } from "node:fs";
+import { access } from "node:fs/promises";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { extname, resolve, sep } from "node:path";
+import { LOOPBACK_HOST } from "../server/local-server.js";
+import type { TutorialLogger } from "../runtime-log.js";
+import { createTutorialLogger } from "../runtime-log.js";
+import { lesson001 } from "./lesson-001.js";
+import { loadWorkbook, type LoadedWorkbook } from "./load.js";
+import { nowEvent, project, WorkbookEventStore, type WorkbookEvent } from "./events.js";
+
+const MIME_TYPES: Record<string, string> = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json; charset=utf-8" };
+const MAX_BODY_BYTES = 16_384;
+
+export interface WorkbookServerOptions { target: string; webRoot: string; port?: number; host?: string; logger?: TutorialLogger; }
+export interface StartedWorkbookServer { url: string; port: number; host: string; close(): Promise<void>; }
+
+function sendJson(response: ServerResponse, status: number, body: unknown): void {
+  response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+  response.end(JSON.stringify(body));
+}
+function headers(response: ServerResponse): void {
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("X-Frame-Options", "SAMEORIGIN");
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'self'");
+}
+function isRoute(pathname: string, route: string): boolean { return pathname === `/api/workbook/${route}` || pathname.endsWith(`/api/workbook/${route}`); }
+async function readJson(request: IncomingMessage): Promise<any> {
+  const chunks: Buffer[] = []; let length = 0;
+  for await (const chunk of request) { const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk); length += buffer.length; if (length > MAX_BODY_BYTES) throw new Error("Request body is too large."); chunks.push(buffer); }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+function assetPaths(pathname: string): string[] {
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments.length === 0) return ["/index.html"];
+  const paths = segments.map((_, index) => `/${segments.slice(index).join("/")}`);
+  return pathname.endsWith("/") ? [...paths, "/index.html"] : paths;
+}
+
+function publicState(loaded: LoadedWorkbook, events: WorkbookEvent[]) {
+  return { title: "Software factory workbook", chapters: loaded.chapters, progress: project(events, lesson001), adapter: { modelBackedHelp: false, note: "Free-text help is block-scoped. No model adapter is wired in this vertical slice." } };
+}
+
+export async function startWorkbookServer(options: WorkbookServerOptions): Promise<StartedWorkbookServer> {
+  const log = options.logger ?? createTutorialLogger();
+  await access(resolve(options.webRoot, "index.html"));
+  const loaded = await loadWorkbook(options.target);
+  const store = new WorkbookEventStore(loaded.workspace);
+  if ((await store.read()).length === 0) await store.append(nowEvent({ type: "session_started" }));
+  let server = createServer(async (request, response) => {
+    headers(response);
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (request.method === "GET" && isRoute(url.pathname, "state")) return sendJson(response, 200, publicState(loaded, await store.read()));
+    if (request.method === "POST" && isRoute(url.pathname, "events")) {
+      try {
+        const body = await readJson(request);
+        const block = lesson001.blocks.find((candidate) => candidate.id === body.blockId);
+        if (!block) return sendJson(response, 400, { error: "Unknown blockId." });
+        let event: WorkbookEvent | undefined;
+        if (body.action === "acknowledge" && block.type === "terminal-practice") event = nowEvent({ type: "observation_acknowledged", lessonId: lesson001.id, blockId: block.id });
+        if (body.action === "unexpected" && block.type === "terminal-practice" && typeof body.evidence === "string") event = nowEvent({ type: "unexpected_output_submitted", lessonId: lesson001.id, blockId: block.id, evidence: body.evidence });
+        if (body.action === "reflect" && block.type === "reflection" && typeof body.response === "string") event = nowEvent({ type: "reflection_submitted", lessonId: lesson001.id, blockId: block.id, response: body.response });
+        if (body.action === "transition" && block.type === "lesson-transition") event = nowEvent({ type: "lesson_transitioned", lessonId: lesson001.id, blockId: block.id });
+        if (body.action === "help" && typeof body.request === "string") event = nowEvent({ type: "help_requested", lessonId: lesson001.id, blockId: block.id, request: body.request });
+        if (!event) return sendJson(response, 400, { error: "Invalid workbook action for this block." });
+        await store.append(event);
+        const events = await store.read();
+        await store.writeProjection(project(events, lesson001));
+        return sendJson(response, 202, publicState(loaded, events));
+      } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." }); }
+    }
+    if (request.method !== "GET" && request.method !== "HEAD") return sendJson(response, 405, { error: "Method not allowed." });
+    const webRoot = resolve(options.webRoot);
+    for (const requestPath of assetPaths(url.pathname)) {
+      const candidate = resolve(webRoot, `.${requestPath}`);
+      if (candidate !== webRoot && !candidate.startsWith(webRoot + sep)) return sendJson(response, 403, { error: "Forbidden." });
+      try { await access(candidate); } catch { continue; }
+      response.writeHead(200, { "Content-Type": MIME_TYPES[extname(candidate)] ?? "application/octet-stream", "Cache-Control": "no-store" });
+      if (request.method === "HEAD") response.end(); else createReadStream(candidate).pipe(response);
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+    if (request.method === "HEAD") response.end(); else createReadStream(resolve(webRoot, "index.html")).pipe(response);
+  });
+  const host = options.host ?? LOOPBACK_HOST; const port = options.port ?? 0;
+  await new Promise<void>((resolvePromise, reject) => { server.once("error", reject); server.listen(port, host, () => { server.off("error", reject); resolvePromise(); }); });
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("Could not determine workbook server address.");
+  const url = `http://${LOOPBACK_HOST}:${address.port}`;
+  log.info(`Workbook tutor listening on ${url}. State: ${store.eventPath}`);
+  return { url, port: address.port, host, close: () => new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise())) };
+}
