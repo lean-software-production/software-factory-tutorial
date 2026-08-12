@@ -112,8 +112,8 @@ function App() {
       <nav className="curriculum" aria-label="Workbook navigation">{parts.map((part) => <div key={part}><p className="part-name">{part}</p>{state.chapters.filter((chapter) => chapter.part === part).map((chapter) => {
         const complete = state.progress.completedLessons.includes(chapter.id);
         const current = chapter.id === state.progress.activeLessonId;
-        if (!chapter.lesson) return <span key={chapter.id} className="lesson-row ahead unavailable" aria-disabled="true"><span>{chapter.id} · {chapter.title}</span></span>;
-        return <details key={chapter.id} className="lesson-nav" open={viewedLesson === chapter.id}><summary><a href={`#lesson-${chapter.id}`} className={`lesson-row ${complete ? "done" : current ? "current" : "ahead"}`} onClick={() => setViewed(chapter.id)}>{chapter.id} · {chapter.title}</a></summary>{viewedLesson === chapter.id && <nav className="lesson-outline" aria-label={`${chapter.title} outline`}>{chapter.lesson.blocks.map((block) => <a href={`#${block.id}`} key={block.id} aria-current={block.id === state.progress.activeBlockId ? "true" : undefined}>{block.title}</a>)}</nav>}</details>;
+        if (!chapter.lesson) return <span key={chapter.id} className="lesson-row ahead unavailable" aria-disabled="true"><span>{chapter.title}</span></span>;
+        return <details key={chapter.id} className="lesson-nav" open={viewedLesson === chapter.id}><summary><a href={`#lesson-${chapter.id}`} className={`lesson-row ${complete ? "done" : current ? "current" : "ahead"}`} onClick={() => setViewed(chapter.id)}>{chapter.title}</a></summary>{viewedLesson === chapter.id && <nav className="lesson-outline" aria-label={`${chapter.title} outline`}>{chapter.lesson.blocks.map((block) => <a href={`#${block.id}`} key={block.id} aria-current={block.id === state.progress.activeBlockId ? "true" : undefined}>{block.title}</a>)}</nav>}</details>;
       })}</div>)}</nav>
     </aside>
     <main><article className="page">
