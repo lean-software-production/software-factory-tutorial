@@ -9,8 +9,14 @@ type Lesson = { id: string; status: string; hero: Hero; opening: Opening; blocks
 type Chapter = { id: string; title: string; part: string; state: "migrated" | "unavailable"; lesson?: Lesson };
 type BlockProgress = { id: string; ready: boolean; active: boolean; completed: boolean; emerged: boolean };
 type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string> };
-type Identity = { title: string; brand: string; tocTitle: string; draftNotice: string };
-type State = { workbook: Identity; introduction: string; chapters: Chapter[]; progress: Progress; adapter: { note: string } };
+type Identity = { title: string; brand: string; tocTitle: string; };
+type State = { workbook: Identity; introduction: string; introductionComplete: boolean; chapters: Chapter[]; progress: Progress; adapter: { note: string } };
+
+async function completeIntroduction(): Promise<State> {
+  const response = await fetch("api/workbook/introduction", { method: "POST" });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
 
 async function post(blockId: string, body: object): Promise<State> {
   const response = await fetch("api/workbook/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, ...body }) });
@@ -59,6 +65,25 @@ function BlockView({ block, progress, refresh }: { block: Block; progress: Progr
   return <section id={block.id} className="work-block lesson-end"><p className="section-label">Lesson transition</p><h2>{block.title}</h2>{renderMarkdown(block.markdown)}{state?.completed ? <p className="next-ready">Lesson complete.</p> : <button className="button primary" onClick={() => post(block.id, { action: "transition" }).then(refresh)}>{block.label}</button>}</section>;
 }
 
+function WorkbookIntroduction({ state, refresh }: { state: State; refresh(state: State): void }) {
+  const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (state.introductionComplete || !sentinel) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) completeIntroduction().then(refresh);
+    }, { threshold: 1 });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [state.introductionComplete, sentinel, refresh]);
+  return <section className="workbook-intro" aria-label="Workbook introduction">
+    <header><h1>{state.workbook.title}</h1></header>
+    {renderMarkdown(state.introduction)}
+    <div ref={setSentinel} className="introduction-end">
+      {state.introductionComplete ? <p className="next-ready">The first lesson is ready below.</p> : <button className="button primary" onClick={() => completeIntroduction().then(refresh)}>Ready to continue</button>}
+    </div>
+  </section>;
+}
+
 function App() {
   const [state, setState] = useState<State>();
   const [viewed, setViewed] = useState<string>();
@@ -91,8 +116,7 @@ function App() {
       })}</div>)}</nav>
     </aside>
     <main><article className="page">
-      <p className="draft">{state.workbook.draftNotice}</p>
-      <section className="workbook-intro" aria-label="Workbook introduction">{renderMarkdown(state.introduction)}</section>
+      <WorkbookIntroduction state={state} refresh={setState} />
       {emerged.map((chapter) => <article id={`lesson-${chapter.id}`} data-lesson-id={chapter.id} key={chapter.id} className="chapter">
         <header><p className="eyebrow">{chapter.part}</p><h1>{chapter.lesson!.hero.title}</h1><p className="dek">{chapter.lesson!.hero.dek}</p><div className="lesson-meta">{chapter.lesson!.hero.meta.map((chip) => <span className="chip" key={chip}>{chip}</span>)}</div></header>
         <section className="opening"><p className="section-label">{chapter.lesson!.opening.sectionLabel}</p><h2>{chapter.lesson!.opening.heading}</h2><div className="prose-callout">{renderMarkdown(chapter.lesson!.opening.markdown)}</div><ul className="outcomes">{chapter.lesson!.opening.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></section>

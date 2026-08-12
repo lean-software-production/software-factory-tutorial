@@ -74,7 +74,7 @@ export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
   const root = resolve(workspace, WORKBOOK_ROOT);
   const manifest = validateWorkbookManifest(parse(await readFile(resolve(root, "workbook.yaml"), "utf8")));
   const introduction = (await readFile(resolve(root, manifest.introduction), "utf8")).trim();
-  const identity: WorkbookIdentity = { title: manifest.title, brand: manifest.brand, tocTitle: manifest.tocTitle, draftNotice: manifest.draftNotice };
+  const identity: WorkbookIdentity = { title: manifest.title, brand: manifest.brand, tocTitle: manifest.tocTitle };
   const chapters = await Promise.all(manifest.parts.flatMap((part) => part.lessons.map(async (railLesson): Promise<WorkbookChapter> => {
     if (!railLesson.dir) return { id: railLesson.id, title: railLesson.title, part: part.name, state: "unavailable" };
     try {

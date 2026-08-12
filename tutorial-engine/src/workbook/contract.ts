@@ -30,7 +30,7 @@ export interface WorkbookLesson {
 export interface WorkbookRailLesson { id: string; title: string; dir?: string; }
 export interface WorkbookPart { name: string; lessons: WorkbookRailLesson[]; }
 /** Workbook identity: product-level strings the engine must not invent for itself. */
-export interface WorkbookIdentity { title: string; brand: string; tocTitle: string; draftNotice: string; }
+export interface WorkbookIdentity { title: string; brand: string; tocTitle: string; }
 export interface WorkbookManifest extends WorkbookIdentity { introduction: string; parts: WorkbookPart[]; }
 
 function isNonEmptyString(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
@@ -40,7 +40,7 @@ export function validateWorkbookManifest(value: unknown): WorkbookManifest {
   const errors: string[] = [];
   const manifest = value as Partial<WorkbookManifest>;
   if (!manifest || typeof manifest !== "object") throw new Error("workbook.yaml must be an object.");
-  for (const key of ["title", "brand", "tocTitle", "draftNotice", "introduction"] as const) {
+  for (const key of ["title", "brand", "tocTitle", "introduction"] as const) {
     if (!isNonEmptyString(manifest[key])) errors.push(`workbook.${key} is required`);
   }
   const ids = new Set<string>();

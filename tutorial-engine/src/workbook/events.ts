@@ -4,6 +4,7 @@ import type { WorkbookLesson } from "./contract.js";
 
 export type WorkbookEvent =
   | { type: "session_started"; at: string }
+  | { type: "workbook_introduction_completed"; at: string }
   | { type: "observation_acknowledged"; at: string; lessonId: string; blockId: string }
   | { type: "unexpected_output_submitted"; at: string; lessonId: string; blockId: string; evidence: string }
   | { type: "reflection_submitted"; at: string; lessonId: string; blockId: string; response: string }
@@ -14,6 +15,10 @@ export interface BlockProgress { id: string; type: string; emerged: boolean; rea
 export interface WorkbookProjection { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; }
 
 const completionEvents = new Set<WorkbookEvent["type"]>(["observation_acknowledged", "reflection_submitted", "lesson_transitioned"]);
+
+export function introductionCompleted(events: readonly WorkbookEvent[]): boolean {
+  return events.some((event) => event.type === "workbook_introduction_completed");
+}
 
 export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson): WorkbookProjection {
   const completed = new Set<string>();

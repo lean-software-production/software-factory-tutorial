@@ -15,7 +15,7 @@ async function fixture() {
   const lessonDir = resolve(dir, "workbook/lessons/first");
   await mkdir(resolve(lessonDir, "blocks"), { recursive: true });
   await writeFile(resolve(dir, "workbook/workbook.yaml"), [
-    "title: Fixture workbook", "brand: Fixture works", "tocTitle: Workbook", "draftNotice: Draft notice",
+    "title: Fixture workbook", "brand: Fixture works", "tocTitle: Workbook",
     "introduction: intro.md", "parts:",
     "  - name: Part 1 — Loop", "    lessons:",
     "      - id: '042'", "        title: First lesson", "        dir: lessons/first",
@@ -44,6 +44,7 @@ describe("workbook browser API", () => {
   it("rejects an action for a required block that is not active", async () => {
     const dir = await fixture(); const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0 });
     try {
+      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
       for (const body of [
         { blockId: "change-job", action: "acknowledge" },
         { blockId: "transition", action: "transition" }
@@ -65,18 +66,25 @@ describe("workbook browser API", () => {
     try {
       const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
       // Identity and introduction come from the authored workbook, not the engine.
-      expect(state.workbook).toMatchObject({ title: "Fixture workbook", brand: "Fixture works", tocTitle: "Workbook", draftNotice: "Draft notice" });
+      expect(state.workbook).toMatchObject({ title: "Fixture workbook", brand: "Fixture works", tocTitle: "Workbook" });
       expect(state.introduction).toContain("Welcome to the fixture workbook.");
-      expect(state.chapters.map((chapter: any) => [chapter.id, chapter.state])).toEqual([["042", "migrated"], ["043", "unavailable"]]);
-      expect(state.progress.activeLessonId).toBe("042");
+      expect(state.chapters.map((chapter: any) => [chapter.id, chapter.state])).toEqual([["042", "unavailable"], ["043", "unavailable"]]);
+      expect(state.introductionComplete).toBe(false);
+      expect(state.chapters[0].lesson).toBeUndefined();
+      const blocked = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "acknowledge" }) });
+      expect(blocked.status).toBe(409);
+      const introduced = await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" }).then((response) => response.json() as any);
+      expect(introduced.introductionComplete).toBe(true);
+      expect(introduced.chapters.map((chapter: any) => [chapter.id, chapter.state])).toEqual([["042", "migrated"], ["043", "unavailable"]]);
+      expect(introduced.progress.activeLessonId).toBe("042");
       // Hero and opening are Markdown-derived authored content.
-      expect(state.chapters[0].lesson.hero).toMatchObject({ title: "First lesson hero", dek: "A hero summary line.", meta: ["Your terminal"] });
-      expect(state.chapters[0].lesson.opening).toMatchObject({ sectionLabel: "What you will learn", heading: "An opening heading.", outcomes: ["Do the thing."] });
-      expect(state.chapters[0].lesson.opening.markdown).toContain("**payoff**");
+      expect(introduced.chapters[0].lesson.hero).toMatchObject({ title: "First lesson hero", dek: "A hero summary line.", meta: ["Your terminal"] });
+      expect(introduced.chapters[0].lesson.opening).toMatchObject({ sectionLabel: "What you will learn", heading: "An opening heading.", outcomes: ["Do the thing."] });
+      expect(introduced.chapters[0].lesson.opening.markdown).toContain("**payoff**");
       // Only emerged block content is serialized: the ahead command and prompt are absent.
-      expect(state.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["run-supplied-command"]);
-      expect(JSON.stringify(state)).not.toContain("echo again");
-      expect(JSON.stringify(state)).not.toContain("Why?");
+      expect(introduced.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["run-supplied-command"]);
+      expect(JSON.stringify(introduced)).not.toContain("echo again");
+      expect(JSON.stringify(introduced)).not.toContain("Why?");
       const different = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "unexpected", evidence: "command failed" }) }).then((r) => r.json() as any);
       expect(different.progress.activeBlockId).toBe("run-supplied-command");
       const ack = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "acknowledge" }) }).then((r) => r.json() as any);

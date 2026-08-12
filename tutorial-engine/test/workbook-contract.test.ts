@@ -51,7 +51,7 @@ describe("workbook lesson contract", () => {
   });
 
   it("reports location-specific errors for a malformed manifest", () => {
-    expect(() => validateWorkbookManifest({ title: "", brand: "B", tocTitle: "T", draftNotice: "D", introduction: "i.md", parts: [{ name: "", lessons: [{ id: "", title: "" }] }] }))
+    expect(() => validateWorkbookManifest({ title: "", brand: "B", tocTitle: "T", introduction: "i.md", parts: [{ name: "", lessons: [{ id: "", title: "" }] }] }))
       .toThrow(/workbook\.title is required[\s\S]*workbook\.parts\[0\]\.name is required[\s\S]*workbook\.parts\[0\]\.lessons\[0\]\.id is required/);
   });
 });

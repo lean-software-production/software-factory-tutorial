@@ -6,7 +6,7 @@ import { LOOPBACK_HOST } from "../server/local-server.js";
 import type { TutorialLogger } from "../runtime-log.js";
 import { createTutorialLogger } from "../runtime-log.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
-import { nowEvent, project, WorkbookEventStore, type WorkbookEvent } from "./events.js";
+import { introductionCompleted, nowEvent, project, WorkbookEventStore, type WorkbookEvent } from "./events.js";
 
 const MIME_TYPES: Record<string, string> = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json; charset=utf-8" };
 const MAX_BODY_BYTES = 16_384;
@@ -50,11 +50,12 @@ function activeLesson(loaded: LoadedWorkbook) {
 function publicState(loaded: LoadedWorkbook, events: WorkbookEvent[]) {
   const lesson = activeLesson(loaded);
   const progress = project(events, lesson);
+  const introductionComplete = introductionCompleted(events);
   const emerged = new Set(progress.blocks.filter((block) => block.emerged).map((block) => block.id));
-  const chapters = loaded.chapters.map((chapter) => chapter.lesson
+  const chapters = loaded.chapters.map((chapter) => chapter.lesson && introductionComplete
     ? { ...chapter, lesson: { ...chapter.lesson, blocks: chapter.lesson.blocks.filter((block) => emerged.has(block.id)) } }
-    : chapter);
-  return { workbook: loaded.identity, introduction: loaded.introduction, chapters, progress, adapter: { modelBackedHelp: false, note: "Free-text help is block-scoped. No model adapter is wired in this vertical slice." } };
+    : { ...chapter, lesson: undefined, state: "unavailable" as const });
+  return { workbook: loaded.identity, introduction: loaded.introduction, introductionComplete, chapters, progress, adapter: { modelBackedHelp: false, note: "Free-text help is block-scoped. No model adapter is wired in this vertical slice." } };
 }
 
 export async function startWorkbookServer(options: WorkbookServerOptions): Promise<StartedWorkbookServer> {
@@ -68,9 +69,17 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     headers(response);
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (request.method === "GET" && isRoute(url.pathname, "state")) return sendJson(response, 200, publicState(loaded, await store.read()));
+    if (request.method === "POST" && isRoute(url.pathname, "introduction")) {
+      const events = await store.read();
+      if (!introductionCompleted(events)) await store.append(nowEvent({ type: "workbook_introduction_completed" }));
+      const updated = await store.read();
+      await store.writeProjection(project(updated, lesson));
+      return sendJson(response, 202, publicState(loaded, updated));
+    }
     if (request.method === "POST" && isRoute(url.pathname, "events")) {
       try {
         const body = await readJson(request);
+        if (!introductionCompleted(await store.read())) return sendJson(response, 409, { error: "Complete the workbook introduction first." });
         const block = lesson.blocks.find((candidate) => candidate.id === body.blockId);
         if (!block) return sendJson(response, 400, { error: "Unknown blockId." });
         const current = project(await store.read(), lesson);

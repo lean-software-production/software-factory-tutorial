@@ -5,7 +5,6 @@
 title: Software factory workbook
 brand: Software factory
 tocTitle: Workbook
-draftNotice: Workbook draft · pending curriculum review
 introduction: intro.md
 parts:
   - name: Part 1 — The validation loop
