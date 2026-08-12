@@ -10,7 +10,7 @@ export type WorkbookEvent =
   | { type: "help_requested"; at: string; lessonId: string; blockId: string; request: string }
   | { type: "lesson_transitioned"; at: string; lessonId: string; blockId: string };
 
-export interface BlockProgress { id: string; type: string; ready: boolean; active: boolean; completed: boolean; }
+export interface BlockProgress { id: string; type: string; emerged: boolean; ready: boolean; active: boolean; completed: boolean; }
 export interface WorkbookProjection { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; }
 
 const completionEvents = new Set<WorkbookEvent["type"]>(["observation_acknowledged", "reflection_submitted", "lesson_transitioned"]);
@@ -32,6 +32,7 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
     id: block.id,
     type: block.type,
     completed: completed.has(block.id),
+    emerged: index <= activeIndex,
     ready: !block.required || index <= activeIndex || completed.has(block.id),
     active: block.id === active.id && nextRequired !== undefined
   }));

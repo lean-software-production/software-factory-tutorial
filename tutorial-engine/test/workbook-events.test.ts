@@ -24,13 +24,17 @@ describe("workbook event projection", () => {
     expect(state.unexpected["run-supplied-command"]).toEqual(["pi not found"]);
   });
 
-  it("advances through acknowledgement, reflection participation, and explicit transition", () => {
+  it("emerges blocks through the active activity and advances through completion", () => {
+    expect(project([], lesson001).blocks.map((block) => [block.id, block.emerged])).toEqual([
+      ["orientation", true], ["run-supplied-command", true], ["change-job", false], ["reflection", false], ["transition", false]
+    ]);
     const events = [
       nowEvent({ type: "observation_acknowledged", lessonId: "001", blockId: "run-supplied-command" }),
       nowEvent({ type: "observation_acknowledged", lessonId: "001", blockId: "change-job" }),
       nowEvent({ type: "reflection_submitted", lessonId: "001", blockId: "reflection", response: "probably wrong is still participation" }),
     ];
     expect(project(events, lesson001).activeBlockId).toBe("transition");
+    expect(project(events, lesson001).blocks.map((block) => block.emerged)).toEqual([true, true, true, true, true]);
     expect(project([...events, nowEvent({ type: "lesson_transitioned", lessonId: "001", blockId: "transition" })], lesson001).completedLessons).toEqual(["001"]);
   });
 

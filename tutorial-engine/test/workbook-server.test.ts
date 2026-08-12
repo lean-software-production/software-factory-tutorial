@@ -48,11 +48,15 @@ describe("workbook browser API", () => {
     try {
       const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
       expect(state.chapters.map((chapter: any) => [chapter.id, chapter.state])).toEqual([["001", "migrated"], ["002", "unavailable"]]);
+      expect(state.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["run-supplied-command"]);
+      expect(JSON.stringify(state)).not.toContain("echo again");
+      expect(JSON.stringify(state)).not.toContain("Why?");
       expect(JSON.stringify(state)).not.toContain("global chat");
       const different = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "unexpected", evidence: "command failed" }) }).then((r) => r.json() as any);
       expect(different.progress.activeBlockId).toBe("run-supplied-command");
       const ack = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "acknowledge" }) }).then((r) => r.json() as any);
       expect(ack.progress.activeBlockId).toBe("change-job");
+      expect(ack.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["run-supplied-command", "change-job"]);
     } finally { await server.close(); }
   });
 });

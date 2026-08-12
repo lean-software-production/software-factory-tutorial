@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
-type Block = { id: string; type: string; title: string; markdown?: string; command?: string; context?: string; expectedObservation?: string; help?: Record<string,string>; prompt?: string; label?: string };
-type Chapter = { id: string; title: string; part?: string; state: "migrated" | "unavailable"; lesson?: { id: string; title: string; status: string; keyConcepts: string[]; learningOutcomes: string[]; blocks: Block[] } };
-type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: { id: string; ready: boolean; active: boolean; completed: boolean }[]; unexpected: Record<string,string[]>; reflections: Record<string,string> };
+type Block = { id: string; type: string; title: string; markdown?: string; command?: string; context?: string; expectedObservation?: string; help?: Record<string, string>; prompt?: string; label?: string };
+type Lesson = { id: string; title: string; status: string; keyConcepts: string[]; learningOutcomes: string[]; blocks: Block[] };
+type Chapter = { id: string; title: string; part?: string; state: "migrated" | "unavailable"; lesson?: Lesson };
+type BlockProgress = { id: string; ready: boolean; active: boolean; completed: boolean; emerged: boolean };
+type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string> };
 type State = { title: string; chapters: Chapter[]; progress: Progress; adapter: { note: string } };
 
 async function post(blockId: string, body: object): Promise<State> {
@@ -12,37 +14,86 @@ async function post(blockId: string, body: object): Promise<State> {
   if (!response.ok) throw new Error(await response.text());
   return response.json();
 }
-function renderMarkdown(text = "") { return text.split(/\n\n+/).map((p, i) => <p key={i}>{p.split(/(\*\*[^*]+\*\*)/).map((part, j) => part.startsWith("**") ? <strong key={j}>{part.slice(2,-2)}</strong> : part)}</p>); }
 
-function TerminalBlock({ block, progress, refresh }: { block: Block; progress: Progress; refresh(s: State): void }) {
-  const state = progress.blocks.find((b) => b.id === block.id)!; const [evidence, setEvidence] = useState(""); const [help, setHelp] = useState<string>(); const [other, setOther] = useState("");
-  return <section id={block.id} className={`block practice ${state.active ? "active" : ""}`} aria-disabled={!state.ready}>
-    <h3>{block.title}</h3><p><b>Terminal context:</b> {block.context}</p><pre><code>{block.command}</code></pre><p><b>Expected observation:</b> {block.expectedObservation}</p>
-    {!state.ready && <p className="held">This practice is visible but held until the previous required block is complete.</p>}
-    {state.completed ? <p className="done">Observation acknowledged.</p> : state.ready && <div className="controls">
-      <button onClick={() => post(block.id,{ action:"acknowledge" }).then(refresh)}>I saw this</button>
-      <button onClick={() => setHelp(block.help?.explain)}>Explain this command</button><button onClick={() => setHelp(block.help?.command)}>Show the command again</button><button onClick={() => setHelp(block.help?.expected)}>Describe expected output</button>
-      <label>I saw something different<textarea value={evidence} onChange={(e)=>setEvidence(e.target.value)} /></label><button onClick={() => post(block.id,{ action:"unexpected", evidence }).then(refresh)}>Record evidence and keep trying</button>
-      <label>Something else<textarea value={other} onChange={(e)=>setOther(e.target.value)} /></label><button onClick={() => { setHelp("This free-text request is recorded for this block only. Model-backed help is not wired in this vertical slice."); return post(block.id,{ action:"help", request: other }).then(refresh); }}>Ask locally</button>
-    </div>}
-    {help && <aside className="help">{help}</aside>}{progress.unexpected[block.id]?.map((item, i) => <p className="evidence" key={i}>Recorded different output: {item}</p>)}
+function renderMarkdown(text = "") {
+  return text.split(/\n\n+/).map((paragraph, index) => <p key={index}>{paragraph.split(/(\*\*[^*]+\*\*)/).map((part, partIndex) => part.startsWith("**") ? <strong key={partIndex}>{part.slice(2, -2)}</strong> : part)}</p>);
+}
+
+function progressFor(progress: Progress, id: string) { return progress.blocks.find((block) => block.id === id); }
+
+function TerminalBlock({ block, progress, refresh }: { block: Block; progress: Progress; refresh(state: State): void }) {
+  const state = progressFor(progress, block.id);
+  const [evidence, setEvidence] = useState("");
+  const [help, setHelp] = useState<string>();
+  const [other, setOther] = useState("");
+  return <section id={block.id} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
+    <p className="section-label">Practice · your terminal</p>
+    <h2>{block.title}</h2>
+    <div className="mode practice">
+      <div className="mode-head"><span className="mode-icon" aria-hidden="true">›_</span><div><span className="tag">Terminal practice</span><h3>Run this from your terminal</h3><p>{block.context}</p></div></div>
+      <div className="mode-body">
+        <pre className="command"><code>{block.command}</code></pre>
+        <div className="expected"><b>Look for</b><p>{block.expectedObservation}</p></div>
+        {state?.completed ? <p className="next-ready">Observation acknowledged. The next step has appeared below.</p> : <div className="action-row">
+          <button className="button primary" onClick={() => post(block.id, { action: "acknowledge" }).then(refresh)}>I saw this</button>
+          <button className="button secondary" onClick={() => setHelp(block.help?.explain)}>Explain this command</button>
+          <button className="button secondary" onClick={() => setHelp(block.help?.command)}>Show the command again</button>
+          <button className="button secondary" onClick={() => setHelp(block.help?.expected)}>Describe expected output</button>
+        </div>}
+        {!state?.completed && <div className="local-help"><label>I saw something different<textarea value={evidence} onChange={(event) => setEvidence(event.target.value)} /></label><button className="button secondary" onClick={() => post(block.id, { action: "unexpected", evidence }).then(refresh)}>Record it and keep trying</button><label>Something else<textarea value={other} onChange={(event) => setOther(event.target.value)} /></label><button className="button secondary" onClick={() => { setHelp("This request is recorded for this block only. Model-backed help is not wired in this draft."); return post(block.id, { action: "help", request: other }).then(refresh); }}>Ask locally</button></div>}
+        {help && <aside className="help" aria-live="polite">{help}</aside>}
+        {progress.unexpected[block.id]?.map((item, index) => <p className="evidence" key={index}>Recorded different output: {item}</p>)}
+      </div>
+    </div>
   </section>;
 }
-function BlockView({ block, progress, refresh }: { block: Block; progress: Progress; refresh(s: State): void }) {
-  const p = progress.blocks.find((b) => b.id === block.id);
-  if (block.type === "narrative") return <section id={block.id} className="block narrative"><h3>{block.title}</h3>{renderMarkdown(block.markdown)}</section>;
-  if (block.type === "terminal-practice") return <TerminalBlock block={block} progress={progress} refresh={refresh}/>;
-  if (block.type === "reflection") return <section id={block.id} className="block reflection"><h3>{block.title}</h3><p>{block.prompt}</p><textarea defaultValue={progress.reflections[block.id] ?? ""} id={`${block.id}-answer`} />{p?.completed ? <p className="done">Reflection recorded. Participation is what counts here.</p> : p?.ready && <button onClick={() => post(block.id,{ action:"reflect", response:(document.getElementById(`${block.id}-answer`) as HTMLTextAreaElement).value }).then(refresh)}>Record reflection</button>}</section>;
-  return <section id={block.id} className="block transition"><h3>{block.title}</h3>{renderMarkdown(block.markdown)}{p?.completed ? <p className="done">Lesson complete.</p> : p?.ready && <button onClick={() => post(block.id,{ action:"transition" }).then(refresh)}>{block.label}</button>}</section>;
+
+function BlockView({ block, progress, refresh }: { block: Block; progress: Progress; refresh(state: State): void }) {
+  const state = progressFor(progress, block.id);
+  if (block.type === "narrative") return <section id={block.id} className="work-block narrative"><p className="section-label">The idea</p><h2>{block.title}</h2>{renderMarkdown(block.markdown)}</section>;
+  if (block.type === "terminal-practice") return <TerminalBlock block={block} progress={progress} refresh={refresh} />;
+  if (block.type === "reflection") return <section id={block.id} className="work-block reflection"><p className="section-label">Reflection</p><h2>{block.title}</h2><p className="question">{block.prompt}</p><textarea aria-label="Your reflection" defaultValue={progress.reflections[block.id] ?? ""} id={`${block.id}-answer`} />{state?.completed ? <p className="next-ready">Reflection recorded. Participation is what counts here.</p> : <button className="button primary" onClick={() => post(block.id, { action: "reflect", response: (document.getElementById(`${block.id}-answer`) as HTMLTextAreaElement).value }).then(refresh)}>Record reflection</button>}</section>;
+  return <section id={block.id} className="work-block lesson-end"><p className="section-label">Lesson transition</p><h2>{block.title}</h2>{renderMarkdown(block.markdown)}{state?.completed ? <p className="next-ready">Lesson complete.</p> : <button className="button primary" onClick={() => post(block.id, { action: "transition" }).then(refresh)}>{block.label}</button>}</section>;
 }
+
 function App() {
-  const [state, setState] = useState<State>(); const [viewed, setViewed] = useState("001");
-  useEffect(() => { fetch("api/workbook/state").then((r) => r.json()).then((s: State) => setState(s)); }, []);
+  const [state, setState] = useState<State>();
+  const [viewed, setViewed] = useState("001");
+  useEffect(() => { fetch("api/workbook/state").then((response) => response.json()).then((next: State) => setState(next)); }, []);
   useEffect(() => { if (!state) return; document.getElementById(state.progress.activeBlockId)?.scrollIntoView({ block: "nearest" }); }, [state?.progress.activeBlockId]);
-  useEffect(() => { if (!state) return; const onScroll = () => { let current = viewed; for (const c of state.chapters.filter((chapter) => chapter.state === "migrated")) { const el = document.getElementById(`lesson-${c.id}`); if (el && el.getBoundingClientRect().top < 120) current = c.id; } setViewed(current); }; addEventListener("scroll", onScroll); return () => removeEventListener("scroll", onScroll); }, [state, viewed]);
-  const parts = useMemo(() => [...new Set(state?.chapters.map((c) => c.part) ?? [])], [state]); if (!state) return <p>Loading workbook…</p>;
-  const visibleBlocks = (lesson: NonNullable<Chapter["lesson"]>) => { const active = lesson.blocks.findIndex((block) => block.id === state.progress.activeBlockId); return lesson.blocks.slice(0, active < 0 ? lesson.blocks.length : active + 1); };
-  return <><nav className="rail" aria-label="Curriculum"><h1>Workbook</h1>{parts.map((part) => <div key={part}><h2>{part}</h2>{state.chapters.filter((c)=>c.part===part).map((c) => c.lesson ? <a key={c.id} href={`#lesson-${c.id}`} className={`${c.id===state.progress.activeLessonId ? "active-lesson" : ""} ${c.state}`} onClick={()=>setViewed(c.id)}><span>{c.id}</span> {c.title}{viewed===c.id && <ol>{visibleBlocks(c.lesson).map((b)=><li key={b.id}>{b.title}</li>)}</ol>}</a> : <span key={c.id} className="rail-entry unavailable" aria-disabled="true"><span>{c.id}</span> {c.title}</span>)}</div>)}</nav><main className="paper"><p className="draft">Lesson 001 workbook material is draft pending human curriculum review. {state.adapter.note}</p>{state.chapters.filter((c) => c.lesson).map((c) => <article id={`lesson-${c.id}`} key={c.id} className="chapter"><h2>{c.id}. {c.title}</h2><p className="status">{c.id===state.progress.activeLessonId ? "Active lesson" : "Ahead of progress; reading does not advance progress."}</p><h3>Key concepts</h3><ul>{c.lesson!.keyConcepts.map((x)=><li key={x}>{x}</li>)}</ul><h3>Learning outcomes</h3><ul>{c.lesson!.learningOutcomes.map((x)=><li key={x}>{x}</li>)}</ul>{visibleBlocks(c.lesson!).map((b)=><BlockView key={b.id} block={b} progress={state.progress} refresh={setState}/>)}</article>)}</main></>;
+  useEffect(() => {
+    if (!state) return;
+    const headings = [...document.querySelectorAll<HTMLElement>(".chapter")];
+    const selectViewed = () => {
+      const passed = headings.filter((heading) => heading.getBoundingClientRect().top <= 120);
+      setViewed((passed.at(-1) ?? headings[0])?.dataset.lessonId ?? state.progress.activeLessonId);
+    };
+    selectViewed(); addEventListener("scroll", selectViewed, { passive: true });
+    return () => removeEventListener("scroll", selectViewed);
+  }, [state]);
+  const parts = useMemo(() => [...new Set(state?.chapters.map((chapter) => chapter.part) ?? [])], [state]);
+  if (!state) return <p className="loading">Loading workbook…</p>;
+  const emerged = state.chapters.filter((chapter) => chapter.lesson);
+  return <div className="shell">
+    <aside className="rail" aria-label="Lesson navigation">
+      <div className="brand"><span className="brand-mark" aria-hidden="true">↗</span> Software factory</div>
+      <p className="toc-title">Workbook</p>
+      <nav className="curriculum" aria-label="Workbook navigation">{parts.map((part) => <div key={part}><p className="part-name">{part}</p>{state.chapters.filter((chapter) => chapter.part === part).map((chapter) => {
+        const complete = state.progress.completedLessons.includes(chapter.id);
+        const current = chapter.id === state.progress.activeLessonId;
+        if (!chapter.lesson) return <span key={chapter.id} className="lesson-row ahead unavailable" aria-disabled="true"><span>{chapter.id} · {chapter.title}</span></span>;
+        return <details key={chapter.id} className="lesson-nav" open={viewed === chapter.id}><summary><a href={`#lesson-${chapter.id}`} className={`lesson-row ${complete ? "done" : current ? "current" : "ahead"}`} onClick={() => setViewed(chapter.id)}>{chapter.id} · {chapter.title}</a></summary>{viewed === chapter.id && <nav className="lesson-outline" aria-label={`${chapter.title} outline`}>{chapter.lesson.blocks.map((block) => <a href={`#${block.id}`} key={block.id} aria-current={block.id === state.progress.activeBlockId ? "true" : undefined}>{block.title}</a>)}</nav>}</details>;
+      })}</div>)}</nav>
+    </aside>
+    <main><article className="page">
+      <p className="draft">Workbook draft · pending curriculum review</p>
+      {emerged.map((chapter) => <article id={`lesson-${chapter.id}`} data-lesson-id={chapter.id} key={chapter.id} className="chapter">
+        <header><p className="eyebrow">{chapter.part}</p><h1>{chapter.title}</h1><p className="dek">Learn the first building block of a software factory: a bounded agent that receives a job, runs it, and exits.</p><div className="lesson-meta"><span className="chip">Your terminal</span><span className="chip">About 10 minutes</span><span className="chip">Lesson {chapter.id}</span></div></header>
+        <section className="opening"><p className="section-label">What you will learn</p><h2>A job, a harness, and a boundary.</h2><div className="prose-callout"><p><strong>{chapter.lesson!.keyConcepts[0]}</strong></p></div><ul className="outcomes">{chapter.lesson!.learningOutcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></section>
+        {chapter.lesson!.blocks.map((block) => <BlockView key={block.id} block={block} progress={state.progress} refresh={setState} />)}
+      </article>)}
+    </article></main>
+  </div>;
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

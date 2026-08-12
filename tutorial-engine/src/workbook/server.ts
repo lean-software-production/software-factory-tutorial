@@ -43,7 +43,13 @@ function lesson001(loaded: LoadedWorkbook) {
   return lesson;
 }
 function publicState(loaded: LoadedWorkbook, events: WorkbookEvent[]) {
-  return { title: "Software factory workbook", chapters: loaded.chapters, progress: project(events, lesson001(loaded)), adapter: { modelBackedHelp: false, note: "Free-text help is block-scoped. No model adapter is wired in this vertical slice." } };
+  const lesson = lesson001(loaded);
+  const progress = project(events, lesson);
+  const emerged = new Set(progress.blocks.filter((block) => block.emerged).map((block) => block.id));
+  const chapters = loaded.chapters.map((chapter) => chapter.lesson
+    ? { ...chapter, lesson: { ...chapter.lesson, blocks: chapter.lesson.blocks.filter((block) => emerged.has(block.id)) } }
+    : chapter);
+  return { title: "Software factory workbook", chapters, progress, adapter: { modelBackedHelp: false, note: "Free-text help is block-scoped. No model adapter is wired in this vertical slice." } };
 }
 
 export async function startWorkbookServer(options: WorkbookServerOptions): Promise<StartedWorkbookServer> {
