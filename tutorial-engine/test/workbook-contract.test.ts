@@ -38,7 +38,7 @@ async function fixture() {
   await writeFile(resolve(migrated, "hero.md"), ["---", "title: Synthetic Hero Title", "dek: Synthetic dek line.", "meta:", "  - Synthetic chip one", "  - Synthetic chip two", "---"].join("\n"));
   await writeFile(resolve(migrated, "opening.md"), ["---", "sectionLabel: Synthetic label", "heading: Synthetic heading.", "outcomes:", "  - Synthetic outcome.", "---", "Synthetic **opening** payoff prose."].join("\n"));
   await writeFile(resolve(migrated, "blocks/intro.md"), ["---", "title: Intro Block", "---", "Synthetic narrative body."].join("\n"));
-  await writeFile(resolve(migrated, "blocks/practice.md"), ["---", "title: Practice Block", "command: synthetic-command", "context: Synthetic context", "expectedObservation: Synthetic observation", "---"].join("\n"));
+  await writeFile(resolve(migrated, "blocks/practice.md"), ["---", "title: Practice Block", "command: synthetic-command", "context: Synthetic context", "expectedObservation: Synthetic observation", "terminalMode: observed-embedded-optional", "---"].join("\n"));
   await writeFile(resolve(migrated, "blocks/think.md"), ["---", "title: Reflect Block", "prompt: Synthetic prompt?", "---"].join("\n"));
   await writeFile(resolve(migrated, "blocks/onward.md"), ["---", "title: Onward Block", "label: Synthetic label", "---", "Synthetic transition body."].join("\n"));
 
@@ -68,6 +68,15 @@ describe("workbook lesson contract", () => {
     const practice = lesson.blocks[1];
     if (practice?.type !== "terminal-practice") throw new Error("practice must be terminal-practice");
     expect(practice.command).toBe("synthetic-command");
+    expect(practice.terminalMode).toBe("observed-embedded-optional");
+  });
+
+  it("defaults terminal practice blocks to the external terminal mode", async () => {
+    const dir = await fixture();
+    await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/blocks/practice.md"), ["---", "title: Practice Block", "command: synthetic-command", "context: Synthetic context", "expectedObservation: Synthetic observation", "---"].join("\n"));
+    const lesson = await loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "fixture/lesson");
+    const practice = lesson.blocks.find((block) => block.type === "terminal-practice");
+    expect(practice?.type === "terminal-practice" && practice.terminalMode).toBe("external");
   });
 
   it("derives the rail from ordered part and lesson directories", async () => {

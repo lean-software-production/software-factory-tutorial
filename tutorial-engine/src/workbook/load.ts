@@ -4,6 +4,7 @@ import { parse } from "yaml";
 import {
   validateWorkbookLesson,
   validateWorkbookManifest,
+  type TerminalMode,
   type WorkbookBlock,
   type WorkbookIdentity,
   type WorkbookLesson,
@@ -43,6 +44,7 @@ function assembleBlock(entry: LessonManifestEntry, data: Record<string, unknown>
     command: (data.command as string) ?? "",
     context: (data.context as string) ?? "",
     expectedObservation: (data.expectedObservation as string) ?? "",
+    terminalMode: ((data.terminalMode as TerminalMode | undefined) ?? "external"),
     help: (data.help as Record<string, string>) ?? {},
   };
   if (entry.type === "reflection") return { ...base, type: "reflection", prompt: (data.prompt as string) ?? "" };

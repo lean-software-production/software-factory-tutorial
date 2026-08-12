@@ -1,3 +1,6 @@
+export type TerminalMode = "external" | "observed-embedded-optional";
+export const OBSERVED_TERMINAL_MODE: TerminalMode = "observed-embedded-optional";
+
 export type WorkbookBlockType = "narrative" | "terminal-practice" | "reflection" | "lesson-transition";
 
 export interface BaseBlock { id: string; type: WorkbookBlockType; title: string; required?: boolean; draft?: boolean; }
@@ -7,6 +10,7 @@ export interface TerminalPracticeBlock extends BaseBlock {
   command: string;
   context: string;
   expectedObservation: string;
+  terminalMode: TerminalMode;
   help: Record<string, string>;
 }
 export interface ReflectionBlock extends BaseBlock { type: "reflection"; prompt: string; }
@@ -77,6 +81,7 @@ export function validateWorkbookLesson(value: unknown): WorkbookLesson {
       if (!practice.command) errors.push(`${path}.command is required`);
       if (!practice.context) errors.push(`${path}.context is required`);
       if (!practice.expectedObservation) errors.push(`${path}.expectedObservation is required`);
+      if (practice.terminalMode !== undefined && practice.terminalMode !== "external" && practice.terminalMode !== OBSERVED_TERMINAL_MODE) errors.push(`${path}.terminalMode is unsupported`);
     }
     if (block.type === "reflection" && !(block as Partial<ReflectionBlock>).prompt) errors.push(`${path}.prompt is required`);
     if (block.type === "lesson-transition") {

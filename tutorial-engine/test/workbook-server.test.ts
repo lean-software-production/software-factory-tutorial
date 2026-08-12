@@ -1,8 +1,11 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { startWorkbookServer } from "../src/workbook/server.js";
+import type { TerminalObserver, TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
 
 let dirs: string[] = [];
 
@@ -10,7 +13,7 @@ let dirs: string[] = [];
 // hard-coded into the runtime; the active lesson is the first migrated chapter
 // the authored workbook declares. It also omits docs/specs entirely, proving
 // the rail is derived from workbook.yaml alone.
-async function fixture() {
+async function fixture(observed = false) {
   const dir = await mkdtemp(resolve(tmpdir(), "workbook-server-")); dirs.push(dir);
   const partDir = resolve(dir, "lessons/01-loop");
   const lessonDir = resolve(partDir, "01-first");
@@ -31,14 +34,42 @@ async function fixture() {
   ].join("\n"));
   await writeFile(resolve(lessonDir, "hero.md"), ["---", "title: First lesson hero", "dek: A hero summary line.", "meta:", "  - Your terminal", "---"].join("\n"));
   await writeFile(resolve(lessonDir, "opening.md"), ["---", "sectionLabel: What you will learn", "heading: An opening heading.", "outcomes:", "  - Do the thing.", "---", "The **payoff** sentence."].join("\n"));
-  await writeFile(resolve(lessonDir, "blocks/run-supplied-command.md"), ["---", "title: Run", "command: echo hello", "context: Root", "expectedObservation: Done", "---"].join("\n"));
-  await writeFile(resolve(lessonDir, "blocks/change-job.md"), ["---", "title: Change", "command: echo again", "context: Root", "expectedObservation: Done", "---"].join("\n"));
+  await writeFile(resolve(lessonDir, "blocks/run-supplied-command.md"), ["---", "title: Run", "command: echo hello", "context: Root", "expectedObservation: Done", ...(observed ? ["terminalMode: observed-embedded-optional"] : []), "---"].join("\n"));
+  await writeFile(resolve(lessonDir, "blocks/change-job.md"), ["---", "title: Change", "command: echo again", "context: Root", "expectedObservation: Done", ...(observed ? ["terminalMode: observed-embedded-optional"] : []), "---"].join("\n"));
   await writeFile(resolve(lessonDir, "blocks/reflection.md"), ["---", "title: Reflect", "prompt: Why?", "---"].join("\n"));
   await writeFile(resolve(lessonDir, "blocks/transition.md"), ["---", "title: Finish", "label: Finish", "---", "Done."].join("\n"));
   await mkdir(resolve(dir, "web")); await writeFile(resolve(dir, "web/index.html"), "<!doctype html><div id=\"root\"></div>");
   return dir;
 }
-afterEach(async () => { await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))); dirs = []; });
+class ServerFakePty implements TerminalPty {
+  writes: string[] = [];
+  data?: (data: string) => void;
+  exit?: (event: { exitCode: number }) => void;
+  write(data: string): void { this.writes.push(data); this.data?.(`\r\nran:${data}`); }
+  resize(): void {}
+  kill(): void {}
+  onData(callback: (data: string) => void): void { this.data = callback; }
+  onExit(callback: (event: { exitCode: number }) => void): void { this.exit = callback; }
+}
+
+function connect(url: string, origin?: string): Promise<WebSocket> {
+  return new Promise((resolvePromise, reject) => {
+    const ws = new WebSocket(url.replace(/^http/, "ws") + "/api/workbook/terminal", origin ? { headers: { Origin: origin } } : undefined);
+    ws.once("open", () => resolvePromise(ws));
+    ws.once("error", reject);
+  });
+}
+
+function waitFor(ws: WebSocket, predicate: (message: any) => boolean): Promise<any> {
+  return new Promise((resolvePromise) => {
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (predicate(message)) resolvePromise(message);
+    });
+  });
+}
+
+afterEach(async () => { vi.useRealTimers(); await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))); dirs = []; });
 
 describe("workbook browser API", () => {
   it("rejects an action for a required block that is not active", async () => {
@@ -91,6 +122,93 @@ describe("workbook browser API", () => {
       const ack = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "acknowledge" }) }).then((r) => r.json() as any);
       expect(ack.progress.activeBlockId).toBe("change-job");
       expect(ack.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["run-supplied-command", "change-job"]);
+    } finally { await server.close(); }
+  });
+
+  it("rejects embedded terminal on a non-loopback host", async () => {
+    const dir = await fixture(true);
+    await expect(startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), host: "0.0.0.0", port: 0, terminalObserver: { observe: async () => ({ status: "waiting" }) } }))
+      .rejects.toThrow(/loopback/i);
+  });
+
+  it("rejects terminal WebSocket origins that are not the workbook server", async () => {
+    const dir = await fixture(true);
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: { observe: async () => ({ status: "waiting" }) } });
+    try {
+      await expect(connect(server.url, "http://evil.test")).rejects.toThrow();
+    } finally { await server.close(); }
+  });
+
+  it("verified terminal completion appends only a server-owned event and progresses", async () => {
+    const dir = await fixture(true);
+    const pty = new ServerFakePty();
+    const observer: TerminalObserver = { observe: async () => ({ status: "complete", summary: "done" }) };
+    const factory: TerminalPtyFactory = () => pty;
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: observer, terminalPtyFactory: factory, terminalDebounceMs: 1 });
+    try {
+      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
+      const ws = await connect(server.url, server.url);
+      const completed = waitFor(ws, (message) => message.type === "verified-complete");
+      ws.send(JSON.stringify({ type: "input", data: "echo hello\r" }));
+      const message = await completed;
+      expect(message.state.progress.activeBlockId).toBe("change-job");
+      ws.close();
+      const events = await readFile(resolve(dir, ".tutorial/.tmp/workbook/events.jsonl"), "utf8");
+      expect(events).toContain("observation_verified");
+      expect(events).toContain("terminal_observer");
+      expect(events).not.toContain("ran:echo hello");
+      expect(events).not.toContain("echo hello\\r");
+    } finally { await server.close(); }
+  });
+
+  it("terminal advice never completes the active block or enters the event log", async () => {
+    const dir = await fixture(true);
+    const pty = new ServerFakePty();
+    const server = await startWorkbookServer({
+      target: dir,
+      webRoot: resolve(dir, "web"),
+      port: 0,
+      terminalPtyFactory: () => pty,
+      terminalDebounceMs: 1,
+      terminalObserver: { observe: async () => ({ status: "advice", message: "Run the authored command from the repository root." }) }
+    });
+    try {
+      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
+      const ws = await connect(server.url, server.url);
+      const advice = waitFor(ws, (message) => message.type === "advice");
+      ws.send(JSON.stringify({ type: "input", data: "bad\r" }));
+      expect(await advice).toMatchObject({ message: "Run the authored command from the repository root." });
+      const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
+      expect(state.progress.activeBlockId).toBe("run-supplied-command");
+      ws.close();
+      const events = await readFile(resolve(dir, ".tutorial/.tmp/workbook/events.jsonl"), "utf8");
+      expect(events).not.toContain("Run the authored command");
+      expect(events).not.toContain("bad");
+    } finally { await server.close(); }
+  });
+
+  it("does not let terminal activity complete a non-active observed block", async () => {
+    const dir = await fixture(true);
+    const pty = new ServerFakePty();
+    const observed: string[] = [];
+    const server = await startWorkbookServer({
+      target: dir,
+      webRoot: resolve(dir, "web"),
+      port: 0,
+      terminalPtyFactory: () => pty,
+      terminalDebounceMs: 1,
+      terminalObserver: { observe: async (request) => { observed.push(request.blockId); return { status: "complete" }; } }
+    });
+    try {
+      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
+      const ws = await connect(server.url, server.url);
+      const completed = waitFor(ws, (message) => message.type === "verified-complete");
+      ws.send(JSON.stringify({ type: "input", data: "echo hello\r" }));
+      await completed;
+      expect(observed).toEqual(["run-supplied-command"]);
+      const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
+      expect(state.progress.activeBlockId).toBe("change-job");
+      ws.close();
     } finally { await server.close(); }
   });
 });
