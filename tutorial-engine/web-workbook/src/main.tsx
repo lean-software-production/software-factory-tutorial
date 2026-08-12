@@ -6,7 +6,7 @@ type Block = { id: string; type: string; title: string; markdown?: string; comma
 type Hero = { title: string; dek: string; meta: string[] };
 type Opening = { sectionLabel: string; heading: string; markdown: string; outcomes: string[] };
 type Lesson = { id: string; status: string; hero: Hero; opening: Opening; blocks: Block[] };
-type Chapter = { id: string; title: string; part: string; state: "migrated" | "unavailable"; lesson?: Lesson };
+type Chapter = { id: string; title: string; part: string; partNumber: number; lessonNumber: number; state: "migrated" | "unavailable"; lesson?: Lesson };
 type BlockProgress = { id: string; ready: boolean; active: boolean; completed: boolean; emerged: boolean };
 type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string> };
 type Identity = { title: string; };
@@ -119,7 +119,7 @@ function App() {
     <main><article className="page">
       <WorkbookIntroduction state={state} refresh={setState} />
       {emerged.map((chapter) => <article id={`lesson-${chapter.id}`} data-lesson-id={chapter.id} key={chapter.id} className="chapter">
-        <header><p className="eyebrow">{chapter.part}</p><h1>{chapter.lesson!.hero.title}</h1><p className="dek">{chapter.lesson!.hero.dek}</p><div className="lesson-meta">{chapter.lesson!.hero.meta.map((chip) => <span className="chip" key={chip}>{chip}</span>)}</div></header>
+        <header><p className="part-title">{chapter.part}</p><p className="eyebrow">Part {chapter.partNumber}, Lesson {chapter.lessonNumber}</p><h1>{chapter.lesson!.hero.title}</h1><p className="dek">{chapter.lesson!.hero.dek}</p><div className="lesson-meta">{chapter.lesson!.hero.meta.map((chip) => <span className="chip" key={chip}>{chip}</span>)}</div></header>
         <section className="opening"><p className="section-label">{chapter.lesson!.opening.sectionLabel}</p><h2>{chapter.lesson!.opening.heading}</h2><div className="prose-callout">{renderMarkdown(chapter.lesson!.opening.markdown)}</div><ul className="outcomes">{chapter.lesson!.opening.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></section>
         {chapter.lesson!.blocks.map((block) => <BlockView key={block.id} block={block} progress={state.progress} refresh={setState} />)}
       </article>)}

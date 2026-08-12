@@ -9,7 +9,7 @@ import {
   type WorkbookLesson,
 } from "./contract.js";
 
-export interface WorkbookChapter { id: string; title: string; part: string; state: "migrated" | "unavailable"; lesson?: WorkbookLesson; }
+export interface WorkbookChapter { id: string; title: string; part: string; partNumber: number; lessonNumber: number; state: "migrated" | "unavailable"; lesson?: WorkbookLesson; }
 export interface LoadedWorkbook { workspace: string; identity: WorkbookIdentity; introduction: string; chapters: WorkbookChapter[]; }
 
 /** The workbook document and lesson directories are authored at the repository root. */
@@ -109,17 +109,17 @@ export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
   const introduction = document.body;
   const identity: WorkbookIdentity = { title: manifest.title };
   const parts = await partDirectories(workspace);
-  const chapterGroups = await Promise.all(parts.map(async (part) => {
+  const chapterGroups = await Promise.all(parts.map(async (part, partIndex) => {
     const lessons = await lessonDirectories(part);
-    return Promise.all(lessons.map(async (directory): Promise<WorkbookChapter> => {
+    return Promise.all(lessons.map(async (directory, lessonIndex): Promise<WorkbookChapter> => {
       const lessonDir = resolve(part.path, directory);
       const id = `${part.id}/${directory}`;
       const title = await lessonTitle(lessonDir);
       try {
         const lesson = await loadWorkbookLesson(lessonDir, id);
-        return { id, title, part: part.title, state: "migrated", lesson };
+        return { id, title, part: part.title, partNumber: partIndex + 1, lessonNumber: lessonIndex + 1, state: "migrated", lesson };
       } catch (error: any) {
-        if (error?.code === "ENOENT" && error?.path?.endsWith("lesson.yaml")) return { id, title, part: part.title, state: "unavailable" };
+        if (error?.code === "ENOENT" && error?.path?.endsWith("lesson.yaml")) return { id, title, part: part.title, partNumber: partIndex + 1, lessonNumber: lessonIndex + 1, state: "unavailable" };
         throw new Error(`Could not load workbook lesson ${id}: ${error instanceof Error ? error.message : "invalid lesson"}`);
       }
     }));

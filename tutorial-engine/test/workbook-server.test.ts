@@ -68,14 +68,14 @@ describe("workbook browser API", () => {
       // Identity and introduction come from the authored workbook, not the engine.
       expect(state.workbook).toMatchObject({ title: "Fixture workbook" });
       expect(state.introduction).toContain("Welcome to the fixture workbook.");
-      expect(state.chapters.map((chapter: any) => [chapter.id, chapter.state])).toEqual([["01-loop/01-first", "unavailable"], ["01-loop/02-second", "unavailable"]]);
+      expect(state.chapters.map((chapter: any) => [chapter.id, chapter.state, chapter.partNumber, chapter.lessonNumber])).toEqual([["01-loop/01-first", "unavailable", 1, 1], ["01-loop/02-second", "unavailable", 1, 2]]);
       expect(state.introductionComplete).toBe(false);
       expect(state.chapters[0].lesson).toBeUndefined();
       const blocked = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "acknowledge" }) });
       expect(blocked.status).toBe(409);
       const introduced = await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" }).then((response) => response.json() as any);
       expect(introduced.introductionComplete).toBe(true);
-      expect(introduced.chapters.map((chapter: any) => [chapter.id, chapter.state])).toEqual([["01-loop/01-first", "migrated"], ["01-loop/02-second", "unavailable"]]);
+      expect(introduced.chapters.map((chapter: any) => [chapter.id, chapter.state, chapter.partNumber, chapter.lessonNumber])).toEqual([["01-loop/01-first", "migrated", 1, 1], ["01-loop/02-second", "unavailable", 1, 2]]);
       expect(introduced.progress.activeLessonId).toBe("01-loop/01-first");
       // Hero and opening are Markdown-derived authored content.
       expect(introduced.chapters[0].lesson.hero).toMatchObject({ title: "First lesson hero", dek: "A hero summary line.", meta: ["Your terminal"] });
