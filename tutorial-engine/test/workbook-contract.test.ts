@@ -10,7 +10,6 @@ describe("workbook lesson contract", () => {
   it("assembles lesson 001 from authored Markdown with stable ordered blocks", async () => {
     const lesson = await loadWorkbookLesson(resolve(workspace, "lessons/01-the-validation-loop/01-run-an-agent-headlessly"), "01-the-validation-loop/01-run-an-agent-headlessly");
     expect(lesson.id).toBe("01-the-validation-loop/01-run-an-agent-headlessly");
-    expect(lesson.status).toBe("draft");
     expect(lesson.hero.title).toBe("Run an agent headlessly");
     expect(lesson.hero.meta).toContain("Your terminal");
     expect(lesson.opening.heading).toBe("A job, a harness, and a boundary.");
@@ -30,7 +29,7 @@ describe("workbook lesson contract", () => {
 
   it("derives the rail from ordered part and lesson directories", async () => {
     const loaded = await loadWorkbook(workspace);
-    expect(loaded.identity.title).toBe("Software factory");
+    expect(loaded.identity.title).toBe("Software Factory Tutorial");
     expect(loaded.chapters[0]).toMatchObject({ id: "01-the-validation-loop/01-run-an-agent-headlessly", state: "migrated", part: "Part 1 — The validation loop" });
     expect(loaded.chapters.find((chapter) => chapter.id === "01-the-validation-loop/02-build-a-doer")?.state).toBe("unavailable");
     expect(loaded.chapters.find((chapter) => chapter.id === "02-build-the-factory/09-oversee-the-orchestrator")?.part).toBe("Part 2 — Build the factory");
@@ -43,7 +42,7 @@ describe("workbook lesson contract", () => {
 
   it("reports location-specific errors for a malformed lesson", () => {
     expect(() => validateWorkbookLesson({
-      id: "x", status: "draft",
+      id: "x",
       hero: { title: "H", dek: "D", meta: [] },
       opening: { sectionLabel: "S", heading: "He", markdown: "M", outcomes: [] },
       blocks: [{ id: "dup", type: "terminal-practice", title: "One" }, { id: "dup", type: "mystery", title: "Two" }],

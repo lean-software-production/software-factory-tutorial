@@ -20,7 +20,6 @@ export interface LessonOpening { sectionLabel: string; heading: string; markdown
 
 export interface WorkbookLesson {
   id: string;
-  status: "draft" | "approved";
   hero: LessonHero;
   opening: LessonOpening;
   blocks: WorkbookBlock[];
@@ -49,7 +48,6 @@ export function validateWorkbookLesson(value: unknown): WorkbookLesson {
   const lesson = value as Partial<WorkbookLesson>;
   const ids = new Set<string>();
   if (!lesson || typeof lesson !== "object") throw new Error("Lesson manifest must be an object.");
-  if (lesson.status !== "draft" && lesson.status !== "approved") errors.push("lesson.status must be draft or approved");
   const hero = lesson.hero;
   if (!hero || typeof hero !== "object") errors.push("lesson.hero is required");
   else {

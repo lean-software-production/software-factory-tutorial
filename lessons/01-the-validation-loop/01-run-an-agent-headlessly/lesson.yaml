@@ -1,7 +1,6 @@
 # Machine structure for lesson 001: ordered block instances, their generic types,
 # the required-completion flags, and the authored source files. Prose lives in the
 # referenced Markdown files, not here.
-status: draft
 hero: hero.md
 opening: opening.md
 blocks:

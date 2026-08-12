@@ -23,7 +23,7 @@ async function fixture() {
   await mkdir(resolve(partDir, "02-second"), { recursive: true });
   await writeFile(resolve(partDir, "02-second/hero.md"), "# Second lesson\n");
   await writeFile(resolve(lessonDir, "lesson.yaml"), [
-    "status: draft", "hero: hero.md", "opening: opening.md", "blocks:",
+    "hero: hero.md", "opening: opening.md", "blocks:",
     "  - id: run-supplied-command", "    type: terminal-practice", "    required: true", "    source: blocks/run-supplied-command.md",
     "  - id: change-job", "    type: terminal-practice", "    required: true", "    source: blocks/change-job.md",
     "  - id: reflection", "    type: reflection", "    required: true", "    source: blocks/reflection.md",

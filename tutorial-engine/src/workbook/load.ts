@@ -32,7 +32,7 @@ async function readMarkdown(path: string): Promise<{ data: Record<string, unknow
 }
 
 interface LessonManifestEntry { id?: string; type?: string; required?: boolean; source?: string; }
-interface LessonManifest { status?: string; hero?: string; opening?: string; blocks?: LessonManifestEntry[]; }
+interface LessonManifest { hero?: string; opening?: string; blocks?: LessonManifestEntry[]; }
 interface PartDirectory { id: string; title: string; path: string; }
 
 function assembleBlock(entry: LessonManifestEntry, data: Record<string, unknown>, body: string): WorkbookBlock {
@@ -96,7 +96,6 @@ export async function loadWorkbookLesson(lessonDir: string, id: string): Promise
   }));
   return validateWorkbookLesson({
     id,
-    status: manifest.status,
     hero: { title: hero.data.title, dek: hero.data.dek, meta: hero.data.meta ?? [] },
     opening: { sectionLabel: opening.data.sectionLabel, heading: opening.data.heading, markdown: opening.body, outcomes: opening.data.outcomes ?? [] },
     blocks,
