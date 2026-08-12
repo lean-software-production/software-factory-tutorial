@@ -19,7 +19,7 @@ async function fixture() {
     "---", "title: Fixture workbook", "---",
     "Welcome to the fixture workbook."
   ].join("\n"));
-  await writeFile(resolve(partDir, "part.md"), "# Part 1 — Loop\n");
+  await writeFile(resolve(partDir, "part.md"), "# Part 1 — Loop\n\nPart copy.\n");
   await mkdir(resolve(partDir, "02-second"), { recursive: true });
   await writeFile(resolve(partDir, "02-second/hero.md"), "# Second lesson\n");
   await writeFile(resolve(lessonDir, "lesson.yaml"), [
@@ -78,6 +78,7 @@ describe("workbook browser API", () => {
       expect(introduced.chapters.map((chapter: any) => [chapter.id, chapter.state, chapter.partNumber, chapter.lessonNumber])).toEqual([["01-loop/01-first", "migrated", 1, 1], ["01-loop/02-second", "unavailable", 1, 2]]);
       expect(introduced.progress.activeLessonId).toBe("01-loop/01-first");
       // Hero and opening are Markdown-derived authored content.
+      expect(introduced.chapters[0]).toMatchObject({ part: "Part 1 — Loop", partMarkdown: "Part copy." });
       expect(introduced.chapters[0].lesson.hero).toMatchObject({ title: "First lesson hero", dek: "A hero summary line.", meta: ["Your terminal"] });
       expect(introduced.chapters[0].lesson.opening).toMatchObject({ sectionLabel: "What you will learn", heading: "An opening heading.", outcomes: ["Do the thing."] });
       expect(introduced.chapters[0].lesson.opening.markdown).toContain("**payoff**");

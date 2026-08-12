@@ -9,7 +9,7 @@ import {
   type WorkbookLesson,
 } from "./contract.js";
 
-export interface WorkbookChapter { id: string; title: string; part: string; partNumber: number; lessonNumber: number; state: "migrated" | "unavailable"; lesson?: WorkbookLesson; }
+export interface WorkbookChapter { id: string; title: string; part: string; partMarkdown: string; partNumber: number; lessonNumber: number; state: "migrated" | "unavailable"; lesson?: WorkbookLesson; }
 export interface LoadedWorkbook { workspace: string; identity: WorkbookIdentity; introduction: string; chapters: WorkbookChapter[]; }
 
 /** The workbook document and lesson directories are authored at the repository root. */
@@ -33,7 +33,7 @@ async function readMarkdown(path: string): Promise<{ data: Record<string, unknow
 
 interface LessonManifestEntry { id?: string; type?: string; required?: boolean; source?: string; }
 interface LessonManifest { hero?: string; opening?: string; blocks?: LessonManifestEntry[]; }
-interface PartDirectory { id: string; title: string; path: string; }
+interface PartDirectory { id: string; title: string; markdown: string; path: string; }
 
 function assembleBlock(entry: LessonManifestEntry, data: Record<string, unknown>, body: string): WorkbookBlock {
   const base = { id: entry.id ?? "", type: entry.type as WorkbookBlock["type"], title: (data.title as string) ?? "", required: entry.required };
@@ -51,22 +51,26 @@ function assembleBlock(entry: LessonManifestEntry, data: Record<string, unknown>
 
 function slugWithoutPrefix(name: string): string { return name.replace(/^\d+-/, ""); }
 
-async function titleFromMarkdown(path: string): Promise<string> {
-  const document = await readMarkdown(path);
+function titleFromMarkdown(path: string, document: { data: Record<string, unknown>; body: string }): string {
   if (typeof document.data.title === "string" && document.data.title.trim()) return document.data.title;
   const heading = /^#\s+(.+)$/m.exec(document.body)?.[1]?.trim();
   if (heading) return heading;
   throw new Error(`${path} needs a title front-matter field or level-one heading.`);
 }
 
+function bodyWithoutTitle(document: { body: string }): string {
+  return document.body.replace(/^#\s+.+\r?\n?/, "").trim();
+}
+
 async function partDirectories(workspace: string): Promise<PartDirectory[]> {
   const root = resolve(workspace, LESSONS_ROOT);
   const entries = await readdir(root, { withFileTypes: true });
-  return Promise.all(entries.filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })).map(async (entry) => ({
-    id: entry.name,
-    title: await titleFromMarkdown(resolve(root, entry.name, "part.md")),
-    path: resolve(root, entry.name)
-  })));
+  return Promise.all(entries.filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })).map(async (entry) => {
+    const path = resolve(root, entry.name);
+    const partPath = resolve(path, "part.md");
+    const document = await readMarkdown(partPath);
+    return { id: entry.name, title: titleFromMarkdown(partPath, document), markdown: bodyWithoutTitle(document), path };
+  }));
 }
 
 async function lessonDirectories(part: PartDirectory): Promise<string[]> {
@@ -75,11 +79,8 @@ async function lessonDirectories(part: PartDirectory): Promise<string[]> {
 }
 
 async function lessonTitle(lessonDir: string): Promise<string> {
-  const hero = await readMarkdown(resolve(lessonDir, "hero.md"));
-  if (typeof hero.data.title === "string" && hero.data.title.trim()) return hero.data.title;
-  const heading = /^#\s+(.+)$/m.exec(hero.body)?.[1]?.trim();
-  if (heading) return heading;
-  throw new Error(`${lessonDir}/hero.md needs a title front-matter field or level-one heading.`);
+  const heroPath = resolve(lessonDir, "hero.md");
+  return titleFromMarkdown(heroPath, await readMarkdown(heroPath));
 }
 
 /** Assemble one lesson from its conventional directory plus its authored Markdown sources. */
@@ -117,9 +118,9 @@ export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
       const title = await lessonTitle(lessonDir);
       try {
         const lesson = await loadWorkbookLesson(lessonDir, id);
-        return { id, title, part: part.title, partNumber: partIndex + 1, lessonNumber: lessonIndex + 1, state: "migrated", lesson };
+        return { id, title, part: part.title, partMarkdown: part.markdown, partNumber: partIndex + 1, lessonNumber: lessonIndex + 1, state: "migrated", lesson };
       } catch (error: any) {
-        if (error?.code === "ENOENT" && error?.path?.endsWith("lesson.yaml")) return { id, title, part: part.title, partNumber: partIndex + 1, lessonNumber: lessonIndex + 1, state: "unavailable" };
+        if (error?.code === "ENOENT" && error?.path?.endsWith("lesson.yaml")) return { id, title, part: part.title, partMarkdown: part.markdown, partNumber: partIndex + 1, lessonNumber: lessonIndex + 1, state: "unavailable" };
         throw new Error(`Could not load workbook lesson ${id}: ${error instanceof Error ? error.message : "invalid lesson"}`);
       }
     }));
