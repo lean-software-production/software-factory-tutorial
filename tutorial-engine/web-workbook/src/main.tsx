@@ -90,7 +90,7 @@ function App() {
   useEffect(() => { if (state) document.title = state.workbook.title; }, [state?.workbook.title]);
   useEffect(() => {
     if (!state?.introductionComplete) return;
-    document.getElementById(`lesson-${state.progress.activeLessonId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById(`part-${state.progress.activeLessonId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [state?.introductionComplete, state?.progress.activeLessonId]);
   useEffect(() => {
     if (!state) return;
@@ -119,7 +119,7 @@ function App() {
     <main><article className="page">
       <WorkbookIntroduction state={state} refresh={setState} />
       {emerged.map((chapter) => <article data-lesson-id={chapter.id} key={chapter.id} className="chapter">
-        <section className="part-chapter" aria-label={chapter.part}><div><p className="part-title">{chapter.part}</p><div className="part-copy">{renderMarkdown(chapter.partMarkdown)}</div></div></section>
+        <section id={`part-${chapter.id}`} className="part-chapter" aria-label={chapter.part}><div><p className="part-title">{chapter.part}</p><div className="part-copy">{renderMarkdown(chapter.partMarkdown)}</div></div></section>
         <header id={`lesson-${chapter.id}`}><p className="eyebrow">Part {chapter.partNumber}, Lesson {chapter.lessonNumber}</p><h1>{chapter.lesson!.hero.title}</h1><p className="dek">{chapter.lesson!.hero.dek}</p><div className="lesson-meta">{chapter.lesson!.hero.meta.map((chip) => <span className="chip" key={chip}>{chip}</span>)}</div></header>
         <section className="opening"><p className="section-label">{chapter.lesson!.opening.sectionLabel}</p><h2>{chapter.lesson!.opening.heading}</h2><div className="prose-callout">{renderMarkdown(chapter.lesson!.opening.markdown)}</div><ul className="outcomes">{chapter.lesson!.opening.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></section>
         {chapter.lesson!.blocks.map((block) => <BlockView key={block.id} block={block} progress={state.progress} refresh={setState} />)}
