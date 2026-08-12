@@ -1,7 +1,0 @@
-title: Software factory
-
-parts:
-  - title: Part 1 — The validation loop
-    lessons: ["001", "002", "003", "004"]
-  - title: Part 2 — Build the factory
-    lessons: ["005", "006", "007", "008", "009", "010", "011", "012", "013"]

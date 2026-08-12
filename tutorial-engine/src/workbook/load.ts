@@ -12,8 +12,9 @@ import {
 export interface WorkbookChapter { id: string; title: string; part: string; state: "migrated" | "unavailable"; lesson?: WorkbookLesson; }
 export interface LoadedWorkbook { workspace: string; identity: WorkbookIdentity; introduction: string; chapters: WorkbookChapter[]; }
 
-/** The authored curriculum lives at the repository root, beside the code, not compiled into it. */
-const WORKBOOK_ROOT = "workbook";
+/** The workbook document and lesson directories are authored at the repository root. */
+const WORKBOOK_DOCUMENT = "workbook.md";
+const LESSONS_ROOT = "lessons";
 
 /**
  * Split a Markdown file into its YAML front matter and prose body. Front matter
@@ -48,7 +49,7 @@ function assembleBlock(entry: LessonManifestEntry, data: Record<string, unknown>
 }
 
 function lessonDirectory(workspace: string, id: string): string {
-  return resolve(workspace, WORKBOOK_ROOT, "lessons", id);
+  return resolve(workspace, LESSONS_ROOT, id);
 }
 
 async function lessonTitle(workspace: string, id: string): Promise<string> {
@@ -83,9 +84,9 @@ export async function loadWorkbookLesson(workspace: string, id: string): Promise
 
 export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
   const workspace = await realpath(resolve(target));
-  const root = resolve(workspace, WORKBOOK_ROOT);
-  const manifest = validateWorkbookManifest(parse(await readFile(resolve(root, "workbook.yaml"), "utf8")));
-  const introduction = (await readFile(resolve(root, "intro.md"), "utf8")).trim();
+  const document = await readMarkdown(resolve(workspace, WORKBOOK_DOCUMENT));
+  const manifest = validateWorkbookManifest(document.data);
+  const introduction = document.body;
   const identity: WorkbookIdentity = { title: manifest.title };
   const chapters = await Promise.all(manifest.parts.flatMap((part) => part.lessons.map(async (id): Promise<WorkbookChapter> => {
     const title = await lessonTitle(workspace, id);

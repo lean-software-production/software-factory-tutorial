@@ -12,15 +12,15 @@ let dirs: string[] = [];
 // the rail is derived from workbook.yaml alone.
 async function fixture() {
   const dir = await mkdtemp(resolve(tmpdir(), "workbook-server-")); dirs.push(dir);
-  const lessonDir = resolve(dir, "workbook/lessons/042");
+  const lessonDir = resolve(dir, "lessons/042");
   await mkdir(resolve(lessonDir, "blocks"), { recursive: true });
-  await writeFile(resolve(dir, "workbook/workbook.yaml"), [
-    "title: Fixture workbook", "parts:",
-    "  - title: Part 1 — Loop", "    lessons: ['042', '043']",
+  await writeFile(resolve(dir, "workbook.md"), [
+    "---", "title: Fixture workbook", "parts:",
+    "  - title: Part 1 — Loop", "    lessons: ['042', '043']", "---",
+    "Welcome to the fixture workbook."
   ].join("\n"));
-  await writeFile(resolve(dir, "workbook/intro.md"), "Welcome to the fixture workbook.\n");
-  await mkdir(resolve(dir, "workbook/lessons/043"), { recursive: true });
-  await writeFile(resolve(dir, "workbook/lessons/043/hero.md"), "# Second lesson\n");
+  await mkdir(resolve(dir, "lessons/043"), { recursive: true });
+  await writeFile(resolve(dir, "lessons/043/hero.md"), "# Second lesson\n");
   await writeFile(resolve(lessonDir, "lesson.yaml"), [
     "id: '042'", "status: draft", "hero: hero.md", "opening: opening.md", "blocks:",
     "  - id: run-supplied-command", "    type: terminal-practice", "    required: true", "    source: blocks/run-supplied-command.md",

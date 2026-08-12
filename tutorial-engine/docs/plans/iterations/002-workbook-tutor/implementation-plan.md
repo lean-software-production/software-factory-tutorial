@@ -132,10 +132,10 @@ Keep key concepts and learning outcomes as authored strings for now. Do not impl
 schema versioning beyond what validation needs, or a general block language for future lessons.
 
 > **Content-boundary update (superseding this section's YAML detail).** Authored curriculum now lives at
-> the repository root under `workbook/`, not in `docs/` and not in the engine. `workbook/workbook.yaml`
-> is the sole source for identity, parts, ordering, rail labels, and which lessons are migrated;
-> `workbook/intro.md` holds the workbook introduction. Each migrated lesson is a directory
-> (`workbook/lessons/NNN/`) whose `lesson.yaml` carries only machine structure — ordered block IDs,
+> the repository root, not in `docs/` and not in the engine. `workbook.md` is the sole source for the
+> workbook title, parts, ordering, and introduction: its front matter carries the structure and its body
+> is the introduction. Each lesson is a directory (`lessons/NNN/`) whose `lesson.yaml` carries only
+> machine structure — ordered block IDs,
 > types, required flags, and source references — while `hero.md`, `opening.md`, and one Markdown file per
 > block under `blocks/` carry the prose, with YAML front matter reserved for the machine fields the
 > generic renderer needs (command, context, expected observation, help, prompt, action label). The engine
