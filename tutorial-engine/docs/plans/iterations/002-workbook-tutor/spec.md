@@ -11,11 +11,11 @@ fixed argument remains stable while specific blocks adapt to the learner's obser
 
 ## Experience principles
 
-### The workbook is one document
+### The workbook is one emerging document
 
-A tutorial is one continuous document containing all its lessons as chapters. Scrolling is the primary
-way to move through it. The learner may read later narrative, but their progress through the curriculum
-is independent of how far they have scrolled.
+A tutorial becomes a continuous document as the learner works through it. Scrolling is the primary way to
+move through material that has emerged; it is not a way to consume future curriculum. The left rail shows
+the complete workbook skeleton, but it does not grant access to later lesson content.
 
 The document uses a squared-paper treatment. It should feel like a working notebook: generous space,
 large editorial typography, a persistent margin, and exercise elements placed on the page. It should not
@@ -32,20 +32,25 @@ The persistent left rail is a curriculum outline:
 - Clicking a lesson scrolls to its chapter in the document.
 - Scrolling into another chapter collapses the old lesson outline and opens the new one.
 
-The lesson in view and the learner's active lesson are different state. A learner may scroll into an
-upcoming chapter to read it. Its row and content must still show that it is ahead of the learner's
-progress.
+The lesson in view and the learner's active lesson are different state only among material that has
+emerged. The rail retains every lesson title and its progress state, but a later lesson has no readable
+chapter or local outline until its transition is unlocked. A resumed session returns to the active block
+in the active lesson, not to the document's first line.
 
-A resumed session returns to the active block in the active lesson, not to the document's first line.
+### Content emerges with successful work
 
-### Narrative is open; consequential work is progressive
+The current block is visible. Its next narrative or exercise block appears automatically when the current
+block completes successfully; no separate “continue reading” action is required. Completion means the
+block's declared evidence has been recorded, not merely that the learner has scrolled past it.
 
-A learner can read the authored narrative ahead. That narrative should be visibly veiled by a translucent
-layer until the learner reaches it, without being hidden or made inaccessible.
+A terminal practice block completes when the learner confirms the expected observation. A reported
+unexpected result keeps that block active while the learner receives help and retries. A reflection or
+quiz completes when it is submitted, regardless of answer correctness. The explicit transition remains
+the final required action that completes a lesson and unlocks the next lesson's opening.
 
-Exercises whose value depends on prior work are held until their prerequisites are met. The learner can
-see that such an activity is coming, but not yet perform its consequential action. Scrolling never
-changes an activity's availability.
+Future blocks and lesson content are not rendered, veiled, or focusable. The rail's skeleton may show a
+future lesson's title, but must communicate that its content is not yet available without treating scroll
+position as progress.
 
 ### Visuals earn their space
 

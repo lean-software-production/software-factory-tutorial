@@ -76,19 +76,22 @@ No cross-engine workspace lease is required for this iteration.
 
 ### B1. Continuous document and navigation
 
-Render one document containing the migrated lesson chapters. The left rail lists every lesson, grouped by
-part. Before a lesson migrates, its rail row is an explicitly unavailable chapter stub: it is not presented
-as readable ahead narrative and it has no local block outline. A chapter is selected for navigation by a
-deterministic reading line, not by arbitrary viewport overlap:
-the chapter whose heading most recently crossed the upper reading line is the viewed lesson. At the top
-and bottom of the document, select the first and last chapter respectively.
+Render the material that has emerged into one scrolling document. The left rail lists every lesson,
+grouped by part, as a persistent curriculum skeleton. Before a lesson transition unlocks it, a lesson is a
+non-navigable unavailable rail entry: it has no document chapter and no local block outline.
 
-Only the viewed lesson expands in the rail. Its local block outline is visible; other lesson rows remain
-collapsed. Clicking a lesson changes document position and the viewed lesson only. It never changes
-curriculum progress.
+Within an emerged lesson, render blocks in order through the active block only. When the active block
+completes, append the next block automatically and scroll only when needed to keep the new active work
+visible. Do not show a “continue reading” control. Future blocks are not rendered, veiled, or focusable.
+
+A chapter is selected for navigation by a deterministic reading line, not by arbitrary viewport overlap:
+the chapter whose heading most recently crossed the upper reading line is the viewed lesson. Only the
+viewed emerged lesson expands in the rail. Its emerged local block outline is visible; other lesson rows
+remain collapsed. Clicking an emerged lesson changes document position and viewed lesson only. It never
+changes curriculum progress.
 
 Persist curriculum progress through workbook events only. Viewed location is transient client state. On
-resume, scroll to the active block in the active lesson, as specified; do not infer progress from the
+resume, render through and scroll to the active block in the active lesson; do not infer progress from the
 restored position.
 
 ### B2. Workbook treatment
@@ -98,18 +101,17 @@ Implement the editorial workbook baseline before adding complex blocks:
 - squared-paper document field and notebook margin;
 - spacious vertical rhythm and large serif narrative type;
 - a persistent, accessible left rail;
-- visible but high-contrast ahead-of-progress treatment;
-- keyboard, selection, search, and screen-reader access to readable ahead narrative.
+- a compact, accessible curriculum skeleton for lessons whose content has not emerged; and
+- a clear active-block marker within the material that has emerged.
 
-Do not use opacity or a translucent overlay in a way that makes text fail contrast requirements. The
-learner's progress state must be available semantically even if the visual design does not print an
-intrusive status label.
+Do not render future block content under an opacity layer or translucent overlay. The rail's unavailable
+state must be available semantically as well as visually.
 
 ### B3. Acceptance checks
 
-- The rail changes expansion deterministically at chapter boundaries.
-- A learner can scroll ahead without changing availability or progress.
-- An ahead chapter remains readable, selectable, keyboard reachable, and announced with its state.
+- The rail changes expansion deterministically at emerged chapter boundaries.
+- Completing a block appends exactly its next block; scrolling cannot reveal, make ready, or complete work.
+- A future lesson appears only as an unavailable rail skeleton entry and has no focusable document content.
 - Mobile navigation remains usable without depending on hover or a wide sidebar.
 
 ## Workstream C: minimum executable lesson contract
