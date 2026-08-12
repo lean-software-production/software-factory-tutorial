@@ -47,16 +47,28 @@ function assembleBlock(entry: LessonManifestEntry, data: Record<string, unknown>
   return { ...base, type: "lesson-transition", label: (data.label as string) ?? "", markdown: body };
 }
 
-/** Assemble one lesson from its `lesson.yaml` structure plus its authored Markdown sources. */
-export async function loadWorkbookLesson(workspace: string, dir: string): Promise<WorkbookLesson> {
-  const lessonDir = resolve(workspace, WORKBOOK_ROOT, dir);
+function lessonDirectory(workspace: string, id: string): string {
+  return resolve(workspace, WORKBOOK_ROOT, "lessons", id);
+}
+
+async function lessonTitle(workspace: string, id: string): Promise<string> {
+  const hero = await readMarkdown(resolve(lessonDirectory(workspace, id), "hero.md"));
+  if (typeof hero.data.title === "string" && hero.data.title.trim()) return hero.data.title;
+  const heading = /^#\s+(.+)$/m.exec(hero.body)?.[1]?.trim();
+  if (heading) return heading;
+  throw new Error(`lessons/${id}/hero.md needs a title front-matter field or level-one heading.`);
+}
+
+/** Assemble one lesson from its conventional directory plus its authored Markdown sources. */
+export async function loadWorkbookLesson(workspace: string, id: string): Promise<WorkbookLesson> {
+  const lessonDir = lessonDirectory(workspace, id);
   const manifest = parse(await readFile(resolve(lessonDir, "lesson.yaml"), "utf8")) as LessonManifest | null;
-  if (!manifest || typeof manifest !== "object") throw new Error(`${dir}/lesson.yaml must be an object.`);
-  if (!manifest.hero || !manifest.opening) throw new Error(`${dir}/lesson.yaml must reference hero and opening sources.`);
+  if (!manifest || typeof manifest !== "object") throw new Error(`lessons/${id}/lesson.yaml must be an object.`);
+  if (!manifest.hero || !manifest.opening) throw new Error(`lessons/${id}/lesson.yaml must reference hero and opening sources.`);
   const hero = await readMarkdown(resolve(lessonDir, manifest.hero));
   const opening = await readMarkdown(resolve(lessonDir, manifest.opening));
   const blocks = await Promise.all((manifest.blocks ?? []).map(async (entry, index) => {
-    if (!entry.source) throw new Error(`${dir}/lesson.yaml blocks[${index}] needs a source file.`);
+    if (!entry.source) throw new Error(`lessons/${id}/lesson.yaml blocks[${index}] needs a source file.`);
     const { data, body } = await readMarkdown(resolve(lessonDir, entry.source));
     return assembleBlock(entry, data, body);
   }));
@@ -73,15 +85,16 @@ export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
   const workspace = await realpath(resolve(target));
   const root = resolve(workspace, WORKBOOK_ROOT);
   const manifest = validateWorkbookManifest(parse(await readFile(resolve(root, "workbook.yaml"), "utf8")));
-  const introduction = (await readFile(resolve(root, manifest.introduction), "utf8")).trim();
-  const identity: WorkbookIdentity = { title: manifest.title, brand: manifest.brand, tocTitle: manifest.tocTitle };
-  const chapters = await Promise.all(manifest.parts.flatMap((part) => part.lessons.map(async (railLesson): Promise<WorkbookChapter> => {
-    if (!railLesson.dir) return { id: railLesson.id, title: railLesson.title, part: part.name, state: "unavailable" };
+  const introduction = (await readFile(resolve(root, "intro.md"), "utf8")).trim();
+  const identity: WorkbookIdentity = { title: manifest.title };
+  const chapters = await Promise.all(manifest.parts.flatMap((part) => part.lessons.map(async (id): Promise<WorkbookChapter> => {
+    const title = await lessonTitle(workspace, id);
     try {
-      const lesson = await loadWorkbookLesson(workspace, railLesson.dir);
-      return { id: railLesson.id, title: railLesson.title, part: part.name, state: "migrated", lesson };
-    } catch (error) {
-      throw new Error(`Could not load migrated workbook lesson ${railLesson.id} from ${railLesson.dir}: ${error instanceof Error ? error.message : "invalid lesson"}`);
+      const lesson = await loadWorkbookLesson(workspace, id);
+      return { id, title, part: part.title, state: "migrated", lesson };
+    } catch (error: any) {
+      if (error?.code === "ENOENT" && error?.path?.endsWith("lesson.yaml")) return { id, title, part: part.title, state: "unavailable" };
+      throw new Error(`Could not load workbook lesson ${id}: ${error instanceof Error ? error.message : "invalid lesson"}`);
     }
   })));
   return { workspace, identity, introduction, chapters };

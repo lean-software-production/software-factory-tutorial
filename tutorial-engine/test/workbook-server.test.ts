@@ -12,16 +12,15 @@ let dirs: string[] = [];
 // the rail is derived from workbook.yaml alone.
 async function fixture() {
   const dir = await mkdtemp(resolve(tmpdir(), "workbook-server-")); dirs.push(dir);
-  const lessonDir = resolve(dir, "workbook/lessons/first");
+  const lessonDir = resolve(dir, "workbook/lessons/042");
   await mkdir(resolve(lessonDir, "blocks"), { recursive: true });
   await writeFile(resolve(dir, "workbook/workbook.yaml"), [
-    "title: Fixture workbook", "brand: Fixture works", "tocTitle: Workbook",
-    "introduction: intro.md", "parts:",
-    "  - name: Part 1 — Loop", "    lessons:",
-    "      - id: '042'", "        title: First lesson", "        dir: lessons/first",
-    "      - id: '043'", "        title: Second lesson",
+    "title: Fixture workbook", "parts:",
+    "  - title: Part 1 — Loop", "    lessons: ['042', '043']",
   ].join("\n"));
   await writeFile(resolve(dir, "workbook/intro.md"), "Welcome to the fixture workbook.\n");
+  await mkdir(resolve(dir, "workbook/lessons/043"), { recursive: true });
+  await writeFile(resolve(dir, "workbook/lessons/043/hero.md"), "# Second lesson\n");
   await writeFile(resolve(lessonDir, "lesson.yaml"), [
     "id: '042'", "status: draft", "hero: hero.md", "opening: opening.md", "blocks:",
     "  - id: run-supplied-command", "    type: terminal-practice", "    required: true", "    source: blocks/run-supplied-command.md",
@@ -66,7 +65,7 @@ describe("workbook browser API", () => {
     try {
       const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
       // Identity and introduction come from the authored workbook, not the engine.
-      expect(state.workbook).toMatchObject({ title: "Fixture workbook", brand: "Fixture works", tocTitle: "Workbook" });
+      expect(state.workbook).toMatchObject({ title: "Fixture workbook" });
       expect(state.introduction).toContain("Welcome to the fixture workbook.");
       expect(state.chapters.map((chapter: any) => [chapter.id, chapter.state])).toEqual([["042", "unavailable"], ["043", "unavailable"]]);
       expect(state.introductionComplete).toBe(false);

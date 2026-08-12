@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { loadWorkbookLesson } from "../src/workbook/load.js";
 
 const workspaceRoot = fileURLToPath(new URL("../../", import.meta.url));
-const lesson001 = await loadWorkbookLesson(workspaceRoot, "lessons/001");
+const lesson001 = await loadWorkbookLesson(workspaceRoot, "001");
 if (!lesson001) throw new Error("Missing workbook lesson 001 fixture.");
 
 let dirs: string[] = [];

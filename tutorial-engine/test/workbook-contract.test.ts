@@ -7,7 +7,7 @@ const workspace = fileURLToPath(new URL("../../", import.meta.url));
 
 describe("workbook lesson contract", () => {
   it("assembles lesson 001 from authored Markdown with stable ordered blocks", async () => {
-    const lesson = await loadWorkbookLesson(workspace, "lessons/001");
+    const lesson = await loadWorkbookLesson(workspace, "001");
     expect(lesson.id).toBe("001");
     expect(lesson.status).toBe("draft");
     expect(lesson.hero.title).toBe("Run an agent headlessly");
@@ -29,7 +29,7 @@ describe("workbook lesson contract", () => {
 
   it("derives the rail from workbook.yaml, independent of docs/specs", async () => {
     const loaded = await loadWorkbook(workspace);
-    expect(loaded.identity.title).toBe("Software factory workbook");
+    expect(loaded.identity.title).toBe("Software factory");
     expect(loaded.chapters[0]).toMatchObject({ id: "001", state: "migrated", part: "Part 1 — The validation loop" });
     expect(loaded.chapters.find((chapter) => chapter.id === "002")?.state).toBe("unavailable");
     expect(loaded.chapters.find((chapter) => chapter.id === "013")?.part).toBe("Part 2 — Build the factory");
@@ -51,7 +51,7 @@ describe("workbook lesson contract", () => {
   });
 
   it("reports location-specific errors for a malformed manifest", () => {
-    expect(() => validateWorkbookManifest({ title: "", brand: "B", tocTitle: "T", introduction: "i.md", parts: [{ name: "", lessons: [{ id: "", title: "" }] }] }))
-      .toThrow(/workbook\.title is required[\s\S]*workbook\.parts\[0\]\.name is required[\s\S]*workbook\.parts\[0\]\.lessons\[0\]\.id is required/);
+    expect(() => validateWorkbookManifest({ title: "", parts: [{ title: "", lessons: [""] }] }))
+      .toThrow(/workbook\.title is required[\s\S]*workbook\.parts\[0\]\.title is required[\s\S]*workbook\.parts\[0\]\.lessons\[0\] must be a lesson ID/);
   });
 });

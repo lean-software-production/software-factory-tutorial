@@ -9,7 +9,7 @@ type Lesson = { id: string; status: string; hero: Hero; opening: Opening; blocks
 type Chapter = { id: string; title: string; part: string; state: "migrated" | "unavailable"; lesson?: Lesson };
 type BlockProgress = { id: string; ready: boolean; active: boolean; completed: boolean; emerged: boolean };
 type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string> };
-type Identity = { title: string; brand: string; tocTitle: string; };
+type Identity = { title: string; };
 type State = { workbook: Identity; introduction: string; introductionComplete: boolean; chapters: Chapter[]; progress: Progress; adapter: { note: string } };
 
 async function completeIntroduction(): Promise<State> {
@@ -106,8 +106,7 @@ function App() {
   const viewedLesson = viewed ?? state.progress.activeLessonId;
   return <div className="shell">
     <aside className="rail" aria-label="Lesson navigation">
-      <div className="brand"><span className="brand-mark" aria-hidden="true">↗</span> {state.workbook.brand}</div>
-      <p className="toc-title">{state.workbook.tocTitle}</p>
+      <div className="brand"><span className="brand-mark" aria-hidden="true">↗</span> {state.workbook.title}</div>
       <nav className="curriculum" aria-label="Workbook navigation">{parts.map((part) => <div key={part}><p className="part-name">{part}</p>{state.chapters.filter((chapter) => chapter.part === part).map((chapter) => {
         const complete = state.progress.completedLessons.includes(chapter.id);
         const current = chapter.id === state.progress.activeLessonId;

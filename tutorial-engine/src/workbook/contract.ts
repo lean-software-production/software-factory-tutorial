@@ -26,12 +26,11 @@ export interface WorkbookLesson {
   blocks: WorkbookBlock[];
 }
 
-/** A single lesson row in the rail, authored in workbook.yaml. `dir` marks a migrated lesson. */
-export interface WorkbookRailLesson { id: string; title: string; dir?: string; }
-export interface WorkbookPart { name: string; lessons: WorkbookRailLesson[]; }
-/** Workbook identity: product-level strings the engine must not invent for itself. */
-export interface WorkbookIdentity { title: string; brand: string; tocTitle: string; }
-export interface WorkbookManifest extends WorkbookIdentity { introduction: string; parts: WorkbookPart[]; }
+/** Workbook ordering is authored; paths and lesson titles follow file conventions. */
+export interface WorkbookPart { title: string; lessons: string[]; }
+/** Workbook identity is its sole configured product-level string. */
+export interface WorkbookIdentity { title: string; }
+export interface WorkbookManifest extends WorkbookIdentity { parts: WorkbookPart[]; }
 
 function isNonEmptyString(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
 
@@ -40,22 +39,18 @@ export function validateWorkbookManifest(value: unknown): WorkbookManifest {
   const errors: string[] = [];
   const manifest = value as Partial<WorkbookManifest>;
   if (!manifest || typeof manifest !== "object") throw new Error("workbook.yaml must be an object.");
-  for (const key of ["title", "brand", "tocTitle", "introduction"] as const) {
-    if (!isNonEmptyString(manifest[key])) errors.push(`workbook.${key} is required`);
-  }
+  if (!isNonEmptyString(manifest.title)) errors.push("workbook.title is required");
   const ids = new Set<string>();
   if (!Array.isArray(manifest.parts) || manifest.parts.length === 0) errors.push("workbook.parts must list at least one part");
   else manifest.parts.forEach((part, partIndex) => {
     const path = `workbook.parts[${partIndex}]`;
-    if (!isNonEmptyString(part?.name)) errors.push(`${path}.name is required`);
+    if (!isNonEmptyString(part?.title)) errors.push(`${path}.title is required`);
     if (!Array.isArray(part?.lessons) || part.lessons.length === 0) errors.push(`${path}.lessons must list at least one lesson`);
     else part.lessons.forEach((lesson, lessonIndex) => {
       const lessonPath = `${path}.lessons[${lessonIndex}]`;
-      if (!isNonEmptyString(lesson?.id)) errors.push(`${lessonPath}.id is required`);
-      else if (ids.has(lesson.id)) errors.push(`${lessonPath}.id must be unique`);
-      else ids.add(lesson.id);
-      if (!isNonEmptyString(lesson?.title)) errors.push(`${lessonPath}.title is required`);
-      if (lesson?.dir !== undefined && !isNonEmptyString(lesson.dir)) errors.push(`${lessonPath}.dir must be a path when present`);
+      if (!isNonEmptyString(lesson)) errors.push(`${lessonPath} must be a lesson ID`);
+      else if (ids.has(lesson)) errors.push(`${lessonPath} must be unique`);
+      else ids.add(lesson);
     });
   });
   if (errors.length) throw new Error(`Invalid workbook manifest:\n- ${errors.join("\n- ")}`);
