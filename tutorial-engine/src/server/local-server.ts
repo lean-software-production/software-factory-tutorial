@@ -9,7 +9,7 @@ import { PiTutorialAdapter } from "../agent/pi-adapter.js";
 import { TutorialEventBus } from "../protocol/event-bus.js";
 import { isBrowserMessage, type BrowserMessage, type RunState, type SessionBootstrap, type TutorialEvent } from "../protocol/events.js";
 import { createTutorialLogger, type TutorialLogger } from "../runtime-log.js";
-import { resetFactory, TutorialSessionLog } from "../session-log.js";
+import { resetTutorialState, TutorialSessionLog } from "../session-log.js";
 
 const MIME_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -27,6 +27,7 @@ export interface LocalServerOptions {
   workspace: string;
   webRoot: string;
   progress: ProgressItem[];
+  resetLearnerArtifacts(): Promise<void>;
   port?: number;
   host?: string;
   logger?: TutorialLogger;
@@ -126,16 +127,16 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
       } else if (mode === "part-2") {
         // Part 2's first lesson moves files Part 1 builds, so skipping means
         // seeding that output, not only moving the outline's highlight.
-        log.info("Starting at Part 2: clearing factory/ and seeding Part 1's output.");
-        await resetFactory(options.workspace);
-        await sessionLog.clear();
+        log.info("Starting at Part 2: clearing curriculum-owned learner artifacts and seeding Part 1's output.");
+        await options.resetLearnerArtifacts();
+        await resetTutorialState(options.workspace);
         const skip = await skipToPartTwo(options.workspace);
         log.info(`Seeded ${skip.seeded.join(", ")}; marked ${skip.skipped.join(", ")} skipped.`);
         bus.publish({ type: "progress", progress: skip.progress });
       } else if (reset) {
-        log.info("Starting over: removing learner artifacts from factory/.");
-        await resetFactory(options.workspace);
-        await sessionLog.clear();
+        log.info("Starting over: removing curriculum-owned learner artifacts.");
+        await options.resetLearnerArtifacts();
+        await resetTutorialState(options.workspace);
         // Progress lives in factory/, so starting over returns the learner to
         // the first lesson. Republish so the header agrees with the tutor.
         bus.publish({ type: "progress", progress: await loadProgress(options.workspace) });

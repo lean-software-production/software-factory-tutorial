@@ -109,7 +109,7 @@ The first time you run `npm run tutorial`, it asks where to start. Start at the 
 
 After that, running it again offers to resume as well. Resume keeps your factory files and asks a fresh tutor process to inspect them before continuing. The other two options delete everything in `factory/` first.
 
-The tutor keeps its own state — the transcript, and how far you have got — in `factory/.tmp/`, along with everything your line regenerates on each run. That directory is ignored by git; the scripts and prompts you write are not, so your own work is yours to commit if you want to keep it.
+The tutor keeps its own state — the transcript and how far you have got — in `.tutorial/.tmp/`. Your line's regenerated evidence stays in `factory/**/.tmp/`. Both locations are ignored by git; the scripts and prompts you write are not, so your own work is yours to commit if you want to keep it.
 
 Each session moves you onto a branch of its own, named `factory-line-` and the date and time. From lesson 007 your line commits to the calculator, and from 008 it does so without asking, so those commits land there rather than on the branch you cloned.
 

@@ -29,8 +29,8 @@ describe("what factory/ keeps", () => {
     }
   });
 
-  it("keeps the engine's own state out, which belongs to one learner", async () => {
-    for (const path of ["factory/.tmp/tutorial-progress.json", "factory/.tmp/tutorial-session.jsonl"]) {
+  it("keeps the tutor's own state out, which belongs to one learner", async () => {
+    for (const path of [".tutorial/.tmp/tutorial-progress.json", ".tutorial/.tmp/tutorial-session.jsonl"]) {
       expect(await ignored(path), `${path} is engine state and should not be committed`).toBe(true);
     }
   });

@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
+import { tutorialStatePath } from "../tutorial-state.js";
 import type { WorkbookLesson } from "./contract.js";
 
 export type WorkbookEvent =
@@ -49,9 +50,8 @@ export class WorkbookEventStore {
   readonly eventPath: string;
   readonly projectionPath: string;
   constructor(readonly workspace: string) {
-    const root = resolve(workspace, "factory/.tmp/workbook");
-    this.eventPath = resolve(root, "events.jsonl");
-    this.projectionPath = resolve(root, "projection.json");
+    this.eventPath = tutorialStatePath(workspace, "workbook", "events.jsonl");
+    this.projectionPath = tutorialStatePath(workspace, "workbook", "projection.json");
   }
   async read(): Promise<WorkbookEvent[]> {
     try {

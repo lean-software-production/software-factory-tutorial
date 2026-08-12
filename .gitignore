@@ -8,5 +8,6 @@
 # script that writes it: the engine's state, and the evidence, findings,
 # baselines, commit messages and iteration records a run regenerates.
 factory/**/.tmp/
+.tutorial/
 .local/
 evals/reports/

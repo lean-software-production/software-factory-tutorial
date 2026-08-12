@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { ENGINE_STATE_DIRECTORY } from "../session-log.js";
+import { dirname } from "node:path";
+import { tutorialStatePath } from "../tutorial-state.js";
 
 const PROGRESS_NAME = "tutorial-progress.json";
 
@@ -23,15 +23,14 @@ const ids = (value: unknown): Set<string> =>
  *
  * The ledger is curriculum and ships in the repository, so writing progress
  * into it would hand everyone who clones a tutorial that claims to be part
- * done. This belongs to one learner, so it sits in `factory/.tmp/` — the
- * engine's own corner of the learner's factory. `resetFactory` clears it along
- * with everything else, which is what starting over should mean.
+ * done. This belongs to one learner, so it lives in the tutor's neutral state
+ * directory, separate from the curriculum's working files.
  */
 export class LessonProgressStore {
   readonly path: string;
 
   constructor(workspace: string) {
-    this.path = resolve(workspace, "factory", ENGINE_STATE_DIRECTORY, PROGRESS_NAME);
+    this.path = tutorialStatePath(workspace, PROGRESS_NAME);
   }
 
   /**

@@ -7,17 +7,17 @@ import { LessonProgressStore } from "../src/lesson/progress-store.js";
 const store = async () => new LessonProgressStore(await mkdtemp(join(tmpdir(), "progress-store-")));
 
 describe("LessonProgressStore", () => {
-  it("keeps progress in the engine's own corner of factory/, cleared when the learner starts over", async () => {
+  it("keeps progress in the tutor's neutral state directory", async () => {
     const progress = await store();
 
-    expect(progress.path.endsWith(join("factory", ".tmp", "tutorial-progress.json"))).toBe(true);
+    expect(progress.path.endsWith(join(".tutorial", ".tmp", "tutorial-progress.json"))).toBe(true);
   });
 
   it("treats a learner who has not started as having finished nothing", async () => {
     expect([...(await (await store()).read()).completed]).toEqual([]);
   });
 
-  it("round-trips finished lessons, creating factory/ if the learner has none yet", async () => {
+  it("round-trips finished lessons, creating tutor state if needed", async () => {
     const progress = await store();
 
     await progress.add("001");

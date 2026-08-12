@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { browserCommand } from "./browser-open.js";
 import { ArgumentError, parseArguments, USAGE } from "./cli-arguments.js";
+import { resetFactoryArtifacts } from "./lesson/factory-artifacts.js";
 import { loadLesson } from "./lesson/load.js";
 import { createTutorialLogger, defaultTutorialLogPath } from "./runtime-log.js";
 import { LOOPBACK_HOST, startLocalServer } from "./server/local-server.js";
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
     workspace: loaded.workspace,
     webRoot: resolve(packageDirectory, "dist/web"),
     progress: loaded.progress,
+    resetLearnerArtifacts: () => resetFactoryArtifacts(loaded.workspace),
     port,
     host,
     logger: log

@@ -2,7 +2,6 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { LessonProgressStore } from "../src/lesson/progress-store.js";
 import { WorkbookEventStore, nowEvent, project } from "../src/workbook/events.js";
 import { fileURLToPath } from "node:url";
 import { loadWorkbookLesson } from "../src/workbook/load.js";
@@ -45,13 +44,11 @@ describe("workbook event projection", () => {
     expect(project(await store.read(), lesson001).activeBlockId).toBe("change-job");
   });
 
-  it("writes only under factory/.tmp/workbook and stays separate from legacy progress", async () => {
+  it("writes workbook events in the tutor's neutral state directory", async () => {
     const dir = await workspace(); const store = new WorkbookEventStore(dir);
     await store.append(nowEvent({ type: "observation_acknowledged", lessonId: "01-the-validation-loop/01-run-an-agent-headlessly", blockId: "run-supplied-command" }));
-    await new LessonProgressStore(dir).write({ completed: ["01-the-validation-loop/01-run-an-agent-headlessly"], skipped: [] });
-    expect(store.eventPath).toContain("factory/.tmp/workbook/events.jsonl");
+    expect(store.eventPath).toContain(".tutorial/.tmp/workbook/events.jsonl");
     expect(await readFile(store.eventPath, "utf8")).toContain("observation_acknowledged");
-    expect(await readFile(resolve(dir, "factory/.tmp/tutorial-progress.json"), "utf8")).toContain("completed");
   });
 
   it("has no event that lets unrelated file changes complete terminal practice", () => {

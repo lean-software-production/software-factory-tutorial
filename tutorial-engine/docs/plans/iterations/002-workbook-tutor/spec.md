@@ -105,10 +105,10 @@ The workbook records append-only facts about what it can observe or what the lea
 does not claim to log every action the learner takes in an external editor or terminal. A projection derives
 active and completed blocks, lesson progress, and resumption state from those events.
 
-The initial store is a local JSONL event log under `factory/.tmp/workbook/`, with an optional rebuildable
-projection cache beside it. The workbook server is its single writer. A database is not required for this
-single-user, local first iteration; reconsider SQLite only if concurrent writers, cross-run queries, or
-multi-user use makes an append log inadequate.
+The initial store is a local JSONL event log under `.tutorial/.tmp/workbook/`, with an optional
+rebuildable projection cache beside it. The workbook server is its single writer. A database is not
+required for this single-user, local first iteration; reconsider SQLite only if concurrent writers,
+cross-run queries, or multi-user use makes an append log inadequate.
 
 ## Lesson contract
 

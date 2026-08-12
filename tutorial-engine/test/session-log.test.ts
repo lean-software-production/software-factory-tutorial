@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resetFactory, TutorialSessionLog } from "../src/session-log.js";
+import { resetTutorialState, TutorialSessionLog } from "../src/session-log.js";
 
 const workspaces: string[] = [];
 
@@ -36,19 +36,17 @@ describe("TutorialSessionLog", () => {
     ]);
   });
 
-  it("starts over by removing factory artifacts and the saved transcript", async () => {
+  it("clears tutor state without touching curriculum-owned learner artifacts", async () => {
     const root = await workspace();
     await writeFile(join(root, "factory", ".gitkeep"), "");
     await writeFile(join(root, "factory", "success.md"), "criteria");
-    await mkdir(join(root, "factory", "scratch"));
-    await writeFile(join(root, "factory", "scratch", "note.txt"), "temporary");
     const log = new TutorialSessionLog(root);
     log.append({ type: "user-message", markdown: "temporary work" });
     await log.flush();
 
-    await resetFactory(root);
+    await resetTutorialState(root);
 
-    expect((await readdir(join(root, "factory"))).sort()).toEqual([".gitkeep"]);
+    expect((await readdir(join(root, "factory"))).sort()).toEqual([".gitkeep", "success.md"]);
     expect(await log.exists()).toBe(false);
   });
 });
