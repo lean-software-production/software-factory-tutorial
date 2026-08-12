@@ -5,19 +5,36 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startWorkbookServer } from "../src/workbook/server.js";
 
 let dirs: string[] = [];
+
+// The fixture uses a lesson whose id is not "001", proving no lesson ID is
+// hard-coded into the runtime; the active lesson is the first migrated chapter
+// the authored workbook declares. It also omits docs/specs entirely, proving
+// the rail is derived from workbook.yaml alone.
 async function fixture() {
   const dir = await mkdtemp(resolve(tmpdir(), "workbook-server-")); dirs.push(dir);
-  await mkdir(resolve(dir, "docs/specs"), { recursive: true });
-  await writeFile(resolve(dir, "README.md"), "# Fixture\n");
-  await writeFile(resolve(dir, "docs/specs/README.md"), "# Lessons\n\n## Part 1 — The validation loop\n\n| Lesson | Goal |\n| --- | --- |\n| [001](001.md) | Run an agent headlessly |\n| [002](002.md) | Build a doer |\n");
-  await mkdir(resolve(dir, "docs/workbook"), { recursive: true });
-  await writeFile(resolve(dir, "docs/workbook/001.yaml"), [
-    "id: '001'", "title: Run an agent headlessly", "status: draft", "keyConcepts: []", "learningOutcomes: []", "blocks:",
-    "  - id: run-supplied-command", "    type: terminal-practice", "    title: Run", "    required: true", "    command: echo hello", "    context: Root", "    expectedObservation: Done",
-    "  - id: change-job", "    type: terminal-practice", "    title: Change", "    required: true", "    command: echo again", "    context: Root", "    expectedObservation: Done",
-    "  - id: reflection", "    type: reflection", "    title: Reflect", "    required: true", "    prompt: Why?",
-    "  - id: transition", "    type: lesson-transition", "    title: Finish", "    required: true", "    label: Finish", "    markdown: Done"
+  const lessonDir = resolve(dir, "workbook/lessons/first");
+  await mkdir(resolve(lessonDir, "blocks"), { recursive: true });
+  await writeFile(resolve(dir, "workbook/workbook.yaml"), [
+    "title: Fixture workbook", "brand: Fixture works", "tocTitle: Workbook", "draftNotice: Draft notice",
+    "introduction: intro.md", "parts:",
+    "  - name: Part 1 — Loop", "    lessons:",
+    "      - id: '042'", "        title: First lesson", "        dir: lessons/first",
+    "      - id: '043'", "        title: Second lesson",
   ].join("\n"));
+  await writeFile(resolve(dir, "workbook/intro.md"), "Welcome to the fixture workbook.\n");
+  await writeFile(resolve(lessonDir, "lesson.yaml"), [
+    "id: '042'", "status: draft", "hero: hero.md", "opening: opening.md", "blocks:",
+    "  - id: run-supplied-command", "    type: terminal-practice", "    required: true", "    source: blocks/run-supplied-command.md",
+    "  - id: change-job", "    type: terminal-practice", "    required: true", "    source: blocks/change-job.md",
+    "  - id: reflection", "    type: reflection", "    required: true", "    source: blocks/reflection.md",
+    "  - id: transition", "    type: lesson-transition", "    required: true", "    source: blocks/transition.md",
+  ].join("\n"));
+  await writeFile(resolve(lessonDir, "hero.md"), ["---", "title: First lesson hero", "dek: A hero summary line.", "meta:", "  - Your terminal", "---"].join("\n"));
+  await writeFile(resolve(lessonDir, "opening.md"), ["---", "sectionLabel: What you will learn", "heading: An opening heading.", "outcomes:", "  - Do the thing.", "---", "The **payoff** sentence."].join("\n"));
+  await writeFile(resolve(lessonDir, "blocks/run-supplied-command.md"), ["---", "title: Run", "command: echo hello", "context: Root", "expectedObservation: Done", "---"].join("\n"));
+  await writeFile(resolve(lessonDir, "blocks/change-job.md"), ["---", "title: Change", "command: echo again", "context: Root", "expectedObservation: Done", "---"].join("\n"));
+  await writeFile(resolve(lessonDir, "blocks/reflection.md"), ["---", "title: Reflect", "prompt: Why?", "---"].join("\n"));
+  await writeFile(resolve(lessonDir, "blocks/transition.md"), ["---", "title: Finish", "label: Finish", "---", "Done."].join("\n"));
   await mkdir(resolve(dir, "web")); await writeFile(resolve(dir, "web/index.html"), "<!doctype html><div id=\"root\"></div>");
   return dir;
 }
@@ -43,15 +60,23 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("serves lesson 001 and leaves unavailable chapters as stubs", async () => {
+  it("serves the first migrated lesson from the authored rail and leaves later chapters as stubs", async () => {
     const dir = await fixture(); const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0 });
     try {
       const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
-      expect(state.chapters.map((chapter: any) => [chapter.id, chapter.state])).toEqual([["001", "migrated"], ["002", "unavailable"]]);
+      // Identity and introduction come from the authored workbook, not the engine.
+      expect(state.workbook).toMatchObject({ title: "Fixture workbook", brand: "Fixture works", tocTitle: "Workbook", draftNotice: "Draft notice" });
+      expect(state.introduction).toContain("Welcome to the fixture workbook.");
+      expect(state.chapters.map((chapter: any) => [chapter.id, chapter.state])).toEqual([["042", "migrated"], ["043", "unavailable"]]);
+      expect(state.progress.activeLessonId).toBe("042");
+      // Hero and opening are Markdown-derived authored content.
+      expect(state.chapters[0].lesson.hero).toMatchObject({ title: "First lesson hero", dek: "A hero summary line.", meta: ["Your terminal"] });
+      expect(state.chapters[0].lesson.opening).toMatchObject({ sectionLabel: "What you will learn", heading: "An opening heading.", outcomes: ["Do the thing."] });
+      expect(state.chapters[0].lesson.opening.markdown).toContain("**payoff**");
+      // Only emerged block content is serialized: the ahead command and prompt are absent.
       expect(state.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["run-supplied-command"]);
       expect(JSON.stringify(state)).not.toContain("echo again");
       expect(JSON.stringify(state)).not.toContain("Why?");
-      expect(JSON.stringify(state)).not.toContain("global chat");
       const different = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "unexpected", evidence: "command failed" }) }).then((r) => r.json() as any);
       expect(different.progress.activeBlockId).toBe("run-supplied-command");
       const ack = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "acknowledge" }) }).then((r) => r.json() as any);

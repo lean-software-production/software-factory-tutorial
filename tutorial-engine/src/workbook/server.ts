@@ -37,26 +37,31 @@ function assetPaths(pathname: string): string[] {
   return pathname.endsWith("/") ? [...paths, "/index.html"] : paths;
 }
 
-function lesson001(loaded: LoadedWorkbook) {
-  const lesson = loaded.chapters.find((chapter) => chapter.id === "001")?.lesson;
-  if (!lesson) throw new Error("Workbook lesson 001 is not migrated.");
+/**
+ * The lesson whose progression is live: the first migrated lesson defined by the
+ * authored workbook. Selection follows the curriculum, so no lesson ID is
+ * hard-coded into the runtime.
+ */
+function activeLesson(loaded: LoadedWorkbook) {
+  const lesson = loaded.chapters.find((chapter) => chapter.lesson)?.lesson;
+  if (!lesson) throw new Error("No workbook lesson is migrated.");
   return lesson;
 }
 function publicState(loaded: LoadedWorkbook, events: WorkbookEvent[]) {
-  const lesson = lesson001(loaded);
+  const lesson = activeLesson(loaded);
   const progress = project(events, lesson);
   const emerged = new Set(progress.blocks.filter((block) => block.emerged).map((block) => block.id));
   const chapters = loaded.chapters.map((chapter) => chapter.lesson
     ? { ...chapter, lesson: { ...chapter.lesson, blocks: chapter.lesson.blocks.filter((block) => emerged.has(block.id)) } }
     : chapter);
-  return { title: "Software factory workbook", chapters, progress, adapter: { modelBackedHelp: false, note: "Free-text help is block-scoped. No model adapter is wired in this vertical slice." } };
+  return { workbook: loaded.identity, introduction: loaded.introduction, chapters, progress, adapter: { modelBackedHelp: false, note: "Free-text help is block-scoped. No model adapter is wired in this vertical slice." } };
 }
 
 export async function startWorkbookServer(options: WorkbookServerOptions): Promise<StartedWorkbookServer> {
   const log = options.logger ?? createTutorialLogger();
   await access(resolve(options.webRoot, "index.html"));
   const loaded = await loadWorkbook(options.target);
-  const lesson = lesson001(loaded);
+  const lesson = activeLesson(loaded);
   const store = new WorkbookEventStore(loaded.workspace);
   if ((await store.read()).length === 0) await store.append(nowEvent({ type: "session_started" }));
   let server = createServer(async (request, response) => {

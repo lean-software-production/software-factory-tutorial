@@ -128,8 +128,19 @@ For example, a terminal-practice block needs its displayed command, terminal con
 observation, learner acknowledgement, and attached help actions. For lesson 001, prerequisites are
 strictly sequential: an activity becomes ready when its immediate required predecessor completes.
 
-Keep key concepts and learning outcomes as authored strings in YAML for now. Do not implement taxonomy
-IDs, schema versioning beyond what validation needs, or a general block language for future lessons.
+Keep key concepts and learning outcomes as authored strings for now. Do not implement taxonomy IDs,
+schema versioning beyond what validation needs, or a general block language for future lessons.
+
+> **Content-boundary update (superseding this section's YAML detail).** Authored curriculum now lives at
+> the repository root under `workbook/`, not in `docs/` and not in the engine. `workbook/workbook.yaml`
+> is the sole source for identity, parts, ordering, rail labels, and which lessons are migrated;
+> `workbook/intro.md` holds the workbook introduction. Each migrated lesson is a directory
+> (`workbook/lessons/NNN/`) whose `lesson.yaml` carries only machine structure — ordered block IDs,
+> types, required flags, and source references — while `hero.md`, `opening.md`, and one Markdown file per
+> block under `blocks/` carry the prose, with YAML front matter reserved for the machine fields the
+> generic renderer needs (command, context, expected observation, help, prompt, action label). The engine
+> contains generic renderer wording only; it no longer hard-codes the workbook title, any lesson's hero,
+> opening, or metadata, or the lesson ID `001`.
 
 ### C2. Event store and minimal state model
 

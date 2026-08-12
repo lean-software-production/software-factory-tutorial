@@ -1,0 +1,41 @@
+# Structural source for the workbook: identity, introduction, and the lesson rail.
+# This file — not docs/specs/README.md — is what the workbook renders its parts,
+# ordering, titles, and identity from. A lesson becomes readable only when it has a
+# `dir`; the rest are rail entries whose content has not been migrated yet.
+title: Software factory workbook
+brand: Software factory
+tocTitle: Workbook
+draftNotice: Workbook draft · pending curriculum review
+introduction: intro.md
+parts:
+  - name: Part 1 — The validation loop
+    lessons:
+      - id: "001"
+        title: Run an agent headlessly
+        dir: lessons/001
+      - id: "002"
+        title: Build a doer that changes the calculator
+      - id: "003"
+        title: Build a validator that checks the change
+      - id: "004"
+        title: Feed the findings back by hand
+  - name: Part 2 — Build the factory
+    lessons:
+      - id: "005"
+        title: Join them into an assembly line
+      - id: "006"
+        title: Put the validator on a read-only harness
+      - id: "007"
+        title: Compose stations, and branch
+      - id: "008"
+        title: Take the pause off
+      - id: "009"
+        title: Record what the line did
+      - id: "010"
+        title: Watch it while it runs
+      - id: "011"
+        title: Ask the factory what happened
+      - id: "012"
+        title: Talk to a running station
+      - id: "013"
+        title: Oversee the orchestrator

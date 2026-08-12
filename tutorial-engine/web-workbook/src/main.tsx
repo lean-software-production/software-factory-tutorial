@@ -3,11 +3,14 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 type Block = { id: string; type: string; title: string; markdown?: string; command?: string; context?: string; expectedObservation?: string; help?: Record<string, string>; prompt?: string; label?: string };
-type Lesson = { id: string; title: string; status: string; keyConcepts: string[]; learningOutcomes: string[]; blocks: Block[] };
-type Chapter = { id: string; title: string; part?: string; state: "migrated" | "unavailable"; lesson?: Lesson };
+type Hero = { title: string; dek: string; meta: string[] };
+type Opening = { sectionLabel: string; heading: string; markdown: string; outcomes: string[] };
+type Lesson = { id: string; status: string; hero: Hero; opening: Opening; blocks: Block[] };
+type Chapter = { id: string; title: string; part: string; state: "migrated" | "unavailable"; lesson?: Lesson };
 type BlockProgress = { id: string; ready: boolean; active: boolean; completed: boolean; emerged: boolean };
 type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string> };
-type State = { title: string; chapters: Chapter[]; progress: Progress; adapter: { note: string } };
+type Identity = { title: string; brand: string; tocTitle: string; draftNotice: string };
+type State = { workbook: Identity; introduction: string; chapters: Chapter[]; progress: Progress; adapter: { note: string } };
 
 async function post(blockId: string, body: object): Promise<State> {
   const response = await fetch("api/workbook/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, ...body }) });
@@ -58,8 +61,9 @@ function BlockView({ block, progress, refresh }: { block: Block; progress: Progr
 
 function App() {
   const [state, setState] = useState<State>();
-  const [viewed, setViewed] = useState("001");
+  const [viewed, setViewed] = useState<string>();
   useEffect(() => { fetch("api/workbook/state").then((response) => response.json()).then((next: State) => setState(next)); }, []);
+  useEffect(() => { if (state) document.title = state.workbook.title; }, [state?.workbook.title]);
   useEffect(() => { if (!state) return; document.getElementById(state.progress.activeBlockId)?.scrollIntoView({ block: "nearest" }); }, [state?.progress.activeBlockId]);
   useEffect(() => {
     if (!state) return;
@@ -74,22 +78,24 @@ function App() {
   const parts = useMemo(() => [...new Set(state?.chapters.map((chapter) => chapter.part) ?? [])], [state]);
   if (!state) return <p className="loading">Loading workbook…</p>;
   const emerged = state.chapters.filter((chapter) => chapter.lesson);
+  const viewedLesson = viewed ?? state.progress.activeLessonId;
   return <div className="shell">
     <aside className="rail" aria-label="Lesson navigation">
-      <div className="brand"><span className="brand-mark" aria-hidden="true">↗</span> Software factory</div>
-      <p className="toc-title">Workbook</p>
+      <div className="brand"><span className="brand-mark" aria-hidden="true">↗</span> {state.workbook.brand}</div>
+      <p className="toc-title">{state.workbook.tocTitle}</p>
       <nav className="curriculum" aria-label="Workbook navigation">{parts.map((part) => <div key={part}><p className="part-name">{part}</p>{state.chapters.filter((chapter) => chapter.part === part).map((chapter) => {
         const complete = state.progress.completedLessons.includes(chapter.id);
         const current = chapter.id === state.progress.activeLessonId;
         if (!chapter.lesson) return <span key={chapter.id} className="lesson-row ahead unavailable" aria-disabled="true"><span>{chapter.id} · {chapter.title}</span></span>;
-        return <details key={chapter.id} className="lesson-nav" open={viewed === chapter.id}><summary><a href={`#lesson-${chapter.id}`} className={`lesson-row ${complete ? "done" : current ? "current" : "ahead"}`} onClick={() => setViewed(chapter.id)}>{chapter.id} · {chapter.title}</a></summary>{viewed === chapter.id && <nav className="lesson-outline" aria-label={`${chapter.title} outline`}>{chapter.lesson.blocks.map((block) => <a href={`#${block.id}`} key={block.id} aria-current={block.id === state.progress.activeBlockId ? "true" : undefined}>{block.title}</a>)}</nav>}</details>;
+        return <details key={chapter.id} className="lesson-nav" open={viewedLesson === chapter.id}><summary><a href={`#lesson-${chapter.id}`} className={`lesson-row ${complete ? "done" : current ? "current" : "ahead"}`} onClick={() => setViewed(chapter.id)}>{chapter.id} · {chapter.title}</a></summary>{viewedLesson === chapter.id && <nav className="lesson-outline" aria-label={`${chapter.title} outline`}>{chapter.lesson.blocks.map((block) => <a href={`#${block.id}`} key={block.id} aria-current={block.id === state.progress.activeBlockId ? "true" : undefined}>{block.title}</a>)}</nav>}</details>;
       })}</div>)}</nav>
     </aside>
     <main><article className="page">
-      <p className="draft">Workbook draft · pending curriculum review</p>
+      <p className="draft">{state.workbook.draftNotice}</p>
+      <section className="workbook-intro" aria-label="Workbook introduction">{renderMarkdown(state.introduction)}</section>
       {emerged.map((chapter) => <article id={`lesson-${chapter.id}`} data-lesson-id={chapter.id} key={chapter.id} className="chapter">
-        <header><p className="eyebrow">{chapter.part}</p><h1>{chapter.title}</h1><p className="dek">Learn the first building block of a software factory: a bounded agent that receives a job, runs it, and exits.</p><div className="lesson-meta"><span className="chip">Your terminal</span><span className="chip">About 10 minutes</span><span className="chip">Lesson {chapter.id}</span></div></header>
-        <section className="opening"><p className="section-label">What you will learn</p><h2>A job, a harness, and a boundary.</h2><div className="prose-callout"><p><strong>{chapter.lesson!.keyConcepts[0]}</strong></p></div><ul className="outcomes">{chapter.lesson!.learningOutcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></section>
+        <header><p className="eyebrow">{chapter.part}</p><h1>{chapter.lesson!.hero.title}</h1><p className="dek">{chapter.lesson!.hero.dek}</p><div className="lesson-meta">{chapter.lesson!.hero.meta.map((chip) => <span className="chip" key={chip}>{chip}</span>)}</div></header>
+        <section className="opening"><p className="section-label">{chapter.lesson!.opening.sectionLabel}</p><h2>{chapter.lesson!.opening.heading}</h2><div className="prose-callout">{renderMarkdown(chapter.lesson!.opening.markdown)}</div><ul className="outcomes">{chapter.lesson!.opening.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></section>
         {chapter.lesson!.blocks.map((block) => <BlockView key={block.id} block={block} progress={state.progress} refresh={setState} />)}
       </article>)}
     </article></main>
