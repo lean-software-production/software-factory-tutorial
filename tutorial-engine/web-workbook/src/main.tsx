@@ -118,8 +118,9 @@ function App() {
     </aside>
     <main><article className="page">
       <WorkbookIntroduction state={state} refresh={setState} />
-      {emerged.map((chapter) => <article id={`lesson-${chapter.id}`} data-lesson-id={chapter.id} key={chapter.id} className="chapter">
-        <header><p className="part-title">{chapter.part}</p><p className="eyebrow">Part {chapter.partNumber}, Lesson {chapter.lessonNumber}</p><h1>{chapter.lesson!.hero.title}</h1><p className="dek">{chapter.lesson!.hero.dek}</p><div className="lesson-meta">{chapter.lesson!.hero.meta.map((chip) => <span className="chip" key={chip}>{chip}</span>)}</div></header>
+      {emerged.map((chapter) => <article data-lesson-id={chapter.id} key={chapter.id} className="chapter">
+        <section className="part-chapter" aria-label={chapter.part}><p className="part-title">{chapter.part}</p></section>
+        <header id={`lesson-${chapter.id}`}><p className="eyebrow">Part {chapter.partNumber}, Lesson {chapter.lessonNumber}</p><h1>{chapter.lesson!.hero.title}</h1><p className="dek">{chapter.lesson!.hero.dek}</p><div className="lesson-meta">{chapter.lesson!.hero.meta.map((chip) => <span className="chip" key={chip}>{chip}</span>)}</div></header>
         <section className="opening"><p className="section-label">{chapter.lesson!.opening.sectionLabel}</p><h2>{chapter.lesson!.opening.heading}</h2><div className="prose-callout">{renderMarkdown(chapter.lesson!.opening.markdown)}</div><ul className="outcomes">{chapter.lesson!.opening.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></section>
         {chapter.lesson!.blocks.map((block) => <BlockView key={block.id} block={block} progress={state.progress} refresh={setState} />)}
       </article>)}
