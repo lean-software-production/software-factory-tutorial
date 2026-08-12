@@ -88,7 +88,10 @@ function App() {
   const [viewed, setViewed] = useState<string>();
   useEffect(() => { fetch("api/workbook/state").then((response) => response.json()).then((next: State) => setState(next)); }, []);
   useEffect(() => { if (state) document.title = state.workbook.title; }, [state?.workbook.title]);
-  useEffect(() => { if (!state) return; document.getElementById(state.progress.activeBlockId)?.scrollIntoView({ block: "nearest" }); }, [state?.progress.activeBlockId]);
+  useEffect(() => {
+    if (!state?.introductionComplete) return;
+    document.getElementById(state.progress.activeBlockId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [state?.introductionComplete, state?.progress.activeBlockId]);
   useEffect(() => {
     if (!state) return;
     const headings = [...document.querySelectorAll<HTMLElement>(".chapter")];
