@@ -1,4 +1,4 @@
-import { readFile, realpath } from "node:fs/promises";
+import { readdir, readFile, realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parse } from "yaml";
 import {
@@ -32,7 +32,8 @@ async function readMarkdown(path: string): Promise<{ data: Record<string, unknow
 }
 
 interface LessonManifestEntry { id?: string; type?: string; required?: boolean; source?: string; }
-interface LessonManifest { id?: string; status?: string; hero?: string; opening?: string; blocks?: LessonManifestEntry[]; }
+interface LessonManifest { status?: string; hero?: string; opening?: string; blocks?: LessonManifestEntry[]; }
+interface PartDirectory { id: string; title: string; path: string; }
 
 function assembleBlock(entry: LessonManifestEntry, data: Record<string, unknown>, body: string): WorkbookBlock {
   const base = { id: entry.id ?? "", type: entry.type as WorkbookBlock["type"], title: (data.title as string) ?? "", required: entry.required };
@@ -48,33 +49,53 @@ function assembleBlock(entry: LessonManifestEntry, data: Record<string, unknown>
   return { ...base, type: "lesson-transition", label: (data.label as string) ?? "", markdown: body };
 }
 
-function lessonDirectory(workspace: string, id: string): string {
-  return resolve(workspace, LESSONS_ROOT, id);
+function slugWithoutPrefix(name: string): string { return name.replace(/^\d+-/, ""); }
+
+async function titleFromMarkdown(path: string): Promise<string> {
+  const document = await readMarkdown(path);
+  if (typeof document.data.title === "string" && document.data.title.trim()) return document.data.title;
+  const heading = /^#\s+(.+)$/m.exec(document.body)?.[1]?.trim();
+  if (heading) return heading;
+  throw new Error(`${path} needs a title front-matter field or level-one heading.`);
 }
 
-async function lessonTitle(workspace: string, id: string): Promise<string> {
-  const hero = await readMarkdown(resolve(lessonDirectory(workspace, id), "hero.md"));
+async function partDirectories(workspace: string): Promise<PartDirectory[]> {
+  const root = resolve(workspace, LESSONS_ROOT);
+  const entries = await readdir(root, { withFileTypes: true });
+  return Promise.all(entries.filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })).map(async (entry) => ({
+    id: entry.name,
+    title: await titleFromMarkdown(resolve(root, entry.name, "part.md")),
+    path: resolve(root, entry.name)
+  })));
+}
+
+async function lessonDirectories(part: PartDirectory): Promise<string[]> {
+  const entries = await readdir(part.path, { withFileTypes: true });
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+async function lessonTitle(lessonDir: string): Promise<string> {
+  const hero = await readMarkdown(resolve(lessonDir, "hero.md"));
   if (typeof hero.data.title === "string" && hero.data.title.trim()) return hero.data.title;
   const heading = /^#\s+(.+)$/m.exec(hero.body)?.[1]?.trim();
   if (heading) return heading;
-  throw new Error(`lessons/${id}/hero.md needs a title front-matter field or level-one heading.`);
+  throw new Error(`${lessonDir}/hero.md needs a title front-matter field or level-one heading.`);
 }
 
 /** Assemble one lesson from its conventional directory plus its authored Markdown sources. */
-export async function loadWorkbookLesson(workspace: string, id: string): Promise<WorkbookLesson> {
-  const lessonDir = lessonDirectory(workspace, id);
+export async function loadWorkbookLesson(lessonDir: string, id: string): Promise<WorkbookLesson> {
   const manifest = parse(await readFile(resolve(lessonDir, "lesson.yaml"), "utf8")) as LessonManifest | null;
-  if (!manifest || typeof manifest !== "object") throw new Error(`lessons/${id}/lesson.yaml must be an object.`);
-  if (!manifest.hero || !manifest.opening) throw new Error(`lessons/${id}/lesson.yaml must reference hero and opening sources.`);
+  if (!manifest || typeof manifest !== "object") throw new Error(`${lessonDir}/lesson.yaml must be an object.`);
+  if (!manifest.hero || !manifest.opening) throw new Error(`${lessonDir}/lesson.yaml must reference hero and opening sources.`);
   const hero = await readMarkdown(resolve(lessonDir, manifest.hero));
   const opening = await readMarkdown(resolve(lessonDir, manifest.opening));
   const blocks = await Promise.all((manifest.blocks ?? []).map(async (entry, index) => {
-    if (!entry.source) throw new Error(`lessons/${id}/lesson.yaml blocks[${index}] needs a source file.`);
+    if (!entry.source) throw new Error(`${lessonDir}/lesson.yaml blocks[${index}] needs a source file.`);
     const { data, body } = await readMarkdown(resolve(lessonDir, entry.source));
     return assembleBlock(entry, data, body);
   }));
   return validateWorkbookLesson({
-    id: manifest.id,
+    id,
     status: manifest.status,
     hero: { title: hero.data.title, dek: hero.data.dek, meta: hero.data.meta ?? [] },
     opening: { sectionLabel: opening.data.sectionLabel, heading: opening.data.heading, markdown: opening.body, outcomes: opening.data.outcomes ?? [] },
@@ -88,15 +109,21 @@ export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
   const manifest = validateWorkbookManifest(document.data);
   const introduction = document.body;
   const identity: WorkbookIdentity = { title: manifest.title };
-  const chapters = await Promise.all(manifest.parts.flatMap((part) => part.lessons.map(async (id): Promise<WorkbookChapter> => {
-    const title = await lessonTitle(workspace, id);
-    try {
-      const lesson = await loadWorkbookLesson(workspace, id);
-      return { id, title, part: part.title, state: "migrated", lesson };
-    } catch (error: any) {
-      if (error?.code === "ENOENT" && error?.path?.endsWith("lesson.yaml")) return { id, title, part: part.title, state: "unavailable" };
-      throw new Error(`Could not load workbook lesson ${id}: ${error instanceof Error ? error.message : "invalid lesson"}`);
-    }
-  })));
-  return { workspace, identity, introduction, chapters };
+  const parts = await partDirectories(workspace);
+  const chapterGroups = await Promise.all(parts.map(async (part) => {
+    const lessons = await lessonDirectories(part);
+    return Promise.all(lessons.map(async (directory): Promise<WorkbookChapter> => {
+      const lessonDir = resolve(part.path, directory);
+      const id = `${part.id}/${directory}`;
+      const title = await lessonTitle(lessonDir);
+      try {
+        const lesson = await loadWorkbookLesson(lessonDir, id);
+        return { id, title, part: part.title, state: "migrated", lesson };
+      } catch (error: any) {
+        if (error?.code === "ENOENT" && error?.path?.endsWith("lesson.yaml")) return { id, title, part: part.title, state: "unavailable" };
+        throw new Error(`Could not load workbook lesson ${id}: ${error instanceof Error ? error.message : "invalid lesson"}`);
+      }
+    }));
+  }));
+  return { workspace, identity, introduction, chapters: chapterGroups.flat() };
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { validateWorkbookLesson, validateWorkbookManifest } from "../src/workbook/contract.js";
 import { loadWorkbook, loadWorkbookLesson, parseFrontMatter } from "../src/workbook/load.js";
 
@@ -7,8 +8,8 @@ const workspace = fileURLToPath(new URL("../../", import.meta.url));
 
 describe("workbook lesson contract", () => {
   it("assembles lesson 001 from authored Markdown with stable ordered blocks", async () => {
-    const lesson = await loadWorkbookLesson(workspace, "001");
-    expect(lesson.id).toBe("001");
+    const lesson = await loadWorkbookLesson(resolve(workspace, "lessons/01-the-validation-loop/01-run-an-agent-headlessly"), "01-the-validation-loop/01-run-an-agent-headlessly");
+    expect(lesson.id).toBe("01-the-validation-loop/01-run-an-agent-headlessly");
     expect(lesson.status).toBe("draft");
     expect(lesson.hero.title).toBe("Run an agent headlessly");
     expect(lesson.hero.meta).toContain("Your terminal");
@@ -27,12 +28,12 @@ describe("workbook lesson contract", () => {
     expect(orientation.markdown).toMatch(/An \*\*agent\*\* is a harness/);
   });
 
-  it("derives the rail from workbook.yaml, independent of docs/specs", async () => {
+  it("derives the rail from ordered part and lesson directories", async () => {
     const loaded = await loadWorkbook(workspace);
     expect(loaded.identity.title).toBe("Software factory");
-    expect(loaded.chapters[0]).toMatchObject({ id: "001", state: "migrated", part: "Part 1 — The validation loop" });
-    expect(loaded.chapters.find((chapter) => chapter.id === "002")?.state).toBe("unavailable");
-    expect(loaded.chapters.find((chapter) => chapter.id === "013")?.part).toBe("Part 2 — Build the factory");
+    expect(loaded.chapters[0]).toMatchObject({ id: "01-the-validation-loop/01-run-an-agent-headlessly", state: "migrated", part: "Part 1 — The validation loop" });
+    expect(loaded.chapters.find((chapter) => chapter.id === "01-the-validation-loop/02-build-a-doer")?.state).toBe("unavailable");
+    expect(loaded.chapters.find((chapter) => chapter.id === "02-build-the-factory/09-oversee-the-orchestrator")?.part).toBe("Part 2 — Build the factory");
   });
 
   it("parses front matter and prose without needing a body", () => {
@@ -51,7 +52,7 @@ describe("workbook lesson contract", () => {
   });
 
   it("reports location-specific errors for a malformed manifest", () => {
-    expect(() => validateWorkbookManifest({ title: "", parts: [{ title: "", lessons: [""] }] }))
-      .toThrow(/workbook\.title is required[\s\S]*workbook\.parts\[0\]\.title is required[\s\S]*workbook\.parts\[0\]\.lessons\[0\] must be a lesson ID/);
+    expect(() => validateWorkbookManifest({ title: "" }))
+      .toThrow(/workbook\.title is required/);
   });
 });

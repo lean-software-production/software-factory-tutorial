@@ -12,17 +12,18 @@ let dirs: string[] = [];
 // the rail is derived from workbook.yaml alone.
 async function fixture() {
   const dir = await mkdtemp(resolve(tmpdir(), "workbook-server-")); dirs.push(dir);
-  const lessonDir = resolve(dir, "lessons/042");
+  const partDir = resolve(dir, "lessons/01-loop");
+  const lessonDir = resolve(partDir, "01-first");
   await mkdir(resolve(lessonDir, "blocks"), { recursive: true });
   await writeFile(resolve(dir, "workbook.md"), [
-    "---", "title: Fixture workbook", "parts:",
-    "  - title: Part 1 — Loop", "    lessons: ['042', '043']", "---",
+    "---", "title: Fixture workbook", "---",
     "Welcome to the fixture workbook."
   ].join("\n"));
-  await mkdir(resolve(dir, "lessons/043"), { recursive: true });
-  await writeFile(resolve(dir, "lessons/043/hero.md"), "# Second lesson\n");
+  await writeFile(resolve(partDir, "part.md"), "# Part 1 — Loop\n");
+  await mkdir(resolve(partDir, "02-second"), { recursive: true });
+  await writeFile(resolve(partDir, "02-second/hero.md"), "# Second lesson\n");
   await writeFile(resolve(lessonDir, "lesson.yaml"), [
-    "id: '042'", "status: draft", "hero: hero.md", "opening: opening.md", "blocks:",
+    "status: draft", "hero: hero.md", "opening: opening.md", "blocks:",
     "  - id: run-supplied-command", "    type: terminal-practice", "    required: true", "    source: blocks/run-supplied-command.md",
     "  - id: change-job", "    type: terminal-practice", "    required: true", "    source: blocks/change-job.md",
     "  - id: reflection", "    type: reflection", "    required: true", "    source: blocks/reflection.md",
@@ -67,15 +68,15 @@ describe("workbook browser API", () => {
       // Identity and introduction come from the authored workbook, not the engine.
       expect(state.workbook).toMatchObject({ title: "Fixture workbook" });
       expect(state.introduction).toContain("Welcome to the fixture workbook.");
-      expect(state.chapters.map((chapter: any) => [chapter.id, chapter.state])).toEqual([["042", "unavailable"], ["043", "unavailable"]]);
+      expect(state.chapters.map((chapter: any) => [chapter.id, chapter.state])).toEqual([["01-loop/01-first", "unavailable"], ["01-loop/02-second", "unavailable"]]);
       expect(state.introductionComplete).toBe(false);
       expect(state.chapters[0].lesson).toBeUndefined();
       const blocked = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "acknowledge" }) });
       expect(blocked.status).toBe(409);
       const introduced = await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" }).then((response) => response.json() as any);
       expect(introduced.introductionComplete).toBe(true);
-      expect(introduced.chapters.map((chapter: any) => [chapter.id, chapter.state])).toEqual([["042", "migrated"], ["043", "unavailable"]]);
-      expect(introduced.progress.activeLessonId).toBe("042");
+      expect(introduced.chapters.map((chapter: any) => [chapter.id, chapter.state])).toEqual([["01-loop/01-first", "migrated"], ["01-loop/02-second", "unavailable"]]);
+      expect(introduced.progress.activeLessonId).toBe("01-loop/01-first");
       // Hero and opening are Markdown-derived authored content.
       expect(introduced.chapters[0].lesson.hero).toMatchObject({ title: "First lesson hero", dek: "A hero summary line.", meta: ["Your terminal"] });
       expect(introduced.chapters[0].lesson.opening).toMatchObject({ sectionLabel: "What you will learn", heading: "An opening heading.", outcomes: ["Do the thing."] });

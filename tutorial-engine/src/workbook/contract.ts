@@ -26,11 +26,9 @@ export interface WorkbookLesson {
   blocks: WorkbookBlock[];
 }
 
-/** Workbook ordering is authored; paths and lesson titles follow file conventions. */
-export interface WorkbookPart { title: string; lessons: string[]; }
-/** Workbook identity is its sole configured product-level string. */
+/** Workbook identity is authored in the root document; directories establish its structure. */
 export interface WorkbookIdentity { title: string; }
-export interface WorkbookManifest extends WorkbookIdentity { parts: WorkbookPart[]; }
+export interface WorkbookManifest extends WorkbookIdentity {}
 
 function isNonEmptyString(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
 
@@ -40,19 +38,7 @@ export function validateWorkbookManifest(value: unknown): WorkbookManifest {
   const manifest = value as Partial<WorkbookManifest>;
   if (!manifest || typeof manifest !== "object") throw new Error("workbook.yaml must be an object.");
   if (!isNonEmptyString(manifest.title)) errors.push("workbook.title is required");
-  const ids = new Set<string>();
-  if (!Array.isArray(manifest.parts) || manifest.parts.length === 0) errors.push("workbook.parts must list at least one part");
-  else manifest.parts.forEach((part, partIndex) => {
-    const path = `workbook.parts[${partIndex}]`;
-    if (!isNonEmptyString(part?.title)) errors.push(`${path}.title is required`);
-    if (!Array.isArray(part?.lessons) || part.lessons.length === 0) errors.push(`${path}.lessons must list at least one lesson`);
-    else part.lessons.forEach((lesson, lessonIndex) => {
-      const lessonPath = `${path}.lessons[${lessonIndex}]`;
-      if (!isNonEmptyString(lesson)) errors.push(`${lessonPath} must be a lesson ID`);
-      else if (ids.has(lesson)) errors.push(`${lessonPath} must be unique`);
-      else ids.add(lesson);
-    });
-  });
+
   if (errors.length) throw new Error(`Invalid workbook manifest:\n- ${errors.join("\n- ")}`);
   return manifest as WorkbookManifest;
 }
@@ -63,7 +49,6 @@ export function validateWorkbookLesson(value: unknown): WorkbookLesson {
   const lesson = value as Partial<WorkbookLesson>;
   const ids = new Set<string>();
   if (!lesson || typeof lesson !== "object") throw new Error("Lesson manifest must be an object.");
-  if (!isNonEmptyString(lesson.id)) errors.push("lesson.id is required");
   if (lesson.status !== "draft" && lesson.status !== "approved") errors.push("lesson.status must be draft or approved");
   const hero = lesson.hero;
   if (!hero || typeof hero !== "object") errors.push("lesson.hero is required");
