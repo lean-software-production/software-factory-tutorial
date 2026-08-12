@@ -5,7 +5,6 @@ import { extname, resolve, sep } from "node:path";
 import { LOOPBACK_HOST } from "../server/local-server.js";
 import type { TutorialLogger } from "../runtime-log.js";
 import { createTutorialLogger } from "../runtime-log.js";
-import { lesson001 } from "./lesson-001.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 import { nowEvent, project, WorkbookEventStore, type WorkbookEvent } from "./events.js";
 
@@ -38,14 +37,20 @@ function assetPaths(pathname: string): string[] {
   return pathname.endsWith("/") ? [...paths, "/index.html"] : paths;
 }
 
+function lesson001(loaded: LoadedWorkbook) {
+  const lesson = loaded.chapters.find((chapter) => chapter.id === "001")?.lesson;
+  if (!lesson) throw new Error("Workbook lesson 001 is not migrated.");
+  return lesson;
+}
 function publicState(loaded: LoadedWorkbook, events: WorkbookEvent[]) {
-  return { title: "Software factory workbook", chapters: loaded.chapters, progress: project(events, lesson001), adapter: { modelBackedHelp: false, note: "Free-text help is block-scoped. No model adapter is wired in this vertical slice." } };
+  return { title: "Software factory workbook", chapters: loaded.chapters, progress: project(events, lesson001(loaded)), adapter: { modelBackedHelp: false, note: "Free-text help is block-scoped. No model adapter is wired in this vertical slice." } };
 }
 
 export async function startWorkbookServer(options: WorkbookServerOptions): Promise<StartedWorkbookServer> {
   const log = options.logger ?? createTutorialLogger();
   await access(resolve(options.webRoot, "index.html"));
   const loaded = await loadWorkbook(options.target);
+  const lesson = lesson001(loaded);
   const store = new WorkbookEventStore(loaded.workspace);
   if ((await store.read()).length === 0) await store.append(nowEvent({ type: "session_started" }));
   let server = createServer(async (request, response) => {
@@ -55,18 +60,27 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     if (request.method === "POST" && isRoute(url.pathname, "events")) {
       try {
         const body = await readJson(request);
-        const block = lesson001.blocks.find((candidate) => candidate.id === body.blockId);
+        const block = lesson.blocks.find((candidate) => candidate.id === body.blockId);
         if (!block) return sendJson(response, 400, { error: "Unknown blockId." });
+        const current = project(await store.read(), lesson);
+        const progress = current.blocks.find((candidate) => candidate.id === block.id);
+        // A block event is evidence for the current activity, never a way for a
+        // browser request to skip the ordered lesson contract. Help remains
+        // available on visible held blocks, but only the active activity can
+        // produce progress evidence.
+        if (body.action !== "help" && (!progress?.active || !progress.ready)) {
+          return sendJson(response, 409, { error: "This block is not active yet." });
+        }
         let event: WorkbookEvent | undefined;
-        if (body.action === "acknowledge" && block.type === "terminal-practice") event = nowEvent({ type: "observation_acknowledged", lessonId: lesson001.id, blockId: block.id });
-        if (body.action === "unexpected" && block.type === "terminal-practice" && typeof body.evidence === "string") event = nowEvent({ type: "unexpected_output_submitted", lessonId: lesson001.id, blockId: block.id, evidence: body.evidence });
-        if (body.action === "reflect" && block.type === "reflection" && typeof body.response === "string") event = nowEvent({ type: "reflection_submitted", lessonId: lesson001.id, blockId: block.id, response: body.response });
-        if (body.action === "transition" && block.type === "lesson-transition") event = nowEvent({ type: "lesson_transitioned", lessonId: lesson001.id, blockId: block.id });
-        if (body.action === "help" && typeof body.request === "string") event = nowEvent({ type: "help_requested", lessonId: lesson001.id, blockId: block.id, request: body.request });
+        if (body.action === "acknowledge" && block.type === "terminal-practice") event = nowEvent({ type: "observation_acknowledged", lessonId: lesson.id, blockId: block.id });
+        if (body.action === "unexpected" && block.type === "terminal-practice" && typeof body.evidence === "string") event = nowEvent({ type: "unexpected_output_submitted", lessonId: lesson.id, blockId: block.id, evidence: body.evidence });
+        if (body.action === "reflect" && block.type === "reflection" && typeof body.response === "string") event = nowEvent({ type: "reflection_submitted", lessonId: lesson.id, blockId: block.id, response: body.response });
+        if (body.action === "transition" && block.type === "lesson-transition") event = nowEvent({ type: "lesson_transitioned", lessonId: lesson.id, blockId: block.id });
+        if (body.action === "help" && typeof body.request === "string") event = nowEvent({ type: "help_requested", lessonId: lesson.id, blockId: block.id, request: body.request });
         if (!event) return sendJson(response, 400, { error: "Invalid workbook action for this block." });
         await store.append(event);
         const events = await store.read();
-        await store.writeProjection(project(events, lesson001));
+        await store.writeProjection(project(events, lesson));
         return sendJson(response, 202, publicState(loaded, events));
       } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." }); }
     }

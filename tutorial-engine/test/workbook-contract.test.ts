@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { fileURLToPath } from "node:url";
 import { validateWorkbookLesson } from "../src/workbook/contract.js";
-import { lesson001 } from "../src/workbook/lesson-001.js";
+import { loadWorkbookLesson } from "../src/workbook/load.js";
+
+const workspace = fileURLToPath(new URL("../../", import.meta.url));
 
 describe("workbook lesson contract", () => {
-  it("accepts the lesson-001 vertical-slice contract with stable ordered blocks", () => {
-    expect(lesson001.id).toBe("001");
-    expect(lesson001.status).toBe("draft");
-    expect(lesson001.blocks.map((block) => [block.id, block.type])).toEqual([
+  it("accepts the lesson-001 vertical-slice contract with stable ordered blocks", async () => {
+    const lesson001 = await loadWorkbookLesson(workspace, "001");
+    expect(lesson001?.id).toBe("001");
+    expect(lesson001?.status).toBe("draft");
+    expect(lesson001?.blocks.map((block) => [block.id, block.type])).toEqual([
       ["orientation", "narrative"],
       ["run-supplied-command", "terminal-practice"],
       ["change-job", "terminal-practice"],

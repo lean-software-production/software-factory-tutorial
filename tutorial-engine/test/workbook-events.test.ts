@@ -4,7 +4,12 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LessonProgressStore } from "../src/lesson/progress-store.js";
 import { WorkbookEventStore, nowEvent, project } from "../src/workbook/events.js";
-import { lesson001 } from "../src/workbook/lesson-001.js";
+import { fileURLToPath } from "node:url";
+import { loadWorkbookLesson } from "../src/workbook/load.js";
+
+const workspaceRoot = fileURLToPath(new URL("../../", import.meta.url));
+const lesson001 = await loadWorkbookLesson(workspaceRoot, "001");
+if (!lesson001) throw new Error("Missing workbook lesson 001 fixture.");
 
 let dirs: string[] = [];
 async function workspace() { const dir = await mkdtemp(resolve(tmpdir(), "workbook-")); dirs.push(dir); return dir; }

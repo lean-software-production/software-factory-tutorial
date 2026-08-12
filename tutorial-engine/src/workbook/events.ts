@@ -25,14 +25,15 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
     if ("blockId" in event && event.lessonId === lesson.id && completionEvents.has(event.type)) completed.add(event.blockId);
   }
   const required = lesson.blocks.filter((block) => block.required);
-  const active = required.find((block) => !completed.has(block.id)) ?? required.at(-1) ?? lesson.blocks[0]!;
+  const nextRequired = required.find((block) => !completed.has(block.id));
+  const active = nextRequired ?? required.at(-1) ?? lesson.blocks[0]!;
   const activeIndex = lesson.blocks.findIndex((block) => block.id === active.id);
   const blocks = lesson.blocks.map((block, index) => ({
     id: block.id,
     type: block.type,
     completed: completed.has(block.id),
     ready: !block.required || index <= activeIndex || completed.has(block.id),
-    active: block.id === active.id && !completed.has(block.id)
+    active: block.id === active.id && nextRequired !== undefined
   }));
   const lessonComplete = required.length > 0 && required.every((block) => completed.has(block.id));
   return { activeLessonId: lesson.id, activeBlockId: active.id, completedLessons: lessonComplete ? [lesson.id] : [], blocks, unexpected, reflections };
