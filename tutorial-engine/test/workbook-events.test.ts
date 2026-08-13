@@ -52,6 +52,8 @@ describe("workbook event projection", () => {
       nowEvent({ type: "block_completed", lessonId: LESSON_ID, blockId: "first-practice" }),
       nowEvent({ type: "observation_acknowledged", lessonId: LESSON_ID, blockId: "second-practice" }),
       nowEvent({ type: "reflection_submitted", lessonId: LESSON_ID, blockId: "reflect", response: "a reflection" }),
+      nowEvent({ type: "reflection_reply_recorded", lessonId: LESSON_ID, blockId: "reflect", response: "A tutor reply." }),
+      nowEvent({ type: "reflection_completed", lessonId: LESSON_ID, blockId: "reflect" }),
     ];
     expect(project(events, lesson).activeBlockId).toBe("finish");
     expect(project(events, lesson).blocks.map((block) => block.emerged)).toEqual([true, true, true, true, true]);
@@ -61,7 +63,7 @@ describe("workbook event projection", () => {
   it("rebuilds resume state from JSONL events, not projection cache or scroll position", async () => {
     const dir = await workspace(); const store = new WorkbookEventStore(dir);
     await store.append(nowEvent({ type: "observation_acknowledged", lessonId: LESSON_ID, blockId: "first-practice" }));
-    await store.writeProjection({ activeLessonId: LESSON_ID, activeBlockId: "wrong", completedLessons: [], blocks: [], unexpected: {}, reflections: {} });
+    await store.writeProjection({ activeLessonId: LESSON_ID, activeBlockId: "wrong", completedLessons: [], blocks: [], unexpected: {}, reflections: {}, reflectionConversations: {} });
     expect(project(await store.read(), lesson).activeBlockId).toBe("second-practice");
   });
 

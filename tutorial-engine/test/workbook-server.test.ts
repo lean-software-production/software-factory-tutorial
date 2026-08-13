@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startWorkbookServer } from "../src/workbook/server.js";
 import type { TerminalObserver, TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
+import type { ReflectionConversationAdapter } from "../src/workbook/reflection.js";
 
 let dirs: string[] = [];
 
@@ -122,6 +123,26 @@ describe("workbook browser API", () => {
       const ack = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "acknowledge" }) }).then((r) => r.json() as any);
       expect(ack.progress.activeBlockId).toBe("change-job");
       expect(ack.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["run-supplied-command", "change-job"]);
+    } finally { await server.close(); }
+  });
+
+  it("discusses a reflection with the completed practice evidence before advancing", async () => {
+    const dir = await fixture();
+    const requests: any[] = [];
+    const reflectionConversation: ReflectionConversationAdapter = { reply: async (request) => { requests.push(request); return "You connected the command result to the validation loop. What would a failing result tell you?"; } };
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, reflectionConversation });
+    try {
+      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
+      for (const blockId of ["run-supplied-command", "change-job"]) await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, action: "acknowledge" }) });
+      const discussed = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "reflection", action: "reflection-submit", response: "It checks whether the work achieved the expected result." }) }).then((response) => response.json() as any);
+      expect(discussed.progress.activeBlockId).toBe("reflection");
+      expect(discussed.progress.reflectionConversations.reflection).toEqual([
+        { role: "learner", text: "It checks whether the work achieved the expected result." },
+        { role: "tutor", text: expect.stringMatching(/connected/i) }
+      ]);
+      expect(requests[0].practiceEvidence).toEqual(expect.arrayContaining([expect.objectContaining({ blockId: "run-supplied-command", expectedObservation: "Done" })]));
+      const complete = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "reflection", action: "reflection-complete" }) }).then((response) => response.json() as any);
+      expect(complete.progress.activeBlockId).toBe("transition");
     } finally { await server.close(); }
   });
 

@@ -12,7 +12,8 @@ type Opening = { sectionLabel: string; heading: string; markdown: string; outcom
 type Lesson = { id: string; status: string; hero: Hero; opening: Opening; blocks: Block[] };
 type Chapter = { id: string; title: string; part: string; partMarkdown: string; partNumber: number; lessonNumber: number; state: "migrated" | "unavailable"; lesson?: Lesson };
 type BlockProgress = { id: string; ready: boolean; active: boolean; completed: boolean; verified: boolean; feedback?: string; emerged: boolean };
-type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string> };
+type ReflectionTurn = { role: "learner" | "tutor"; text: string };
+type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]> };
 type Identity = { title: string; };
 type State = { workbook: Identity; introduction: string; introductionComplete: boolean; chapters: Chapter[]; progress: Progress; adapter: { note: string } };
 
@@ -141,11 +142,29 @@ function TerminalBlock({ block, progress, refresh }: { block: Block; progress: P
   </section>;
 }
 
+function ReflectionBlock({ block, state, progress, refresh }: { block: Block; state: BlockProgress | undefined; progress: Progress; refresh(state: State): void }) {
+  const turns = progress.reflectionConversations[block.id] ?? [];
+  const hasTutorReply = turns.some((turn) => turn.role === "tutor");
+  const [draft, setDraft] = useState("");
+  const [pending, setPending] = useState(false);
+  const submit = (action: "reflection-submit" | "reflection-follow-up") => {
+    setPending(true);
+    post(block.id, { action, response: draft }).then((next) => { setDraft(""); refresh(next); }).finally(() => setPending(false));
+  };
+  return <section id={block.id} className="work-block reflection"><p className="section-label">Reflection · discuss it</p><h2>{block.title}</h2><p className="question">{block.prompt}</p>
+    {turns.length > 0 && <div className="reflection-thread" aria-live="polite">{turns.map((turn, index) => <div key={index} className={`reflection-turn ${turn.role}`}><b>{turn.role === "learner" ? "You" : "Tutor"}</b><p>{turn.text}</p></div>)}</div>}
+    {state?.completed ? <p className="next-ready">Reflection complete. The next step has appeared below.</p> : <>
+      <label className="reflection-input">{hasTutorReply ? "Ask a clarifying question or add to your answer" : "Share your answer"}<textarea aria-label="Your reflection" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={pending} /></label>
+      <div className="action-row"><button className="button primary" disabled={pending || !draft.trim()} onClick={() => submit(hasTutorReply ? "reflection-follow-up" : "reflection-submit")}>{pending ? "Thinking…" : hasTutorReply ? "Send question" : "Discuss reflection"}</button>{hasTutorReply && <button className="button secondary" disabled={pending} onClick={() => { setPending(true); post(block.id, { action: "reflection-complete" }).then(refresh).finally(() => setPending(false)); }}>Continue</button>}</div>
+    </>}
+  </section>;
+}
+
 function BlockView({ block, progress, refresh }: { block: Block; progress: Progress; refresh(state: State): void }) {
   const state = progressFor(progress, block.id);
   if (block.type === "narrative") return <section id={block.id} className="work-block narrative"><p className="section-label">The idea</p><h2>{block.title}</h2>{renderMarkdown(block.markdown)}</section>;
   if (block.type === "terminal-practice") return <TerminalBlock block={block} progress={progress} refresh={refresh} />;
-  if (block.type === "reflection") return <section id={block.id} className="work-block reflection"><p className="section-label">Reflection</p><h2>{block.title}</h2><p className="question">{block.prompt}</p><textarea aria-label="Your reflection" defaultValue={progress.reflections[block.id] ?? ""} id={`${block.id}-answer`} />{state?.completed ? <p className="next-ready">Reflection recorded. Participation is what counts here.</p> : <button className="button primary" onClick={() => post(block.id, { action: "reflect", response: (document.getElementById(`${block.id}-answer`) as HTMLTextAreaElement).value }).then(refresh)}>Record reflection</button>}</section>;
+  if (block.type === "reflection") return <ReflectionBlock block={block} state={state} progress={progress} refresh={refresh} />;
   return <section id={block.id} className="work-block lesson-end"><p className="section-label">Lesson transition</p><h2>{block.title}</h2>{renderMarkdown(block.markdown)}{state?.completed ? <p className="next-ready">Lesson complete.</p> : <button className="button primary" onClick={() => post(block.id, { action: "transition" }).then(refresh)}>{block.label}</button>}</section>;
 }
 

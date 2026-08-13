@@ -10,11 +10,12 @@ import { OBSERVED_TERMINAL_MODE } from "./contract.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 import { introductionCompleted, nowEvent, project, WorkbookEventStore, type WorkbookEvent } from "./events.js";
 import { PiTerminalObserver, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalObserver, type TerminalPtyFactory } from "./terminal.js";
+import { PiReflectionConversationAdapter, type PracticeEvidence, type ReflectionConversationAdapter } from "./reflection.js";
 
 const MIME_TYPES: Record<string, string> = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json; charset=utf-8" };
 const MAX_BODY_BYTES = 16_384;
 
-export interface WorkbookServerOptions { target: string; webRoot: string; port?: number; host?: string; logger?: TutorialLogger; terminalObserver?: TerminalObserver; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; }
+export interface WorkbookServerOptions { target: string; webRoot: string; port?: number; host?: string; logger?: TutorialLogger; terminalObserver?: TerminalObserver; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; reflectionConversation?: ReflectionConversationAdapter; }
 export interface StartedWorkbookServer { url: string; port: number; host: string; close(): Promise<void>; }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
@@ -92,6 +93,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const host = options.host ?? LOOPBACK_HOST;
   if (embeddedTerminalEnabled && !isLoopbackHost(host)) throw new Error("The embedded terminal can only be enabled on a loopback host; it exposes a real local shell.");
   const store = new WorkbookEventStore(loaded.workspace);
+  const reflectionConversation = options.reflectionConversation ?? new PiReflectionConversationAdapter(loaded.workspace, log);
+  let reflectionQueue = Promise.resolve();
   if ((await store.read()).length === 0) await store.append(nowEvent({ type: "session_started" }));
   let eventsCache = await store.read();
   const refreshEvents = async () => { eventsCache = await store.read(); return eventsCache; };
@@ -123,6 +126,15 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     debounceMs: options.terminalDebounceMs,
     logger: log
   }) : undefined;
+  const reflectionEvidence = (): PracticeEvidence[] => {
+    const current = project(eventsCache, lesson);
+    const transcripts = new Map((terminal?.practiceTranscripts() ?? []).map((item) => [item.blockId, item.transcript]));
+    return lesson.blocks.flatMap((block) => {
+      const progress = current.blocks.find((item) => item.id === block.id);
+      if (block.type !== "terminal-practice" || !progress?.emerged) return [];
+      return [{ blockId: block.id, title: block.title, expectedObservation: block.expectedObservation, transcript: transcripts.get(block.id), unexpectedOutput: current.unexpected[block.id] ?? [], verified: progress.verified, feedback: progress.feedback }];
+    });
+  };
   let server = createServer(async (request, response) => {
     headers(response);
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -149,11 +161,32 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         if (body.action !== "help" && (!progress?.active || !progress.ready)) {
           return sendJson(response, 409, { error: "This block is not active yet." });
         }
+        if ((body.action === "reflection-submit" || body.action === "reflection-follow-up") && block.type === "reflection") {
+          const learnerResponse = typeof body.response === "string" ? body.response.trim().slice(0, 4_000) : "";
+          if (!learnerResponse) return sendJson(response, 400, { error: "Write a reflection before discussing it." });
+          const conversation = current.reflectionConversations[block.id] ?? [];
+          const isFirst = body.action === "reflection-submit";
+          if ((isFirst && conversation.length > 0) || (!isFirst && !conversation.some((turn) => turn.role === "tutor"))) return sendJson(response, 409, { error: "Wait for the tutor reply before adding a follow-up." });
+          // Keep turns in request order if an eager browser submits twice.
+          let result: any;
+          await (reflectionQueue = reflectionQueue.then(async () => {
+            await store.append(nowEvent(isFirst
+              ? { type: "reflection_submitted", lessonId: lesson.id, blockId: block.id, response: learnerResponse }
+              : { type: "reflection_follow_up_submitted", lessonId: lesson.id, blockId: block.id, response: learnerResponse }));
+            const updated = await refreshEvents();
+            const thread = project(updated, lesson).reflectionConversations[block.id] ?? [];
+            const reply = await reflectionConversation.reply({ prompt: block.prompt, message: learnerResponse, conversation: thread, practiceEvidence: reflectionEvidence() });
+            await store.append(nowEvent({ type: "reflection_reply_recorded", lessonId: lesson.id, blockId: block.id, response: reply }));
+            const complete = await refreshEvents(); await store.writeProjection(project(complete, lesson));
+            result = publicState(loaded, complete);
+          }));
+          return sendJson(response, 202, result);
+        }
         let event: WorkbookEvent | undefined;
         if (body.action === "acknowledge" && block.type === "terminal-practice") event = nowEvent({ type: "observation_acknowledged", lessonId: lesson.id, blockId: block.id });
         if (body.action === "complete" && block.type === "terminal-practice" && progress?.verified && !progress.completed) event = nowEvent({ type: "block_completed", lessonId: lesson.id, blockId: block.id });
         if (body.action === "unexpected" && block.type === "terminal-practice" && typeof body.evidence === "string") event = nowEvent({ type: "unexpected_output_submitted", lessonId: lesson.id, blockId: block.id, evidence: body.evidence });
-        if (body.action === "reflect" && block.type === "reflection" && typeof body.response === "string") event = nowEvent({ type: "reflection_submitted", lessonId: lesson.id, blockId: block.id, response: body.response });
+        if (body.action === "reflection-complete" && block.type === "reflection" && (current.reflectionConversations[block.id] ?? []).some((turn) => turn.role === "tutor")) event = nowEvent({ type: "reflection_completed", lessonId: lesson.id, blockId: block.id });
         if (body.action === "transition" && block.type === "lesson-transition") event = nowEvent({ type: "lesson_transitioned", lessonId: lesson.id, blockId: block.id });
         if (body.action === "help" && typeof body.request === "string") event = nowEvent({ type: "help_requested", lessonId: lesson.id, blockId: block.id, request: body.request });
         if (!event) return sendJson(response, 400, { error: "Invalid workbook action for this block." });

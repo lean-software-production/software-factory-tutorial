@@ -77,6 +77,17 @@ describe("WorkbookTerminalManager", () => {
     expect(client.messages.at(-1)).toMatchObject({ type: "advice", blockId: "practice", message: "Use npm test." });
   });
 
+  it("retains bounded terminal attempts as reflection evidence in memory", () => {
+    const { manager, ptys } = setup();
+    manager.attach(new FakeClient());
+    manager.receive({ type: "input", data: "wrong command\r" });
+    ptys[0]!.emitData("command not found");
+    const [evidence] = manager.practiceTranscripts();
+    expect(evidence).toMatchObject({ lessonId: "lesson", blockId: "practice" });
+    expect(evidence?.transcript).toContain("wrong command");
+    expect(evidence?.transcript).toContain("command not found");
+  });
+
   it("does not observe inactive or non-observed blocks", async () => {
     vi.useFakeTimers();
     const observe = vi.fn(async () => ({ status: "complete" as const }));

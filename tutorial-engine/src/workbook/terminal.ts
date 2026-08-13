@@ -42,6 +42,7 @@ export interface ActiveObservedTerminalBlock {
 }
 
 export interface TerminalObservationRequest extends ActiveObservedTerminalBlock { transcript: string; }
+export type PracticeTranscript = { lessonId: string; blockId: string; transcript: string };
 export type TerminalObserverDecision =
   | { status: "waiting" }
   | { status: "advice"; message: string }
@@ -98,6 +99,7 @@ export class WorkbookTerminalManager {
   #replay = "";
   #transcript = "";
   #captureKey: string | undefined;
+  #practiceTranscripts = new Map<string, PracticeTranscript>();
   #commandPending = false;
   #observeTimer: NodeJS.Timeout | undefined;
   #inFlight = false;
@@ -180,6 +182,9 @@ export class WorkbookTerminalManager {
 
   transcriptForTesting(): string { return this.#transcript; }
 
+  /** Bounded, in-memory evidence for the later reflection discussion. */
+  practiceTranscripts(): PracticeTranscript[] { return [...this.#practiceTranscripts.values()]; }
+
   #ensurePty(): void {
     if (this.#pty) return;
     const instance = this.#ptyFactory({ cwd: this.workspace, cols: 90, rows: 24 });
@@ -205,12 +210,13 @@ export class WorkbookTerminalManager {
     const key = terminalKey(block);
     if (this.#captureKey !== key) {
       this.#captureKey = key;
-      this.#transcript = "";
+      this.#transcript = this.#practiceTranscripts.get(key)?.transcript ?? "";
       this.#commandPending = false;
       this.#lastFingerprint = "";
     }
     const label = kind === "input" ? "LEARNER INPUT" : "TERMINAL OUTPUT";
     this.#transcript = boundedAppend(this.#transcript, `\n[${label}]\n${data}`, this.#maxTranscriptBytes);
+    this.#practiceTranscripts.set(key, { lessonId: block.lessonId, blockId: block.blockId, transcript: this.#transcript });
   }
 
   #isSubmittedCommand(data: string): boolean {
