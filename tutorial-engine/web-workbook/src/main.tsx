@@ -35,7 +35,7 @@ function renderMarkdown(text = "") {
 function progressFor(progress: Progress, id: string) { return progress.blocks.find((block) => block.id === id); }
 function commandForInsertion(command = "") { return command.replace(/\\\r?\n\s*/g, " "); }
 
-function EmbeddedTerminal({ block, active, completed, refresh, onAdvice, onError, onStatus }: { block: Block; active: boolean; completed: boolean; refresh(state: State): void; onAdvice(message: string): void; onError(message: string): void; onStatus(message: string): void }) {
+function EmbeddedTerminal({ block, active, completed, verified, refresh, onAdvice, onError, onStatus }: { block: Block; active: boolean; completed: boolean; verified: boolean; refresh(state: State): void; onAdvice(message: string): void; onError(message: string): void; onStatus(message: string): void }) {
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
@@ -59,7 +59,7 @@ function EmbeddedTerminal({ block, active, completed, refresh, onAdvice, onError
       nextFit.fit();
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: nextTerminal.cols, rows: nextTerminal.rows }));
     };
-    const dataDisposable = nextTerminal.onData((data) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data })); });
+    const dataDisposable = nextTerminal.onData((data) => { if (!verified && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data })); });
     ws.addEventListener("open", () => { setConnected(true); onStatus("Terminal connected. This is a real local shell, not a sandbox."); sendResize(); });
     ws.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
@@ -85,17 +85,17 @@ function EmbeddedTerminal({ block, active, completed, refresh, onAdvice, onError
       socket.current = null;
       setConnected(false);
     };
-  }, [active, completed, block.id, refresh, onAdvice, onError, onStatus]);
+  }, [active, completed, verified, block.id, refresh, onAdvice, onError, onStatus]);
 
   const insertCommand = () => {
     const data = commandForInsertion(block.command);
-    if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({ type: "input", data }));
+    if (!verified && socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({ type: "input", data }));
   };
 
   return <div className="embedded-terminal-panel">
     <div className="embedded-terminal-head"><div><b>Embedded terminal</b><p>Observed by the tutor. It runs as you in this repository; it is not a sandbox.</p></div><span className={connected ? "status connected" : "status"}>{connected ? "connected" : "offline"}</span></div>
     <div ref={terminalElement} className="embedded-terminal" aria-label="Embedded terminal" />
-    <div className="action-row"><button className="button primary" disabled={!connected} onClick={insertCommand}>Insert command — do not press Enter</button><span className="terminal-note">The button types a single-line equivalent only. You decide when to press Enter.</span></div>
+    <div className="action-row">{verified ? <span className="terminal-note">Your terminal transcript is preserved here as evidence of what you did.</span> : <><button className="button primary" disabled={!connected} onClick={insertCommand}>Insert command — do not press Enter</button><span className="terminal-note">The button types a single-line equivalent only. You decide when to press Enter.</span></>}</div>
   </div>;
 }
 
@@ -115,7 +115,7 @@ function TerminalBlock({ block, progress, refresh }: { block: Block; progress: P
     <div className="mode practice">
       <div className="mode-head"><span className="mode-icon" aria-hidden="true">›_</span><div><span className="tag">Terminal practice</span><h3>{observed ? "Run this in the embedded terminal" : "Run this from your terminal"}</h3><p>{block.context}</p></div></div>
       <div className="mode-body">
-        {observed && !state?.verified && !state?.completed && <EmbeddedTerminal block={block} active={Boolean(state?.active)} completed={Boolean(state?.completed)} refresh={refresh} onAdvice={setObserverAdvice} onError={setObserverError} onStatus={setObserverStatus} />}
+        {observed && !state?.completed && <EmbeddedTerminal block={block} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={Boolean(state?.verified)} refresh={refresh} onAdvice={setObserverAdvice} onError={setObserverError} onStatus={setObserverStatus} />}
         {state?.verified && !state?.completed ? <aside className="success-checkpoint" aria-live="polite">
           <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Verified</p><h3>Nice work — you got it.</h3><p>{state.feedback || "You produced the expected result."}</p><button className="button primary" onClick={() => post(block.id, { action: "complete" }).then(refresh)}>Continue</button></div>
         </aside> : <>
