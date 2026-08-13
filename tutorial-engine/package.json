@@ -29,6 +29,7 @@
     "test": "vitest run --root .",
     "browser:smoke": "tsx test/browser-smoke.mts",
     "check": "tsc --noEmit && npm run test",
+    "postinstall": "node scripts/fix-node-pty-helper.mjs",
     "prepublishOnly": "npm run build && npm run check",
     "dev:workbook": "npm run build:web:workbook && tsx src/workbook/cli.ts",
     "build:web:workbook": "vite build --config vite.workbook.config.ts"

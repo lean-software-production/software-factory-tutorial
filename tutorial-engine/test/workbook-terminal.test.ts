@@ -100,6 +100,16 @@ describe("WorkbookTerminalManager", () => {
     expect(client.messages.at(-1)).toMatchObject({ type: "verified-complete", state: { progressed: true } });
   });
 
+  it("reports a PTY startup failure without throwing through the server", () => {
+    const manager = new WorkbookTerminalManager({
+      workspace: "/tmp/workspace", getActiveBlock: () => undefined, observer: { observe: async () => ({ status: "waiting" }) },
+      onVerifiedCompletion: async () => ({}), ptyFactory: () => { throw new Error("spawn failed"); }
+    });
+    const client = new FakeClient();
+    expect(manager.attach(client)).toBe(true);
+    expect(client.messages).toContainEqual({ type: "terminal-error", message: expect.stringMatching(/could not start/i) });
+  });
+
   it("keeps one client at a time, replays buffered output on reconnect, and cleans up the shell", () => {
     const { manager, ptys } = setup();
     const first = new FakeClient();

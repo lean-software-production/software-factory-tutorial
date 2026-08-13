@@ -69,6 +69,7 @@ function EmbeddedTerminal({ block, active, completed, refresh, onAdvice, onError
       if (message.type === "observer-status" && message.blockId === block.id) onStatus(message.status === "checking" ? "Checking the terminal output…" : "Keep going; the expected result is not visible yet.");
       if (message.type === "verified-complete" && message.blockId === block.id) refresh(message.state);
       if (message.type === "busy") onError(message.message);
+      if (message.type === "terminal-error") onError(message.message);
       if (message.type === "exit") onStatus("The embedded shell exited. Refresh the page to start a new one.");
     });
     ws.addEventListener("close", () => setConnected(false));

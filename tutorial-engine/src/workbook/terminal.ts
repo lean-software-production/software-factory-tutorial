@@ -126,7 +126,13 @@ export class WorkbookTerminalManager {
   attach(client: TerminalClient): boolean {
     if (this.#client) return false;
     this.#client = client;
-    this.#ensurePty();
+    try { this.#ensurePty(); }
+    catch (error) {
+      this.#client = undefined;
+      this.#log.info(`Embedded terminal could not start: ${error instanceof Error ? error.message : String(error)}`);
+      client.send(JSON.stringify({ type: "terminal-error", message: "The embedded terminal could not start on this machine. Use your own terminal instead." }));
+      return true;
+    }
     if (this.#replay) client.send(JSON.stringify({ type: "output", data: this.#replay }));
     const block = this.#getActiveBlock();
     if (block) {
