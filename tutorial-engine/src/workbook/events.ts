@@ -7,16 +7,17 @@ export type WorkbookEvent =
   | { type: "session_started"; at: string }
   | { type: "workbook_introduction_completed"; at: string }
   | { type: "observation_acknowledged"; at: string; lessonId: string; blockId: string }
-  | { type: "observation_verified"; at: string; lessonId: string; blockId: string; source: "terminal_observer" }
+  | { type: "observation_verified"; at: string; lessonId: string; blockId: string; source: "terminal_observer"; summary: string }
+  | { type: "block_completed"; at: string; lessonId: string; blockId: string }
   | { type: "unexpected_output_submitted"; at: string; lessonId: string; blockId: string; evidence: string }
   | { type: "reflection_submitted"; at: string; lessonId: string; blockId: string; response: string }
   | { type: "help_requested"; at: string; lessonId: string; blockId: string; request: string }
   | { type: "lesson_transitioned"; at: string; lessonId: string; blockId: string };
 
-export interface BlockProgress { id: string; type: string; emerged: boolean; ready: boolean; active: boolean; completed: boolean; }
+export interface BlockProgress { id: string; type: string; emerged: boolean; ready: boolean; active: boolean; completed: boolean; verified: boolean; feedback?: string; }
 export interface WorkbookProjection { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; }
 
-const completionEvents = new Set<WorkbookEvent["type"]>(["observation_acknowledged", "observation_verified", "reflection_submitted", "lesson_transitioned"]);
+const completionEvents = new Set<WorkbookEvent["type"]>(["observation_acknowledged", "block_completed", "reflection_submitted", "lesson_transitioned"]);
 
 export function introductionCompleted(events: readonly WorkbookEvent[]): boolean {
   return events.some((event) => event.type === "workbook_introduction_completed");
@@ -26,9 +27,11 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
   const completed = new Set<string>();
   const unexpected: Record<string, string[]> = {};
   const reflections: Record<string, string> = {};
+  const verified = new Map<string, string>();
   for (const event of events) {
     if (event.type === "unexpected_output_submitted") (unexpected[event.blockId] ??= []).push(event.evidence);
     if (event.type === "reflection_submitted") reflections[event.blockId] = event.response;
+    if (event.type === "observation_verified" && event.lessonId === lesson.id) verified.set(event.blockId, event.summary);
     if ("blockId" in event && event.lessonId === lesson.id && completionEvents.has(event.type)) completed.add(event.blockId);
   }
   const required = lesson.blocks.filter((block) => block.required);
@@ -39,6 +42,8 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
     id: block.id,
     type: block.type,
     completed: completed.has(block.id),
+    verified: verified.has(block.id),
+    feedback: verified.get(block.id),
     emerged: index <= activeIndex,
     ready: !block.required || index <= activeIndex || completed.has(block.id),
     active: block.id === active.id && nextRequired !== undefined

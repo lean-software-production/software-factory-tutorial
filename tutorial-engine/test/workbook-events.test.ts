@@ -37,12 +37,19 @@ describe("workbook event projection", () => {
     expect(state.unexpected["first-practice"]).toEqual(["command not found"]);
   });
 
-  it("emerges blocks through the active activity and advances through completion", () => {
+  it("holds verified terminal practice at its checkpoint until the learner completes it", () => {
     expect(project([], lesson).blocks.map((block) => [block.id, block.emerged])).toEqual([
       ["narrate", true], ["first-practice", true], ["second-practice", false], ["reflect", false], ["finish", false]
     ]);
+    const verified = [nowEvent({ type: "observation_verified", lessonId: LESSON_ID, blockId: "first-practice", source: "terminal_observer", summary: "The expected output appeared." })];
+    const checkpoint = project(verified, lesson);
+    expect(checkpoint.activeBlockId).toBe("first-practice");
+    expect(checkpoint.blocks.find((block) => block.id === "first-practice")).toMatchObject({ verified: true, completed: false, feedback: "The expected output appeared." });
+    expect(checkpoint.blocks.find((block) => block.id === "second-practice")?.emerged).toBe(false);
+
     const events = [
-      nowEvent({ type: "observation_acknowledged", lessonId: LESSON_ID, blockId: "first-practice" }),
+      ...verified,
+      nowEvent({ type: "block_completed", lessonId: LESSON_ID, blockId: "first-practice" }),
       nowEvent({ type: "observation_acknowledged", lessonId: LESSON_ID, blockId: "second-practice" }),
       nowEvent({ type: "reflection_submitted", lessonId: LESSON_ID, blockId: "reflect", response: "a reflection" }),
     ];

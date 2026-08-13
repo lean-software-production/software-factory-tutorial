@@ -11,7 +11,7 @@ type Hero = { title: string; dek: string; meta: string[] };
 type Opening = { sectionLabel: string; heading: string; markdown: string; outcomes: string[] };
 type Lesson = { id: string; status: string; hero: Hero; opening: Opening; blocks: Block[] };
 type Chapter = { id: string; title: string; part: string; partMarkdown: string; partNumber: number; lessonNumber: number; state: "migrated" | "unavailable"; lesson?: Lesson };
-type BlockProgress = { id: string; ready: boolean; active: boolean; completed: boolean; emerged: boolean };
+type BlockProgress = { id: string; ready: boolean; active: boolean; completed: boolean; verified: boolean; feedback?: string; emerged: boolean };
 type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string> };
 type Identity = { title: string; };
 type State = { workbook: Identity; introduction: string; introductionComplete: boolean; chapters: Chapter[]; progress: Progress; adapter: { note: string } };
@@ -115,21 +115,25 @@ function TerminalBlock({ block, progress, refresh }: { block: Block; progress: P
     <div className="mode practice">
       <div className="mode-head"><span className="mode-icon" aria-hidden="true">›_</span><div><span className="tag">Terminal practice</span><h3>{observed ? "Run this in the embedded terminal" : "Run this from your terminal"}</h3><p>{block.context}</p></div></div>
       <div className="mode-body">
-        {observed && !state?.completed && <EmbeddedTerminal block={block} active={Boolean(state?.active)} completed={Boolean(state?.completed)} refresh={refresh} onAdvice={setObserverAdvice} onError={setObserverError} onStatus={setObserverStatus} />}
-        {observerStatus && !observerAdvice && !observerError && <aside className="observer-status" aria-live="polite">{observerStatus}</aside>}
-        {observerAdvice && <aside className="advice" aria-live="polite"><b>Try this:</b> {observerAdvice}</aside>}
-        {observerError && <aside className="advice warning" aria-live="polite">{observerError}</aside>}
+        {observed && !state?.verified && !state?.completed && <EmbeddedTerminal block={block} active={Boolean(state?.active)} completed={Boolean(state?.completed)} refresh={refresh} onAdvice={setObserverAdvice} onError={setObserverError} onStatus={setObserverStatus} />}
+        {state?.verified && !state?.completed ? <aside className="success-checkpoint" aria-live="polite">
+          <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Verified</p><h3>Nice work — you got it.</h3><p>{state.feedback || "You produced the expected result."}</p><button className="button primary" onClick={() => post(block.id, { action: "complete" }).then(refresh)}>Continue</button></div>
+        </aside> : <>
+          {observerStatus && !observerAdvice && !observerError && <aside className="observer-status" aria-live="polite">{observerStatus}</aside>}
+          {observerAdvice && <aside className="advice" aria-live="polite"><b>Try this:</b> {observerAdvice}</aside>}
+          {observerError && <aside className="advice warning" aria-live="polite">{observerError}</aside>}
+        </>}
         <details className="external-fallback" open={!observed}><summary>{observed ? "Use your own terminal instead" : "Command"}</summary>
           <pre className="command"><code>{block.command}</code></pre>
           <div className="expected"><b>Look for</b><p>{block.expectedObservation}</p></div>
-          {state?.completed ? <p className="next-ready">Observation complete. The next step has appeared below.</p> : <div className="action-row">
+          {state?.completed ? <p className="next-ready">Observation complete. The next step has appeared below.</p> : !state?.verified && <div className="action-row">
             <button className="button primary" onClick={() => post(block.id, { action: "acknowledge" }).then(refresh)}>{observed ? "I saw this in my own terminal (fallback)" : "I saw this"}</button>
             <button className="button secondary" onClick={() => setHelp(block.help?.explain)}>Explain this command</button>
             <button className="button secondary" onClick={() => setHelp(block.help?.command)}>Show the command again</button>
             <button className="button secondary" onClick={() => setHelp(block.help?.expected)}>Describe expected output</button>
           </div>}
         </details>
-        {!state?.completed && <div className="local-help"><label>I saw something different<textarea value={evidence} onChange={(event) => setEvidence(event.target.value)} /></label><button className="button secondary" onClick={() => post(block.id, { action: "unexpected", evidence }).then(refresh)}>Record it and keep trying</button><label>Something else<textarea value={other} onChange={(event) => setOther(event.target.value)} /></label><button className="button secondary" onClick={() => { setHelp("This request is recorded for this block only. Model-backed help is not wired in this draft."); return post(block.id, { action: "help", request: other }).then(refresh); }}>Ask locally</button></div>}
+        {!state?.completed && !state?.verified && <div className="local-help"><label>I saw something different<textarea value={evidence} onChange={(event) => setEvidence(event.target.value)} /></label><button className="button secondary" onClick={() => post(block.id, { action: "unexpected", evidence }).then(refresh)}>Record it and keep trying</button><label>Something else<textarea value={other} onChange={(event) => setOther(event.target.value)} /></label><button className="button secondary" onClick={() => { setHelp("This request is recorded for this block only. Model-backed help is not wired in this draft."); return post(block.id, { action: "help", request: other }).then(refresh); }}>Ask locally</button></div>}
         {help && <aside className="help" aria-live="polite">{help}</aside>}
         {progress.unexpected[block.id]?.map((item, index) => <p className="evidence" key={index}>Recorded different output: {item}</p>)}
       </div>

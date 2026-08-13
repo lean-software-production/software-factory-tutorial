@@ -139,7 +139,7 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("verified terminal completion appends only a server-owned event and progresses", async () => {
+  it("verified terminal practice holds a server-owned success checkpoint until completion", async () => {
     const dir = await fixture(true);
     const pty = new ServerFakePty();
     const observer: TerminalObserver = { observe: async () => ({ status: "complete", summary: "done" }) };
@@ -151,10 +151,14 @@ describe("workbook browser API", () => {
       const completed = waitFor(ws, (message) => message.type === "verified-complete");
       ws.send(JSON.stringify({ type: "input", data: "echo hello\r" }));
       const message = await completed;
-      expect(message.state.progress.activeBlockId).toBe("change-job");
+      expect(message.state.progress.activeBlockId).toBe("run-supplied-command");
+      expect(message.state.progress.blocks.find((block: any) => block.id === "run-supplied-command")).toMatchObject({ verified: true, completed: false, feedback: "done" });
+      const complete = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "complete" }) }).then((response) => response.json() as any);
+      expect(complete.progress.activeBlockId).toBe("change-job");
       ws.close();
       const events = await readFile(resolve(dir, ".tutorial/.tmp/workbook/events.jsonl"), "utf8");
       expect(events).toContain("observation_verified");
+      expect(events).toContain("block_completed");
       expect(events).toContain("terminal_observer");
       expect(events).not.toContain("ran:echo hello");
       expect(events).not.toContain("echo hello\\r");
@@ -207,7 +211,8 @@ describe("workbook browser API", () => {
       await completed;
       expect(observed).toEqual(["run-supplied-command"]);
       const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
-      expect(state.progress.activeBlockId).toBe("change-job");
+      expect(state.progress.activeBlockId).toBe("run-supplied-command");
+      expect(state.progress.blocks.find((block: any) => block.id === "run-supplied-command")?.verified).toBe(true);
       ws.close();
     } finally { await server.close(); }
   });

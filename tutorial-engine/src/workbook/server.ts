@@ -103,11 +103,13 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     if (!authored || authored.type !== "terminal-practice" || authored.terminalMode !== OBSERVED_TERMINAL_MODE) return undefined;
     return { lessonId: lesson.id, blockId: authored.id, command: authored.command, context: authored.context, expectedObservation: authored.expectedObservation };
   };
-  const completeFromObserver = async (block: ActiveObservedTerminalBlock) => {
+  const completeFromObserver = async (block: ActiveObservedTerminalBlock, summary: string) => {
     const events = await refreshEvents();
     const active = activeObservedBlock();
     if (!active || active.lessonId !== block.lessonId || active.blockId !== block.blockId) return publicState(loaded, events);
-    await store.append(nowEvent({ type: "observation_verified", lessonId: block.lessonId, blockId: block.blockId, source: "terminal_observer" }));
+    // Verification holds the learner at a visible success checkpoint. Only an
+    // explicit completion event reveals the next required block.
+    await store.append(nowEvent({ type: "observation_verified", lessonId: block.lessonId, blockId: block.blockId, source: "terminal_observer", summary }));
     const updated = await refreshEvents();
     await store.writeProjection(project(updated, lesson));
     return publicState(loaded, updated);
@@ -149,6 +151,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         }
         let event: WorkbookEvent | undefined;
         if (body.action === "acknowledge" && block.type === "terminal-practice") event = nowEvent({ type: "observation_acknowledged", lessonId: lesson.id, blockId: block.id });
+        if (body.action === "complete" && block.type === "terminal-practice" && progress?.verified && !progress.completed) event = nowEvent({ type: "block_completed", lessonId: lesson.id, blockId: block.id });
         if (body.action === "unexpected" && block.type === "terminal-practice" && typeof body.evidence === "string") event = nowEvent({ type: "unexpected_output_submitted", lessonId: lesson.id, blockId: block.id, evidence: body.evidence });
         if (body.action === "reflect" && block.type === "reflection" && typeof body.response === "string") event = nowEvent({ type: "reflection_submitted", lessonId: lesson.id, blockId: block.id, response: body.response });
         if (body.action === "transition" && block.type === "lesson-transition") event = nowEvent({ type: "lesson_transitioned", lessonId: lesson.id, blockId: block.id });
