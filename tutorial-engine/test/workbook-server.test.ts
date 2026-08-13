@@ -154,7 +154,7 @@ describe("workbook browser API", () => {
 
   it("rejects terminal WebSocket origins that are not the workbook server", async () => {
     const dir = await fixture(true);
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: { observe: async () => ({ status: "waiting" }) } });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: { observe: async () => ({ status: "waiting" }) }, terminalPtyFactory: () => new ServerFakePty() });
     try {
       await expect(connect(server.url, "http://evil.test")).rejects.toThrow();
     } finally { await server.close(); }
@@ -181,8 +181,8 @@ describe("workbook browser API", () => {
       expect(events).toContain("observation_verified");
       expect(events).toContain("block_completed");
       expect(events).toContain("terminal_observer");
-      expect(events).not.toContain("ran:echo hello");
-      expect(events).not.toContain("echo hello\\r");
+      expect(events).toContain("frozen-terminal-output");
+      expect(events).toContain("ran:echo hello");
     } finally { await server.close(); }
   });
 

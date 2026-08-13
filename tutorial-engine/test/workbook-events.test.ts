@@ -41,10 +41,10 @@ describe("workbook event projection", () => {
     expect(project([], lesson).blocks.map((block) => [block.id, block.emerged])).toEqual([
       ["narrate", true], ["first-practice", true], ["second-practice", false], ["reflect", false], ["finish", false]
     ]);
-    const verified = [nowEvent({ type: "observation_verified", lessonId: LESSON_ID, blockId: "first-practice", source: "terminal_observer", summary: "The expected output appeared." })];
+    const verified = [nowEvent({ type: "observation_verified", lessonId: LESSON_ID, blockId: "first-practice", source: "terminal_observer", summary: "The expected output appeared.", terminalHtml: "<pre class=\"frozen-terminal-output\">output</pre>" })];
     const checkpoint = project(verified, lesson);
     expect(checkpoint.activeBlockId).toBe("first-practice");
-    expect(checkpoint.blocks.find((block) => block.id === "first-practice")).toMatchObject({ verified: true, completed: false, feedback: "The expected output appeared." });
+    expect(checkpoint.blocks.find((block) => block.id === "first-practice")).toMatchObject({ verified: true, completed: false, feedback: "The expected output appeared.", terminalHtml: expect.stringContaining("frozen-terminal-output") });
     expect(checkpoint.blocks.find((block) => block.id === "second-practice")?.emerged).toBe(false);
 
     const events = [

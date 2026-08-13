@@ -88,6 +88,18 @@ describe("WorkbookTerminalManager", () => {
     expect(evidence?.transcript).toContain("command not found");
   });
 
+  it("freezes escaped terminal output after verification and stops the isolated session", async () => {
+    vi.useFakeTimers();
+    const { manager, ptys } = setup({ observe: async () => ({ status: "complete" }) }, 5);
+    manager.attach(new FakeClient());
+    manager.receive({ type: "input", data: "echo '<tag>'\r" });
+    ptys[0]!.emitData("\u001b[32m<tag>\u001b[0m");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(manager.frozenTerminalHtml()).toContain("&lt;tag&gt;");
+    expect(manager.frozenTerminalHtml()).not.toContain("\u001b[");
+    expect(ptys[0]?.killed).toBe(true);
+  });
+
   it("does not observe inactive or non-observed blocks", async () => {
     vi.useFakeTimers();
     const observe = vi.fn(async () => ({ status: "complete" as const }));

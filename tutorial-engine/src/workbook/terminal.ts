@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import {
   DefaultResourceLoader,
@@ -31,6 +33,8 @@ export interface TerminalPty {
 }
 
 export interface TerminalPtyOptions { cwd: string; cols: number; rows: number; }
+interface DockerPty extends TerminalPty { stopContainer?(): void; }
+const WORKBOOK_TERMINAL_IMAGE = "lean-software-production/workbook-terminal:latest";
 export type TerminalPtyFactory = (options: TerminalPtyOptions) => TerminalPty;
 
 export interface ActiveObservedTerminalBlock {
@@ -53,7 +57,7 @@ export interface WorkbookTerminalManagerOptions {
   workspace: string;
   getActiveBlock(): ActiveObservedTerminalBlock | undefined;
   observer: TerminalObserver;
-  onVerifiedCompletion(block: ActiveObservedTerminalBlock, summary: string): Promise<unknown>;
+  onVerifiedCompletion(block: ActiveObservedTerminalBlock, summary: string, terminalHtml: string): Promise<unknown>;
   ptyFactory?: TerminalPtyFactory;
   logger?: TutorialLogger;
   debounceMs?: number;
@@ -71,19 +75,34 @@ function boundedAppend(previous: string, addition: string, limit: number): strin
   const next = previous + addition;
   return next.length > limit ? next.slice(-limit) : next;
 }
+function stripTerminalControls(text: string): string { return text.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|.)/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ""); }
+function escapeHtml(text: string): string { return text.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character]!); }
 
 function terminalKey(block: ActiveObservedTerminalBlock): string { return `${block.lessonId}:${block.blockId}`; }
 
-function defaultShell(): string { return process.env.SHELL && existsSync(process.env.SHELL) ? process.env.SHELL : "/bin/sh"; }
+export function assertDockerTerminalReady(): void {
+  const available = spawnSync("docker", ["info"], { stdio: "ignore" });
+  if (available.error || available.status !== 0) throw new Error("Docker must be running before starting the workbook terminal.");
+  const image = spawnSync("docker", ["image", "inspect", WORKBOOK_TERMINAL_IMAGE], { stdio: "ignore" });
+  if (image.error || image.status !== 0) throw new Error(`Docker image ${WORKBOOK_TERMINAL_IMAGE} is missing. Run npm run --workspace=tutorial-engine build:workbook-terminal.`);
+}
 
-export function createNodePty(options: TerminalPtyOptions): TerminalPty {
-  return pty.spawn(defaultShell(), ["-l"], {
-    name: "xterm-256color",
-    cols: options.cols,
-    rows: options.rows,
-    cwd: resolve(options.cwd),
-    env: { ...process.env, TERM: "xterm-256color" }
-  });
+/** Starts a hardened, per-practice container; browser bytes can only reach docker exec. */
+export function createDockerPty(options: TerminalPtyOptions): TerminalPty {
+  const workspace = resolve(options.cwd);
+  const name = `workbook-terminal-${randomUUID()}`;
+  const auth = resolve(process.env.HOME ?? "", ".pi/agent/auth.json");
+  const args = ["run", "-d", "--rm", "--name", name, "--label", "workbook-terminal=true", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--mount", `type=bind,src=${workspace},dst=/workspace,readonly`, "--workdir", "/workspace"];
+  // The auth file is intentionally the only host Pi state exposed. It is read-only.
+  if (existsSync(auth)) args.push("--mount", `type=bind,src=${auth},dst=/home/learner/.pi/agent/auth.json,readonly`);
+  args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
+  try { execFileSync("docker", args, { stdio: "ignore" }); }
+  catch (error) { throw new Error(`Could not start isolated terminal container: ${error instanceof Error ? error.message : String(error)}`); }
+  const instance = pty.spawn("docker", ["exec", "-it", "--workdir", "/workspace", name, "/bin/sh", "-l"], {
+    name: "xterm-256color", cols: options.cols, rows: options.rows, cwd: workspace, env: { ...process.env, TERM: "xterm-256color" }
+  }) as DockerPty;
+  instance.stopContainer = () => { try { execFileSync("docker", ["rm", "-f", name], { stdio: "ignore" }); } catch { /* removal is best effort; --rm cleans a stopped container. */ } };
+  return instance;
 }
 
 /**
@@ -108,7 +127,7 @@ export class WorkbookTerminalManager {
   #lastError = new Map<string, string>();
   readonly #getActiveBlock: () => ActiveObservedTerminalBlock | undefined;
   readonly #observer: TerminalObserver;
-  readonly #onVerifiedCompletion: (block: ActiveObservedTerminalBlock, summary: string) => Promise<unknown>;
+  readonly #onVerifiedCompletion: (block: ActiveObservedTerminalBlock, summary: string, terminalHtml: string) => Promise<unknown>;
   readonly #ptyFactory: TerminalPtyFactory;
   readonly #log: TutorialLogger;
   readonly #debounceMs: number;
@@ -119,7 +138,7 @@ export class WorkbookTerminalManager {
     this.#getActiveBlock = options.getActiveBlock;
     this.#observer = options.observer;
     this.#onVerifiedCompletion = options.onVerifiedCompletion;
-    this.#ptyFactory = options.ptyFactory ?? createNodePty;
+    this.#ptyFactory = options.ptyFactory ?? createDockerPty;
     this.#log = options.logger ?? createTutorialLogger();
     this.#debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
     this.#maxTranscriptBytes = options.maxTranscriptBytes ?? DEFAULT_MAX_TRANSCRIPT_BYTES;
@@ -171,16 +190,20 @@ export class WorkbookTerminalManager {
     }
   }
 
-  dispose(): void {
+  dispose(): void { this.#stopTerminal(); }
+
+  transcriptForTesting(): string { return this.#transcript; }
+  frozenTerminalHtml(): string { return `<pre class="frozen-terminal-output">${escapeHtml(stripTerminalControls(this.#replay || this.#transcript))}</pre>`; }
+
+  #stopTerminal(): void {
     if (this.#observeTimer) clearTimeout(this.#observeTimer);
     this.#observeTimer = undefined;
     this.#client?.close(1001, "Workbook terminal stopped.");
     this.#client = undefined;
-    this.#pty?.kill();
+    const shell = this.#pty as DockerPty | undefined;
+    shell?.kill(); shell?.stopContainer?.();
     this.#pty = undefined;
   }
-
-  transcriptForTesting(): string { return this.#transcript; }
 
   /** Bounded, in-memory evidence for the later reflection discussion. */
   practiceTranscripts(): PracticeTranscript[] { return [...this.#practiceTranscripts.values()]; }
@@ -254,8 +277,10 @@ export class WorkbookTerminalManager {
         this.#lastAdvice.delete(key);
         this.#lastError.delete(key);
         const summary = decision.summary?.trim() || "You produced the expected result.";
-        const state = await this.#onVerifiedCompletion(block, summary);
-        this.#client?.send(JSON.stringify({ type: "verified-complete", blockId: block.blockId, summary, state }));
+        const terminalHtml = this.frozenTerminalHtml();
+        const state = await this.#onVerifiedCompletion(block, summary, terminalHtml);
+        this.#client?.send(JSON.stringify({ type: "verified-complete", blockId: block.blockId, summary, terminalHtml, state }));
+        this.#stopTerminal();
       } else if (decision.status === "advice") {
         this.#commandPending = false;
         this.#lastError.delete(key);

@@ -11,7 +11,7 @@ type Hero = { title: string; dek: string; meta: string[] };
 type Opening = { sectionLabel: string; heading: string; markdown: string; outcomes: string[] };
 type Lesson = { id: string; status: string; hero: Hero; opening: Opening; blocks: Block[] };
 type Chapter = { id: string; title: string; part: string; partMarkdown: string; partNumber: number; lessonNumber: number; state: "migrated" | "unavailable"; lesson?: Lesson };
-type BlockProgress = { id: string; ready: boolean; active: boolean; completed: boolean; verified: boolean; feedback?: string; emerged: boolean };
+type BlockProgress = { id: string; ready: boolean; active: boolean; completed: boolean; verified: boolean; feedback?: string; terminalHtml?: string; emerged: boolean };
 type ReflectionTurn = { role: "learner" | "tutor"; text: string };
 type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]> };
 type Identity = { title: string; };
@@ -116,7 +116,7 @@ function TerminalBlock({ block, progress, refresh }: { block: Block; progress: P
     <div className="mode practice">
       <div className="mode-head"><span className="mode-icon" aria-hidden="true">›_</span><div><span className="tag">Terminal practice</span><h3>{observed ? "Run this in the embedded terminal" : "Run this from your terminal"}</h3><p>{block.context}</p></div></div>
       <div className="mode-body">
-        {observed && !state?.completed && <EmbeddedTerminal block={block} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={Boolean(state?.verified)} refresh={refresh} onAdvice={setObserverAdvice} onError={setObserverError} onStatus={setObserverStatus} />}
+        {observed && state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : observed && !state?.completed && <EmbeddedTerminal block={block} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={false} refresh={refresh} onAdvice={setObserverAdvice} onError={setObserverError} onStatus={setObserverStatus} />}
         {state?.verified && !state?.completed ? <aside className="success-checkpoint" aria-live="polite">
           <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Verified</p><h3>Nice work — you got it.</h3><p>{state.feedback || "You produced the expected result."}</p><button className="button primary" onClick={() => post(block.id, { action: "complete" }).then(refresh)}>Continue</button></div>
         </aside> : <>

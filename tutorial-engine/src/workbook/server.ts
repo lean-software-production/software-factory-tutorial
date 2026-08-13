@@ -9,7 +9,7 @@ import { createTutorialLogger } from "../runtime-log.js";
 import { OBSERVED_TERMINAL_MODE } from "./contract.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 import { introductionCompleted, nowEvent, project, WorkbookEventStore, type WorkbookEvent } from "./events.js";
-import { PiTerminalObserver, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalObserver, type TerminalPtyFactory } from "./terminal.js";
+import { assertDockerTerminalReady, PiTerminalObserver, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalObserver, type TerminalPtyFactory } from "./terminal.js";
 import { PiReflectionConversationAdapter, type PracticeEvidence, type ReflectionConversationAdapter } from "./reflection.js";
 
 const MIME_TYPES: Record<string, string> = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json; charset=utf-8" };
@@ -91,7 +91,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const lesson = activeLesson(loaded);
   const embeddedTerminalEnabled = lesson.blocks.some((block) => block.type === "terminal-practice" && block.terminalMode === OBSERVED_TERMINAL_MODE);
   const host = options.host ?? LOOPBACK_HOST;
-  if (embeddedTerminalEnabled && !isLoopbackHost(host)) throw new Error("The embedded terminal can only be enabled on a loopback host; it exposes a real local shell.");
+  if (embeddedTerminalEnabled && !isLoopbackHost(host)) throw new Error("The embedded terminal can only be enabled on a loopback host; it exposes an isolated container shell.");
+  if (embeddedTerminalEnabled && !options.terminalPtyFactory) assertDockerTerminalReady();
   const store = new WorkbookEventStore(loaded.workspace);
   const reflectionConversation = options.reflectionConversation ?? new PiReflectionConversationAdapter(loaded.workspace, log);
   let reflectionQueue = Promise.resolve();
@@ -106,13 +107,13 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     if (!authored || authored.type !== "terminal-practice" || authored.terminalMode !== OBSERVED_TERMINAL_MODE) return undefined;
     return { lessonId: lesson.id, blockId: authored.id, command: authored.command, context: authored.context, expectedObservation: authored.expectedObservation };
   };
-  const completeFromObserver = async (block: ActiveObservedTerminalBlock, summary: string) => {
+  const completeFromObserver = async (block: ActiveObservedTerminalBlock, summary: string, terminalHtml: string) => {
     const events = await refreshEvents();
     const active = activeObservedBlock();
     if (!active || active.lessonId !== block.lessonId || active.blockId !== block.blockId) return publicState(loaded, events);
     // Verification holds the learner at a visible success checkpoint. Only an
     // explicit completion event reveals the next required block.
-    await store.append(nowEvent({ type: "observation_verified", lessonId: block.lessonId, blockId: block.blockId, source: "terminal_observer", summary }));
+    await store.append(nowEvent({ type: "observation_verified", lessonId: block.lessonId, blockId: block.blockId, source: "terminal_observer", summary, terminalHtml }));
     const updated = await refreshEvents();
     await store.writeProjection(project(updated, lesson));
     return publicState(loaded, updated);

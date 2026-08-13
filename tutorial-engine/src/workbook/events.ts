@@ -7,7 +7,7 @@ export type WorkbookEvent =
   | { type: "session_started"; at: string }
   | { type: "workbook_introduction_completed"; at: string }
   | { type: "observation_acknowledged"; at: string; lessonId: string; blockId: string }
-  | { type: "observation_verified"; at: string; lessonId: string; blockId: string; source: "terminal_observer"; summary: string }
+  | { type: "observation_verified"; at: string; lessonId: string; blockId: string; source: "terminal_observer"; summary: string; terminalHtml: string }
   | { type: "block_completed"; at: string; lessonId: string; blockId: string }
   | { type: "unexpected_output_submitted"; at: string; lessonId: string; blockId: string; evidence: string }
   | { type: "reflection_submitted"; at: string; lessonId: string; blockId: string; response: string }
@@ -17,7 +17,7 @@ export type WorkbookEvent =
   | { type: "help_requested"; at: string; lessonId: string; blockId: string; request: string }
   | { type: "lesson_transitioned"; at: string; lessonId: string; blockId: string };
 
-export interface BlockProgress { id: string; type: string; emerged: boolean; ready: boolean; active: boolean; completed: boolean; verified: boolean; feedback?: string; }
+export interface BlockProgress { id: string; type: string; emerged: boolean; ready: boolean; active: boolean; completed: boolean; verified: boolean; feedback?: string; terminalHtml?: string; }
 export type ReflectionTurn = { role: "learner" | "tutor"; text: string };
 export interface WorkbookProjection { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]>; }
 
@@ -32,13 +32,13 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
   const unexpected: Record<string, string[]> = {};
   const reflections: Record<string, string> = {};
   const reflectionConversations: Record<string, ReflectionTurn[]> = {};
-  const verified = new Map<string, string>();
+  const verified = new Map<string, { summary: string; terminalHtml: string }>();
   for (const event of events) {
     if (event.type === "unexpected_output_submitted") (unexpected[event.blockId] ??= []).push(event.evidence);
     if (event.type === "reflection_submitted") { reflections[event.blockId] = event.response; (reflectionConversations[event.blockId] ??= []).push({ role: "learner", text: event.response }); }
     if (event.type === "reflection_follow_up_submitted") (reflectionConversations[event.blockId] ??= []).push({ role: "learner", text: event.response });
     if (event.type === "reflection_reply_recorded") (reflectionConversations[event.blockId] ??= []).push({ role: "tutor", text: event.response });
-    if (event.type === "observation_verified" && event.lessonId === lesson.id) verified.set(event.blockId, event.summary);
+    if (event.type === "observation_verified" && event.lessonId === lesson.id) verified.set(event.blockId, { summary: event.summary, terminalHtml: event.terminalHtml });
     if ("blockId" in event && event.lessonId === lesson.id && completionEvents.has(event.type)) completed.add(event.blockId);
   }
   const required = lesson.blocks.filter((block) => block.required);
@@ -50,7 +50,8 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
     type: block.type,
     completed: completed.has(block.id),
     verified: verified.has(block.id),
-    feedback: verified.get(block.id),
+    feedback: verified.get(block.id)?.summary,
+    terminalHtml: verified.get(block.id)?.terminalHtml,
     emerged: index <= activeIndex,
     ready: !block.required || index <= activeIndex || completed.has(block.id),
     active: block.id === active.id && nextRequired !== undefined
