@@ -80,6 +80,11 @@ function escapeHtml(text: string): string { return text.replace(/[&<>"']/g, (cha
 
 function terminalKey(block: ActiveObservedTerminalBlock): string { return `${block.lessonId}:${block.blockId}`; }
 
+/** Preserve host ownership on the read-only credential bind mount. */
+export function dockerContainerUser(): string {
+  return `${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`;
+}
+
 export function assertDockerTerminalReady(): void {
   const available = spawnSync("docker", ["info"], { stdio: "ignore" });
   if (available.error || available.status !== 0) throw new Error("Docker must be running before starting the workbook terminal.");
@@ -92,7 +97,7 @@ export function createDockerPty(options: TerminalPtyOptions): TerminalPty {
   const workspace = resolve(options.cwd);
   const name = `workbook-terminal-${randomUUID()}`;
   const auth = resolve(process.env.HOME ?? "", ".pi/agent/auth.json");
-  const args = ["run", "-d", "--rm", "--name", name, "--label", "workbook-terminal=true", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--mount", `type=bind,src=${workspace},dst=/workspace,readonly`, "--workdir", "/workspace"];
+  const args = ["run", "-d", "--rm", "--name", name, "--label", "workbook-terminal=true", "--user", dockerContainerUser(), "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--mount", `type=bind,src=${workspace},dst=/workspace,readonly`, "--workdir", "/workspace"];
   // The auth file is intentionally the only host Pi state exposed. It is read-only.
   if (existsSync(auth)) args.push("--mount", `type=bind,src=${auth},dst=/home/learner/.pi/agent/auth.json,readonly`);
   args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");

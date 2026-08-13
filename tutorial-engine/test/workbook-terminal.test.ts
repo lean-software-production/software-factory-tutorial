@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WorkbookTerminalManager, type TerminalClient, type TerminalObserver, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
+import { dockerContainerUser, WorkbookTerminalManager, type TerminalClient, type TerminalObserver, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
 
 class FakePty implements TerminalPty {
   writes: string[] = [];
@@ -44,6 +44,10 @@ function setup(observer: TerminalObserver = { observe: vi.fn(async () => ({ stat
 afterEach(() => vi.useRealTimers());
 
 describe("WorkbookTerminalManager", () => {
+  it("uses the host identity so the read-only Pi auth mount remains readable", () => {
+    expect(dockerContainerUser()).toBe(`${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`);
+  });
+
   it("starts the PTY in the canonical workspace without writing a command", () => {
     const { manager, ptys } = setup();
     const client = new FakeClient();
