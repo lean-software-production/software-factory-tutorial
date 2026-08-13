@@ -69,6 +69,7 @@ describe("WorkbookTerminalManager", () => {
     const client = new FakeClient();
     manager.attach(client);
     manager.receive({ type: "input", data: `echo ${"x".repeat(80)}\r` });
+    expect(client.messages.at(-1)).toMatchObject({ type: "observer-status", blockId: "practice", status: "running" });
     ptys[0]!.emitData("short output");
     await vi.advanceTimersByTimeAsync(25);
     expect(observe).toHaveBeenCalledTimes(1);

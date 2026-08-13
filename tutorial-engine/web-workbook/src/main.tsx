@@ -66,7 +66,7 @@ function EmbeddedTerminal({ block, active, completed, verified, refresh, onAdvic
       if (message.type === "output") nextTerminal.write(message.data);
       if (message.type === "advice" && message.blockId === block.id) onAdvice(message.message);
       if (message.type === "observer-error" && message.blockId === block.id) onError(message.message);
-      if (message.type === "observer-status" && message.blockId === block.id) onStatus(message.status === "checking" ? "Checking the terminal output…" : "Keep going; the expected result is not visible yet.");
+      if (message.type === "observer-status" && message.blockId === block.id) onStatus(message.status === "running" ? "Running — waiting for terminal output…" : message.status === "checking" ? "Checking the terminal output…" : "Keep going; the expected result is not visible yet.");
       if (message.type === "verified-complete" && message.blockId === block.id) refresh(message.state);
       if (message.type === "busy") onError(message.message);
       if (message.type === "terminal-error") onError(message.message);

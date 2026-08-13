@@ -158,6 +158,7 @@ export class WorkbookTerminalManager {
       this.#record("input", message.data);
       if (this.#isSubmittedCommand(message.data)) {
         this.#commandPending = true;
+        this.#client?.send(JSON.stringify({ type: "observer-status", blockId: this.#getActiveBlock()?.blockId, status: "running" }));
         this.#scheduleObservation();
       }
       if (message.data.includes("\x03")) this.#commandPending = false;
@@ -187,7 +188,10 @@ export class WorkbookTerminalManager {
       this.#replay = boundedAppend(this.#replay, data, MAX_REPLAY_BYTES);
       this.#client?.send(JSON.stringify({ type: "output", data }));
       this.#record("output", data);
-      if (this.#commandPending) this.#scheduleObservation();
+      if (this.#commandPending) {
+        this.#client?.send(JSON.stringify({ type: "observer-status", blockId: this.#getActiveBlock()?.blockId, status: "running" }));
+        this.#scheduleObservation();
+      }
     });
     instance.onExit(({ exitCode, signal }) => {
       this.#client?.send(JSON.stringify({ type: "exit", exitCode, signal }));
