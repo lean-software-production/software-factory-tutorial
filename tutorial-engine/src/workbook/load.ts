@@ -1,77 +1,109 @@
 import { readdir, readFile, realpath } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { parse } from "yaml";
 import {
+  validateBlockFrontMatter,
+  validateLessonFrontMatter,
+  validatePartManifest,
   validateWorkbookLesson,
   validateWorkbookManifest,
-  type TerminalMode,
   type WorkbookBlock,
   type WorkbookIdentity,
   type WorkbookLesson,
 } from "./contract.js";
 
-export interface WorkbookChapter { id: string; title: string; part: string; partMarkdown: string; partNumber: number; lessonNumber: number; state: "migrated" | "unavailable"; lesson?: WorkbookLesson; }
+export interface WorkbookChapter {
+  id: string;
+  title: string;
+  part: string;
+  partMarkdown: string;
+  partNumber: number;
+  lessonNumber: number;
+  lesson: WorkbookLesson;
+}
 export interface LoadedWorkbook { workspace: string; identity: WorkbookIdentity; introduction: string; chapters: WorkbookChapter[]; }
 
 /** The workbook document and lesson directories are authored at the repository root. */
 const WORKBOOK_DOCUMENT = "workbook.md";
 const LESSONS_ROOT = "lessons";
+const PART_DOCUMENT = "part.md";
+const LESSON_DOCUMENT = "lesson.md";
+const BLOCKS_DIR = "blocks";
 
 /**
- * Split a Markdown file into its YAML front matter and prose body. Front matter
- * carries only the machine fields the generic renderer needs; the body is prose.
+ * Split a Markdown file into its YAML front matter and prose body. Every
+ * authored document requires a front-matter block, delimited by `---` lines;
+ * an empty map is valid when the document has no structured fields.
  */
-export function parseFrontMatter(text: string): { data: Record<string, unknown>; body: string } {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text);
-  if (!match) return { data: {}, body: text.trim() };
-  const data = parse(match[1]!) as Record<string, unknown> | null;
-  return { data: data ?? {}, body: (match[2] ?? "").trim() };
+export function parseFrontMatter(text: string, location = "document"): { data: Record<string, unknown>; body: string } {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  if (lines[0] !== "---") throw new Error(`${location} needs YAML front matter delimited by --- lines, even if empty (---\\n---).`);
+  const closingIndex = lines.indexOf("---", 1);
+  if (closingIndex === -1) throw new Error(`${location} front matter is missing its closing --- line.`);
+  const data = parse(lines.slice(1, closingIndex).join("\n")) as Record<string, unknown> | null;
+  if (data !== null && typeof data !== "object") throw new Error(`${location}: front matter must be a YAML mapping.`);
+  return { data: data ?? {}, body: lines.slice(closingIndex + 1).join("\n").trim() };
 }
 
 async function readMarkdown(path: string): Promise<{ data: Record<string, unknown>; body: string }> {
-  return parseFrontMatter(await readFile(path, "utf8"));
+  let text: string;
+  try { text = await readFile(path, "utf8"); }
+  catch (error: any) {
+    if (error?.code === "ENOENT") throw new Error(`${path} is missing.`);
+    throw error;
+  }
+  return parseFrontMatter(text, path);
 }
 
-interface LessonManifestEntry { id?: string; type?: string; required?: boolean; source?: string; }
-interface LessonManifest { hero?: string; opening?: string; blocks?: LessonManifestEntry[]; }
+/**
+ * Extract the document's single title heading at the given level (1 for H1,
+ * 2 for H2) and return the remaining body with that heading line removed.
+ * Absent, duplicate, or wrong-level headings are location-specific errors.
+ */
+function extractHeading(body: string, level: 1 | 2, location: string): { title: string; body: string } {
+  const marker = "#".repeat(level);
+  const label = level === 1 ? "H1" : "H2";
+  const pattern = new RegExp(`^${marker}(?!#)[ \\t]+(.+?)[ \\t]*$`, "gm");
+  const matches = [...body.matchAll(pattern)];
+  if (matches.length === 0) throw new Error(`${location} must have exactly one ${label} title heading ("${marker} Title").`);
+  if (matches.length > 1) throw new Error(`${location} must have exactly one ${label} title heading; found ${matches.length}.`);
+  const match = matches[0]!;
+  const title = match[1]!.trim();
+  if (!title) throw new Error(`${location} has an empty ${label} title heading.`);
+  const start = match.index ?? 0;
+  const end = start + match[0].length;
+  return { title, body: (body.slice(0, start) + body.slice(end)).trim() };
+}
+
+/** The first paragraph after a lesson's H1 is its dek; a lesson has no other authored content. */
+function extractDek(body: string, location: string): string {
+  const trimmed = body.trim();
+  if (!trimmed) throw new Error(`${location} needs a dek: one paragraph of prose after its title heading.`);
+  const match = /^([\s\S]+?)(?:\r?\n[ \t]*\r?\n|$)/.exec(trimmed)!;
+  const dek = match[1]!.trim();
+  const rest = trimmed.slice(match[0].length).trim();
+  if (rest) throw new Error(`${location} may only contain a title heading and a dek paragraph; found extra content after the dek.`);
+  return dek;
+}
+
+async function readTitledDocument(path: string, level: 1 | 2): Promise<{ data: Record<string, unknown>; title: string; body: string }> {
+  const { data, body } = await readMarkdown(path);
+  const { title, body: rest } = extractHeading(body, level, path);
+  return { data, title, body: rest };
+}
+
 interface PartDirectory { id: string; title: string; markdown: string; path: string; }
-
-function assembleBlock(entry: LessonManifestEntry, data: Record<string, unknown>, body: string): WorkbookBlock {
-  const base = { id: entry.id ?? "", type: entry.type as WorkbookBlock["type"], title: (data.title as string) ?? "", required: entry.required };
-  if (entry.type === "narrative") return { ...base, type: "narrative", markdown: body };
-  if (entry.type === "terminal-practice") return {
-    ...base, type: "terminal-practice",
-    command: (data.command as string) ?? "",
-    context: (data.context as string) ?? "",
-    expectedObservation: (data.expectedObservation as string) ?? "",
-    terminalMode: ((data.terminalMode as TerminalMode | undefined) ?? "external"),
-    help: (data.help as Record<string, string>) ?? {},
-  };
-  if (entry.type === "reflection") return { ...base, type: "reflection", prompt: (data.prompt as string) ?? "" };
-  return { ...base, type: "lesson-transition", label: (data.label as string) ?? "", markdown: body };
-}
-
-function slugWithoutPrefix(name: string): string { return name.replace(/^\d+-/, ""); }
-
-function titleFromMarkdown(path: string, document: { data: Record<string, unknown>; body: string }): string {
-  if (typeof document.data.title === "string" && document.data.title.trim()) return document.data.title;
-  const heading = /^#\s+(.+)$/m.exec(document.body)?.[1]?.trim();
-  if (heading) return heading;
-  throw new Error(`${path} needs a title front-matter field or level-one heading.`);
-}
-
-function bodyWithoutTitle(document: { body: string }): string {
-  return document.body.replace(/^#\s+.+\r?\n?/, "").trim();
-}
 
 async function partDirectories(workspace: string): Promise<PartDirectory[]> {
   const root = resolve(workspace, LESSONS_ROOT);
   const entries = await readdir(root, { withFileTypes: true });
-  return Promise.all(entries.filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })).map(async (entry) => {
+  const dirs = entries.filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  return Promise.all(dirs.map(async (entry) => {
     const path = resolve(root, entry.name);
-    const partPath = resolve(path, "part.md");
-    const document = await readMarkdown(partPath);
-    return { id: entry.name, title: titleFromMarkdown(partPath, document), markdown: bodyWithoutTitle(document), path };
+    const partPath = resolve(path, PART_DOCUMENT);
+    const { data, title, body } = await readTitledDocument(partPath, 1);
+    validatePartManifest(data, partPath);
+    return { id: entry.name, title, markdown: body, path };
   }));
 }
 
@@ -80,51 +112,61 @@ async function lessonDirectories(part: PartDirectory): Promise<string[]> {
   return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
-async function lessonTitle(lessonDir: string): Promise<string> {
-  const heroPath = resolve(lessonDir, "hero.md");
-  return titleFromMarkdown(heroPath, await readMarkdown(heroPath));
+/** A block id resolves to blocks/<id>.md by convention; the filename supplies its id. */
+async function loadWorkbookBlock(lessonDir: string, blockId: string, lessonPath: string): Promise<WorkbookBlock> {
+  const path = resolve(lessonDir, BLOCKS_DIR, `${blockId}.md`);
+  let text: string;
+  try { text = await readFile(path, "utf8"); }
+  catch (error: any) {
+    if (error?.code === "ENOENT") throw new Error(`${lessonPath} lists block "${blockId}", but ${path} is missing.`);
+    throw error;
+  }
+  const { data, body } = parseFrontMatter(text, path);
+  const front = validateBlockFrontMatter(data, path);
+  const { title, body: markdown } = extractHeading(body, 2, path);
+  const base = { id: blockId, title, markdown };
+  if (front.type === "terminal-practice") return { ...base, type: "terminal-practice", tutor: front.tutor! };
+  if (front.type === "reflection") return { ...base, type: "reflection", tutor: front.tutor! };
+  if (front.type === "narrative") return { ...base, type: "narrative" };
+  return { ...base, type: "lesson-transition" };
 }
 
-/** Assemble one lesson from its conventional directory plus its authored Markdown sources. */
+/** Assemble one lesson from its conventional directory and its lesson.md manifest. */
 export async function loadWorkbookLesson(lessonDir: string, id: string): Promise<WorkbookLesson> {
-  const manifest = parse(await readFile(resolve(lessonDir, "lesson.yaml"), "utf8")) as LessonManifest | null;
-  if (!manifest || typeof manifest !== "object") throw new Error(`${lessonDir}/lesson.yaml must be an object.`);
-  if (!manifest.hero || !manifest.opening) throw new Error(`${lessonDir}/lesson.yaml must reference hero and opening sources.`);
-  const hero = await readMarkdown(resolve(lessonDir, manifest.hero));
-  const opening = await readMarkdown(resolve(lessonDir, manifest.opening));
-  const blocks = await Promise.all((manifest.blocks ?? []).map(async (entry, index) => {
-    if (!entry.source) throw new Error(`${lessonDir}/lesson.yaml blocks[${index}] needs a source file.`);
-    const { data, body } = await readMarkdown(resolve(lessonDir, entry.source));
-    return assembleBlock(entry, data, body);
-  }));
-  return validateWorkbookLesson({
-    id,
-    hero: { title: hero.data.title, dek: hero.data.dek, meta: hero.data.meta ?? [] },
-    opening: { sectionLabel: opening.data.sectionLabel, heading: opening.data.heading, markdown: opening.body, outcomes: opening.data.outcomes ?? [] },
-    blocks,
-  });
+  const lessonPath = resolve(lessonDir, LESSON_DOCUMENT);
+  const { data, body } = await readMarkdown(lessonPath);
+  const front = validateLessonFrontMatter(data, lessonPath);
+  const { title, body: afterTitle } = extractHeading(body, 1, lessonPath);
+  const dek = extractDek(afterTitle, lessonPath);
+
+  const blocksDir = resolve(lessonDir, BLOCKS_DIR);
+  let blockFiles: string[] = [];
+  try { blockFiles = (await readdir(blocksDir)).filter((name) => name.endsWith(".md")); }
+  catch (error: any) { if (error?.code !== "ENOENT") throw error; }
+  const idsOnDisk = new Set(blockFiles.map((name) => basename(name, ".md")));
+  const listed = new Set(front.blocks);
+  const unlisted = [...idsOnDisk].filter((blockId) => !listed.has(blockId)).sort();
+  if (unlisted.length) throw new Error(`${lessonPath}: blocks/ contains file(s) not listed in front matter blocks: ${unlisted.join(", ")}.`);
+
+  const blocks = await Promise.all(front.blocks.map((blockId) => loadWorkbookBlock(lessonDir, blockId, lessonPath)));
+  return validateWorkbookLesson({ id, title, dek, durationMinutes: front.durationMinutes, outcomes: front.outcomes, blocks }, lessonPath);
 }
 
 export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
   const workspace = await realpath(resolve(target));
-  const document = await readMarkdown(resolve(workspace, WORKBOOK_DOCUMENT));
-  const manifest = validateWorkbookManifest(document.data);
-  const introduction = document.body;
-  const identity: WorkbookIdentity = { title: manifest.title };
+  const workbookPath = resolve(workspace, WORKBOOK_DOCUMENT);
+  const { data, title, body } = await readTitledDocument(workbookPath, 1);
+  validateWorkbookManifest(data, workbookPath);
+  const identity: WorkbookIdentity = { title };
+  const introduction = body;
   const parts = await partDirectories(workspace);
   const chapterGroups = await Promise.all(parts.map(async (part, partIndex) => {
     const lessons = await lessonDirectories(part);
     return Promise.all(lessons.map(async (directory, lessonIndex): Promise<WorkbookChapter> => {
       const lessonDir = resolve(part.path, directory);
       const id = `${part.id}/${directory}`;
-      const title = await lessonTitle(lessonDir);
-      try {
-        const lesson = await loadWorkbookLesson(lessonDir, id);
-        return { id, title, part: part.title, partMarkdown: part.markdown, partNumber: partIndex + 1, lessonNumber: lessonIndex + 1, state: "migrated", lesson };
-      } catch (error: any) {
-        if (error?.code === "ENOENT" && error?.path?.endsWith("lesson.yaml")) return { id, title, part: part.title, partMarkdown: part.markdown, partNumber: partIndex + 1, lessonNumber: lessonIndex + 1, state: "unavailable" };
-        throw new Error(`Could not load workbook lesson ${id}: ${error instanceof Error ? error.message : "invalid lesson"}`);
-      }
+      const lesson = await loadWorkbookLesson(lessonDir, id);
+      return { id, title: lesson.title, part: part.title, partMarkdown: part.markdown, partNumber: partIndex + 1, lessonNumber: lessonIndex + 1, lesson };
     }));
   }));
   return { workspace, identity, introduction, chapters: chapterGroups.flat() };

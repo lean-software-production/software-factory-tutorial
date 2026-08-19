@@ -1,95 +1,161 @@
-export type TerminalMode = "external" | "observed-embedded-optional";
-export const OBSERVED_TERMINAL_MODE: TerminalMode = "observed-embedded-optional";
+/**
+ * The workbook's content contract. Every authored document is Markdown with
+ * YAML front matter; the front matter carries only machine data, and every
+ * title is a Markdown heading, never a front-matter value. Folder position
+ * determines a document's kind, so there is no `kind` field anywhere here.
+ */
 
 export type WorkbookBlockType = "narrative" | "terminal-practice" | "reflection" | "lesson-transition";
 
-export interface BaseBlock { id: string; type: WorkbookBlockType; title: string; required?: boolean; draft?: boolean; }
-export interface NarrativeBlock extends BaseBlock { type: "narrative"; markdown: string; }
-export interface TerminalPracticeBlock extends BaseBlock {
-  type: "terminal-practice";
-  command: string;
-  context: string;
-  expectedObservation: string;
-  terminalMode: TerminalMode;
-  help: Record<string, string>;
-}
-export interface ReflectionBlock extends BaseBlock { type: "reflection"; prompt: string; }
-export interface LessonTransitionBlock extends BaseBlock { type: "lesson-transition"; label: string; markdown: string; }
+const BLOCK_TYPES: readonly WorkbookBlockType[] = ["narrative", "terminal-practice", "reflection", "lesson-transition"];
+const TUTOR_REQUIRED_TYPES = new Set<WorkbookBlockType>(["terminal-practice", "reflection"]);
+
+/** Every block gets its id from its filename, its title from its H2, and its body as learner Markdown. */
+export interface WorkbookBlockBase { id: string; type: WorkbookBlockType; title: string; markdown: string; }
+export interface NarrativeBlock extends WorkbookBlockBase { type: "narrative"; }
+export interface TerminalPracticeBlock extends WorkbookBlockBase { type: "terminal-practice"; tutor: string; }
+export interface ReflectionBlock extends WorkbookBlockBase { type: "reflection"; tutor: string; }
+export interface LessonTransitionBlock extends WorkbookBlockBase { type: "lesson-transition"; }
 export type WorkbookBlock = NarrativeBlock | TerminalPracticeBlock | ReflectionBlock | LessonTransitionBlock;
 
-/** The lesson hero: the authored title, summary line, and metadata chips shown above the opening. */
-export interface LessonHero { title: string; dek: string; meta: string[]; }
-/** The authored opening argument: its labels, the payoff prose, and the learning outcomes. */
-export interface LessonOpening { sectionLabel: string; heading: string; markdown: string; outcomes: string[]; }
-
+/** The assembled lesson: title and dek come from lesson.md's H1 and first paragraph. */
 export interface WorkbookLesson {
   id: string;
-  hero: LessonHero;
-  opening: LessonOpening;
+  title: string;
+  dek: string;
+  durationMinutes: number;
+  outcomes: string[];
   blocks: WorkbookBlock[];
 }
 
-/** Workbook identity is authored in the root document; directories establish its structure. */
+/** Workbook identity is the resolved title of workbook.md's single H1. */
 export interface WorkbookIdentity { title: string; }
-export interface WorkbookManifest extends WorkbookIdentity {}
+
+/** No workbook-level structured field is defined yet, so front matter must be an empty map. */
+export interface WorkbookManifest {}
+/** No part-level structured field is defined yet, so front matter must be an empty map. */
+export interface PartManifest {}
+
+export interface LessonFrontMatter { durationMinutes: number; outcomes: string[]; blocks: string[]; }
+export interface BlockFrontMatter { type: WorkbookBlockType; tutor?: string; }
+
+const BLOCK_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
 function isNonEmptyString(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
-
-/** Validate the structural source that carries the workbook's identity and rail. */
-export function validateWorkbookManifest(value: unknown): WorkbookManifest {
-  const errors: string[] = [];
-  const manifest = value as Partial<WorkbookManifest>;
-  if (!manifest || typeof manifest !== "object") throw new Error("workbook.yaml must be an object.");
-  if (!isNonEmptyString(manifest.title)) errors.push("workbook.title is required");
-
-  if (errors.length) throw new Error(`Invalid workbook manifest:\n- ${errors.join("\n- ")}`);
-  return manifest as WorkbookManifest;
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-/** Validate an assembled lesson: its hero, opening, and ordered typed blocks. */
-export function validateWorkbookLesson(value: unknown): WorkbookLesson {
+function rejectUnknownFields(data: Record<string, unknown>, allowed: readonly string[], location: string, errors: string[]): void {
+  for (const key of Object.keys(data)) if (!allowed.includes(key)) errors.push(`${location}: unknown front matter field "${key}"`);
+}
+
+function fail(location: string, errors: string[]): never {
+  throw new Error(`Invalid ${location}:\n- ${errors.join("\n- ")}`);
+}
+
+/** Shared shape for workbook.md and part.md front matter: no fields are defined yet. */
+function validateEmptyManifest(data: unknown, location: string): Record<string, never> {
   const errors: string[] = [];
-  const lesson = value as Partial<WorkbookLesson>;
+  if (!isPlainObject(data)) errors.push(`${location}: front matter must be a YAML mapping (use an empty --- / --- block if it has no fields).`);
+  else rejectUnknownFields(data, [], location, errors);
+  if (errors.length) fail(location, errors);
+  return {};
+}
+
+/** Validate workbook.md's front matter. No structured field is defined yet; only an empty map is valid. */
+export function validateWorkbookManifest(data: unknown, location = "workbook.md"): WorkbookManifest {
+  return validateEmptyManifest(data, location);
+}
+
+/** Validate a part.md's front matter. No structured field is defined yet; only an empty map is valid. */
+export function validatePartManifest(data: unknown, location = "part.md"): PartManifest {
+  return validateEmptyManifest(data, location);
+}
+
+/** Validate a lesson.md's raw front matter: duration, outcomes, and ordered block ids. */
+export function validateLessonFrontMatter(data: unknown, location: string): LessonFrontMatter {
+  const errors: string[] = [];
+  if (!isPlainObject(data)) fail(location, [`${location}: front matter must be a YAML mapping.`]);
+  const record = data as Record<string, unknown>;
+  rejectUnknownFields(record, ["durationMinutes", "outcomes", "blocks"], location, errors);
+
+  const duration = record.durationMinutes;
+  if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) errors.push(`${location}: durationMinutes must be a positive number`);
+
+  const outcomes = record.outcomes;
+  if (!isStringArray(outcomes) || outcomes.length === 0 || outcomes.some((item) => !isNonEmptyString(item))) errors.push(`${location}: outcomes must be a non-empty list of non-empty strings`);
+
+  const blocks = record.blocks;
+  if (!isStringArray(blocks) || blocks.length === 0 || blocks.some((id) => !BLOCK_ID_PATTERN.test(id))) {
+    errors.push(`${location}: blocks must be a non-empty ordered list of lowercase-hyphenated block ids`);
+  } else {
+    const seen = new Set<string>();
+    for (const id of blocks) {
+      if (seen.has(id)) errors.push(`${location}: blocks lists "${id}" more than once`);
+      seen.add(id);
+    }
+  }
+
+  if (errors.length) fail(location, errors);
+  return { durationMinutes: duration as number, outcomes: outcomes as string[], blocks: blocks as string[] };
+}
+
+/** Validate one block's raw front matter: its type, and a private tutor field required only for interactive types. */
+export function validateBlockFrontMatter(data: unknown, location: string): BlockFrontMatter {
+  const errors: string[] = [];
+  if (!isPlainObject(data)) fail(location, [`${location}: front matter must be a YAML mapping.`]);
+  const record = data as Record<string, unknown>;
+  rejectUnknownFields(record, ["type", "tutor"], location, errors);
+
+  const type = record.type;
+  const validType = typeof type === "string" && (BLOCK_TYPES as readonly string[]).includes(type);
+  if (!validType) errors.push(`${location}: type must be one of ${BLOCK_TYPES.join(", ")}`);
+
+  const tutor = record.tutor;
+  const tutorRequired = validType && TUTOR_REQUIRED_TYPES.has(type as WorkbookBlockType);
+  if (tutorRequired) {
+    if (!isNonEmptyString(tutor)) errors.push(`${location}: tutor is required for ${type} blocks and must be a non-empty private string`);
+  } else if (tutor !== undefined) {
+    errors.push(`${location}: tutor is only allowed for terminal-practice and reflection blocks`);
+  }
+
+  if (errors.length) fail(location, errors);
+  return { type: type as WorkbookBlockType, tutor: isNonEmptyString(tutor) ? tutor : undefined };
+}
+
+/** Validate a fully assembled lesson: its resolved title/dek/duration/outcomes and its ordered typed blocks. */
+export function validateWorkbookLesson(value: unknown, location = "lesson"): WorkbookLesson {
+  const errors: string[] = [];
+  const lesson = value as Partial<WorkbookLesson> | null;
+  if (!lesson || typeof lesson !== "object") throw new Error(`${location} must be an object.`);
+
+  if (!isNonEmptyString(lesson.id)) errors.push(`${location}.id is required`);
+  if (!isNonEmptyString(lesson.title)) errors.push(`${location}.title is required`);
+  if (!isNonEmptyString(lesson.dek)) errors.push(`${location}.dek is required`);
+  if (typeof lesson.durationMinutes !== "number" || !Number.isFinite(lesson.durationMinutes) || lesson.durationMinutes <= 0) errors.push(`${location}.durationMinutes must be a positive number`);
+  if (!isStringArray(lesson.outcomes) || lesson.outcomes.length === 0 || lesson.outcomes.some((item) => !isNonEmptyString(item))) errors.push(`${location}.outcomes must be a non-empty list of non-empty strings`);
+
   const ids = new Set<string>();
-  if (!lesson || typeof lesson !== "object") throw new Error("Lesson manifest must be an object.");
-  const hero = lesson.hero;
-  if (!hero || typeof hero !== "object") errors.push("lesson.hero is required");
-  else {
-    if (!isNonEmptyString(hero.title)) errors.push("lesson.hero.title is required");
-    if (!isNonEmptyString(hero.dek)) errors.push("lesson.hero.dek is required");
-    if (!Array.isArray(hero.meta) || hero.meta.some((item) => typeof item !== "string")) errors.push("lesson.hero.meta must be strings");
-  }
-  const opening = lesson.opening;
-  if (!opening || typeof opening !== "object") errors.push("lesson.opening is required");
-  else {
-    if (!isNonEmptyString(opening.sectionLabel)) errors.push("lesson.opening.sectionLabel is required");
-    if (!isNonEmptyString(opening.heading)) errors.push("lesson.opening.heading is required");
-    if (!isNonEmptyString(opening.markdown)) errors.push("lesson.opening.markdown is required");
-    if (!Array.isArray(opening.outcomes) || opening.outcomes.some((item) => typeof item !== "string")) errors.push("lesson.opening.outcomes must be strings");
-  }
-  if (!Array.isArray(lesson.blocks) || lesson.blocks.length === 0) errors.push("lesson.blocks must contain ordered block instances");
-  else lesson.blocks.forEach((block, index) => {
-    const path = `lesson.blocks[${index}]`;
-    if (!block.id) errors.push(`${path}.id is required`);
+  if (!Array.isArray(lesson.blocks) || lesson.blocks.length === 0) errors.push(`${location}.blocks must contain ordered block instances`);
+  else lesson.blocks.forEach((block: any, index) => {
+    const path = `${location}.blocks[${index}]`;
+    if (!block || typeof block !== "object") { errors.push(`${path} must be an object`); return; }
+    if (!isNonEmptyString(block.id)) errors.push(`${path}.id is required`);
     else if (ids.has(block.id)) errors.push(`${path}.id must be unique`);
     else ids.add(block.id);
-    if (!["narrative", "terminal-practice", "reflection", "lesson-transition"].includes(block.type)) errors.push(`${path}.type is unsupported`);
-    if (!block.title) errors.push(`${path}.title is required`);
-    if (block.type === "narrative" && !isNonEmptyString((block as Partial<NarrativeBlock>).markdown)) errors.push(`${path}.markdown is required`);
-    if (block.type === "terminal-practice") {
-      const practice = block as Partial<TerminalPracticeBlock>;
-      if (!practice.command) errors.push(`${path}.command is required`);
-      if (!practice.context) errors.push(`${path}.context is required`);
-      if (!practice.expectedObservation) errors.push(`${path}.expectedObservation is required`);
-      if (practice.terminalMode !== undefined && practice.terminalMode !== "external" && practice.terminalMode !== OBSERVED_TERMINAL_MODE) errors.push(`${path}.terminalMode is unsupported`);
-    }
-    if (block.type === "reflection" && !(block as Partial<ReflectionBlock>).prompt) errors.push(`${path}.prompt is required`);
-    if (block.type === "lesson-transition") {
-      const transition = block as Partial<LessonTransitionBlock>;
-      if (!transition.label) errors.push(`${path}.label is required`);
-      if (!isNonEmptyString(transition.markdown)) errors.push(`${path}.markdown is required`);
-    }
+    const validType = (BLOCK_TYPES as readonly string[]).includes(block.type);
+    if (!validType) errors.push(`${path}.type is unsupported`);
+    if (!isNonEmptyString(block.title)) errors.push(`${path}.title is required`);
+    if (!isNonEmptyString(block.markdown)) errors.push(`${path}.markdown is required`);
+    const tutorRequired = validType && TUTOR_REQUIRED_TYPES.has(block.type as WorkbookBlockType);
+    if (tutorRequired) { if (!isNonEmptyString(block.tutor)) errors.push(`${path}.tutor is required`); }
+    else if (block.tutor !== undefined) errors.push(`${path}.tutor is not allowed for ${block.type} blocks`);
   });
-  if (errors.length) throw new Error(`Invalid workbook lesson:\n- ${errors.join("\n- ")}`);
+
+  if (errors.length) fail(location, errors);
   return lesson as WorkbookLesson;
 }

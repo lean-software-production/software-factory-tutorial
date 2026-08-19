@@ -41,7 +41,11 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
     if (event.type === "observation_verified" && event.lessonId === lesson.id) verified.set(event.blockId, { summary: event.summary, terminalHtml: event.terminalHtml });
     if ("blockId" in event && event.lessonId === lesson.id && completionEvents.has(event.type)) completed.add(event.blockId);
   }
-  const required = lesson.blocks.filter((block) => block.required);
+  // Task 1 note: contract.ts's WorkbookBlock no longer carries `required` (the plan removes
+  // the flag entirely, since every listed block is part of the required sequence). Progression
+  // redesign is Task 2's scope (Phase 4); this cast only preserves today's runtime behavior for
+  // callers that still construct blocks with a `required` property.
+  const required = lesson.blocks.filter((block) => (block as { required?: boolean }).required);
   const nextRequired = required.find((block) => !completed.has(block.id));
   const active = nextRequired ?? required.at(-1) ?? lesson.blocks[0]!;
   const activeIndex = lesson.blocks.findIndex((block) => block.id === active.id);
@@ -53,7 +57,7 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
     feedback: verified.get(block.id)?.summary,
     terminalHtml: verified.get(block.id)?.terminalHtml,
     emerged: index <= activeIndex,
-    ready: !block.required || index <= activeIndex || completed.has(block.id),
+    ready: !(block as { required?: boolean }).required || index <= activeIndex || completed.has(block.id),
     active: block.id === active.id && nextRequired !== undefined
   }));
   const lessonComplete = required.length > 0 && required.every((block) => completed.has(block.id));

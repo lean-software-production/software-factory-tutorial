@@ -15,9 +15,12 @@ import {
 import * as pty from "node-pty";
 import type { TutorialLogger } from "../runtime-log.js";
 import { createTutorialLogger } from "../runtime-log.js";
-import { OBSERVED_TERMINAL_MODE, type TerminalMode } from "./contract.js";
-
-export { OBSERVED_TERMINAL_MODE, type TerminalMode };
+// The embedded-terminal mode is a runtime/server concept, not an authored content-contract
+// field, so it lives here rather than in ./contract.js. (Task 1 note: contract.ts's Phase 1
+// removal of TerminalMode forced this relocation; Phase 3 will redesign embedded-only terminal
+// selection in a later task.)
+export type TerminalMode = "external" | "observed-embedded-optional";
+export const OBSERVED_TERMINAL_MODE: TerminalMode = "observed-embedded-optional";
 
 export type TerminalClient = { send(message: string): void; close(code?: number, reason?: string): void };
 export type TerminalMessage =

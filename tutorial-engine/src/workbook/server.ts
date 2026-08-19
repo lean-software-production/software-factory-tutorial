@@ -6,10 +6,9 @@ import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { LOOPBACK_HOST } from "../server/local-server.js";
 import type { TutorialLogger } from "../runtime-log.js";
 import { createTutorialLogger } from "../runtime-log.js";
-import { OBSERVED_TERMINAL_MODE } from "./contract.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 import { introductionCompleted, nowEvent, project, WorkbookEventStore, type WorkbookEvent } from "./events.js";
-import { assertDockerTerminalReady, PiTerminalObserver, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalObserver, type TerminalPtyFactory } from "./terminal.js";
+import { assertDockerTerminalReady, OBSERVED_TERMINAL_MODE, PiTerminalObserver, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalObserver, type TerminalPtyFactory } from "./terminal.js";
 import { PiReflectionConversationAdapter, type PracticeEvidence, type ReflectionConversationAdapter } from "./reflection.js";
 
 const MIME_TYPES: Record<string, string> = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json; charset=utf-8" };
@@ -89,7 +88,10 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   await access(resolve(options.webRoot, "index.html"));
   const loaded = await loadWorkbook(options.target);
   const lesson = activeLesson(loaded);
-  const embeddedTerminalEnabled = lesson.blocks.some((block) => block.type === "terminal-practice" && block.terminalMode === OBSERVED_TERMINAL_MODE);
+  // Task 1 note: contract.ts's TerminalPracticeBlock no longer carries `terminalMode` (Phase 3
+  // makes the embedded terminal the only mode; that redesign is Task 2's scope). This cast only
+  // preserves today's runtime behavior for callers that still construct blocks with the field.
+  const embeddedTerminalEnabled = lesson.blocks.some((block) => block.type === "terminal-practice" && (block as { terminalMode?: string }).terminalMode === OBSERVED_TERMINAL_MODE);
   const host = options.host ?? LOOPBACK_HOST;
   if (embeddedTerminalEnabled && !isLoopbackHost(host)) throw new Error("The embedded terminal can only be enabled on a loopback host; it exposes an isolated container shell.");
   if (embeddedTerminalEnabled && !options.terminalPtyFactory) assertDockerTerminalReady();
@@ -104,8 +106,9 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     const projection = project(eventsCache, lesson);
     const active = projection.blocks.find((block) => block.active);
     const authored = lesson.blocks.find((block) => block.id === active?.id);
-    if (!authored || authored.type !== "terminal-practice" || authored.terminalMode !== OBSERVED_TERMINAL_MODE) return undefined;
-    return { lessonId: lesson.id, blockId: authored.id, command: authored.command, context: authored.context, expectedObservation: authored.expectedObservation };
+    if (!authored || authored.type !== "terminal-practice" || (authored as { terminalMode?: string }).terminalMode !== OBSERVED_TERMINAL_MODE) return undefined;
+    const legacy = authored as unknown as { command: string; context: string; expectedObservation: string };
+    return { lessonId: lesson.id, blockId: authored.id, command: legacy.command, context: legacy.context, expectedObservation: legacy.expectedObservation };
   };
   const completeFromObserver = async (block: ActiveObservedTerminalBlock, summary: string, terminalHtml: string) => {
     const events = await refreshEvents();
@@ -133,7 +136,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     return lesson.blocks.flatMap((block) => {
       const progress = current.blocks.find((item) => item.id === block.id);
       if (block.type !== "terminal-practice" || !progress?.emerged) return [];
-      return [{ blockId: block.id, title: block.title, expectedObservation: block.expectedObservation, transcript: transcripts.get(block.id), unexpectedOutput: current.unexpected[block.id] ?? [], verified: progress.verified, feedback: progress.feedback }];
+      return [{ blockId: block.id, title: block.title, expectedObservation: (block as { expectedObservation?: string }).expectedObservation ?? "", transcript: transcripts.get(block.id), unexpectedOutput: current.unexpected[block.id] ?? [], verified: progress.verified, feedback: progress.feedback }];
     });
   };
   let server = createServer(async (request, response) => {
@@ -176,7 +179,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
               : { type: "reflection_follow_up_submitted", lessonId: lesson.id, blockId: block.id, response: learnerResponse }));
             const updated = await refreshEvents();
             const thread = project(updated, lesson).reflectionConversations[block.id] ?? [];
-            const reply = await reflectionConversation.reply({ prompt: block.prompt, message: learnerResponse, conversation: thread, practiceEvidence: reflectionEvidence() });
+            const reply = await reflectionConversation.reply({ prompt: (block as { prompt?: string }).prompt ?? "", message: learnerResponse, conversation: thread, practiceEvidence: reflectionEvidence() });
             await store.append(nowEvent({ type: "reflection_reply_recorded", lessonId: lesson.id, blockId: block.id, response: reply }));
             const complete = await refreshEvents(); await store.writeProjection(project(complete, lesson));
             result = publicState(loaded, complete);
