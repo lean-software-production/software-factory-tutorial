@@ -1,6 +1,7 @@
 **/node_modules/
 **/dist/
 **/.subagents/
+.worktrees/
 *.log
 *.swp
 # factory/ holds the learner's own work, and is tracked so a mistake is
