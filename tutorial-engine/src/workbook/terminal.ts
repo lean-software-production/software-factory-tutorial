@@ -31,9 +31,16 @@ export interface TerminalPty {
 export interface TerminalPtyOptions { cwd: string; cols: number; rows: number; }
 interface DockerPty extends TerminalPty { stopContainer?(): void; }
 const WORKBOOK_TERMINAL_IMAGE = "lean-software-production/workbook-terminal:latest";
+const OPENCODE_API_KEY_ENV = "OPENCODE_API_KEY";
+const CONTAINER_AGENT_DIR = "/home/learner/.pi/agent";
+const PI_PREFLIGHT = [
+  "import { ModelRuntime } from '/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.js';",
+  "const runtime = await ModelRuntime.create();",
+  "if ((await runtime.getAvailable()).length === 0) process.exit(1);"
+].join(" ");
 const DEFAULT_WRITABLE_WORKSPACE_PATHS = ["factory", "calculator", ".tutorial/.tmp", ".git"] as const;
 export type TerminalPtyFactory = (options: TerminalPtyOptions) => TerminalPty;
-export interface DockerRunArgumentsOptions { workspace: string; name: string; authPath?: string; writableWorkspacePaths?: readonly string[]; }
+export interface DockerRunArgumentsOptions { workspace: string; name: string; apiKey: string; writableWorkspacePaths?: readonly string[]; }
 
 export interface ActiveObservedTerminalBlock {
   lessonId: string;
@@ -78,16 +85,33 @@ function escapeHtml(text: string): string { return text.replace(/[&<>"']/g, (cha
 
 function terminalKey(block: ActiveObservedTerminalBlock): string { return `${block.lessonId}:${block.blockId}`; }
 
-/** Preserve host ownership on the read-only credential bind mount. */
+/** The tmpfs Pi state must be writable by the shell that runs inside the container. */
 export function dockerContainerUser(): string {
   return `${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`;
 }
 
-export function assertDockerTerminalReady(): void {
+export function requireOpenCodeApiKey(): string {
+  const key = process.env[OPENCODE_API_KEY_ENV]?.trim();
+  if (!key) throw new Error(`Embedded terminal requires ${OPENCODE_API_KEY_ENV}.`);
+  return key;
+}
+
+export function assertDockerTerminalReady(workspace = process.cwd()): void {
+  const apiKey = requireOpenCodeApiKey();
   const available = spawnSync("docker", ["info"], { stdio: "ignore" });
   if (available.error || available.status !== 0) throw new Error("Docker must be running before starting the workbook terminal.");
   const image = spawnSync("docker", ["image", "inspect", WORKBOOK_TERMINAL_IMAGE], { stdio: "ignore" });
   if (image.error || image.status !== 0) throw new Error(`Docker image ${WORKBOOK_TERMINAL_IMAGE} is missing. Run npm run --workspace=tutorial-engine build:workbook-terminal.`);
+  const name = `workbook-terminal-preflight-${randomUUID()}`;
+  try {
+    const args = dockerRunArguments({ workspace, name, apiKey });
+    args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
+    execFileSync("docker", args, { stdio: "ignore" });
+    const preflight = spawnSync("docker", ["exec", name, "node", "--input-type=module", "-e", PI_PREFLIGHT], { stdio: "ignore", timeout: 20_000 });
+    if (preflight.error || preflight.status !== 0) throw new Error(`Could not authenticate Pi with ${OPENCODE_API_KEY_ENV} inside the workbook terminal.`);
+  } finally {
+    try { execFileSync("docker", ["rm", "-f", name], { stdio: "ignore" }); } catch { /* preflight cleanup is best effort. */ }
+  }
 }
 
 function bindMount(src: string, dst: string, readonly = false): string {
@@ -106,12 +130,12 @@ function workspaceChildForMount(workspace: string, child: string): string | unde
 
 export function dockerRunArguments(options: DockerRunArgumentsOptions): string[] {
   const workspace = resolve(options.workspace);
-  const args = ["run", "-d", "--rm", "--name", options.name, "--label", "workbook-terminal=true", "--user", dockerContainerUser(), "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--mount", bindMount(workspace, "/workspace", true), "--workdir", "/workspace"];
+  const [uid, gid] = dockerContainerUser().split(":");
+  const args = ["run", "-d", "--rm", "--name", options.name, "--label", "workbook-terminal=true", "--user", dockerContainerUser(), "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--env", `${OPENCODE_API_KEY_ENV}=${options.apiKey}`, "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--tmpfs", `${CONTAINER_AGENT_DIR}:uid=${uid},gid=${gid},mode=0700`, "--mount", bindMount(workspace, "/workspace", true), "--workdir", "/workspace"];
   for (const child of options.writableWorkspacePaths ?? DEFAULT_WRITABLE_WORKSPACE_PATHS) {
     const source = workspaceChildForMount(workspace, child);
     if (source) args.push("--mount", bindMount(source, `/workspace/${child}`));
   }
-  if (options.authPath && existsSync(options.authPath)) args.push("--mount", bindMount(resolve(options.authPath), "/home/learner/.pi/agent/auth.json", true));
   return args;
 }
 
@@ -119,7 +143,7 @@ export function dockerRunArguments(options: DockerRunArgumentsOptions): string[]
 export function createDockerPty(options: TerminalPtyOptions): TerminalPty {
   const workspace = resolve(options.cwd);
   const name = `workbook-terminal-${randomUUID()}`;
-  const args = dockerRunArguments({ workspace, name, authPath: resolve(process.env.HOME ?? "", ".pi/agent/auth.json") });
+  const args = dockerRunArguments({ workspace, name, apiKey: requireOpenCodeApiKey() });
   args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
   try { execFileSync("docker", args, { stdio: "ignore" }); }
   catch (error) { throw new Error(`Could not start isolated terminal container: ${error instanceof Error ? error.message : String(error)}`); }
