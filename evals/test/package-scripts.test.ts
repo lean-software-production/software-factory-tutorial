@@ -14,7 +14,7 @@ describe("evaluator package scripts", () => {
     const tsconfig = await readJson<TsconfigJson>("evals/tsconfig.json");
 
     expect(packageJson.scripts["check:eval"]).toBe("tsc -p evals/tsconfig.json");
-    expect(packageJson.scripts["test:eval"]).toBe("vitest run --root . ./evals/test/*.test.ts");
+    expect(packageJson.scripts["test:eval"]).toBe("vitest run --root . --exclude '.worktrees/**' ./evals/test/*.test.ts");
     expect(packageJson.scripts.eval).toBe("npm run --workspace=tutorial-engine build && tsx evals/run.ts");
 
     expect(tsconfig.include).toEqual(["run.ts", "v2/**/*.ts", "test/**/*.test.ts"]);

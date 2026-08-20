@@ -1,44 +1,73 @@
-# Live tutorial evals
+# V2 live workbook evals
 
-These are paid, real-model evaluations of the browser tutorial. They are deliberately separate from `npm test` and `npm run check`.
+These evaluations drive the dedicated v2 evaluation workbook through the real workbook HTTP and terminal WebSocket protocol. They make paid, real-model calls and are deliberately separate from `npm test` and `npm run check`.
 
-## Run
+## Prerequisites
 
-Build the trusted engine once, choose a judge model, then select a scope:
+Before running a live eval:
+
+1. Install dependencies from the repository root: `npm install`.
+2. Build the embedded terminal image: `npm run --workspace=tutorial-engine build:workbook-terminal`.
+3. Start Docker. The workbook terminal preflight requires `docker info` to succeed and the `lean-software-production/workbook-terminal:latest` image to exist.
+4. Export `OPENCODE_API_KEY`. The embedded terminal passes this key into its isolated container so Pi can authenticate there.
+5. Ensure Pi is authenticated on the host for the tutor and judge providers.
+6. Export `EVAL_JUDGE_MODEL` as the judge model, for example `provider/model-name`.
+7. Optionally export `TUTOR_MODEL` as the tutor model. If it is unset, the workbook tutor lets Pi choose its configured default.
+8. Optionally export `EVAL_JUDGE_COMMAND` for a Pi-compatible judge wrapper. The default is `pi --no-session`.
+
+## Cost warning
+
+`npm run eval` is the only live command. It spends tutor-model and judge-model tokens. A single selected scenario starts a fresh workbook server, drives one learner session, runs deterministic gates, and then calls the judge once if the gates pass. `--repeat 3` can make three tutor sessions and three judge calls. `--all --yes` runs every v2 scenario and can spend several times more.
+
+Do not put `npm run eval` in deterministic checks. Root `npm run check` remains model-free: it typechecks and unit-tests the evaluator but does not call the tutor or judge.
+
+## Usage
+
+A scope is mandatory:
 
 ```sh
+export OPENCODE_API_KEY='...'
 export EVAL_JUDGE_MODEL='provider/model-name'
-npm run eval -- --scenario doer-learner-led-happy-path
-npm run eval -- --lesson 005
+# optional: export TUTOR_MODEL='provider/model-name'
+# optional: export EVAL_JUDGE_COMMAND='pi --no-session'
+
+npm run eval -- --scenario v2-exact-command-success
+npm run eval -- --scenario v2-exact-command-success --repeat 3
 npm run eval -- --all --yes
-npm run eval -- --scenario doer-learner-led-happy-path --repeat 3
-npm run eval -- --calibrate
 ```
 
-A scope is mandatory. The largest matrices, lessons 002, 005 and 007, are six or seven tutor sessions and as many judge calls each: roughly 120,000 total model tokens and 10–30 minutes when sequential. Part 2 is nine lessons, so `--all` is now well over twice what it used to cost — scope to a lesson unless you mean it. Lessons 001, 004 and 013 build no artefact, so their scenarios are graded by the judge alone. `--all` requires `--yes` in an interactive terminal. The tutor uses the ordinary tutorial Pi configuration; only the judge model is selected by `EVAL_JUDGE_MODEL`. Set `EVAL_JUDGE_COMMAND` only when the judge is invoked through a compatible Pi wrapper (default: `pi --no-session`).
+The v2 live evaluator does not support the legacy `--lesson` or `--calibrate` scopes.
 
-`evals/tsconfig.json` typechecks this directory under `--strict`. The harness runs under `tsx`, which strips types without checking them, so `npm run check` runs `npm run check:eval` to keep a wrong annotation here from being invisible.
+## Scenario selection
+
+Use `--scenario <id>` to run exactly one scenario. Current scenario IDs are:
+
+- `v2-exact-command-success`: runs the visible exact-command terminal practice.
+- `v2-unexpected-output`: submits unexpected-output evidence without completing the block.
+- `v2-clue-only-task`: completes the clue-only terminal practice with learner-chosen shell syntax.
+- `v2-reflection-follow-up`: submits a reflection answer and a follow-up answer.
+- `v2-transition-completion`: completes terminal practice, reflection, and the lesson transition.
+
+Use `--all --yes` only when you intend to run every scenario. Use `--repeat 2` or `--repeat 3` to re-run the selected scope in fresh workspaces; repeat must be between 1 and 3.
 
 ## What it exercises
 
-The runner copies the tutorial into a temporary learner workspace, starts the checked-out engine on an ephemeral port, consumes `/api/events` as SSE, and posts the same shared browser protocol messages as the web client. It maps choice labels to per-session option IDs; it never parses prose for a choice. Successful workspaces are removed. Failed workspaces and all reports are retained.
+The runner copies `evals/workbook/` to a temporary learner workspace, starts the checked-out v2 workbook server on an ephemeral port, and drives the same public workbook API and terminal WebSocket used by the browser. It records only public workbook state, learner-visible terminal transcript, reflection turns, public workbook events, and `.tmp` artifact snapshots.
 
-The engine's file tools enforce the workspace boundary after resolving symlinks and emit sanitised `audit` events. This is a tool boundary, not an operating-system sandbox.
-
-`factory-stubs.ts` performs `bash -n` and runs the script the active lesson asks for — `factory/refactor-do.sh`, `factory/refactor-validate.sh`, `factory/refactor/run.sh`, or from lesson 010 one of the operating scripts beside the line — on a controlled `PATH`. One stub program stands in for `pi`, `npm` and `git`, capturing stdin, arguments, working directory, validator output, saved reports, and the Enter pause, so factory checks do not spend another model call.
-
-The stub follows Pi's `--mode`. In `json` it emits the subset of the event stream the lessons read back, which is what lets the gate prove lesson 009's round trip — JSON out of a station, text back into the branch. In `rpc` it reads JSONL commands from the fifo lesson 012 builds and answers the first `prompt`, which is what caught a canonical script whose `jq` pretty-printed its command across eight lines.
-
-Scripts run in their own process group and are signalled as one. From lesson 010 a script leaves children of its own — a `tail -f` in a pipeline, a model process and a `sleep` holding a fifo — and signalling only Bash leaves them holding the pipe the harness reads, so the run hangs rather than ending.
-
-The harness needs `jq` on the `PATH` as well as Bash: the lessons use it from 009 onwards, and the canonical scripts are run rather than only matched.
+The recorder refuses to store a private `tutor` field or known private tutor-guidance text. Deterministic gates inspect the trace before any judge call. The judge receives the scenario criteria and the recorded public learner session, not the authored curriculum or private tutor guidance.
 
 ## Results
 
-Ignored output is under `evals/reports/<run-id>/`: raw events and browser messages, snapshots, readable transcript, deterministic gate, stub result, judge JSON with verified event citations, metadata, and summary. A run passes only when its deterministic gate passes and every applicable judge score is non-zero with at least 80% total. Happy paths omit mistake diagnosis (7/8); mistake scenarios require 8/10.
+Each run writes an ignored report directory under `evals/reports/<run-id>/`. Important files are:
 
-Only provider 429/5xx, connection resets, and a timeout before useful output qualify for one fresh-workspace retry. Tutor protocol/artifact failures and judge failures never retry. With `--repeat 3`, two passing runs and a median score of 80% are required.
+- `evals/reports/<run-id>/trace.json`: recorded public state, terminal transcript, reflections, workbook events, and artifacts.
+- `evals/reports/<run-id>/gate.json`: deterministic gate assertions.
+- `evals/reports/<run-id>/artifacts.json`: captured `.tmp` artifact contents.
+- `evals/reports/<run-id>/judge-input.txt`: exact prompt sent to the judge, including scenario criteria and the recorded public trace citations.
+- `evals/reports/<run-id>/judge.json`: verified judge JSON.
+- `evals/reports/<run-id>/report.json`: combined scenario, model identities, gate, trace, judge input, judge result, artifacts, and verdict.
+- `evals/reports/<run-id>/summary.md`: short human-readable result.
+- `evals/reports/<run-id>/metadata.json`: run metadata, model identities, git revision, and workspace path.
+- `evals/reports/<run-id>/failure.txt`: exact failure when setup, the live session, deterministic gates, or judge invocation fails.
 
-## Authoring scenarios and calibrating the judge
-
-Scenario data lives in `scenarios/lesson-*/scenarios.ts` and has canonical atomic patches, learner messages, preconditions, and expected states. Keep the learner deterministic; it is not a second model. Add hand-reviewed JSON packets to `judge-calibration/` before changing the judge prompt or model, then run `npm run eval -- --calibrate` to verify that good packets stay passing and bad packets stay failing in regression review.
+The latest command also writes `evals/reports/latest.json` with the selected scenarios and report directories.

@@ -49,6 +49,7 @@ export interface V2Report {
   modelIdentities: { tutor: string; judge: string };
   gate: V2GateResult;
   trace: V2SessionTrace;
+  judgeInput: { prompt: string };
   judge: V2JudgeResult;
   artifacts: V2ArtifactSnapshot[];
   verdict: { passed: boolean; percentage: number };
@@ -79,9 +80,13 @@ Score these dimensions from 0 to 2:
 Return exactly {"dimensions":{"protocolUse":{"score":0,"citations":[0],"rationale":"..."},"tutorQuality":{"score":0,"citations":[0],"rationale":"..."},"criteriaFit":{"score":0,"citations":[0],"rationale":"..."}},"summary":"..."}. Every citation must identify one trace citation ID above.`;
 }
 
-export async function judgeV2Trace(scenario: V2Scenario, trace: V2SessionTrace, gate: V2GateResult): Promise<V2JudgeResult> {
-  const raw = await invokeJudge(buildV2JudgePrompt(scenario, trace, gate));
+export async function judgeV2TraceFromPrompt(prompt: string, trace: V2SessionTrace): Promise<V2JudgeResult> {
+  const raw = await invokeJudge(prompt);
   return verifyV2JudgeResult(raw, trace);
+}
+
+export async function judgeV2Trace(scenario: V2Scenario, trace: V2SessionTrace, gate: V2GateResult): Promise<V2JudgeResult> {
+  return judgeV2TraceFromPrompt(buildV2JudgePrompt(scenario, trace, gate), trace);
 }
 
 export function verifyV2JudgeResult(value: unknown, trace: V2SessionTrace): V2JudgeResult {
@@ -103,7 +108,7 @@ export function v2JudgePass(result: V2JudgeResult): { passed: boolean; percentag
   return judgePass(result);
 }
 
-export function createV2Report(options: { scenario: V2Scenario; trace: V2SessionTrace; gate: V2GateResult; judge: V2JudgeResult; tutorModel: string; judgeModel: string }): V2Report {
+export function createV2Report(options: { scenario: V2Scenario; trace: V2SessionTrace; gate: V2GateResult; judgeInput: string; judge: V2JudgeResult; tutorModel: string; judgeModel: string }): V2Report {
   return {
     scenario: {
       id: options.scenario.id,
@@ -115,6 +120,7 @@ export function createV2Report(options: { scenario: V2Scenario; trace: V2Session
     modelIdentities: { tutor: options.tutorModel, judge: options.judgeModel },
     gate: options.gate,
     trace: options.trace,
+    judgeInput: { prompt: options.judgeInput },
     judge: options.judge,
     artifacts: options.trace.artifacts,
     verdict: v2JudgePass(options.judge)

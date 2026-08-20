@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createV2Report, judgeV2Trace, v2JudgePass } from "./v2/judge.js";
+import { buildV2JudgePrompt, createV2Report, judgeV2TraceFromPrompt, v2JudgePass } from "./v2/judge.js";
 import { createEmptyV2SessionTrace } from "./v2/session.js";
 import { deterministicV2Gate, runV2ScenarioSession, v2Scenarios, type V2Scenario } from "./v2/scenarios.js";
 import { createEvaluationWorkspace } from "./v2/workspace.js";
@@ -19,7 +19,7 @@ Usage:
   npm run eval -- --all --yes
   npm run eval -- --scenario v2-exact-command-success --repeat 3
 
-A scope is required. EVAL_JUDGE_MODEL selects the judge model. PI_MODEL selects the tutor model used by the workbook tutor. Reports are written under evals/reports/.`);
+A scope is required. EVAL_JUDGE_MODEL selects the judge model. TUTOR_MODEL optionally selects the tutor model used by the workbook tutor. Reports are written under evals/reports/.`);
 }
 
 export function selectV2Scenarios(args: string[]): V2Scenario[] {
@@ -57,14 +57,17 @@ async function runOnce(scenario: V2Scenario, repetition: number): Promise<{ pass
       return { passed: false, directory, error: "deterministic gate failed" };
     }
 
-    const judge = await judgeV2Trace(scenario, trace, gate);
+    const judgeInput = buildV2JudgePrompt(scenario, trace, gate);
+    await writeFile(join(directory, "judge-input.txt"), judgeInput);
+    const judge = await judgeV2TraceFromPrompt(judgeInput, trace);
     const verdict = v2JudgePass(judge);
     const report = createV2Report({
       scenario,
       trace,
       gate,
+      judgeInput,
       judge,
-      tutorModel: process.env.PI_MODEL ?? "tutorial default",
+      tutorModel: process.env.TUTOR_MODEL ?? "tutorial default",
       judgeModel: process.env.EVAL_JUDGE_MODEL ?? "unset"
     });
     const ended = new Date().toISOString();
@@ -76,6 +79,7 @@ async function runOnce(scenario: V2Scenario, repetition: number): Promise<{ pass
         gitRevision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root }).toString().trim(),
         node: process.version,
         modelIdentities: report.modelIdentities,
+        judgeInputFile: "judge-input.txt",
         scenario: scenario.id,
         timestamps: { started, ended },
         workspaceRoot: workspace.root
@@ -103,7 +107,7 @@ async function main(): Promise<void> {
   if (args.includes("--all") && !args.includes("--yes")) throw new Error(`--all can spend model tokens across ${v2Scenarios.length} live scenarios. Re-run with --yes to confirm.`);
 
   await mkdir(reports, { recursive: true });
-  console.log(`Selected: ${chosen.map((item) => item.id).join(", ")}\nTutor: ${process.env.PI_MODEL ?? "tutorial default"}\nJudge: ${process.env.EVAL_JUDGE_MODEL}`);
+  console.log(`Selected: ${chosen.map((item) => item.id).join(", ")}\nTutor: ${process.env.TUTOR_MODEL ?? "tutorial default"}\nJudge: ${process.env.EVAL_JUDGE_MODEL}`);
   const results: Array<{ scenario: string; runs: Awaited<ReturnType<typeof runOnce>>[] }> = [];
   for (const scenario of chosen) {
     const runs = [];

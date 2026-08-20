@@ -1,0 +1,95 @@
+import { readFile } from "node:fs/promises";
+import { describe, expect, it } from "vitest";
+import type { WorkbookEvent } from "../../tutorial-engine/src/workbook/events.js";
+import { buildV2JudgePrompt, createV2Report, verifyV2JudgeResult } from "../v2/judge.js";
+import { deterministicV2Gate, findV2Scenario, v2Scenarios } from "../v2/scenarios.js";
+import { createEmptyV2SessionTrace } from "../v2/session.js";
+import type { V2GateResult } from "../v2/scenarios.js";
+import type { V2SessionTrace } from "../v2/types.js";
+
+const lessonId = "01-evaluator/01-live-session";
+const exactCommand = "mkdir -p .tmp && printf 'command block complete\\n' > .tmp/evaluator-command.txt && cat .tmp/evaluator-command.txt";
+
+function event(event: Record<string, unknown>): WorkbookEvent {
+  return { at: "2026-08-20T00:00:00.000Z", ...event } as WorkbookEvent;
+}
+
+function auditableTrace(): V2SessionTrace {
+  const trace = createEmptyV2SessionTrace("v2-exact-command-success");
+  trace.publicStates.push({
+    label: "terminal:exact-command:verified",
+    state: {
+      workbook: { title: "V2 Live Evaluator Workbook" },
+      progress: { activeLessonId: lessonId, activeBlockId: "exact-command", completedLessons: [], blocks: [] }
+    }
+  });
+  trace.terminalTranscript.push(
+    { blockId: "exact-command", direction: "input", text: `${exactCommand}\r` },
+    { blockId: "exact-command", direction: "output", text: "command block complete\r\n" },
+    { blockId: "exact-command", direction: "observer", text: "created and printed the command artifact" }
+  );
+  trace.reflections.push(
+    { blockId: "reflection", role: "learner", text: "The public workbook state showed the command block." },
+    { blockId: "reflection", role: "tutor", text: "That is visible learner-facing guidance." }
+  );
+  trace.events.push(
+    event({ type: "observation_verified", lessonId, blockId: "exact-command", source: "terminal_observer", summary: "created and printed the command artifact", terminalHtml: "command block complete" }),
+    event({ type: "block_completed", lessonId, blockId: "exact-command" })
+  );
+  trace.artifacts.push({ path: ".tmp/evaluator-command.txt", content: "command block complete\n" });
+  return trace;
+}
+
+function passingGate(trace: V2SessionTrace): V2GateResult {
+  const gate = deterministicV2Gate(findV2Scenario(trace.scenarioId), trace);
+  expect(gate.assertions.filter((assertion) => !assertion.passed)).toEqual([]);
+  return gate;
+}
+
+describe("live v2 evaluator regressions", () => {
+  it("documents exact live command usage, prerequisites, scenario selection, cost, and report files", async () => {
+    const readme = await readFile("evals/README.md", "utf8");
+
+    expect(readme).toContain("npm run eval -- --scenario v2-exact-command-success");
+    expect(readme).toContain("npm run eval -- --all --yes");
+    expect(readme).toContain("EVAL_JUDGE_MODEL");
+    expect(readme).toContain("TUTOR_MODEL");
+    expect(readme).toContain("OPENCODE_API_KEY");
+    expect(readme).toContain("build:workbook-terminal");
+    expect(readme).toMatch(/paid|cost|tokens/i);
+    expect(readme).toContain("evals/reports/<run-id>/trace.json");
+    expect(readme).toContain("evals/reports/<run-id>/judge-input.txt");
+    expect(readme).toContain("evals/reports/latest.json");
+    for (const scenario of v2Scenarios) expect(readme).toContain(scenario.id);
+  });
+
+  it("keeps the judge input auditable and limited to the recorded public learner session", () => {
+    const trace = auditableTrace();
+    const scenario = findV2Scenario(trace.scenarioId);
+    const gate = passingGate(trace);
+    const judgeInput = buildV2JudgePrompt(scenario, trace, gate);
+
+    expect(judgeInput).toContain(scenario.criteria[0]!);
+    expect(judgeInput).toContain("terminal:exact-command:verified");
+    expect(judgeInput).toContain("command block complete");
+    expect(judgeInput).toContain("The public workbook state showed the command block.");
+    expect(judgeInput).toContain(".tmp/evaluator-command.txt");
+    expect(judgeInput).not.toContain('"tutor":');
+    expect(judgeInput).not.toContain("This is private tutor guidance");
+    expect(judgeInput).not.toContain("Do not reveal an exact command");
+
+    const judge = verifyV2JudgeResult({
+      dimensions: {
+        protocolUse: { score: 2, citations: [0], rationale: "The public state was recorded." },
+        tutorQuality: { score: 2, citations: [1], rationale: "The terminal transcript was recorded." },
+        criteriaFit: { score: 2, citations: [4], rationale: "The artifact snapshot was recorded." }
+      },
+      summary: "The judge received the recorded public learner session."
+    }, trace);
+    const report = createV2Report({ scenario, trace, gate, judge, judgeInput, tutorModel: "tutor-model", judgeModel: "judge-model" });
+
+    expect(report.judgeInput).toEqual({ prompt: judgeInput });
+    expect(report.trace).toBe(trace);
+    expect(report.artifacts).toEqual(trace.artifacts);
+  });
+});

@@ -191,8 +191,9 @@ describe("v2 live evaluator scenarios", () => {
     }, trace);
     expect(() => verifyV2JudgeResult({ ...judge, dimensions: { ...judge.dimensions, protocolUse: { score: 2, citations: [99], rationale: "bad" } } }, trace)).toThrow(/unknown trace citation/i);
 
-    const report = createV2Report({ scenario, trace, gate, judge, tutorModel: "tutor-model", judgeModel: "judge-model" });
+    const report = createV2Report({ scenario, trace, gate, judgeInput: prompt, judge, tutorModel: "tutor-model", judgeModel: "judge-model" });
     expect(report.modelIdentities).toEqual({ tutor: "tutor-model", judge: "judge-model" });
+    expect(report.judgeInput).toEqual({ prompt });
     expect(report.trace).toBe(trace);
     expect(report.judge).toBe(judge);
     expect(report.artifacts).toEqual(trace.artifacts);
