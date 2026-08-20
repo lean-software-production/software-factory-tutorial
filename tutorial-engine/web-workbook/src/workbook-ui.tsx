@@ -270,12 +270,12 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
     <h2>{block.title}</h2>
     <Markdown>{block.markdown}</Markdown>
     <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
-    <div className="editor-status" role="status" aria-live="polite">{localError ?? status}</div>
-    {state?.feedback && !completed && <aside className="advice editor-feedback" aria-live="polite"><b>Inline feedback:</b> {state.feedback}</aside>}
-    <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />
-    {completed && <aside className="success-checkpoint editor-unlocked" aria-live="polite">
+    {canEdit && <div className="editor-status" role="status" aria-live="polite">{localError ?? status}</div>}
+    {canEdit && state?.feedback && <aside className="advice editor-feedback" aria-live="polite"><b>Inline feedback:</b> {state.feedback}</aside>}
+    {canEdit && <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />}
+    {completed ? <aside className="success-checkpoint editor-unlocked" aria-live="polite">
       <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Unlocked</p><h3>Accepted revision unlocked the next step.</h3><p>{state?.feedback || "The latest accepted editor draft was written to the target file."}</p></div>
-    </aside>}
+    </aside> : !canEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
   </section>;
 }
 

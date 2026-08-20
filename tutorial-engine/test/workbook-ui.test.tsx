@@ -154,6 +154,32 @@ describe("workbook lesson UI", () => {
     expect(markup).not.toContain("Review");
   });
 
+  it("does not render live editor-practice surface or status for inactive and completed blocks", () => {
+    const inactiveMarkup = html(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ ready: false, active: false, completed: false, editorStatus: undefined, feedback: "Hold this feedback until the block is active." } as any),
+      refresh: vi.fn()
+    }));
+    const completedMarkup = html(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ active: false, completed: true, editorStatus: "unlocked", feedback: "Approved: the answer is accepted." } as any),
+      refresh: vi.fn()
+    }));
+
+    expect(inactiveMarkup).toContain("Edit the answer");
+    expect(inactiveMarkup).toContain("factory/answer.md");
+    expect(inactiveMarkup).not.toContain("editor-surface");
+    expect(inactiveMarkup).not.toContain("role=\"status\"");
+    expect(inactiveMarkup).not.toMatch(/Editing —|Reviewing your latest revision/);
+
+    expect(completedMarkup).toContain("factory/answer.md");
+    expect(completedMarkup).toContain("Accepted revision unlocked the next step.");
+    expect(completedMarkup).toContain("Approved: the answer is accepted.");
+    expect(completedMarkup).not.toContain("editor-surface");
+    expect(completedMarkup).not.toContain("role=\"status\"");
+    expect(completedMarkup).not.toMatch(/Editing —|Reviewing your latest revision/);
+  });
+
   it("debounces editor-practice edits and posts only the latest text at the next revision", async () => {
     vi.useFakeTimers();
     const refresh = vi.fn();
