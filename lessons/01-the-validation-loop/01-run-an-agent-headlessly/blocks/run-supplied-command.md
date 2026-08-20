@@ -1,13 +1,22 @@
 ---
-title: Run the supplied headless command
-command: |-
-  echo "Describe what this calculator does, in three sentences." \
-    | (cd calculator && pi --no-session --tools read,grep,find,ls -p)
-context: Run from the repository root.
-expectedObservation: Pi prints a short description of the calculator and exits. The exact wording is not important; the mechanics are the lesson.
-terminalMode: observed-embedded-optional
-help:
-  explain: The text before the pipe is the job to be done. The subshell changes into calculator, then Pi runs headlessly with -p and with read-only tools.
-  command: Copy the command exactly, starting from the repository root. It uses standard input; you do not edit a file for this lesson.
-  expected: Expect a brief answer about the calculator. It may vary because a model is producing it. What matters is that the run finishes without a conversation.
+type: terminal-practice
+tutor: |-
+  Have the learner run the displayed command in the embedded terminal.
+
+  Success: Pi prints a short description of the calculator and exits. The model's exact wording
+  does not matter.
+
+  If the learner needs help, point out that the quoted text after echo is the job. The subshell
+  changes into calculator, and Pi runs with -p, no session, and only read-only tools.
 ---
+
+## Run the supplied headless command
+
+Run this command from the repository root:
+
+```sh
+echo "Describe what this calculator does, in three sentences." \
+  | (cd calculator && pi --no-session --tools read,grep,find,ls -p)
+```
+
+Pi should print a short description of the calculator and exit. Its exact wording is not important.

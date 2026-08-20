@@ -1,6 +1,7 @@
 ---
-title: Software Factory Tutorial
 ---
+
+# Software Factory Tutorial
 
 Welcome! 👋
 
