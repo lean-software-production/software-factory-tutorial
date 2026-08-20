@@ -288,10 +288,16 @@ function gateTransitionCompletion(trace: V2SessionTrace): V2GateResult {
 
 
 function editorFeedbackVisible(trace: V2SessionTrace): V2GateAssertion {
-  const feedbackText = trace.publicStates
-    .map((state) => JSON.stringify(state.state))
-    .find((text) => text.includes('"editorStatus":"feedback"') && /feedback/i.test(text)) ?? "";
-  return { name: "editor feedback visible", passed: feedbackText.length > 0, detail: feedbackText || "No public editor feedback state was recorded." };
+  const block = trace.publicStates
+    .flatMap((state) => publicEditorBlocks(state.state))
+    .find((candidate): candidate is { editorStatus: "feedback"; feedback: string } => candidate.editorStatus === "feedback" && typeof candidate.feedback === "string" && candidate.feedback.trim().length > 0);
+  const feedback = block?.feedback ?? "";
+  return { name: "editor feedback visible", passed: feedback.length > 0, detail: feedback || "No public editor feedback state was recorded." };
+}
+
+function publicEditorBlocks(state: unknown): Array<{ editorStatus?: unknown; feedback?: unknown }> {
+  const blocks = (state as { progress?: { blocks?: unknown } })?.progress?.blocks;
+  return Array.isArray(blocks) ? blocks.filter((block): block is { editorStatus?: unknown; feedback?: unknown } => typeof block === "object" && block !== null) : [];
 }
 
 function editorStillActive(trace: V2SessionTrace): V2GateAssertion {

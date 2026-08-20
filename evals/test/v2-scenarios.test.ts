@@ -150,6 +150,21 @@ describe("v2 live evaluator scenarios", () => {
     const failed = deterministicV2Gate(findV2Scenario(missingFeedback.scenarioId), missingFeedback);
     expect(failed.assertions.find((assertion) => assertion.name === "editor feedback visible")?.passed).toBe(false);
 
+    const feedbackStatusOnly = baseTrace("v2-editor-feedback-locked");
+    feedbackStatusOnly.publicStates.push({
+      label: "editor-practice:feedback-status-only",
+      state: {
+        progress: {
+          activeLessonId: lessonId,
+          activeBlockId: "editor-practice",
+          completedLessons: [],
+          blocks: [{ id: "editor-practice", type: "editor-practice", active: true, completed: false, editorStatus: "feedback", revision: 1 }]
+        }
+      }
+    });
+    const statusOnlyFailed = deterministicV2Gate(findV2Scenario(feedbackStatusOnly.scenarioId), feedbackStatusOnly);
+    expect(statusOnlyFailed.assertions.find((assertion) => assertion.name === "editor feedback visible")?.passed).toBe(false);
+
     const leaky = editorFeedbackTrace();
     (leaky.publicStates[1]!.state as any).progress.blocks[0].feedback = "Private editor criterion: mention promotion.";
     const leakyFailed = deterministicV2Gate(findV2Scenario(leaky.scenarioId), leaky);
