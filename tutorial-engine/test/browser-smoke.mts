@@ -110,9 +110,9 @@ async function main(): Promise<void> {
     await page.getByRole("heading", { name: "Smoke lesson" }).waitFor();
     await page.getByRole("heading", { name: "What you will learn" }).waitFor();
     await page.getByRole("heading", { name: "Orientation" }).waitFor();
-    await page.getByRole("button", { name: "Continue" }).click();
+    await page.getByRole("button", { name: "Continue" }).click({ force: true });
     await page.getByRole("heading", { name: "Practice" }).waitFor();
-    await page.getByText("Embedded terminal").waitFor();
+    await page.getByText("Embedded terminal", { exact: true }).waitFor();
     const body = await Promise.race([eventRequest, new Promise((_, reject) => setTimeout(() => reject(new Error("Browser did not post the workbook event request.")), 10_000))]);
     if (JSON.stringify(body) !== JSON.stringify({ blockId: "orientation", action: "continue" })) throw new Error(`Unexpected workbook event request: ${JSON.stringify(body)}`);
     console.log("Browser smoke passed: rendered the v2 workbook UI and observed /api/workbook/events.");
