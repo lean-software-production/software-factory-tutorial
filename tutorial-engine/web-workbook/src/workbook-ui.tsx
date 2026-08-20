@@ -26,6 +26,15 @@ async function post(blockId: string, body: object): Promise<State> {
 }
 
 function progressFor(progress: Progress, id: string) { return progress.blocks.find((block) => block.id === id); }
+function domSafe(value: string) { return value.replace(/[^A-Za-z0-9_-]+/g, "-"); }
+function blockElementId(lessonId: string, blockId: string) { return `lesson-${domSafe(lessonId)}-block-${domSafe(blockId)}`; }
+function completedBlockState(block: Block): BlockProgress { return { id: block.id, type: block.type, ready: true, active: false, completed: true, verified: block.type === "terminal-practice", terminalHtml: block.type === "terminal-practice" ? "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" : undefined, emerged: true }; }
+function stateForBlock(progress: Progress, lessonId: string, block: Block): BlockProgress | undefined {
+  if (lessonId === progress.activeLessonId) return progressFor(progress, block.id);
+  if (progress.completedLessons.includes(lessonId)) return completedBlockState(block);
+  return undefined;
+}
+function activeLessonValue<T>(progress: Progress, lessonId: string, value: T | undefined, fallback: T): T { return lessonId === progress.activeLessonId ? value ?? fallback : fallback; }
 function commandForInsertion(command = "") { return command.replace(/\\\r?\n\s*/g, " "); }
 
 const SHELL_FENCE = /```(?:sh|bash|shell|zsh|console)\s*\n([\s\S]*?)```/i;
@@ -135,8 +144,8 @@ function ContinueControls({ block, state, refresh }: { block: Block; state: Bloc
   </div>;
 }
 
-function NarrativeBlock({ block, state, refresh }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void }) {
-  return <section id={block.id} className={`work-block narrative ${state?.active ? "is-active" : ""}`}>
+function NarrativeBlock({ lessonId, block, state, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void }) {
+  return <section id={blockElementId(lessonId, block.id)} className={`work-block narrative ${state?.active ? "is-active" : ""}`}>
     <p className="section-label">The idea</p>
     <h2>{block.title}</h2>
     <Markdown>{block.markdown}</Markdown>
@@ -144,8 +153,7 @@ function NarrativeBlock({ block, state, refresh }: { block: Block; state: BlockP
   </section>;
 }
 
-function TerminalBlock({ block, progress, refresh }: { block: Block; progress: Progress; refresh(state: State): void }) {
-  const state = progressFor(progress, block.id);
+function TerminalBlock({ lessonId, block, state, unexpected, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; unexpected: string[]; refresh(state: State): void }) {
   const [evidence, setEvidence] = useState("");
   const [other, setOther] = useState("");
   const [observerAdvice, setObserverAdvice] = useState<string>();
@@ -153,7 +161,7 @@ function TerminalBlock({ block, progress, refresh }: { block: Block; progress: P
   const [observerStatus, setObserverStatus] = useState<string>();
   const command = shellCommandFrom(block.markdown);
   useEffect(() => { setObserverAdvice(undefined); setObserverError(undefined); setObserverStatus(undefined); }, [block.id, state?.completed]);
-  return <section id={block.id} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
+  return <section id={blockElementId(lessonId, block.id)} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
     <p className="section-label">Practice · embedded terminal</p>
     <h2>{block.title}</h2>
     <Markdown>{block.markdown}</Markdown>
@@ -169,14 +177,13 @@ function TerminalBlock({ block, progress, refresh }: { block: Block; progress: P
           {observerError && <aside className="advice warning" aria-live="polite">{observerError}</aside>}
         </>}
         {!state?.completed && !state?.verified && <div className="local-help"><label>I saw something different<textarea value={evidence} onChange={(event) => setEvidence(event.target.value)} /></label><button className="button secondary" onClick={() => post(block.id, { action: "unexpected", evidence }).then(refresh)}>Record it and keep trying</button><label>Something else<textarea value={other} onChange={(event) => setOther(event.target.value)} /></label><button className="button secondary" onClick={() => { setOther(""); return post(block.id, { action: "help", request: other }).then(refresh); }}>Ask locally</button></div>}
-        {progress.unexpected[block.id]?.map((item, index) => <p className="evidence" key={index}>Recorded different output: {item}</p>)}
+        {unexpected.map((item, index) => <p className="evidence" key={index}>Recorded different output: {item}</p>)}
       </div>
     </div>
   </section>;
 }
 
-function ReflectionBlock({ block, state, progress, refresh }: { block: Block; state: BlockProgress | undefined; progress: Progress; refresh(state: State): void }) {
-  const turns = progress.reflectionConversations[block.id] ?? [];
+function ReflectionBlock({ lessonId, block, state, turns, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; turns: ReflectionTurn[]; refresh(state: State): void }) {
   const hasTutorReply = turns.some((turn) => turn.role === "tutor");
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
@@ -184,7 +191,7 @@ function ReflectionBlock({ block, state, progress, refresh }: { block: Block; st
     setPending(true);
     post(block.id, { action, response: draft }).then((next) => { setDraft(""); refresh(next); }).finally(() => setPending(false));
   };
-  return <section id={block.id} className={`work-block reflection ${state?.active ? "is-active" : ""}`}><p className="section-label">Reflection · discuss it</p><h2>{block.title}</h2><div className="question"><Markdown>{block.markdown}</Markdown></div>
+  return <section id={blockElementId(lessonId, block.id)} className={`work-block reflection ${state?.active ? "is-active" : ""}`}><p className="section-label">Reflection · discuss it</p><h2>{block.title}</h2><div className="question"><Markdown>{block.markdown}</Markdown></div>
     {turns.length > 0 && <div className="reflection-thread" aria-live="polite">{turns.map((turn, index) => <div key={index} className={`reflection-turn ${turn.role}`}><b>{turn.role === "learner" ? "You" : "Tutor"}</b><p>{turn.text}</p></div>)}</div>}
     {state?.completed ? <p className="next-ready">Reflection complete. The next step has appeared below.</p> : <>
       <label className="reflection-input">{hasTutorReply ? "Ask a clarifying question or add to your answer" : "Share your answer"}<textarea aria-label="Your reflection" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={pending} /></label>
@@ -193,8 +200,8 @@ function ReflectionBlock({ block, state, progress, refresh }: { block: Block; st
   </section>;
 }
 
-function TransitionBlock({ block, state, refresh }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void }) {
-  return <section id={block.id} className={`work-block lesson-end ${state?.active ? "is-active" : ""}`}>
+function TransitionBlock({ lessonId, block, state, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void }) {
+  return <section id={blockElementId(lessonId, block.id)} className={`work-block lesson-end ${state?.active ? "is-active" : ""}`}>
     <p className="section-label">Lesson transition</p>
     <h2>{block.title}</h2>
     <Markdown>{block.markdown}</Markdown>
@@ -202,12 +209,13 @@ function TransitionBlock({ block, state, refresh }: { block: Block; state: Block
   </section>;
 }
 
-export function BlockView({ block, progress, refresh }: { block: Block; progress: Progress; refresh(state: State): void }) {
-  const state = progressFor(progress, block.id);
-  if (block.type === "narrative") return <NarrativeBlock block={block} state={state} refresh={refresh} />;
-  if (block.type === "terminal-practice") return <TerminalBlock block={block} progress={progress} refresh={refresh} />;
-  if (block.type === "reflection") return <ReflectionBlock block={block} state={state} progress={progress} refresh={refresh} />;
-  return <TransitionBlock block={block} state={state} refresh={refresh} />;
+export function BlockView({ lessonId, block, progress, refresh }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void }) {
+  const resolvedLessonId = lessonId ?? progress.activeLessonId;
+  const state = stateForBlock(progress, resolvedLessonId, block);
+  if (block.type === "narrative") return <NarrativeBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
+  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} unexpected={activeLessonValue(progress, resolvedLessonId, progress.unexpected[block.id], [])} refresh={refresh} />;
+  if (block.type === "reflection") return <ReflectionBlock lessonId={resolvedLessonId} block={block} state={state} turns={activeLessonValue(progress, resolvedLessonId, progress.reflectionConversations[block.id], [])} refresh={refresh} />;
+  return <TransitionBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
 }
 
 function WorkbookIntroduction({ state, refresh }: { state: State; refresh(state: State): void }) {
@@ -243,9 +251,9 @@ export function LessonRail({ title, chapters, progress, viewedLessonId, setViewe
 
 export function LessonView({ chapter, progress, refresh }: { chapter: Chapter & { lesson: Lesson }; progress: Progress; refresh(state: State): void }) {
   return <article data-lesson-id={chapter.id} key={chapter.id} className="chapter">
-    <header id={`lesson-${chapter.id}`}><p className="eyebrow">Part {chapter.partNumber}, Lesson {chapter.lessonNumber}</p><h1>{chapter.lesson.title}</h1><p className="dek">{chapter.lesson.dek}</p><div className="lesson-meta"><span className="chip duration">{chapter.lesson.durationMinutes} min</span></div></header>
+    <header id={`lesson-${chapter.id}`}><h1>{chapter.lesson.title}</h1><p className="dek">{chapter.lesson.dek}</p><div className="lesson-meta"><span className="chip duration">{chapter.lesson.durationMinutes} min</span></div></header>
     <section className="opening"><p className="section-label">What you will learn</p><h2>What you will learn</h2><ul className="outcomes">{chapter.lesson.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></section>
-    {chapter.lesson.blocks.map((block) => <BlockView key={block.id} block={block} progress={progress} refresh={refresh} />)}
+    {chapter.lesson.blocks.map((block) => <BlockView key={block.id} lessonId={chapter.id} block={block} progress={progress} refresh={refresh} />)}
   </article>;
 }
 

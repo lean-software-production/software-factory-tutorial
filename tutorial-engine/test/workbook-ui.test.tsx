@@ -36,13 +36,33 @@ function html(element: ReturnType<typeof createElement>) {
   return renderToStaticMarkup(element);
 }
 
+function chapter(overrides: Partial<Chapter> = {}): Chapter & { lesson: typeof lesson } {
+  return { id: lesson.id, part: "Part One", partMarkdown: "Part copy.", partNumber: 1, lessonNumber: 1, title: lesson.title, lesson, ...overrides } as Chapter & { lesson: typeof lesson };
+}
+
+function progressWithActiveDuplicate(blockId: string): Progress {
+  return {
+    ...progress,
+    activeLessonId: "part/lesson-two",
+    activeBlockId: blockId,
+    completedLessons: ["part/lesson-one"],
+    blocks: progress.blocks.map((block) => ({
+      ...block,
+      active: block.id === blockId,
+      ready: block.id === blockId || block.completed,
+      completed: block.id === "orientation" && blockId !== "orientation",
+      verified: false,
+      emerged: block.id === blockId || block.completed,
+    })),
+  };
+}
+
 describe("workbook lesson UI", () => {
   it("renders the Markdown manifest lesson header, fixed outcomes section, and ordered Markdown blocks", () => {
-    const markup = html(createElement(LessonView, { chapter: { id: lesson.id, part: "Part One", partMarkdown: "Part copy.", partNumber: 1, lessonNumber: 1, title: lesson.title, lesson }, progress, refresh: vi.fn() }));
+    const markup = html(createElement(LessonView, { chapter: chapter(), progress, refresh: vi.fn() }));
 
-    expect(markup).toContain("<h1>Markdown Lesson</h1>");
-    expect(markup).toContain("Dek paragraph.");
-    expect(markup).toContain("14 min");
+    expect(markup).toContain('<header id="lesson-part/lesson-one"><h1>Markdown Lesson</h1><p class="dek">Dek paragraph.</p><div class="lesson-meta"><span class="chip duration">14 min</span></div></header>');
+    expect(markup).not.toContain('class="eyebrow"');
     expect(markup).toContain("What you will learn");
     expect(markup).toContain("Run the supplied command.");
     expect(markup.indexOf("Orientation")).toBeLessThan(markup.indexOf("Practice"));
@@ -99,5 +119,36 @@ describe("workbook lesson UI", () => {
     expect(markup).toContain("lesson-row current");
     expect(markup).toContain("Lesson Three");
     expect(markup).toContain("aria-disabled=\"true\"");
+  });
+
+  it("does not let a completed lesson's duplicate narrative block continue the active lesson", () => {
+    const oldChapter = chapter();
+    const activeLesson = { ...lesson, id: "part/lesson-two", title: "Active Duplicate Lesson" };
+    const activeChapter = chapter({ id: activeLesson.id, lessonNumber: 2, title: activeLesson.title, lesson: activeLesson });
+    const duplicateProgress = progressWithActiveDuplicate("orientation");
+
+    const completedMarkup = html(createElement(LessonView, { chapter: oldChapter, progress: duplicateProgress, refresh: vi.fn() }));
+    const activeMarkup = html(createElement(LessonView, { chapter: activeChapter, progress: duplicateProgress, refresh: vi.fn() }));
+
+    expect(completedMarkup).not.toContain('class="continuation-controls"');
+    expect(completedMarkup).not.toContain('data-completion-action="continue"');
+    expect(activeMarkup).toContain('class="continuation-controls"');
+    expect(activeMarkup).toContain('data-completion-action="continue"');
+  });
+
+  it("renders a completed lesson's duplicate terminal block frozen instead of live", () => {
+    const oldChapter = chapter();
+    const activeLesson = { ...lesson, id: "part/lesson-two", title: "Active Duplicate Lesson" };
+    const activeChapter = chapter({ id: activeLesson.id, lessonNumber: 2, title: activeLesson.title, lesson: activeLesson });
+    const duplicateProgress = progressWithActiveDuplicate("practice");
+
+    const completedMarkup = html(createElement(LessonView, { chapter: oldChapter, progress: duplicateProgress, refresh: vi.fn() }));
+    const activeMarkup = html(createElement(LessonView, { chapter: activeChapter, progress: duplicateProgress, refresh: vi.fn() }));
+
+    expect(completedMarkup).toContain("Frozen terminal session");
+    expect(completedMarkup).not.toContain("Embedded terminal");
+    expect(completedMarkup).not.toContain("Insert command");
+    expect(activeMarkup).toContain("Embedded terminal");
+    expect(activeMarkup).toContain("Insert command");
   });
 });
