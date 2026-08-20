@@ -57,11 +57,14 @@ describe("v2 public session trace", () => {
         publicStates: [{ label: "exact-command-visible", state: expect.objectContaining({ workbook: { title: "V2 Live Evaluator Workbook" } }) }],
         terminalTranscript: [],
         reflections: [],
+        editors: [],
         events: [expect.objectContaining({ type: "session_started" }), expect.objectContaining({ type: "workbook_introduction_completed" }), expect.objectContaining({ type: "block_continued" })],
         artifacts: []
       });
       const serialized = JSON.stringify(trace);
-      expect(serialized).toContain("Run the exact command");
+      expect(serialized).toContain("Draft the editor artifact");
+      expect(serialized).toContain("editor-artifacts/evaluator-editor.txt");
+      expect(serialized).not.toContain("Private editor criterion");
       expect(serialized).not.toContain("This is private tutor guidance");
       expect(serialized).not.toContain("Do not reveal an exact command");
       expect(serialized).not.toContain("Follow up until the learner");
@@ -100,12 +103,15 @@ describe("v2 public session trace", () => {
     const workspace = await createEvaluationWorkspace();
     tempRoots.push(workspace.root);
     await mkdir(resolve(workspace.root, ".tmp"), { recursive: true });
+    await mkdir(resolve(workspace.root, "editor-artifacts"), { recursive: true });
     await writeFile(resolve(workspace.root, ".tmp/evaluator-command.txt"), "command block complete\n");
+    await writeFile(resolve(workspace.root, "editor-artifacts/evaluator-editor.txt"), "editor draft complete\n");
 
     trace.artifacts = await snapshotArtifacts(workspace.root);
 
     expect(trace.artifacts).toEqual([
-      { path: ".tmp/evaluator-command.txt", content: "command block complete\n" }
+      { path: ".tmp/evaluator-command.txt", content: "command block complete\n" },
+      { path: "editor-artifacts/evaluator-editor.txt", content: "editor draft complete\n" }
     ]);
     expect(JSON.stringify(trace)).not.toContain("private tutor guidance");
 

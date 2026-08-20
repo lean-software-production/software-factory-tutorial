@@ -42,9 +42,11 @@ The v2 live evaluator does not support the legacy `--lesson` or `--calibrate` sc
 
 Use `--scenario <id>` to run exactly one scenario. Current scenario IDs are:
 
-- `v2-exact-command-success`: runs the visible exact-command terminal practice.
-- `v2-unexpected-output`: submits unexpected-output evidence without completing the block.
-- `v2-clue-only-task`: completes the clue-only terminal practice with learner-chosen shell syntax.
+- `v2-exact-command-success`: unlocks editor practice, then runs the visible exact-command terminal practice.
+- `v2-unexpected-output`: unlocks editor practice, then submits unexpected-output evidence without completing the block.
+- `v2-editor-feedback-locked`: submits an insufficient editor draft and expects public feedback without unlocking.
+- `v2-editor-unlocked`: submits a satisfactory editor draft and expects the promoted artifact.
+- `v2-clue-only-task`: unlocks editor practice, then completes the clue-only terminal practice with learner-chosen shell syntax.
 - `v2-reflection-follow-up`: submits a reflection answer and a follow-up answer.
 - `v2-transition-completion`: completes terminal practice, reflection, and the lesson transition.
 
@@ -52,7 +54,7 @@ Use `--all --yes` only when you intend to run every scenario. Use `--repeat 2` o
 
 ## What it exercises
 
-The runner copies `evals/workbook/` to a temporary learner workspace, starts the checked-out v2 workbook server on an ephemeral port, and drives the same public workbook API and terminal WebSocket used by the browser. It records only public workbook state, learner-visible terminal transcript, reflection turns, public workbook events, and `.tmp` artifact snapshots.
+The runner copies `evals/workbook/` to a temporary learner workspace, starts the checked-out v2 workbook server on an ephemeral port, and drives the same public workbook API, editor endpoint, and terminal WebSocket used by the browser. It records only public workbook state, public editor status/feedback, learner-visible terminal transcript, reflection turns, public workbook events, and `.tmp` plus `editor-artifacts` artifact snapshots.
 
 The recorder refuses to store a private `tutor` field or known private tutor-guidance text. Deterministic gates inspect the trace before any judge call. The judge receives the scenario criteria and the recorded public learner session, not the authored curriculum or private tutor guidance.
 
@@ -62,7 +64,7 @@ Each run writes an ignored report directory under `evals/reports/<run-id>/`. Imp
 
 - `evals/reports/<run-id>/trace.json`: recorded public state, terminal transcript, reflections, workbook events, and artifacts.
 - `evals/reports/<run-id>/gate.json`: deterministic gate assertions.
-- `evals/reports/<run-id>/artifacts.json`: captured `.tmp` artifact contents.
+- `evals/reports/<run-id>/artifacts.json`: captured `.tmp` and `editor-artifacts` artifact contents.
 - `evals/reports/<run-id>/judge-input.txt`: exact prompt sent to the judge, including scenario criteria and the recorded public trace citations.
 - `evals/reports/<run-id>/judge.json`: verified judge JSON.
 - `evals/reports/<run-id>/report.json`: combined scenario, model identities, gate, trace, judge input, judge result, artifacts, and verdict.

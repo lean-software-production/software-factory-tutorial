@@ -1,10 +1,24 @@
 import { rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { EditorReviewAdapter, type EditorReviewDecision, type EditorReviewRequest } from "../../tutorial-engine/src/workbook/editor.js";
 import type { ReflectionConversationAdapter } from "../../tutorial-engine/src/workbook/reflection.js";
 import type { TerminalObserver, TerminalPty } from "../../tutorial-engine/src/workbook/terminal.js";
 import { createV2WorkbookDriver, V2WorkbookDriver } from "../v2/driver.js";
+import { satisfactoryEditorDraft } from "../v2/scenarios.js";
 import { createEmptyV2SessionTrace } from "../v2/session.js";
 import { createEvaluationWorkspace, type CreateEvaluationWorkspaceOptions } from "../v2/workspace.js";
+
+class DriverFakeEditorReviewAdapter extends EditorReviewAdapter {
+  constructor(readonly calls: EditorReviewRequest[]) {
+    super(async () => ({ prompt: async () => "" }));
+  }
+
+  override async review(request: EditorReviewRequest): Promise<EditorReviewDecision> {
+    this.calls.push(request);
+    if (request.draft.text.includes("editor-artifacts/evaluator-editor.txt") && request.draft.text.includes("ready for promotion")) return { status: "unlocked", revisionId: request.draft.revision };
+    return { status: "feedback", message: "Name editor-artifacts/evaluator-editor.txt and explain the promotion intent." };
+  }
+}
 
 class DriverFakePty implements TerminalPty {
   writes: string[] = [];
@@ -56,20 +70,25 @@ async function startDriver(options: CreateEvaluationWorkspaceOptions = {}) {
       return "Tutor reply that asks one public follow-up.";
     }
   };
+  const editorRequests: EditorReviewRequest[] = [];
+  const editorReviewAdapter = new DriverFakeEditorReviewAdapter(editorRequests);
   const server = await workspace.startServer({
     terminalObserver,
     terminalPtyFactory: () => pty,
     terminalDebounceMs: 1,
-    reflectionConversation
+    reflectionConversation,
+    editorReviewAdapter,
+    editorReviewDebounceMs: 1
   });
   const trace = createEmptyV2SessionTrace("driver-test");
   const driver = createV2WorkbookDriver({ serverUrl: server.url, trace });
-  return { workspace, server, trace, driver, pty, terminalRequests, reflectionRequests };
+  return { workspace, server, trace, driver, pty, terminalRequests, reflectionRequests, editorRequests };
 }
 
 async function reachExactCommand(driver: V2WorkbookDriver) {
   await driver.completeIntroduction();
-  return driver.continueBlock("orientation");
+  await driver.continueBlock("orientation");
+  return driver.submitEditorDraft("editor-practice", satisfactoryEditorDraft);
 }
 
 async function reachReflection(driver: V2WorkbookDriver) {
@@ -90,9 +109,32 @@ describe("v2 workbook driver", () => {
       expect(introduced.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["orientation"]);
 
       const continued = await driver.continueBlock("orientation");
-      expect(continued.progress.activeBlockId).toBe("exact-command");
-      expect(continued.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["orientation", "exact-command"]);
+      expect(continued.progress.activeBlockId).toBe("editor-practice");
+      expect(continued.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["orientation", "editor-practice"]);
       expect(trace.publicStates.map((state) => state.label)).toEqual(["initial", "introduction", "continue:orientation"]);
+      expect(JSON.stringify(trace)).not.toContain('"tutor"');
+    } finally {
+      await server.close();
+    }
+  });
+
+
+  it("submits editor drafts and records only public editor feedback", async () => {
+    const { server, trace, driver, editorRequests } = await startDriver();
+    try {
+      await driver.completeIntroduction();
+      await driver.continueBlock("orientation");
+
+      const reviewed = await driver.submitEditorDraft("editor-practice", "This is a vague draft.");
+
+      const editorBlock = reviewed.progress.blocks.find((block: any) => block.id === "editor-practice");
+      expect(editorBlock).toMatchObject({ active: true, completed: false, editorStatus: "feedback", revision: 1, feedback: expect.stringContaining("editor-artifacts/evaluator-editor.txt") });
+      expect(trace.editors).toEqual([
+        { blockId: "editor-practice", revision: 1, status: "reviewing" },
+        { blockId: "editor-practice", revision: 1, status: "feedback", feedback: "Name editor-artifacts/evaluator-editor.txt and explain the promotion intent." }
+      ]);
+      expect(editorRequests).toHaveLength(1);
+      expect(JSON.stringify(trace)).not.toContain("Private editor criterion");
       expect(JSON.stringify(trace)).not.toContain('"tutor"');
     } finally {
       await server.close();

@@ -2,14 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { WorkbookEvent } from "../../tutorial-engine/src/workbook/events.js";
 import { selectV2Scenarios } from "../run.js";
 import { buildV2JudgePrompt, createV2Report, verifyV2JudgeResult } from "../v2/judge.js";
-import { deterministicV2Gate, findV2Scenario, v2Scenarios } from "../v2/scenarios.js";
+import { clueCommand, deterministicV2Gate, exactCommand, findV2Scenario, satisfactoryEditorDraft, v2Scenarios } from "../v2/scenarios.js";
 import { createEmptyV2SessionTrace } from "../v2/session.js";
 import type { V2SessionTrace } from "../v2/types.js";
 
 const lessonId = "01-evaluator/01-live-session";
-const exactCommand = "mkdir -p .tmp && printf 'command block complete\\n' > .tmp/evaluator-command.txt && cat .tmp/evaluator-command.txt";
-const clueCommand = "mkdir -p .tmp && printf 'clue block complete\\n' > .tmp/evaluator-clue.txt && cat .tmp/evaluator-clue.txt";
-
 function event(event: Record<string, unknown>): WorkbookEvent {
   return { at: "2026-08-20T00:00:00.000Z", ...event } as WorkbookEvent;
 }
@@ -24,8 +21,46 @@ function baseTrace(scenarioId: string): V2SessionTrace {
   return trace;
 }
 
-function exactCommandTrace(scenarioId = "v2-exact-command-success"): V2SessionTrace {
+function editorFeedbackTrace(): V2SessionTrace {
+  const trace = baseTrace("v2-editor-feedback-locked");
+  trace.publicStates.push({
+    label: "editor-practice:feedback",
+    state: {
+      progress: {
+        activeLessonId: lessonId,
+        activeBlockId: "editor-practice",
+        completedLessons: [],
+        blocks: [{ id: "editor-practice", type: "editor-practice", active: true, completed: false, editorStatus: "feedback", revision: 1, feedback: "Name editor-artifacts/evaluator-editor.txt and explain the promotion intent." }]
+      },
+      chapters: [{ lesson: { blocks: [{ id: "editor-practice", type: "editor-practice", markdown: "Write a short draft for `editor-artifacts/evaluator-editor.txt`." }] } }]
+    }
+  });
+  return trace;
+}
+
+function editorUnlockedTrace(scenarioId = "v2-editor-unlocked"): V2SessionTrace {
   const trace = baseTrace(scenarioId);
+  trace.events.push(event({ type: "editor_practice_unlocked", lessonId, blockId: "editor-practice", revisionId: 1, path: "editor-artifacts/evaluator-editor.txt" }));
+  trace.publicStates.push({
+    label: "editor-practice:unlocked",
+    state: {
+      progress: {
+        activeLessonId: lessonId,
+        activeBlockId: "exact-command",
+        completedLessons: [],
+        blocks: [
+          { id: "editor-practice", type: "editor-practice", active: false, completed: true, editorStatus: "unlocked", revision: 1 },
+          { id: "exact-command", type: "terminal-practice", active: true, completed: false }
+        ]
+      }
+    }
+  });
+  trace.artifacts.push({ path: "editor-artifacts/evaluator-editor.txt", content: satisfactoryEditorDraft });
+  return trace;
+}
+
+function exactCommandTrace(scenarioId = "v2-exact-command-success"): V2SessionTrace {
+  const trace = editorUnlockedTrace(scenarioId);
   trace.terminalTranscript.push(
     { blockId: "exact-command", direction: "input", text: `${exactCommand}\r` },
     { blockId: "exact-command", direction: "output", text: "command block complete\r\n" },
@@ -73,6 +108,8 @@ describe("v2 live evaluator scenarios", () => {
     expect(v2Scenarios.map((scenario) => scenario.id)).toEqual([
       "v2-exact-command-success",
       "v2-unexpected-output",
+      "v2-editor-feedback-locked",
+      "v2-editor-unlocked",
       "v2-clue-only-task",
       "v2-reflection-follow-up",
       "v2-transition-completion"
@@ -93,15 +130,40 @@ describe("v2 live evaluator scenarios", () => {
   });
 
   it("gates unexpected output on learner-submitted evidence without requiring terminal completion", () => {
-    const trace = baseTrace("v2-unexpected-output");
+    const trace = editorUnlockedTrace("v2-unexpected-output");
     trace.events.push(event({ type: "unexpected_output_submitted", lessonId, blockId: "exact-command", evidence: "The command printed 'not what I expected'." }));
     trace.publicStates.push({ label: "unexpected-output", state: { progress: { unexpected: { "exact-command": ["The command printed 'not what I expected'."] } } } });
 
     allGateAssertionsPass(trace);
 
-    const missing = baseTrace("v2-unexpected-output");
+    const missing = editorUnlockedTrace("v2-unexpected-output");
     const failed = deterministicV2Gate(findV2Scenario(missing.scenarioId), missing);
     expect(failed.assertions.find((assertion) => assertion.name === "unexpected output evidence")?.passed).toBe(false);
+  });
+
+
+  it("gates incomplete editor drafts on public feedback without unlocking", () => {
+    const trace = editorFeedbackTrace();
+    allGateAssertionsPass(trace);
+
+    const missingFeedback = baseTrace("v2-editor-feedback-locked");
+    const failed = deterministicV2Gate(findV2Scenario(missingFeedback.scenarioId), missingFeedback);
+    expect(failed.assertions.find((assertion) => assertion.name === "editor feedback visible")?.passed).toBe(false);
+
+    const leaky = editorFeedbackTrace();
+    (leaky.publicStates[1]!.state as any).progress.blocks[0].feedback = "Private editor criterion: mention promotion.";
+    const leakyFailed = deterministicV2Gate(findV2Scenario(leaky.scenarioId), leaky);
+    expect(leakyFailed.assertions.find((assertion) => assertion.name === "public trace has no hidden tutor instructions")?.passed).toBe(false);
+  });
+
+  it("gates satisfactory editor drafts on unlock and promoted artifact", () => {
+    const trace = editorUnlockedTrace();
+    allGateAssertionsPass(trace);
+
+    const missingArtifact = editorUnlockedTrace();
+    missingArtifact.artifacts = [];
+    const failed = deterministicV2Gate(findV2Scenario(missingArtifact.scenarioId), missingArtifact);
+    expect(failed.assertions.find((assertion) => assertion.name === "editor-artifacts/evaluator-editor.txt artifact")?.passed).toBe(false);
   });
 
   it("gates a clue-only task on public clues, learner-chosen command, output, completion, and artifact", () => {
@@ -109,7 +171,7 @@ describe("v2 live evaluator scenarios", () => {
     allGateAssertionsPass(trace);
 
     const leaky = clueOnlyTrace();
-    (leaky.publicStates[1]!.state as any).chapters[0].lesson.blocks[0].markdown += `\n\`\`\`sh command\n${clueCommand}\n\`\`\``;
+    (leaky.publicStates[2]!.state as any).chapters[0].lesson.blocks[0].markdown += `\n\`\`\`sh command\n${clueCommand}\n\`\`\``;
     const failed = deterministicV2Gate(findV2Scenario(leaky.scenarioId), leaky);
     expect(failed.assertions.find((assertion) => assertion.name === "clue-only public prompt")?.passed).toBe(false);
   });

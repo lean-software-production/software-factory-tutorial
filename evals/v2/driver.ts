@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import { assertNoPrivateTutorState, recordPublicState, recordReflectionTurn, recordTerminalTranscript } from "./session.js";
+import { assertNoPrivateTutorState, recordEditorStatus, recordPublicState, recordReflectionTurn, recordTerminalTranscript } from "./session.js";
 import type { PublicWorkbookState, V2SessionTrace } from "./types.js";
 
 export type WorkbookApiState = PublicWorkbookState & { [key: string]: any };
@@ -21,12 +21,18 @@ export interface SubmitTerminalCommandOptions {
   timeoutMs?: number;
 }
 
+export interface SubmitEditorDraftOptions {
+  label?: string;
+  timeoutMs?: number;
+}
+
 export class V2WorkbookDriver {
   readonly serverUrl: string;
   readonly trace: V2SessionTrace;
   readonly #fetch: FetchLike;
   readonly #WebSocket: WebSocketConstructor;
   readonly #terminalTimeoutMs: number;
+  readonly #editorRevisions = new Map<string, number>();
 
   constructor(options: V2WorkbookDriverOptions) {
     this.serverUrl = options.serverUrl.replace(/\/$/, "");
@@ -72,6 +78,16 @@ export class V2WorkbookDriver {
     return this.#requestState("POST", "/api/workbook/events", { blockId, action, ...payload }, label);
   }
 
+  async submitEditorDraft(blockId: string, text: string, options: SubmitEditorDraftOptions = {}): Promise<WorkbookApiState> {
+    const revision = (this.#editorRevisions.get(blockId) ?? 0) + 1;
+    const label = options.label ?? `editor:${blockId}`;
+    const submitted = await this.#requestState("POST", "/api/workbook/editor", { blockId, revision, text }, `${label}:reviewing`);
+    this.#editorRevisions.set(blockId, revision);
+    const submittedStatus = this.#recordEditorProgress(blockId, revision, submitted);
+    if (submittedStatus === "feedback" || submittedStatus === "unlocked") return submitted;
+    return this.#waitForEditorReview(blockId, revision, `${label}:reviewed`, options.timeoutMs ?? this.#terminalTimeoutMs);
+  }
+
   async submitTerminalCommand(blockId: string, command: string, options: SubmitTerminalCommandOptions = {}): Promise<WorkbookApiState> {
     const input = /[\r\n]$/.test(command) ? command : `${command}\r`;
     const verifiedState = await this.#submitTerminalInput(blockId, input, options.label ?? `terminal:${blockId}:verified`, options.timeoutMs);
@@ -110,6 +126,31 @@ export class V2WorkbookDriver {
       if ((role !== "learner" && role !== "tutor") || typeof text !== "string") continue;
       recordReflectionTurn(this.trace, { blockId, role, text });
     }
+  }
+
+  async #waitForEditorReview(blockId: string, revision: number, label: string, timeoutMs: number): Promise<WorkbookApiState> {
+    const deadline = Date.now() + timeoutMs;
+    let attempt = 0;
+    while (Date.now() <= deadline) {
+      await delay(25);
+      const state = await this.readState(`${label}:${++attempt}`);
+      const status = this.#recordEditorProgress(blockId, revision, state);
+      if (status === "feedback" || status === "unlocked") return state;
+    }
+    throw new Error(`Timed out waiting for editor-practice review for ${blockId} revision ${revision}.`);
+  }
+
+  #recordEditorProgress(blockId: string, revision: number, state: WorkbookApiState): "reviewing" | "feedback" | "unlocked" | undefined {
+    const blocks = state.progress?.blocks;
+    if (!Array.isArray(blocks)) return undefined;
+    const block = blocks.find((candidate: any) => candidate?.id === blockId);
+    if (!block || typeof block !== "object") return undefined;
+    const status = (block as { editorStatus?: unknown }).editorStatus;
+    const publicRevision = (block as { revision?: unknown }).revision;
+    if ((status !== "reviewing" && status !== "feedback" && status !== "unlocked") || publicRevision !== revision) return undefined;
+    const feedback = typeof (block as { feedback?: unknown }).feedback === "string" ? (block as { feedback: string }).feedback : undefined;
+    recordEditorStatus(this.trace, feedback === undefined ? { blockId, revision, status } : { blockId, revision, status, feedback });
+    return status;
   }
 
   async #submitTerminalInput(blockId: string, input: string, label: string, timeoutMs = this.#terminalTimeoutMs): Promise<WorkbookApiState> {
@@ -168,4 +209,8 @@ export class V2WorkbookDriver {
 
 export function createV2WorkbookDriver(options: V2WorkbookDriverOptions): V2WorkbookDriver {
   return new V2WorkbookDriver(options);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

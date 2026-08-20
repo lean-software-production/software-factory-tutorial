@@ -1,14 +1,14 @@
 import { readdir, readFile } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import type { WorkbookEvent } from "../../tutorial-engine/src/workbook/events.js";
-import type { PublicWorkbookState, V2ArtifactSnapshot, V2RecordedPublicState, V2ReflectionEntry, V2SessionTrace, V2TerminalTranscriptEntry } from "./types.js";
+import type { PublicWorkbookState, V2ArtifactSnapshot, V2EditorEntry, V2RecordedPublicState, V2ReflectionEntry, V2SessionTrace, V2TerminalTranscriptEntry } from "./types.js";
 
-const PRIVATE_TEXT_PATTERNS = [/This is private tutor guidance/i, /Do not reveal an exact command/i, /Follow up until the learner/i];
-const DEFAULT_ARTIFACT_ROOTS = [".tmp"];
+const PRIVATE_TEXT_PATTERNS = [/This is private tutor guidance/i, /Do not reveal an exact command/i, /Follow up until the learner/i, /Private editor criterion/i];
+const DEFAULT_ARTIFACT_ROOTS = [".tmp", "editor-artifacts"]; 
 const MAX_ARTIFACT_BYTES = 64 * 1024;
 
 export function createEmptyV2SessionTrace(scenarioId: string): V2SessionTrace {
-  return { scenarioId, publicStates: [], terminalTranscript: [], reflections: [], events: [], artifacts: [] };
+  return { scenarioId, publicStates: [], terminalTranscript: [], reflections: [], editors: [], events: [], artifacts: [] };
 }
 
 export function recordPublicState(trace: V2SessionTrace, label: string, state: unknown): V2RecordedPublicState {
@@ -27,6 +27,14 @@ export function recordTerminalTranscript(trace: V2SessionTrace, entry: V2Termina
 export function recordReflectionTurn(trace: V2SessionTrace, entry: V2ReflectionEntry): V2ReflectionEntry {
   assertNoPrivateTutorState(entry, "reflection");
   trace.reflections.push({ ...entry });
+  return entry;
+}
+
+export function recordEditorStatus(trace: V2SessionTrace, entry: V2EditorEntry): V2EditorEntry {
+  assertNoPrivateTutorState(entry, "editor");
+  const previous = trace.editors.at(-1);
+  if (previous?.blockId === entry.blockId && previous.revision === entry.revision && previous.status === entry.status && previous.feedback === entry.feedback) return previous;
+  trace.editors.push({ ...entry });
   return entry;
 }
 

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { WorkbookEvent } from "../../tutorial-engine/src/workbook/events.js";
 import { buildV2JudgePrompt, createV2Report, verifyV2JudgeResult } from "../v2/judge.js";
-import { deterministicV2Gate, findV2Scenario, v2Scenarios } from "../v2/scenarios.js";
+import { deterministicV2Gate, findV2Scenario, satisfactoryEditorDraft, v2Scenarios } from "../v2/scenarios.js";
 import { createEmptyV2SessionTrace } from "../v2/session.js";
 import type { V2GateResult } from "../v2/scenarios.js";
 import type { V2SessionTrace } from "../v2/types.js";
@@ -17,12 +17,36 @@ function event(event: Record<string, unknown>): WorkbookEvent {
 function auditableTrace(): V2SessionTrace {
   const trace = createEmptyV2SessionTrace("v2-exact-command-success");
   trace.publicStates.push({
+    label: "editor:editor-practice:reviewed:1",
+    state: {
+      workbook: { title: "V2 Live Evaluator Workbook" },
+      progress: {
+        activeLessonId: lessonId,
+        activeBlockId: "exact-command",
+        completedLessons: [],
+        blocks: [
+          { id: "editor-practice", type: "editor-practice", completed: true, active: false, editorStatus: "unlocked", revision: 1 },
+          { id: "exact-command", type: "terminal-practice", completed: false, active: true }
+        ]
+      }
+    }
+  });
+  trace.publicStates.push({
     label: "terminal:exact-command:verified",
     state: {
       workbook: { title: "V2 Live Evaluator Workbook" },
-      progress: { activeLessonId: lessonId, activeBlockId: "exact-command", completedLessons: [], blocks: [] }
+      progress: {
+        activeLessonId: lessonId,
+        activeBlockId: "exact-command",
+        completedLessons: [],
+        blocks: [
+          { id: "editor-practice", type: "editor-practice", completed: true, active: false, editorStatus: "unlocked", revision: 1 },
+          { id: "exact-command", type: "terminal-practice", completed: false, active: true }
+        ]
+      }
     }
   });
+  trace.editors.push({ blockId: "editor-practice", revision: 1, status: "unlocked" });
   trace.terminalTranscript.push(
     { blockId: "exact-command", direction: "input", text: `${exactCommand}\r` },
     { blockId: "exact-command", direction: "output", text: "command block complete\r\n" },
@@ -33,10 +57,14 @@ function auditableTrace(): V2SessionTrace {
     { blockId: "reflection", role: "tutor", text: "That is visible learner-facing guidance." }
   );
   trace.events.push(
+    event({ type: "editor_practice_unlocked", lessonId, blockId: "editor-practice", revisionId: 1, path: "editor-artifacts/evaluator-editor.txt" }),
     event({ type: "observation_verified", lessonId, blockId: "exact-command", source: "terminal_observer", summary: "created and printed the command artifact", terminalHtml: "command block complete" }),
     event({ type: "block_completed", lessonId, blockId: "exact-command" })
   );
-  trace.artifacts.push({ path: ".tmp/evaluator-command.txt", content: "command block complete\n" });
+  trace.artifacts.push(
+    { path: "editor-artifacts/evaluator-editor.txt", content: satisfactoryEditorDraft },
+    { path: ".tmp/evaluator-command.txt", content: "command block complete\n" }
+  );
   return trace;
 }
 

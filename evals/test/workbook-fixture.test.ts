@@ -37,6 +37,7 @@ describe("v2 live-evaluation workbook fixture", () => {
     expect(chapter.lesson.dek).toBe("Exercise every public block shape the live evaluator drives.");
     expect(chapter.lesson.outcomes).toEqual([
       "Continue from a narrative block.",
+      "Submit an editor draft and wait for reviewer promotion.",
       "Run a learner-visible exact command in the embedded terminal.",
       "Attempt a clue-only terminal task without exposing private tutor guidance.",
       "Submit a reflection and finish through a transition."
@@ -44,31 +45,39 @@ describe("v2 live-evaluation workbook fixture", () => {
 
     expect(chapter.lesson.blocks.map((block) => [block.id, block.type, block.title])).toEqual([
       ["orientation", "narrative", "Start the disposable session"],
+      ["editor-practice", "editor-practice", "Draft the editor artifact"],
       ["exact-command", "terminal-practice", "Run the exact command"],
       ["clue-only", "terminal-practice", "Use the clues"],
       ["reflection", "reflection", "Reflection"],
       ["transition", "lesson-transition", "Finish the evaluator fixture"]
     ]);
 
-    const exactCommand = chapter.lesson.blocks[1]!;
+    const editorPractice = chapter.lesson.blocks[1]!;
+    if (editorPractice.type !== "editor-practice") throw new Error("editor-practice must be editor-practice");
+    expect(editorPractice.path).toBe("editor-artifacts/evaluator-editor.txt");
+    expect(editorPractice.markdown).toContain("editor-artifacts/evaluator-editor.txt");
+    expect(editorPractice.tutor).toContain("Private editor criterion");
+    expect(editorPractice.markdown).not.toContain("Private editor criterion");
+
+    const exactCommand = chapter.lesson.blocks[2]!;
     if (exactCommand.type !== "terminal-practice") throw new Error("exact-command must be terminal-practice");
     expect(exactCommand.markdown).toContain("```sh command\nmkdir -p .tmp && printf 'command block complete\\n' > .tmp/evaluator-command.txt && cat .tmp/evaluator-command.txt\n```");
     expect(exactCommand.tutor).toContain("private tutor guidance");
     expect(exactCommand.markdown).not.toContain("private tutor guidance");
 
-    const clueOnly = chapter.lesson.blocks[2]!;
+    const clueOnly = chapter.lesson.blocks[3]!;
     if (clueOnly.type !== "terminal-practice") throw new Error("clue-only must be terminal-practice");
     expect(clueOnly.markdown).toContain("Create `.tmp/evaluator-clue.txt`");
     expect(clueOnly.markdown).toContain("print it back with a command that reads the file");
     expect(clueOnly.markdown).not.toContain("```sh command");
     expect(clueOnly.tutor).toContain("Do not reveal an exact command");
 
-    const reflection = chapter.lesson.blocks[3]!;
+    const reflection = chapter.lesson.blocks[4]!;
     if (reflection.type !== "reflection") throw new Error("reflection must be reflection");
     expect(reflection.markdown).toContain("Which terminal block gave you an exact command");
     expect(reflection.tutor).toContain("Follow up");
 
-    const transition = chapter.lesson.blocks[4]!;
+    const transition = chapter.lesson.blocks[5]!;
     expect(transition.type).toBe("lesson-transition");
     expect(transition.markdown).toContain("The live evaluator has enough signal");
     expect((transition as any).tutor).toBeUndefined();

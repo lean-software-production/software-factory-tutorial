@@ -22,6 +22,14 @@ export interface V2ReflectionEntry {
   at?: string;
 }
 
+export interface V2EditorEntry {
+  blockId: string;
+  revision: number;
+  status: "reviewing" | "feedback" | "unlocked";
+  feedback?: string;
+  at?: string;
+}
+
 export interface V2ArtifactSnapshot {
   path: string;
   content: string;
@@ -32,6 +40,7 @@ export interface V2SessionTrace {
   publicStates: V2RecordedPublicState[];
   terminalTranscript: V2TerminalTranscriptEntry[];
   reflections: V2ReflectionEntry[];
+  editors: V2EditorEntry[];
   events: WorkbookEvent[];
   artifacts: V2ArtifactSnapshot[];
 }

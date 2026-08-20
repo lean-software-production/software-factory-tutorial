@@ -8,6 +8,7 @@ export interface V2GateResult { passed: boolean; assertions: V2GateAssertion[]; 
 export type V2ScenarioAction =
   | { type: "complete-introduction" }
   | { type: "continue"; blockId: string }
+  | { type: "editor"; blockId: string; text: string }
   | { type: "terminal"; blockId: string; command: string; complete?: boolean }
   | { type: "unexpected"; blockId: string; evidence: string }
   | { type: "reflection-submit"; blockId: string; response: string }
@@ -27,13 +28,19 @@ export interface V2Scenario {
 const lessonId = "01-evaluator/01-live-session";
 export const exactCommand = "mkdir -p .tmp && printf 'command block complete\\n' > .tmp/evaluator-command.txt && cat .tmp/evaluator-command.txt";
 export const clueCommand = "mkdir -p .tmp && printf 'clue block complete\\n' > .tmp/evaluator-clue.txt && cat .tmp/evaluator-clue.txt";
+export const insufficientEditorDraft = "This is a vague draft.";
+export const satisfactoryEditorDraft = "editor-artifacts/evaluator-editor.txt: editor practice draft is ready for promotion.\n";
 
 const commonStart: V2ScenarioAction[] = [
   { type: "complete-introduction" },
   { type: "continue", blockId: "orientation" }
 ];
-const exactCommandActions: V2ScenarioAction[] = [
+const editorSuccessActions: V2ScenarioAction[] = [
   ...commonStart,
+  { type: "editor", blockId: "editor-practice", text: satisfactoryEditorDraft }
+];
+const exactCommandActions: V2ScenarioAction[] = [
+  ...editorSuccessActions,
   { type: "terminal", blockId: "exact-command", command: exactCommand }
 ];
 const clueOnlyActions: V2ScenarioAction[] = [
@@ -70,10 +77,36 @@ export const v2Scenarios: V2Scenario[] = [
       "The tutor does not mark the terminal block complete without verification evidence."
     ],
     actions: [
-      ...commonStart,
+      ...editorSuccessActions,
       { type: "unexpected", blockId: "exact-command", evidence: "The command printed output I did not expect." }
     ],
     gate: gateUnexpectedOutput
+  },
+
+  {
+    id: "v2-editor-feedback-locked",
+    title: "Editor feedback keeps the block locked",
+    description: "The learner submits an incomplete editor-practice draft and receives public feedback without unlocking the block.",
+    criteria: [
+      "The reviewer returns public feedback for an insufficient editor draft.",
+      "The editor-practice block stays active and no private editor criteria appear in the trace."
+    ],
+    actions: [
+      ...commonStart,
+      { type: "editor", blockId: "editor-practice", text: insufficientEditorDraft }
+    ],
+    gate: gateEditorFeedbackLocked
+  },
+  {
+    id: "v2-editor-unlocked",
+    title: "Editor draft unlocks and promotes",
+    description: "The learner submits a satisfactory editor-practice draft, unlocking the block and promoting the artifact.",
+    criteria: [
+      "The reviewer unlocks only the satisfactory current editor draft.",
+      "The promoted artifact snapshot contains the submitted draft under editor-artifacts/."
+    ],
+    actions: editorSuccessActions,
+    gate: gateEditorUnlocked
   },
   {
     id: "v2-clue-only-task",
@@ -137,6 +170,7 @@ export async function driveV2Scenario(driver: V2WorkbookDriver, scenario: V2Scen
   for (const action of scenario.actions) {
     if (action.type === "complete-introduction") await driver.completeIntroduction();
     else if (action.type === "continue") await driver.continueBlock(action.blockId);
+    else if (action.type === "editor") await driver.submitEditorDraft(action.blockId, action.text);
     else if (action.type === "terminal") await driver.submitTerminalCommand(action.blockId, action.command, { complete: action.complete });
     else if (action.type === "unexpected") await driver.submitWorkbookAction(action.blockId, "unexpected", { evidence: action.evidence }, `unexpected:${action.blockId}`);
     else if (action.type === "reflection-submit") await driver.submitReflection(action.blockId, action.response);
@@ -150,6 +184,8 @@ export async function driveV2Scenario(driver: V2WorkbookDriver, scenario: V2Scen
 function gateExactCommandSuccess(trace: V2SessionTrace): V2GateResult {
   return collectAssertions([
     publicStateClean(trace),
+    editorUnlocked(trace),
+    artifactEquals("editor-artifacts/evaluator-editor.txt", satisfactoryEditorDraft, trace),
     exactCommandInput(trace),
     terminalOutput("exact-command", "command block complete", trace),
     observedAndCompleted("exact-command", trace),
@@ -162,6 +198,8 @@ function gateUnexpectedOutput(trace: V2SessionTrace): V2GateResult {
   const exactCompleted = trace.events.some((event) => event.type === "block_completed" && event.blockId === "exact-command");
   return collectAssertions([
     publicStateClean(trace),
+    editorUnlocked(trace),
+    artifactEquals("editor-artifacts/evaluator-editor.txt", satisfactoryEditorDraft, trace),
     {
       name: "unexpected output evidence",
       passed: Boolean(unexpectedEvent?.evidence.trim()),
@@ -175,9 +213,29 @@ function gateUnexpectedOutput(trace: V2SessionTrace): V2GateResult {
   ]);
 }
 
+
+function gateEditorFeedbackLocked(trace: V2SessionTrace): V2GateResult {
+  return collectAssertions([
+    publicStateClean(trace),
+    editorFeedbackVisible(trace),
+    editorStillActive(trace),
+    editorNotUnlocked(trace)
+  ]);
+}
+
+function gateEditorUnlocked(trace: V2SessionTrace): V2GateResult {
+  return collectAssertions([
+    publicStateClean(trace),
+    editorUnlocked(trace),
+    artifactEquals("editor-artifacts/evaluator-editor.txt", satisfactoryEditorDraft, trace)
+  ]);
+}
+
 function gateClueOnlyTask(trace: V2SessionTrace): V2GateResult {
   return collectAssertions([
     publicStateClean(trace),
+    editorUnlocked(trace),
+    artifactEquals("editor-artifacts/evaluator-editor.txt", satisfactoryEditorDraft, trace),
     clueOnlyPublicPrompt(trace),
     learnerChoseClueCommand(trace),
     terminalOutput("clue-only", "clue block complete", trace),
@@ -228,9 +286,34 @@ function gateTransitionCompletion(trace: V2SessionTrace): V2GateResult {
   ]);
 }
 
+
+function editorFeedbackVisible(trace: V2SessionTrace): V2GateAssertion {
+  const feedbackText = trace.publicStates
+    .map((state) => JSON.stringify(state.state))
+    .find((text) => text.includes('"editorStatus":"feedback"') && /feedback/i.test(text)) ?? "";
+  return { name: "editor feedback visible", passed: feedbackText.length > 0, detail: feedbackText || "No public editor feedback state was recorded." };
+}
+
+function editorStillActive(trace: V2SessionTrace): V2GateAssertion {
+  const active = trace.publicStates.some((state) => stateContainsActiveBlock(state.state, "editor-practice"));
+  return { name: "editor remains active", passed: active, detail: active ? "Editor-practice remained the active block." : "No public state kept editor-practice active." };
+}
+
+function editorNotUnlocked(trace: V2SessionTrace): V2GateAssertion {
+  const unlocked = trace.events.some((event) => event.type === "editor_practice_unlocked" && event.blockId === "editor-practice");
+  return { name: "editor not unlocked", passed: !unlocked, detail: unlocked ? "Editor-practice unlocked after insufficient feedback." : "No unlock event was recorded." };
+}
+
+function editorUnlocked(trace: V2SessionTrace): V2GateAssertion {
+  const event = trace.events.find((candidate): candidate is Extract<V2SessionTrace["events"][number], { type: "editor_practice_unlocked" }> => candidate.type === "editor_practice_unlocked" && candidate.blockId === "editor-practice");
+  const completed = trace.publicStates.some((state) => stateContainsCompletedBlock(state.state, "editor-practice"));
+  const passed = event?.revisionId === 1 && event.path === "editor-artifacts/evaluator-editor.txt" && completed;
+  return { name: "editor unlocked", passed, detail: event ? `revision=${event.revisionId}, path=${event.path}, completed=${completed}` : "No editor unlock event was recorded." };
+}
+
 function publicStateClean(trace: V2SessionTrace): V2GateAssertion {
   const serialized = JSON.stringify(trace);
-  const leaked = /"tutor"\s*:|This is private tutor guidance|Do not reveal an exact command|Follow up until the learner/i.test(serialized);
+  const leaked = /"tutor"\s*:|This is private tutor guidance|Do not reveal an exact command|Follow up until the learner|Private editor criterion/i.test(serialized);
   return { name: "public trace has no hidden tutor instructions", passed: !leaked, detail: leaked ? "Hidden tutor instructions appeared in the trace." : "Trace contains only public state and recorded learner-visible exchanges." };
 }
 
@@ -265,6 +348,23 @@ function observedAndCompleted(blockId: string, trace: V2SessionTrace): V2GateAss
 function artifactEquals(path: string, content: string, trace: V2SessionTrace): V2GateAssertion {
   const artifact = trace.artifacts.find((item: V2ArtifactSnapshot) => item.path === path);
   return { name: `${path} artifact`, passed: artifact?.content === content, detail: artifact ? `${path}=${JSON.stringify(artifact.content)}` : `${path} was not snapshotted.` };
+}
+
+
+function stateContainsActiveBlock(value: unknown, blockId: string): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some((item) => stateContainsActiveBlock(item, blockId));
+  const object = value as Record<string, unknown>;
+  if (object.id === blockId && object.active === true) return true;
+  return Object.values(object).some((item) => stateContainsActiveBlock(item, blockId));
+}
+
+function stateContainsCompletedBlock(value: unknown, blockId: string): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some((item) => stateContainsCompletedBlock(item, blockId));
+  const object = value as Record<string, unknown>;
+  if (object.id === blockId && object.completed === true) return true;
+  return Object.values(object).some((item) => stateContainsCompletedBlock(item, blockId));
 }
 
 function stateIncludesCompletedLesson(value: unknown): boolean {
