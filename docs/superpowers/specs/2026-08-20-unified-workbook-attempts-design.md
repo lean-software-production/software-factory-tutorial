@@ -6,6 +6,10 @@ Replace the workbook's separate editor reviewer, terminal observer, and reflecti
 long-running, restricted tutor session. Model every evaluated learner interaction as an immutable
 attempt. The tutor judges one attempt at a time and can declare only that the current attempt is ready.
 
+This design implements [ADR 0002](../../../tutorial-engine/docs/adr/0002-model-evaluated-learner-work-as-attempts.md)
+and [ADR 0003](../../../tutorial-engine/docs/adr/0003-use-one-long-running-workbook-tutor-session.md), which
+are proposed alongside it.
+
 Accepted work remains visible as a success checkpoint. The learner, not the tutor, chooses when to
 continue to the next block.
 
