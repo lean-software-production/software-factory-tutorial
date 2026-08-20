@@ -10,11 +10,11 @@ tutor: |-
 
 ## Checks
 
-From the repository root, in three terminals:
+From the repository root, start the line and watcher in the background, then steer the active run:
 
 ```sh
-./factory/refactor/run.sh
-./factory/watch.sh refactor
+./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &
+./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &
 ./factory/steer.sh refactor "Which file are you working on?"
 ```
 

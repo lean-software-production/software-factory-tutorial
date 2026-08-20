@@ -1,7 +1,7 @@
 ---
 type: terminal-practice
 tutor: |-
-  Guide the learner through running the completed factory from three terminals and inspecting the
+  Guide the learner through running the completed factory in the embedded terminal and inspecting
   files rather than building new ones. Success means they can point to factory/refactor/run.sh as
   the orchestrator, factory/ as the factory, refactor/ as the assembly line, the prompt/script pairs
   as stations, and themselves as operator, then map routing, evidence carrying, and stopping back to
@@ -13,12 +13,10 @@ tutor: |-
 
 ## Implementation order
 
-There is nothing to build. Run the whole thing once, from three terminals, and then work through
-what
-follows.
+There is nothing to build. Start the line and watcher in the background, then ask about that run:
 
 ```sh
-./factory/refactor/run.sh
-./factory/watch.sh refactor
+./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &
+./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &
 ./factory/ask.sh refactor "What happened in this run?"
 ```

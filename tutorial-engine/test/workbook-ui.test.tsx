@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { BlockView, LessonRail, LessonView, type Chapter, type Progress } from "../web-workbook/src/workbook-ui.js";
+import { BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Chapter, type Progress } from "../web-workbook/src/workbook-ui.js";
 
 const progress: Progress = {
   activeLessonId: "part/lesson-one",
@@ -124,6 +124,17 @@ describe("workbook lesson UI", () => {
     expect(markup).toContain("lesson-row current");
     expect(markup).toContain("Lesson Three");
     expect(markup).toContain("aria-disabled=\"true\"");
+  });
+
+  it("scrolls to the active lesson's sanitized DOM id", () => {
+    const scrollIntoView = vi.fn();
+    const getElementById = vi.fn((id: string) => id === "lesson-part-two-lesson-two" ? { scrollIntoView } : null);
+
+    scrollActiveLessonIntoView({ getElementById }, "part two/lesson#two");
+
+    expect(getElementById).toHaveBeenCalledWith("lesson-part-two-lesson-two");
+    expect(getElementById).not.toHaveBeenCalledWith("lesson-part two/lesson#two");
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
   });
 
   it("links lesson outlines to lesson-scoped safe block DOM ids", () => {

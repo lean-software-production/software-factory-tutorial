@@ -113,9 +113,8 @@ Work in this order. Complete each small step before moving to the next one:
          else empty end'
    ```
 
-6. **Steer a run.** Three terminals, all at the repository root. Run the line in the first, watch it
-   in
-   the second, and in the third, while the doer is working:
+6. **Steer a run.** Start the line and watcher in the background from the repository root. Then,
+   while the doer is working, send these messages:
 
    ```sh
    ./factory/steer.sh refactor "What are you changing, and why that file?"
