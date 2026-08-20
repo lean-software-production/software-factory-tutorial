@@ -128,6 +128,29 @@ describe("workbook lesson contract", () => {
     expect(practice.markdown).toContain("pi --no-session");
   });
 
+  it("loads the real migrated workbook rail with all 13 lessons", async () => {
+    const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
+
+    expect(workbook.identity.title).toBe("Software Factory Tutorial");
+    expect(workbook.chapters).toHaveLength(13);
+    expect(workbook.chapters.map((chapter) => chapter.id)).toEqual([
+      "01-the-validation-loop/01-run-an-agent-headlessly",
+      "01-the-validation-loop/02-build-a-doer",
+      "01-the-validation-loop/03-build-a-validator",
+      "01-the-validation-loop/04-feed-the-findings-back",
+      "02-build-the-factory/01-join-them-into-a-line",
+      "02-build-the-factory/02-read-only-validator",
+      "02-build-the-factory/03-compose-and-branch",
+      "02-build-the-factory/04-take-the-pause-off",
+      "02-build-the-factory/05-record-what-happened",
+      "02-build-the-factory/06-watch-it-while-it-runs",
+      "02-build-the-factory/07-ask-what-happened",
+      "02-build-the-factory/08-talk-to-a-station",
+      "02-build-the-factory/09-oversee-the-orchestrator",
+    ]);
+    expect(workbook.chapters.every((chapter) => chapter.lesson)).toBe(true);
+  });
+
   it("keeps real curriculum block Markdown learner-facing", async () => {
     const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
     const offenders = workbook.chapters.flatMap((chapter) =>
