@@ -1,0 +1,25 @@
+# Tutorial engine Architecture Decision Records
+
+This directory records durable architecture decisions about the tutorial engine. It does not govern the
+tutorial curriculum, lesson specifications, or general repository administration.
+
+## Working with ADRs
+
+Run ADRgen from `tutorial-engine/`:
+
+```sh
+adrgen create "Decision title"
+adrgen status <number> accepted
+adrgen create "Replacement decision" --supersedes <number>
+adrgen list
+```
+
+Use ADRs for decisions that shape the engine’s architecture. State the context, the decision, and its
+consequences. Do not rewrite an accepted decision; create a superseding ADR when the decision changes.
+Update the index below whenever you create a record or change its status.
+
+## Index
+
+| ADR | Status | Title |
+| --- | --- | --- |
+| [0001](0001-use-architecture-decision-records.md) | accepted | Use Architecture Decision Records |

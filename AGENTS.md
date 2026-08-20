@@ -1,5 +1,12 @@
 # Software factory tutorial
 
+## Tutorial-engine architecture decisions
+
+Record durable tutorial-engine architecture decisions as ADRs in `tutorial-engine/docs/adr/`. Run ADRgen
+from `tutorial-engine/`, keep `tutorial-engine/docs/adr/README.md` indexed, and supersede accepted ADRs
+rather than rewriting them. This convention does not apply to the tutorial curriculum or lesson
+specifications.
+
 ## Writing lesson specifications
 
 Lessons live in `docs/specs/NNN-*.md` and are read by two audiences: the coach agent, which
