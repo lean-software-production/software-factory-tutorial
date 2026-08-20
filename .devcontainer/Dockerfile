@@ -21,6 +21,8 @@ ARG NPM_VERSION=11.19.0
 # Pinned to the version this repository depends on, so the globally installed
 # `pi` the lessons call matches the SDK the tutor engine imports.
 ARG PI_VERSION=0.83.0
+# Go release installed below; pin it with its matching SHA-256 per architecture.
+ARG ADRGEN_VERSION=0.4.1-beta
 
 # -----------------------------------------------------------------------------
 # Layer 1: OS utilities
@@ -65,7 +67,25 @@ RUN npm install -g "npm@${NPM_VERSION}" \
     && npm cache clean --force
 
 # -----------------------------------------------------------------------------
-# Layer 4: state-volume mount point
+# Layer 4: ADR generator
+# -----------------------------------------------------------------------------
+# The Go release ships a static Linux binary for both devcontainer target
+# architectures. Verify the publisher's checksum before putting it on PATH.
+RUN case "${TARGETARCH}" in \
+      amd64) adrgen_arch=x86_64; adrgen_sha=36b29d5c9d84789d889b722b62c95a0d651473490a865e7bd04b36b09fb57b65 ;; \
+      arm64) adrgen_arch=arm64; adrgen_sha=f39cafff77f69805506f3484f8cd0d3617f66a3592da35a6f2b7ccba3257298e ;; \
+      *) echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && archive="adrgen_Linux_${adrgen_arch}.tar.gz" \
+    && curl -fsSL "https://github.com/asiermarques/adrgen/releases/download/v${ADRGEN_VERSION}/${archive}" \
+        -o "/tmp/${archive}" \
+    && echo "${adrgen_sha}  /tmp/${archive}" | sha256sum -c - \
+    && tar -xzf "/tmp/${archive}" -C /tmp adrgen \
+    && install /tmp/adrgen /usr/local/bin/adrgen \
+    && rm "/tmp/${archive}" /tmp/adrgen
+
+# -----------------------------------------------------------------------------
+# Layer 5: state-volume mount point
 # -----------------------------------------------------------------------------
 # Created here, owned by vscode, so the named volume Docker initialises from it
 # inherits that ownership. Without this the fresh volume is root-owned and
@@ -73,7 +93,7 @@ RUN npm install -g "npm@${NPM_VERSION}" \
 RUN install -d -o vscode -g vscode /home/vscode/.tutorial-state
 
 # -----------------------------------------------------------------------------
-# Layer 5: Environment defaults
+# Layer 6: Environment defaults
 # -----------------------------------------------------------------------------
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
