@@ -304,7 +304,7 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
       view.destroy();
       if (editor.current === view) editor.current = null;
     };
-  }, [block.id, canEdit, initialText, refresh]);
+  }, [block.id, canEdit, refresh]);
 
   const status = editorStatusText(state, completed);
   return <section id={blockElementId(lessonId, block.id)} className={`work-block editor-practice ${state?.active ? "is-active" : ""}`}>

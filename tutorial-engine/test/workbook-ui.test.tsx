@@ -209,6 +209,20 @@ describe("workbook lesson UI", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ blockId: "edit-answer", revision: 1, text: "second draft" });
   });
 
+  it("preserves editor focus while refreshed state arrives", async () => {
+    const refresh = vi.fn();
+    const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: "" } as any), refresh }));
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']");
+    editor!.focus();
+    expect(document.activeElement).toBe(editor);
+
+    await act(async () => {
+      mountedRoot!.render(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "waiting" } as any), refresh }));
+    });
+
+    expect(document.activeElement).toBe(container.querySelector("[role='textbox'][contenteditable='true']"));
+  });
+
   it("continues submitting after a refreshed draft recreates the editor", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ progress: activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "waiting" } as any) }) }));
