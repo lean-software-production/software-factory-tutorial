@@ -20,6 +20,7 @@ const lesson: WorkbookLesson = {
   outcomes: ["Fixture outcome."],
   blocks: [
     { id: "narrate", type: "narrative", title: "Narrate", markdown: "Body" },
+    { id: "edit-answer", type: "editor-practice", title: "Edit", markdown: "Write the answer.", path: "factory/answer.md", tutor: "Private editor rubric." },
     { id: "first-practice", type: "terminal-practice", title: "First", markdown: "Practice body", tutor: "Observe the first result." },
     { id: "second-practice", type: "terminal-practice", title: "Second", markdown: "Practice body", tutor: "Observe the second result." },
     { id: "reflect", type: "reflection", title: "Reflect", markdown: "Question?", tutor: "Discuss the question." },
@@ -37,6 +38,7 @@ describe("workbook event projection", () => {
     expect(initial.activeBlockId).toBe("narrate");
     expect(initial.blocks.map((block) => [block.id, block.emerged, block.ready, block.active])).toEqual([
       ["narrate", true, true, true],
+      ["edit-answer", false, false, false],
       ["first-practice", false, false, false],
       ["second-practice", false, false, false],
       ["reflect", false, false, false],
@@ -44,14 +46,15 @@ describe("workbook event projection", () => {
     ]);
 
     const continued = project([nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" })], lesson);
-    expect(continued.activeBlockId).toBe("first-practice");
+    expect(continued.activeBlockId).toBe("edit-answer");
     expect(continued.blocks.find((block) => block.id === "narrate")?.completed).toBe(true);
-    expect(continued.blocks.find((block) => block.id === "first-practice")).toMatchObject({ emerged: true, ready: true, active: true });
+    expect(continued.blocks.find((block) => block.id === "edit-answer")).toMatchObject({ emerged: true, ready: true, active: true, editorStatus: "editing" });
   });
 
   it("keeps unexpected output as evidence without completing the active block", () => {
     const events = [
       nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }),
+      nowEvent({ type: "editor_practice_unlocked", lessonId: LESSON_ID, blockId: "edit-answer", revisionId: 2, path: "factory/answer.md" }),
       nowEvent({ type: "unexpected_output_submitted", lessonId: LESSON_ID, blockId: "first-practice", evidence: "command not found" }),
     ];
     const state = project(events, lesson);
@@ -61,7 +64,10 @@ describe("workbook event projection", () => {
   });
 
   it("holds verified terminal practice at its checkpoint until the learner completes it", () => {
-    const started = [nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" })];
+    const started = [
+      nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }),
+      nowEvent({ type: "editor_practice_unlocked", lessonId: LESSON_ID, blockId: "edit-answer", revisionId: 2, path: "factory/answer.md" }),
+    ];
     const verified = [...started, nowEvent({ type: "observation_verified", lessonId: LESSON_ID, blockId: "first-practice", source: "terminal_observer", summary: "The expected output appeared.", terminalHtml: "<pre class=\"frozen-terminal-output\">output</pre>" })];
     const checkpoint = project(verified, lesson);
     expect(checkpoint.activeBlockId).toBe("first-practice");
@@ -76,9 +82,32 @@ describe("workbook event projection", () => {
     expect(project(events, lesson).activeBlockId).toBe("second-practice");
   });
 
+  it("completes editor practice only from a valid unlock while the editor block is active", () => {
+    const started = [nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" })];
+    const forgedCompletion = project([...started, nowEvent({ type: "block_completed", lessonId: LESSON_ID, blockId: "edit-answer" })], lesson);
+    expect(forgedCompletion.activeBlockId).toBe("edit-answer");
+    expect(forgedCompletion.blocks.find((block) => block.id === "edit-answer")).toMatchObject({ completed: false, editorStatus: "editing" });
+
+    const staleUnlock = project([...started, nowEvent({ type: "editor_practice_unlocked", lessonId: LESSON_ID, blockId: "edit-answer", revisionId: 0, path: "factory/answer.md" })], lesson);
+    expect(staleUnlock.activeBlockId).toBe("edit-answer");
+    expect(staleUnlock.blocks.find((block) => block.id === "edit-answer")?.completed).toBe(false);
+
+    const earlyUnlock = project([
+      nowEvent({ type: "editor_practice_unlocked", lessonId: LESSON_ID, blockId: "edit-answer", revisionId: 2, path: "factory/answer.md" }),
+      nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }),
+    ], lesson);
+    expect(earlyUnlock.activeBlockId).toBe("edit-answer");
+    expect(earlyUnlock.blocks.find((block) => block.id === "edit-answer")?.completed).toBe(false);
+
+    const unlocked = project([...started, nowEvent({ type: "editor_practice_unlocked", lessonId: LESSON_ID, blockId: "edit-answer", revisionId: 2, path: "factory/answer.md" })], lesson);
+    expect(unlocked.activeBlockId).toBe("first-practice");
+    expect(unlocked.blocks.find((block) => block.id === "edit-answer")).toMatchObject({ completed: true, editorStatus: "unlocked", revision: 2 });
+  });
+
   it("uses reflection completion and generic transition continuation to complete the lesson", () => {
     const events = [
       nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }),
+      nowEvent({ type: "editor_practice_unlocked", lessonId: LESSON_ID, blockId: "edit-answer", revisionId: 2, path: "factory/answer.md" }),
       nowEvent({ type: "observation_verified", lessonId: LESSON_ID, blockId: "first-practice", source: "terminal_observer", summary: "First done.", terminalHtml: "<pre>1</pre>" }),
       nowEvent({ type: "block_completed", lessonId: LESSON_ID, blockId: "first-practice" }),
       nowEvent({ type: "observation_verified", lessonId: LESSON_ID, blockId: "second-practice", source: "terminal_observer", summary: "Second done.", terminalHtml: "<pre>2</pre>" }),
@@ -88,15 +117,18 @@ describe("workbook event projection", () => {
       nowEvent({ type: "reflection_completed", lessonId: LESSON_ID, blockId: "reflect" }),
     ];
     expect(project(events, lesson).activeBlockId).toBe("finish");
-    expect(project(events, lesson).blocks.map((block) => block.emerged)).toEqual([true, true, true, true, true]);
+    expect(project(events, lesson).blocks.map((block) => block.emerged)).toEqual([true, true, true, true, true, true]);
     expect(project([...events, nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "finish" })], lesson).completedLessons).toEqual([LESSON_ID]);
   });
 
   it("rebuilds resume state from JSONL events, not projection cache or scroll position", async () => {
     const dir = await workspace(); const store = new WorkbookEventStore(dir);
     await store.append(nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }));
+    await store.append(nowEvent({ type: "editor_practice_unlocked", lessonId: LESSON_ID, blockId: "edit-answer", revisionId: 2, path: "factory/answer.md" }));
     await store.writeProjection({ activeLessonId: LESSON_ID, activeBlockId: "wrong", completedLessons: [], blocks: [], unexpected: {}, reflections: {}, reflectionConversations: {} });
-    expect(project(await store.read(), lesson).activeBlockId).toBe("first-practice");
+    const replayed = project(await store.read(), lesson);
+    expect(replayed.activeBlockId).toBe("first-practice");
+    expect(replayed.blocks.find((block) => block.id === "edit-answer")).toMatchObject({ completed: true, editorStatus: "unlocked", revision: 2 });
   });
 
   it("writes workbook events in the tutor's neutral state directory", async () => {
@@ -109,6 +141,7 @@ describe("workbook event projection", () => {
   it("has no event that lets unrelated file changes complete terminal practice", () => {
     const events = [
       nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }),
+      nowEvent({ type: "editor_practice_unlocked", lessonId: LESSON_ID, blockId: "edit-answer", revisionId: 2, path: "factory/answer.md" }),
       { type: "file_change_observed", at: new Date().toISOString(), lessonId: LESSON_ID, blockId: "first-practice" } as any,
     ];
     expect(project(events, lesson).activeBlockId).toBe("first-practice");

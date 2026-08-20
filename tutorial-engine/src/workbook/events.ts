@@ -15,10 +15,11 @@ export type WorkbookEvent =
   | { type: "reflection_follow_up_submitted"; at: string; lessonId: string; blockId: string; response: string }
   | { type: "reflection_reply_recorded"; at: string; lessonId: string; blockId: string; response: string }
   | { type: "reflection_completed"; at: string; lessonId: string; blockId: string }
+  | { type: "editor_practice_unlocked"; at: string; lessonId: string; blockId: string; revisionId: number; path: string }
   | { type: "help_requested"; at: string; lessonId: string; blockId: string; request: string }
   | { type: "lesson_transitioned"; at: string; lessonId: string; blockId: string };
 
-export interface BlockProgress { id: string; type: string; emerged: boolean; ready: boolean; active: boolean; completed: boolean; verified: boolean; feedback?: string; terminalHtml?: string; }
+export interface BlockProgress { id: string; type: string; emerged: boolean; ready: boolean; active: boolean; completed: boolean; verified: boolean; feedback?: string; terminalHtml?: string; revision?: number; editorStatus?: "editing" | "reviewing" | "feedback" | "unlocked"; }
 export type ReflectionTurn = { role: "learner" | "tutor"; text: string };
 export interface WorkbookProjection { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]>; }
 
@@ -28,13 +29,14 @@ export function introductionCompleted(events: readonly WorkbookEvent[]): boolean
 }
 
 export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson): WorkbookProjection {
-  const continued = new Set<string>();
-  const terminalCompletions = new Set<string>();
-  const reflectionCompletions = new Set<string>();
   const unexpected: Record<string, string[]> = {};
   const reflections: Record<string, string> = {};
   const reflectionConversations: Record<string, ReflectionTurn[]> = {};
   const verified = new Map<string, { summary: string; terminalHtml: string }>();
+  const editorUnlocks = new Map<string, { revision: number; path: string }>();
+  const completed = new Set<string>();
+  const activeBlock = () => lesson.blocks.find((block) => !completed.has(block.id));
+
   for (const event of events) {
     if (!("lessonId" in event) || event.lessonId !== lesson.id) continue;
     if (event.type === "unexpected_output_submitted") (unexpected[event.blockId] ??= []).push(event.evidence);
@@ -42,31 +44,40 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
     if (event.type === "reflection_follow_up_submitted") (reflectionConversations[event.blockId] ??= []).push({ role: "learner", text: event.response });
     if (event.type === "reflection_reply_recorded") (reflectionConversations[event.blockId] ??= []).push({ role: "tutor", text: event.response });
     if (event.type === "observation_verified") verified.set(event.blockId, { summary: event.summary, terminalHtml: event.terminalHtml });
-    if (event.type === "block_continued" || event.type === "lesson_transitioned") continued.add(event.blockId);
-    if (event.type === "block_completed") terminalCompletions.add(event.blockId);
-    if (event.type === "reflection_completed") reflectionCompletions.add(event.blockId);
+
+    const active = activeBlock();
+    if (!active || active.id !== event.blockId) continue;
+    if (event.type === "block_continued" && (active.type === "narrative" || active.type === "lesson-transition")) completed.add(active.id);
+    if (event.type === "lesson_transitioned" && active.type === "lesson-transition") completed.add(active.id);
+    if (event.type === "block_completed" && active.type === "terminal-practice" && verified.has(active.id)) completed.add(active.id);
+    if (event.type === "reflection_completed" && active.type === "reflection") completed.add(active.id);
+    if (event.type === "editor_practice_unlocked" && active.type === "editor-practice" && Number.isInteger(event.revisionId) && event.revisionId > 0 && event.path === active.path) {
+      editorUnlocks.set(active.id, { revision: event.revisionId, path: event.path });
+      completed.add(active.id);
+    }
   }
 
-  const completed = new Set<string>();
-  for (const block of lesson.blocks) {
-    if ((block.type === "narrative" || block.type === "lesson-transition") && continued.has(block.id)) completed.add(block.id);
-    if (block.type === "terminal-practice" && verified.has(block.id) && terminalCompletions.has(block.id)) completed.add(block.id);
-    if (block.type === "reflection" && reflectionCompletions.has(block.id)) completed.add(block.id);
-  }
   const next = lesson.blocks.find((block) => !completed.has(block.id));
   const active = next ?? lesson.blocks.at(-1) ?? lesson.blocks[0]!;
   const activeIndex = Math.max(0, lesson.blocks.findIndex((block) => block.id === active.id));
-  const blocks = lesson.blocks.map((block, index) => ({
-    id: block.id,
-    type: block.type,
-    completed: completed.has(block.id),
-    verified: verified.has(block.id),
-    feedback: verified.get(block.id)?.summary,
-    terminalHtml: verified.get(block.id)?.terminalHtml,
-    emerged: index <= activeIndex,
-    ready: index <= activeIndex,
-    active: next !== undefined && block.id === active.id
-  }));
+  const blocks = lesson.blocks.map((block, index) => {
+    const unlock = editorUnlocks.get(block.id);
+    const terminalFeedback = verified.get(block.id);
+    const isActive = next !== undefined && block.id === active.id;
+    return {
+      id: block.id,
+      type: block.type,
+      completed: completed.has(block.id),
+      verified: verified.has(block.id),
+      feedback: terminalFeedback?.summary,
+      terminalHtml: terminalFeedback?.terminalHtml,
+      revision: unlock?.revision,
+      editorStatus: unlock ? "unlocked" as const : (block.type === "editor-practice" && isActive ? "editing" as const : undefined),
+      emerged: index <= activeIndex,
+      ready: index <= activeIndex,
+      active: isActive
+    };
+  });
   const lessonComplete = lesson.blocks.length > 0 && lesson.blocks.every((block) => completed.has(block.id));
   return { activeLessonId: lesson.id, activeBlockId: active.id, completedLessons: lessonComplete ? [lesson.id] : [], blocks, unexpected, reflections, reflectionConversations };
 }
