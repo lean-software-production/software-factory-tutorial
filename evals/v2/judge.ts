@@ -1,6 +1,43 @@
-import { invokeJudge, judgePass, type JudgeDimension } from "../harness/judge.js";
+import { spawn } from "node:child_process";
 import type { V2GateResult, V2Scenario } from "./scenarios.js";
 import type { V2ArtifactSnapshot, V2SessionTrace } from "./types.js";
+
+export interface JudgeDimension { score: 0 | 1 | 2; citations: number[]; rationale: string; }
+
+function extractJson(text: string): unknown {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] ?? text;
+  const start = fenced.indexOf("{");
+  const end = fenced.lastIndexOf("}");
+  if (start < 0 || end < start) throw new Error("Judge did not return JSON.");
+  return JSON.parse(fenced.slice(start, end + 1));
+}
+
+async function invokeJudge(prompt: string, model = process.env.EVAL_JUDGE_MODEL): Promise<unknown> {
+  if (!model) throw new Error("EVAL_JUDGE_MODEL is required for a live eval judge call.");
+  const [command, ...args] = (process.env.EVAL_JUDGE_COMMAND ?? "pi --no-session").split(/\s+/);
+  if (!command) throw new Error("EVAL_JUDGE_COMMAND is empty.");
+  const output = await new Promise<string>((resolve, reject) => {
+    const child = spawn(command, [...args, "--model", model, "-p"], {
+      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", NO_COLOR: "1" },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let text = "";
+    let error = "";
+    child.stdout.on("data", (chunk) => { text += String(chunk); });
+    child.stderr.on("data", (chunk) => { error += String(chunk); });
+    child.once("error", reject);
+    child.once("close", (code) => code === 0 ? resolve(text) : reject(new Error(`Judge command exited ${code}: ${error}`)));
+    child.stdin.end(prompt);
+  });
+  return extractJson(output);
+}
+
+function judgePass(result: { dimensions: Record<string, JudgeDimension> }): { passed: boolean; percentage: number } {
+  const scores = Object.values(result.dimensions).map((dimension) => dimension.score);
+  const total = scores.reduce<number>((sum, score) => sum + score, 0);
+  const maximum = scores.length * 2;
+  return { passed: scores.every((score) => score > 0) && total / maximum >= 0.8, percentage: maximum ? total / maximum : 0 };
+}
 
 export interface V2JudgeResult {
   dimensions: Record<V2JudgeDimensionName, JudgeDimension>;

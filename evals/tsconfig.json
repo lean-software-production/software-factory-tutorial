@@ -13,6 +13,6 @@
     "verbatimModuleSyntax": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["**/*.ts"],
-  "exclude": ["reports"]
+  "include": ["run.ts", "v2/**/*.ts", "test/**/*.test.ts"],
+  "exclude": ["harness", "scenarios", "reports"]
 }
