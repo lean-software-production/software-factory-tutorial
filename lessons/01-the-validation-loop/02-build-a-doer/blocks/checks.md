@@ -4,29 +4,20 @@ tutor: |-
   Ask the learner to answer the checks from the block. A satisfactory answer says refactor-do.sh
   announces its phases, records a baseline in factory/.tmp, runs Pi from calculator with edit tools
   and no bash, makes at most one focused calculator change, and leaves testing and quality checks to
-  the learner. Accept equivalent manual review commands, but require npm test and node
+  the learner. Accept equivalent manual diff review, but require npm test and node
   scripts/quality.mjs or a clear reason they could not run. Follow up if they describe the doer as
-  having validated its own work; the lesson is about keeping that evidence outside the doer.
+  having checked its own work; the lesson is about keeping that evidence outside the doer.
 ---
 
 ## Checks
 
-From the repository root, make the script executable and run it:
+Before moving on, answer these checks:
 
-```sh
-chmod +x factory/refactor-do.sh
-./factory/refactor-do.sh
-```
+- Did `refactor-do.sh` announce each step before invoking Pi?
+- Did it record the baseline in `factory/.tmp/refactor-quality-before.txt`?
+- Did it run Pi from `calculator/` with `read,edit,write,grep,find,ls` and no `bash` tool?
+- Did the calculator diff show at most one focused change?
+- Did you run `npm test` and `node scripts/quality.mjs` outside the doer?
 
-Then review the change yourself. Read the diff, and run the evidence the doer was not allowed to
-run:
-
-```sh
-(cd calculator && npm test)
-(cd calculator && node scripts/quality.mjs)
-```
-
-Do not ask the doer to run or interpret these checks.
-
-Verify manually that `refactor-do.sh` announces each step before invoking Pi, that the doer works
-only in `calculator/`, makes at most one focused change, and cannot invoke a shell tool.
+If the doer checked its own work, the boundary moved. Put the evidence back outside the doer before
+you continue.

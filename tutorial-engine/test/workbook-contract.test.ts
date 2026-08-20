@@ -136,6 +136,31 @@ describe("workbook lesson contract", () => {
     expect(practice.markdown).toContain("pi --no-session");
   });
 
+  it("loads the real migrated lesson 002 editor-practice blocks", async () => {
+    const lessonDir = resolve(import.meta.dirname, "../../lessons/01-the-validation-loop/02-build-a-doer");
+    const lesson = await loadWorkbookLesson(lessonDir, "01-the-validation-loop/02-build-a-doer");
+    expect(lesson.blocks.map((block) => block.id)).toEqual([
+      "key-concept",
+      "write-doer-prompt",
+      "write-doer-harness",
+      "run-doer",
+      "check-the-doer",
+      "alternatives-choose-another-doer",
+      "checks",
+      "pressure-test",
+    ]);
+
+    const prompt = lesson.blocks.find((block) => block.id === "write-doer-prompt");
+    if (prompt?.type !== "editor-practice") throw new Error("write-doer-prompt must be editor-practice");
+    expect(prompt.path).toBe("factory/refactor.md");
+    expect(prompt.tutor.trim().length).toBeGreaterThan(0);
+
+    const harness = lesson.blocks.find((block) => block.id === "write-doer-harness");
+    if (harness?.type !== "editor-practice") throw new Error("write-doer-harness must be editor-practice");
+    expect(harness.path).toBe("factory/refactor-do.sh");
+    expect(harness.tutor.trim().length).toBeGreaterThan(0);
+  });
+
   it("loads the real migrated workbook rail with all 13 lessons", async () => {
     const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
 
