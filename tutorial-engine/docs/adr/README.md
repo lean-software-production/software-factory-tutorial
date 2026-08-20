@@ -23,5 +23,5 @@ Update the index below whenever you create a record or change its status.
 | ADR | Status | Title |
 | --- | --- | --- |
 | [0001](0001-use-architecture-decision-records.md) | accepted | Use Architecture Decision Records |
-| [0002](0002-model-evaluated-learner-work-as-attempts.md) | proposed | Model evaluated learner work as attempts |
-| [0003](0003-use-one-long-running-workbook-tutor-session.md) | proposed | Use one long-running workbook tutor session |
+| [0002](0002-model-evaluated-learner-work-as-attempts.md) | accepted | Model evaluated learner work as attempts |
+| [0003](0003-use-one-long-running-workbook-tutor-session.md) | accepted | Use one long-running workbook tutor session |

@@ -2,10 +2,11 @@
 
 ## Tutorial-engine architecture decisions
 
-Record durable tutorial-engine architecture decisions as ADRs in `tutorial-engine/docs/adr/`. Run ADRgen
-from `tutorial-engine/`, keep `tutorial-engine/docs/adr/README.md` indexed, and supersede accepted ADRs
-rather than rewriting them. This convention does not apply to the tutorial curriculum or lesson
-specifications.
+Record durable tutorial-engine architecture decisions as ADRs in `tutorial-engine/docs/adr/`. ADRgen is
+installed in the development container, not on the host: from the repository root run
+`devcontainer exec --workspace-folder . bash -lc 'cd tutorial-engine && adrgen <command>'`. Keep
+`tutorial-engine/docs/adr/README.md` indexed, and supersede accepted ADRs rather than rewriting them.
+This convention does not apply to the tutorial curriculum or lesson specifications.
 
 ## Writing lesson specifications
 
