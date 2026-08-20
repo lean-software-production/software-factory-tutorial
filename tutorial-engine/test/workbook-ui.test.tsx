@@ -209,6 +209,29 @@ describe("workbook lesson UI", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ blockId: "edit-answer", revision: 1, text: "second draft" });
   });
 
+  it("continues submitting after a refreshed draft recreates the editor", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ progress: activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "waiting" } as any) }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const refresh = vi.fn();
+    const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: "" } as any), refresh }));
+
+    await act(async () => {
+      mountedRoot!.render(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "waiting" } as any), refresh }));
+    });
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']");
+    editor!.textContent = "second draft";
+    await act(async () => {
+      editor!.dispatchEvent(new window.Event("input", { bubbles: true }));
+      vi.advanceTimersByTime(750);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ blockId: "edit-answer", revision: 2, text: "second draft" });
+  });
+
   it("polls public state while an editor review is in flight and refreshes on completion", async () => {
     vi.useFakeTimers();
     const unlockedState = { progress: activeEditorProgress({ active: false, completed: true, revision: 1, editorStatus: "unlocked", feedback: "Accepted." } as any) };

@@ -87,6 +87,17 @@ describe("EditorReviewAdapter", () => {
     expect(seenPrompts[0]).not.toContain(workspacePathThatMustNotLeak);
   });
 
+  it("waits without feedback while the reviewer says the draft is unfinished", async () => {
+    const factory: EditorReviewSessionFactory = async () => ({ async prompt() { return "WAITING"; } });
+
+    await expect(new EditorReviewAdapter(factory).review({
+      lessonId: "lesson-id",
+      blockId: "block-id",
+      privateBrief: "Approve the exact draft.",
+      draft: { revision: 1, text: "half written" }
+    })).resolves.toEqual({ status: "waiting" });
+  });
+
   it("returns unlocked when the reviewer calls unlock_editor_practice for the current revision", async () => {
     const factory: EditorReviewSessionFactory = async ({ customTools }) => ({
       async prompt() {

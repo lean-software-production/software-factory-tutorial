@@ -218,6 +218,7 @@ const EDITOR_REVIEW_MAX_POLLS = 480;
 function editorStatusText(state: BlockProgress | undefined, completed: boolean): string {
   if (completed || state?.editorStatus === "unlocked") return "Unlocked — the accepted revision has been written to the target file.";
   if (state?.editorStatus === "reviewing") return "Reviewing your latest revision…";
+  if (state?.editorStatus === "waiting") return "Keep writing — the reviewer will check again after you pause.";
   if (state?.editorStatus === "feedback") return "Feedback received — keep editing and pause to request another review.";
   return "Editing — changes are reviewed automatically after you pause.";
 }
@@ -269,6 +270,7 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
 
   useEffect(() => {
     if (!canEdit || !editorElement.current) return;
+    activeRef.current = true;
     const parent = editorElement.current;
     const scheduleReview = (text: string) => {
       if (!activeRef.current) return;

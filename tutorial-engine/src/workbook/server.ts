@@ -86,7 +86,7 @@ function publicLesson(lesson: WorkbookLesson, blocks: WorkbookBlock[]) {
   return { ...lesson, blocks: blocks.map(publicBlock) };
 }
 
-type PublicEditorProgress = { revision: number; editorStatus: "reviewing" | "feedback"; feedback?: string };
+type PublicEditorProgress = { revision: number; editorStatus: "reviewing" | "waiting" | "feedback"; feedback?: string };
 type PublicEditorProgressByBlock = ReadonlyMap<string, PublicEditorProgress>;
 const editorProgressKey = (lessonId: string, blockId: string) => `${lessonId}\u0000${blockId}`;
 
@@ -212,6 +212,10 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         const currentActive = activeEditorBlock();
         const currentDraft = await editorDraftStore.read(lessonId, blockId);
         if (!currentActive || currentActive.lesson.id !== lessonId || currentActive.block.id !== blockId || !currentDraft || currentDraft.revision !== request.draft.revision) return;
+        if (decision.status === "waiting") {
+          editorProgress.set(key, { revision: request.draft.revision, editorStatus: "waiting" });
+          return;
+        }
         if (decision.status === "feedback") {
           setEditorFeedback(lessonId, blockId, request.draft.revision, decision.message);
           return;
