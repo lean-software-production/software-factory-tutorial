@@ -13,7 +13,7 @@ tutor: |-
 
 ## Implementation order
 
-Teach and build this lesson in this order. Complete each small step before moving to the next one:
+Work in this order. Complete each small step before moving to the next one:
 
 1. **Write the doer prompt.** Create `factory/refactor.md`. Nothing else tells the doer what you
    want, so the prompt states the job directly: choose one small, behaviour-preserving refactoring
@@ -49,9 +49,10 @@ as it stood at the start of *this* turn, not a fixed starting point for the whol
 deliberate: the question worth asking about a turn is whether that turn improved things, and after
 the second turn a baseline from before the first would no longer answer it.
 
-The two lines around the Pi call are the harness — deterministic code wrapping a model call. Notice
-that each step announces itself before it runs. Nothing the harness does should be invisible to you,
-because when a run surprises you the announcements are how you find out which part surprised you.
+The two lines around the Pi call are the harness — deterministic code wrapping a model call.
+Notice that each step announces itself before it runs. Nothing the harness does should be
+invisible to you, because when a run surprises you the announcements are how you find out which
+part surprised you.
 
 `refactor-do.sh` performs one doer turn and exits. It has no Bash loop, validation command, recovery
 path, or second agent.

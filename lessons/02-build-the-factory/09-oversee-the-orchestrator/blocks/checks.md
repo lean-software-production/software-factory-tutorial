@@ -11,7 +11,7 @@ tutor: |-
 
 ## Checks
 
-The learner should be able to answer these from what they have built, in their own words:
+You should be able to answer these from what you have built, in your own words:
 
 - Which file is the orchestrator, and which of its lines does each of the five orchestrator jobs?
 - Which parts of `factory/` would still work if a second line appeared tomorrow, and which would
@@ -20,6 +20,6 @@ The learner should be able to answer these from what they have built, in their o
 - Which station on this line has no tools at all, and why does that not limit it?
 - Given a `[FAIL]` on the same criterion in five consecutive iterations, what are the two
   explanations,
-  and how would they tell them apart?
-- What is the most expensive thing this line could do while they were not watching, and what in the
-  factory would tell them it had happened?
+  and how would you tell them apart?
+- What is the most expensive thing this line could do while you were not watching, and what in the
+  factory would tell you it had happened?

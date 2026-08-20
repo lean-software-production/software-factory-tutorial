@@ -4,7 +4,7 @@ type: narrative
 
 ## The loop you just ran
 
-Show this diagram after the learner has completed a cycle, not before:
+You have completed the cycle once. Here is the loop you just ran:
 
 ```mermaid
 flowchart LR

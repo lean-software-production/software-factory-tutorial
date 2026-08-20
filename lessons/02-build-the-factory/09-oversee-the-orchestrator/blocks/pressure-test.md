@@ -14,7 +14,6 @@ line: a verdict, a repair, a fresh refactoring, a verdict.
 
 The difference between those two runs is not in the record, and no station here can find it.
 
-That is the job the learner is left with, and it is not a smaller job than the one they started
-with.
+That is the job you are left with, and it is not a smaller job than the one you started with.
 The line has taken over the mechanical part of the work — routing it, carrying it, recording it,
 knowing when to stop — and left the part that requires knowing what the work is for.

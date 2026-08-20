@@ -12,7 +12,7 @@ tutor: |-
 
 ## Implementation order
 
-Build this lesson in this order. Complete each small step before moving to the next one:
+Work in this order. Complete each small step before moving to the next one:
 
 1. **Write the watcher.** Create `factory/watch.sh`. It takes the name of a line and follows its
    record:
@@ -52,10 +52,9 @@ Build this lesson in this order. Complete each small step before moving to the n
    ./factory/watch.sh refactor
    ```
 
-   Have the learner keep both visible. The terminal running the line is still an unreadable JSON
-   firehose, and the one watching it is a list of what the stations are doing. Neither script knows
-   the
-   other exists.
+   Keep both visible. The terminal running the line is still an unreadable JSON firehose, and the
+   one watching it is a list of what the stations are doing. Neither script knows the other
+   exists.
 
 3. **Add the running cost.** A second expression over the same stream, either as a second watcher in
    a

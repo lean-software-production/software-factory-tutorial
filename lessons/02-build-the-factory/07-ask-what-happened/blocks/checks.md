@@ -18,7 +18,7 @@ From the repository root, after a run has finished:
 
 Verify by hand that:
 
-- the answer names things that are actually in the record, and the learner can find them;
+- the answer names things that are actually in the record, and you can find them;
 - `ask.sh` runs with no tools, and does not read the calculator or any file the caller did not give
   it;
 - it works on a line that has finished and on one that is halfway through, since the record is a

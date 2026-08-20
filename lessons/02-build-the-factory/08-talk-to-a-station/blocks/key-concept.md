@@ -5,8 +5,7 @@ type: narrative
 ## Key concept
 
 Headless has meant one thing since lesson 001: no human in the conversation while the station works.
-The learner has read that as *the station cannot be spoken to*, which is not what it says and not
-what
+You may have read that as *the station cannot be spoken to*, which is not what it says and not what
 is true.
 
 Pi's third output mode changes what standard input is for. With `-p`, stdin is the prompt: the
@@ -20,6 +19,6 @@ delivered after the current assistant turn finishes executing its tool calls, an
 model
 call. Not an interruption, and not a queue for later. The station finishes what it is doing, and
 then
-what the learner said is in its context.
+what you said is in its context.
 
 Nobody is in the conversation. Something can still be put into it.

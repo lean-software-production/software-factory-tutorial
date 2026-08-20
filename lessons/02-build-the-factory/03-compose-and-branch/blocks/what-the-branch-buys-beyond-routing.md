@@ -12,8 +12,7 @@ Three things, none of which needed a lesson of its own:
 - **The line gains a discardable unit of work.** Every accepted iteration is one commit, which is
   what
   makes running the line unattended survivable in the next lesson. `git log` and `git revert` are
-  the
-  undo the learner has not needed until now.
+  the undo you have not needed until now.
 - **The pass case stops being empty.** Note what the `if` used to lack: an `else`. A `PASS` was the
   branch that did nothing. Now both directions of the graph go somewhere, which is what makes it
   worth

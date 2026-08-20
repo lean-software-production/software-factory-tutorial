@@ -4,8 +4,7 @@ type: narrative
 
 ## What the line took over
 
-Lesson 004 left the learner doing three jobs by hand: deciding what runs next, carrying evidence
-between
+Lesson 004 left you doing three jobs by hand: deciding what runs next, carrying evidence between
 stations, and judging when to stop. Walk through each one and find it in the code.
 
 - **Deciding what runs next** is the `grep` and the `if` in 007. It is worth saying again that this
@@ -15,4 +14,4 @@ stations, and judging when to stop. Walk through each one and find it in the cod
   `text_of` helper in 009. No station on this line has ever gone looking for its own inputs.
 - **Judging when to stop** is the two counters in 008.
 
-Three jobs, three pieces of shell, all of them the learner's.
+Three jobs, three pieces of shell, all of them yours.

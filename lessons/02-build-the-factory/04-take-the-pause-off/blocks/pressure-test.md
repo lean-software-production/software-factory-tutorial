@@ -17,5 +17,5 @@ iteration's.
 not
 in the commits. Five iterations, four stations each, and the number does not exist.
 
-The learner has just spent the tutorial's central move: they built something, ran it, and now cannot
-tell what it did. The next lesson gives the line a memory.
+You have just spent the tutorial's central move: you built something, ran it, and now cannot tell
+what it did. The next lesson gives the line a memory.

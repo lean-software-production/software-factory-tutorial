@@ -9,7 +9,7 @@ Nothing is built in this lesson. Everything it names is already on disk.
 Lesson 005 made the same move on a smaller scale: put the doer and the validator in one folder, run
 them in a fixed order, and only then take the name. This is that move applied to the whole of Part
 2,
-and it works for the same reason — the learner has something to point at.
+and it works for the same reason — you have something to point at.
 
 ```text
 factory/                    ← the factory
@@ -24,8 +24,8 @@ factory/                    ← the factory
 
 **The orchestrator is `run.sh`, and it has been since lesson 007.** The lexicon gives the role five
 jobs: starting a line, handing each station its inputs, choosing what runs next where the graph
-branches, handling failures, and deciding when the line is finished. The learner wrote every one of
-them. The branch arrived in 007, the ending in 008, and the rest has been there since 005.
+branches, handling failures, and deciding when the line is finished. You wrote every one of them.
+The branch arrived in 007, the ending in 008, and the rest has been there since 005.
 
 **The factory is `factory/`** — the software containing the line and the orchestrator that manages
 it,
@@ -36,5 +36,5 @@ work unchanged on a second line, which is the only reason it is honest to call a
 line
 in it a factory at all.
 
-**The learner is the operator.** That word has not been used before now, because until this point it
-would have been a description of somebody doing the work by hand.
+**You are the operator.** That word has not been used before now, because until this point it would
+have been a description of somebody doing the work by hand.

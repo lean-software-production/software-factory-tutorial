@@ -13,7 +13,7 @@ tutor: |-
 
 ## Implementation order
 
-Build this lesson in this order. Complete each small step before moving to the next one:
+Work in this order. Complete each small step before moving to the next one:
 
 1. **Give the line somewhere to put the record.** At the top of `run.sh`, after the `cd`:
 
@@ -84,6 +84,5 @@ Build this lesson in this order. Complete each small step before moving to the n
    run
    nobody watched, answered by two commands over files the line wrote to itself.
 
-   Have the learner run these against a fresh run before going on. A record they have never queried
-   is
-   a record they have no reason to trust.
+   Run these against a fresh run before going on. A record you have never queried is a record you
+   have no reason to trust.

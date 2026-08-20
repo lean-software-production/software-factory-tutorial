@@ -5,7 +5,7 @@ type: narrative
 ## What is left
 
 This is the lesson. Take it slowly, because every item is a judgement and every one of them is still
-the learner's.
+yours.
 
 **It cannot tell whether the criteria are right.** `success.md` is the one thing on this line that
 nothing ever questions. And lesson 006 made this sharper than it looks: closing the validator's
@@ -34,10 +34,7 @@ what
 it achieved is not a comparison the line can make, because only one of those two things is written
 down.
 
-**It cannot be told any of this.** 012 gave the learner a channel to a station. There is no channel
-to
-the orchestrator: its decisions are `if` statements, and the way to change its mind is to stop it
-and
+**It cannot be told any of this.** 012 gave you a channel to a station. There is no channel to the
+orchestrator: its decisions are `if` statements, and the way to change its mind is to stop it and
 edit the file. That is not a defect to be fixed — it is what it means for routing to be
-deterministic —
-but it is worth knowing which of the two things in front of them can be argued with.
+deterministic — but it is worth knowing which of those two things can be argued with.

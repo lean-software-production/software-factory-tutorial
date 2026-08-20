@@ -14,6 +14,15 @@ import { loadWorkbook, loadWorkbookLesson, parseFrontMatter } from "../src/workb
 let dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))); dirs = []; });
 
+const learnerVisibleAuthorDirections = [
+  /\b(?:have|ask|tell)\s+the\s+learner\b/i,
+  /\bshow\s+this\s+diagram\b/i,
+  /\bthe\s+tutor\s+must\b/i,
+  /\bteach\s+and\s+build\b/i,
+  /\bbuild\s+this\s+lesson\b/i,
+];
+function exposesAuthorDirection(markdown: string) { return learnerVisibleAuthorDirections.some((pattern) => pattern.test(markdown)); }
+
 /**
  * Author a self-contained workbook whose every string is synthetic, so these
  * tests exercise front-matter assembly and directory-driven discovery without
@@ -115,6 +124,25 @@ describe("workbook lesson contract", () => {
     if (practice?.type !== "terminal-practice") throw new Error("run-supplied-command must be terminal-practice");
     expect(practice.tutor.length).toBeGreaterThan(0);
     expect(practice.markdown).toContain("pi --no-session");
+  });
+
+  it("keeps real curriculum block Markdown learner-facing", async () => {
+    const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
+    const offenders = workbook.chapters.flatMap((chapter) =>
+      chapter.lesson.blocks
+        .filter((block) => exposesAuthorDirection(block.markdown))
+        .map((block) => `${chapter.id}/blocks/${block.id}`));
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("allows ordinary learner-facing examples that mention learner vocabulary", () => {
+    expect(exposesAuthorDirection('The output may include "learner changed calculator.py" after the script runs.')).toBe(false);
+  });
+
+  it("rejects author directions in learner-visible block Markdown", () => {
+    expect(exposesAuthorDirection("Ask the learner to explain why the validator is read-only.")).toBe(true);
+    expect(exposesAuthorDirection("The tutor must check the command output before moving on.")).toBe(true);
   });
 
   it("parses front matter and requires it even when empty", () => {

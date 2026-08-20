@@ -12,11 +12,10 @@ tutor: |-
 
 ## Implementation order
 
-Build this lesson in this order. Complete each small step before moving to the next one:
+Work in this order. Complete each small step before moving to the next one:
 
-1. **Choose the stopping conditions.** Have the learner pick before writing anything, because each
-   one
-   fails differently and the choice is the lesson:
+1. **Choose the stopping conditions.** Pick them before writing anything, because each one fails
+   differently and the choice is the lesson:
 
    - **A ceiling.** Stop after N iterations. Crude, honest, and never wrong about terminating.
    - **Giving up.** Stop after N failing verdicts in a row, on the grounds that a line failing
@@ -47,8 +46,8 @@ Build this lesson in this order. Complete each small step before moving to the n
    Note what the announcement is for. Nobody is watching a prompt any more, so the scrollback is the
    only record of where one iteration ended and the next began.
 
-3. **Record the outcome, and give up if it keeps failing.** Inside the branch the learner already
-   wrote, each arm now updates the count, and a check after it decides whether to carry on:
+3. **Record the outcome, and give up if it keeps failing.** Inside the branch you already wrote,
+   each arm now updates the count, and a check after it decides whether to carry on:
 
    ```sh
    if [ "$verdict" = "VERDICT: FAIL" ]; then

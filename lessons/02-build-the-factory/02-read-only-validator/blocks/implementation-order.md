@@ -13,7 +13,7 @@ tutor: |-
 
 ## Implementation order
 
-Build this lesson in this order. Complete each small step before moving to the next one:
+Work in this order. Complete each small step before moving to the next one:
 
 1. **Gather the evidence in the harness.** Both `validate.sh` and `run.sh` need the same block, so
    write it once and understand it before copying it:
@@ -43,9 +43,8 @@ Build this lesson in this order. Complete each small step before moving to the n
 
    `git diff -- .` rather than `git diff`, because `git diff` on its own reports the whole
    repository
-   whatever directory it runs in, and the learner's own `factory/` work would otherwise be swept
-   into
-   the validator's context. The scripts and prompts in `factory/` are tracked, so that pathspec is
+   whatever directory it runs in, and your own `factory/` work would otherwise be swept into the
+   validator's context. The scripts and prompts in `factory/` are tracked, so that pathspec is
    the
    only thing keeping them out: this is a boundary drawn by the argument, not by an accident.
 
@@ -76,4 +75,4 @@ Build this lesson in this order. Complete each small step before moving to the n
    `VERDICT: PASS` or `VERDICT: FAIL` is the first non-empty line, same one finding per criterion.
 
    Delete the sentence forbidding file-modifying shell commands. It is no longer doing any work, and
-   leaving it in would teach the learner that prohibitions are how boundaries are drawn.
+   leaving it in would teach the wrong lesson: that prohibitions are how boundaries are drawn.

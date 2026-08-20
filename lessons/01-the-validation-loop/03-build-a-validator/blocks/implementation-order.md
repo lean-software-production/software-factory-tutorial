@@ -13,8 +13,8 @@ tutor: |-
 
 ## Implementation order
 
-Keep `factory/refactor.md` and `factory/refactor-do.sh` from the previous lesson. Build this lesson
-in this order:
+Keep `factory/refactor.md` and `factory/refactor-do.sh` from the previous lesson. Work in this
+order:
 
 1. **Write the validator prompt.** Create `factory/refactor-validate.md`. Its job to be done is one
    sentence: was the change a single refactoring, and did it reduce what

@@ -14,10 +14,10 @@ tutor: |-
 
 ## Implementation order
 
-Build this lesson in this order. Complete each small step before moving to the next one:
+Work in this order. Complete each small step before moving to the next one:
 
 1. **Make the doer steerable.** The doer is the station worth steering, because it is the one that
-   makes choices the learner might disagree with. Replace its invocation in `run.sh`:
+   makes choices you might disagree with. Replace its invocation in `run.sh`:
 
    ```sh
    echo "Starting doer..."
@@ -52,10 +52,9 @@ Build this lesson in this order. Complete each small step before moving to the n
    That process does nothing. Its entire job is to hold the channel open, and it is the reason the
    station stays alive between commands.
 
-   Point out what the learner has just built. A channel on disk, a process holding it open, and a
-   long-running program reading commands from it: that is the whole of what a daemon is. They are
-   not
-   using one; they made the smallest possible one out of two lines of shell.
+   Look at what you have just built. A channel on disk, a process holding it open, and a
+   long-running program reading commands from it: that is the whole of what a daemon is. You are
+   not using one; you made the smallest possible one out of two lines of shell.
 
 3. **Clean up after it.** Two background processes and a file in the filesystem, in a script that
    can
@@ -72,9 +71,9 @@ Build this lesson in this order. Complete each small step before moving to the n
 
    Say plainly why this is in the lesson rather than left as an exercise. Every previous station
    exited
-   on its own when its work was done. This one exits when someone tells it to, and a learner who
-   Ctrl-Cs out of a run without this trap has left a model process and a `sleep` running on their
-   station with nothing to stop them.
+   on its own when its work was done. This one exits when someone tells it to, and if you Ctrl-C out
+   of a run without this trap, you have left a model process and a `sleep` running on your station
+   with nothing to stop them.
 
 4. **Write the steering tool.** Create `factory/steer.sh`, beside `watch.sh` and `ask.sh`:
 
@@ -89,11 +88,9 @@ Build this lesson in this order. Complete each small step before moving to the n
    jq -cn --arg m "$*" '{type:"steer",message:$m}' > "$line"/control
    ```
 
-   `jq` is building the JSON here rather than reading it — the same tool doing the inverse job. Do
-   not
-   let the learner hand-roll this with `echo`. The first message anyone actually wants to send
-   contains
-   an apostrophe, and a hand-rolled `echo '{"message":"don't touch the parser"}'` produces a parse
+   `jq` is building the JSON here rather than reading it — the same tool doing the inverse job.
+   Do not hand-roll this with `echo`. The first message anyone actually wants to send contains an
+   apostrophe, and a hand-rolled `echo '{"message":"don't touch the parser"}'` produces a parse
    error instead of a steer.
 
    **The `-c` is not optional.** The channel is JSONL and the reader splits on newlines, one command
@@ -102,7 +99,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    none of
    which parses as a whole object, and the station sits waiting for an instruction it has already
    been
-   given. It fails silently, which is what makes it worth saying before the learner meets it.
+   given. It fails silently, which is what makes it worth saying before you meet it.
 
 5. **Show the station's replies.** `watch.sh` currently reports tool calls, which is no use for
    reading
@@ -129,15 +126,9 @@ Build this lesson in this order. Complete each small step before moving to the n
    The answer arrives in the watcher.
 
    **Steer early.** A steering message is delivered after the current assistant turn finishes its
-   tool
-   calls and before the next model call, so a station with no next model call never receives one.
-   Steer
-   a station that is about to finish and the command is accepted, queued, and then thrown away when
-   the
-   station exits — no error, no warning, and `queue_update` in the record showing it still pending.
-   The
-   learner should send one steer in the first seconds of a turn and one just before it ends, and see
-   the
-   difference. Steering is a conversation with a station that is still working, not a way to recall
-   one
-   that has finished.
+   tool calls and before the next model call, so a station with no next model call never receives
+   one. Steer a station that is about to finish and the command is accepted, queued, and then
+   thrown away when the station exits — no error, no warning, and `queue_update` in the record
+   showing it still pending. The send one steer in the first seconds of a turn and one just
+   before it ends, and see the difference. Steering is a conversation with a station that is
+   still working, not a way to recall one that has finished.

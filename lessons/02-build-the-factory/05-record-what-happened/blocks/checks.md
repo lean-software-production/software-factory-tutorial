@@ -27,7 +27,7 @@ Verify by hand that:
 - the two `jq` queries above return a plausible tool tally and a cost; and
 - the terminal, during the run, is unreadable.
 
-The last one is the finding, not a defect. Measure it if the learner is unconvinced:
+The last one is the finding, not a defect. Measure it if you are unconvinced:
 
 ```sh
 wc -l factory/refactor/events/*.jsonl

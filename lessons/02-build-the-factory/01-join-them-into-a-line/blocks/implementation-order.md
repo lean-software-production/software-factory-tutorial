@@ -13,7 +13,7 @@ tutor: |-
 
 ## Implementation order
 
-Build this lesson in this order. Complete each small step before moving to the next one:
+Work in this order. Complete each small step before moving to the next one:
 
 1. **Give the line an edge.** From the repository root:
 
@@ -45,32 +45,30 @@ Build this lesson in this order. Complete each small step before moving to the n
      `validate.sh`'s guard;
    - `refactor-validate.md` becomes `validate.md`, and `.tmp/refactor-validate-findings.txt` becomes
      `.tmp/validate-findings.txt`;
-   - the guard's message now names the script the learner would actually run: `./do.sh`.
+   - the guard's message now names the script you would actually run: `./do.sh`.
 
    Run `./factory/refactor/do.sh` and `./factory/refactor/validate.sh` once from the repository root
    before going on. A rename that nobody exercises is a rename nobody has checked.
 
-   Nothing behaves differently after this step, which is the point worth making. What the learner
-   bought is an edge. A second line — one that writes documentation, say — would be a second folder
+   Nothing behaves differently after this step, which is the point worth making. What you bought
+   is an edge. A second line — one that writes documentation, say — would be a second folder
    sitting alongside this one, with its own prompts and its own criteria, and a factory is what
-   holds
-   them both. The line had to have an edge before it could be named.
+   holds them both. The line had to have an edge before it could be named.
 
 2. **Define success.** Create `factory/refactor/success.md`. It describes the calculator the line is
    working towards: not the next refactoring, but what the code should look like after many of them.
-   Have the learner write it in their own terms, and default to Kent Beck's four rules of simple
-   design, in order:
+   Write it in your own terms, and default to Kent Beck's four rules of simple design, in order:
 
    - passes its tests;
    - reveals intention;
    - no duplication;
    - fewest elements.
 
-   For each rule, name the evidence a validator can quote. Evidence means a command whose output it
-   can paste back — `npm test`, `node scripts/quality.mjs`, a `grep -n` that puts two near-identical
-   passages side by side with their line numbers. It does not mean the name of a tool the validator
-   would have to work out how to install and run. The validator can only quote what it can actually
-   run from `calculator/`.
+   For each rule, name the evidence a validator can quote. Evidence means a command whose output
+   it can paste back — `npm test`, `node scripts/quality.mjs`, a `grep -n` that puts two
+   near-identical passages side by side with their line numbers. It does not mean the name of a
+   tool the validator would have to work out how to install and run. The validator can only quote
+   what it can actually run from `calculator/`.
 
    These criteria are a strategy for the whole line, not a checklist for the next change. The reason
    is worth saying out loud. The validator in lesson 003 knew one check — had the change reduced
@@ -159,8 +157,8 @@ Build this lesson in this order. Complete each small step before moving to the n
 
    One turn of this loop is an **iteration**: baseline, doer, validator, pause. That is the bounded
    batch of agent work between check-ins. Each `echo` names a phase within the iteration, not an
-   iteration of its own. The `read` is where the line hands control back to the learner, and Ctrl-C
-   at that prompt stops the line.
+   iteration of its own. The `read` is where the line hands control back to you, and Ctrl-C at that
+   prompt stops the line.
 
    With that written, the folder is the whole line:
 

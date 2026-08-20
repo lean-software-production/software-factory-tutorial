@@ -13,5 +13,5 @@ followed a `PASS`: same prompt, same criteria, same job. The findings were writt
 read
 by nobody.
 
-That is lesson 004's copy-paste — the step the learner did with their own hands — still undone. The
-next lesson gives it to the line.
+That is lesson 004's copy-paste — the step you did with your own hands — still undone. The next
+lesson gives it to the line.

@@ -11,7 +11,7 @@ tutor: |-
 
 ## Checks
 
-The learner should be able to say:
+You should be able to say:
 
 - what they personally decided in that cycle, and when;
 - why the doer behaved differently on the second run despite an unchanged prompt file; and

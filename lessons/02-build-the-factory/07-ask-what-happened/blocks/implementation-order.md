@@ -13,7 +13,7 @@ tutor: |-
 
 ## Implementation order
 
-Build this lesson in this order. Complete each small step before moving to the next one:
+Work in this order. Complete each small step before moving to the next one:
 
 1. **Write the asker.** Create `factory/ask.sh`:
 
@@ -46,7 +46,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    of thousands of event lines, most of them streaming fragments of messages that also appear whole
    further down. Keeping the tool calls and the completed messages is what makes the record fit.
 
-   Have the learner see the difference for themselves:
+   See the difference for yourself:
 
    ```sh
    cat factory/refactor/events/*.jsonl | wc -l
@@ -65,7 +65,6 @@ Build this lesson in this order. Complete each small step before moving to the n
    ./factory/ask.sh refactor "Where did the money go?"
    ```
 
-   Have the learner check an answer against the record by hand before trusting the next one. This
-   station has exactly the same standing as every other station on the line: it is a model, it can
-   be
-   wrong, and nothing here validates it.
+   Check an answer against the record by hand before trusting the next one. This station has exactly
+   the same standing as every other station on the line: it is a model, it can be wrong, and nothing
+   here validates it.

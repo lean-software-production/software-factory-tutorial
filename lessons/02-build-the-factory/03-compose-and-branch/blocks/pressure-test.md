@@ -4,8 +4,7 @@ type: lesson-transition
 
 ## Pressure test
 
-The line now does two of the three things the learner did by hand in lesson 004. It reads a verdict
-and
+The line now does two of the three things you did by hand in lesson 004. It reads a verdict and
 chooses what runs next, and it carries the evidence from the validator to the station that needs it.
 
 Lesson 004 named a third: judging when to stop. That one has not moved.
@@ -17,4 +16,4 @@ supposed to have taken over — the lexicon lists "deciding when the line is fin
 routing,
 in the same sentence, as the same role's work.
 
-The learner is still sitting at the keyboard supplying it. The next lesson takes the keyboard away.
+You are still sitting at the keyboard supplying it. The next lesson takes the keyboard away.

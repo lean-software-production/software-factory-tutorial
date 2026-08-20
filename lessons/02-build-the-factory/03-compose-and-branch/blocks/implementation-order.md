@@ -13,7 +13,7 @@ tutor: |-
 
 ## Implementation order
 
-Build this lesson in this order. Complete each small step before moving to the next one:
+Work in this order. Complete each small step before moving to the next one:
 
 1. **Write the repair prompt.** Create `factory/refactor/repair.md`. Its job to be done is narrower
    than
@@ -42,8 +42,8 @@ Build this lesson in this order. Complete each small step before moving to the n
    only judgement on this line, and a station that grades its own work has no reason to report a
    problem with it.
 
-   Like every other prompt on the line, `repair.md` names no path to go and fetch. Its inputs — the
-   criteria and the findings — arrive appended to it by the caller.
+   Like every other prompt on the line, `repair.md` names no path to go and fetch. Its inputs —
+   the criteria and the findings — arrive appended to it by the caller.
 
 2. **Write the commit prompt.** Create `factory/refactor/commit.md`. Given the diff and the
    validator's
@@ -94,7 +94,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    folder.
 
    `git add -- .` from inside `calculator/` stages that directory and nothing else. That pathspec is
-   what keeps the learner's own work out of a station's commit: `factory/` is tracked too, and a
+   what keeps your own work out of a station's commit: `factory/` is tracked too, and a
    bare
    `git add` from anywhere in the repository would sweep the line's own source into the change it is
    supposed to be recording.
