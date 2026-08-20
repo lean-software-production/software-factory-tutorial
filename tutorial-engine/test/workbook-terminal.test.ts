@@ -137,9 +137,10 @@ describe("WorkbookTerminalManager", () => {
     }
   });
 
-  it("starts Bash so the interactive terminal edits command history", () => {
+  it("starts a bare Bash prompt without resolving a container user", () => {
     expect(dockerExecArguments("workbook-terminal-test")).toEqual([
-      "exec", "-it", "--workdir", "/workspace", "workbook-terminal-test", "/bin/bash", "-l"
+      "exec", "-it", "--env", "PS1=$ ", "--workdir", "/workspace", "workbook-terminal-test",
+      "/bin/bash", "--noprofile", "--norc", "-i"
     ]);
   });
 

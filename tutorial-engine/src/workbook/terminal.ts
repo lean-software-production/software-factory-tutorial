@@ -140,7 +140,7 @@ export function dockerRunArguments(options: DockerRunArgumentsOptions): string[]
 }
 
 export function dockerExecArguments(name: string): string[] {
-  return ["exec", "-it", "--workdir", "/workspace", name, "/bin/bash", "-l"];
+  return ["exec", "-it", "--env", "PS1=$ ", "--workdir", "/workspace", name, "/bin/bash", "--noprofile", "--norc", "-i"];
 }
 
 /** Starts a hardened, per-practice container; browser bytes can only reach docker exec. */
