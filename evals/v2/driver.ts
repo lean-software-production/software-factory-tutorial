@@ -13,6 +13,7 @@ export interface V2WorkbookDriverOptions {
   fetch?: FetchLike;
   WebSocket?: WebSocketConstructor;
   terminalTimeoutMs?: number;
+  editorReviewTimeoutMs?: number;
 }
 
 export interface SubmitTerminalCommandOptions {
@@ -32,6 +33,7 @@ export class V2WorkbookDriver {
   readonly #fetch: FetchLike;
   readonly #WebSocket: WebSocketConstructor;
   readonly #terminalTimeoutMs: number;
+  readonly #editorReviewTimeoutMs: number;
   readonly #editorRevisions = new Map<string, number>();
 
   constructor(options: V2WorkbookDriverOptions) {
@@ -40,6 +42,7 @@ export class V2WorkbookDriver {
     this.#fetch = options.fetch ?? fetch;
     this.#WebSocket = options.WebSocket ?? WebSocket;
     this.#terminalTimeoutMs = options.terminalTimeoutMs ?? 5_000;
+    this.#editorReviewTimeoutMs = options.editorReviewTimeoutMs ?? 120_000;
   }
 
   async readState(label = "state"): Promise<WorkbookApiState> {
@@ -85,7 +88,7 @@ export class V2WorkbookDriver {
     this.#editorRevisions.set(blockId, revision);
     const submittedStatus = this.#recordEditorProgress(blockId, revision, submitted);
     if (submittedStatus === "feedback" || submittedStatus === "unlocked") return submitted;
-    return this.#waitForEditorReview(blockId, revision, `${label}:reviewed`, options.timeoutMs ?? this.#terminalTimeoutMs);
+    return this.#waitForEditorReview(blockId, revision, `${label}:reviewed`, options.timeoutMs ?? this.#editorReviewTimeoutMs);
   }
 
   async submitTerminalCommand(blockId: string, command: string, options: SubmitTerminalCommandOptions = {}): Promise<WorkbookApiState> {

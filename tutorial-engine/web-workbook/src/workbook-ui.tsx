@@ -41,6 +41,12 @@ async function postEditorDraft(blockId: string, revision: number, text: string):
   return response.json();
 }
 
+async function readWorkbookState(): Promise<State> {
+  const response = await fetch("/api/workbook/state");
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
 function progressFor(progress: Progress, id: string) { return progress.blocks.find((block) => block.id === id); }
 function domSafe(value: string) { return value.replace(/[^A-Za-z0-9_-]+/g, "-"); }
 function lessonElementId(lessonId: string) { return `lesson-${domSafe(lessonId)}`; }
@@ -206,6 +212,9 @@ function TerminalBlock({ lessonId, block, state, unexpected, refresh }: { lesson
   </section>;
 }
 
+const EDITOR_REVIEW_POLL_INTERVAL_MS = 250;
+const EDITOR_REVIEW_MAX_POLLS = 480;
+
 function editorStatusText(state: BlockProgress | undefined, completed: boolean): string {
   if (completed || state?.editorStatus === "unlocked") return "Unlocked — the accepted revision has been written to the target file.";
   if (state?.editorStatus === "reviewing") return "Reviewing your latest revision…";
@@ -226,6 +235,37 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
 
   useEffect(() => { baseRevision.current = state?.revision ?? baseRevision.current; }, [block.id, state?.revision]);
   useEffect(() => { activeRef.current = canEdit; }, [canEdit]);
+
+  useEffect(() => {
+    if (!canEdit || state?.editorStatus !== "reviewing" || !Number.isInteger(state.revision)) return;
+    let cancelled = false;
+    let polls = 0;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    const revision = state.revision;
+    const poll = () => {
+      pollTimer = setTimeout(() => {
+        if (cancelled) return;
+        polls += 1;
+        readWorkbookState().then((next) => {
+          if (cancelled) return;
+          const nextProgress = progressFor(next.progress, block.id);
+          const nextStatus = nextProgress?.editorStatus;
+          const completedReview = Boolean(nextProgress?.completed || nextStatus === "feedback" || nextStatus === "unlocked" || !nextProgress?.active);
+          refresh(next);
+          if (completedReview || nextProgress?.revision !== revision || polls >= EDITOR_REVIEW_MAX_POLLS) return;
+          poll();
+        }).catch((error) => {
+          console.error(error);
+          if (!cancelled && polls < EDITOR_REVIEW_MAX_POLLS) poll();
+        });
+      }, EDITOR_REVIEW_POLL_INTERVAL_MS);
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, [block.id, canEdit, refresh, state?.editorStatus, state?.revision]);
 
   useEffect(() => {
     if (!canEdit || !editorElement.current) return;

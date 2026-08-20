@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
@@ -90,15 +90,38 @@ type PublicEditorProgress = { revision: number; editorStatus: "reviewing" | "fee
 type PublicEditorProgressByBlock = ReadonlyMap<string, PublicEditorProgress>;
 const editorProgressKey = (lessonId: string, blockId: string) => `${lessonId}\u0000${blockId}`;
 
-function publicState(loaded: LoadedWorkbook, events: WorkbookEvent[], editorProgress: PublicEditorProgressByBlock = new Map()) {
+type PublicActiveEditorDraft = { revision: number; draftText: string };
+
+async function readTargetDraftText(workspace: string, block: EditorPracticeBlock): Promise<string> {
+  const target = await resolveEditorTarget(workspace, block.path);
+  try { return await readFile(target, "utf8"); }
+  catch (error: any) {
+    if (error?.code === "ENOENT") return "";
+    throw error;
+  }
+}
+
+async function activeEditorDraftState(loaded: LoadedWorkbook, lessonId: string, block: EditorPracticeBlock, editorDraftStore: EditorDraftStore): Promise<PublicActiveEditorDraft> {
+  const durableDraft = await editorDraftStore.read(lessonId, block.id);
+  if (durableDraft) return { revision: durableDraft.revision, draftText: durableDraft.text };
+  try { return { revision: 0, draftText: await readTargetDraftText(loaded.workspace, block) }; }
+  catch { return { revision: 0, draftText: "" }; }
+}
+
+async function publicState(loaded: LoadedWorkbook, events: WorkbookEvent[], editorDraftStore: EditorDraftStore, editorProgress: PublicEditorProgressByBlock = new Map()) {
   const lesson = activeLesson(loaded, events);
   const activeProgress = project(events, lesson);
   const completedLessons = completedLessonIds(loaded, events);
-  const blocks = activeProgress.blocks.map((block) => {
+  const blocks = await Promise.all(activeProgress.blocks.map(async (block) => {
     const overlay = editorProgress.get(editorProgressKey(activeProgress.activeLessonId, block.id));
-    if (!overlay || block.completed) return block;
-    return { ...block, revision: overlay.revision, editorStatus: overlay.editorStatus, feedback: overlay.feedback };
-  });
+    const authored = lesson.blocks.find((candidate) => candidate.id === block.id);
+    const activeEditorDraft = authored?.type === "editor-practice" && block.active && block.ready && !block.completed
+      ? await activeEditorDraftState(loaded, activeProgress.activeLessonId, authored, editorDraftStore)
+      : undefined;
+    if (overlay && !block.completed) return { ...block, ...activeEditorDraft, revision: overlay.revision, editorStatus: overlay.editorStatus, feedback: overlay.feedback };
+    if (activeEditorDraft) return { ...block, revision: activeEditorDraft.revision, draftText: activeEditorDraft.draftText, editorStatus: block.editorStatus ?? "editing" as const };
+    return block;
+  }));
   const progress = { ...activeProgress, completedLessons, blocks };
   const introductionComplete = introductionCompleted(events);
   const emerged = new Set(activeProgress.blocks.filter((block) => block.emerged).map((block) => block.id));
@@ -144,7 +167,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       if (editorBlockLocks.get(key) === tail) editorBlockLocks.delete(key);
     }
   };
-  const currentPublicState = (events: WorkbookEvent[]) => publicState(loaded, events, editorProgress);
+  const currentPublicState = (events: WorkbookEvent[]) => publicState(loaded, events, editorDraftStore, editorProgress);
   let reflectionQueue = Promise.resolve();
   if ((await store.read()).length === 0) await store.append(nowEvent({ type: "session_started" }));
   let eventsCache = await store.read();
@@ -256,13 +279,13 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   let server = createServer(async (request, response) => {
     headers(response);
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (request.method === "GET" && isRoute(url.pathname, "state")) return sendJson(response, 200, currentPublicState(await refreshEvents()));
+    if (request.method === "GET" && isRoute(url.pathname, "state")) return sendJson(response, 200, await currentPublicState(await refreshEvents()));
     if (request.method === "POST" && isRoute(url.pathname, "introduction")) {
       const events = await refreshEvents();
       if (!introductionCompleted(events)) await store.append(nowEvent({ type: "workbook_introduction_completed" }));
       const updated = await refreshEvents();
       await store.writeProjection(project(updated, activeLesson(loaded, updated)));
-      return sendJson(response, 202, currentPublicState(updated));
+      return sendJson(response, 202, await currentPublicState(updated));
     }
     if (request.method === "POST" && isRoute(url.pathname, "editor")) {
       try {
@@ -287,7 +310,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
           await editorDraftStore.write(active.lesson.id, active.block.id, revision, text);
           editorProgress.set(editorProgressKey(active.lesson.id, active.block.id), { revision, editorStatus: "reviewing" });
           enqueueEditorReview(active.lesson.id, active.block.id);
-          return { status: 202, body: currentPublicState(await refreshEvents()) };
+          return { status: 202, body: await currentPublicState(await refreshEvents()) };
         });
         return sendJson(response, result.status, result.body);
       } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." }); }
@@ -326,7 +349,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
             const reply = await reflectionConversation.reply({ question: block.markdown, tutor: block.tutor, message: learnerResponse, conversation: thread, practiceEvidence: reflectionEvidence() });
             await store.append(nowEvent({ type: "reflection_reply_recorded", lessonId: lesson.id, blockId: block.id, response: reply }));
             const complete = await refreshEvents(); await store.writeProjection(project(complete, activeLesson(loaded, complete)));
-            result = currentPublicState(complete);
+            result = await currentPublicState(complete);
           }));
           return sendJson(response, 202, result);
         }
@@ -340,7 +363,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         await store.append(event);
         const events = await refreshEvents();
         await store.writeProjection(project(events, activeLesson(loaded, events)));
-        return sendJson(response, 202, currentPublicState(events));
+        return sendJson(response, 202, await currentPublicState(events));
       } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." }); }
     }
     if (request.method !== "GET" && request.method !== "HEAD") return sendJson(response, 405, { error: "Method not allowed." });

@@ -141,6 +141,30 @@ describe("v2 workbook driver", () => {
     }
   });
 
+  it("uses a dedicated editor review timeout instead of the terminal timeout", async () => {
+    const trace = createEmptyV2SessionTrace("editor-timeout-test");
+    let stateReads = 0;
+    const reviewingState = { progress: { blocks: [{ id: "editor-practice", revision: 1, editorStatus: "reviewing" }] } };
+    const feedbackState = { progress: { blocks: [{ id: "editor-practice", revision: 1, editorStatus: "feedback", feedback: "Review finished after the terminal timeout." }] } };
+    const driver = new V2WorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      terminalTimeoutMs: 30,
+      editorReviewTimeoutMs: 100,
+      fetch: async (_input, init) => {
+        if (init?.method === "POST") return new Response(JSON.stringify(reviewingState), { status: 202 });
+        stateReads += 1;
+        return new Response(JSON.stringify(stateReads >= 3 ? feedbackState : reviewingState), { status: 200 });
+      }
+    });
+
+    const reviewed = await driver.submitEditorDraft("editor-practice", "draft that needs a model-backed review");
+
+    expect(stateReads).toBe(3);
+    expect(reviewed.progress.blocks[0]).toMatchObject({ editorStatus: "feedback", feedback: "Review finished after the terminal timeout." });
+    expect(trace.editors.at(-1)).toEqual({ blockId: "editor-practice", revision: 1, status: "feedback", feedback: "Review finished after the terminal timeout." });
+  });
+
   it("submits reflections and records the public learner/tutor conversation", async () => {
     const { server, trace, driver, reflectionRequests } = await startDriver();
     try {

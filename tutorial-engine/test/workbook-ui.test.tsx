@@ -209,6 +209,52 @@ describe("workbook lesson UI", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ blockId: "edit-answer", revision: 1, text: "second draft" });
   });
 
+  it("polls public state while an editor review is in flight and refreshes on completion", async () => {
+    vi.useFakeTimers();
+    const unlockedState = { progress: activeEditorProgress({ active: false, completed: true, revision: 1, editorStatus: "unlocked", feedback: "Accepted." } as any) };
+    const refresh = vi.fn();
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => unlockedState }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any), refresh }));
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/workbook/state");
+    expect(refresh).toHaveBeenCalledWith(unlockedState);
+    fetchMock.mockClear();
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+      await Promise.resolve();
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("stops editor review polling when the active editor unmounts", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ progress: activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any) }) }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any), refresh: vi.fn() }));
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => { mountedRoot!.unmount(); });
+    mountedRoot = undefined;
+    fetchMock.mockClear();
+    await act(async () => {
+      vi.advanceTimersByTime(2_000);
+      await Promise.resolve();
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("renders the Markdown manifest lesson header, fixed outcomes section, and ordered Markdown blocks", () => {
     const markup = html(createElement(LessonView, { chapter: chapter(), progress, refresh: vi.fn() }));
 

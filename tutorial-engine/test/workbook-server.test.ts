@@ -220,6 +220,50 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("loads the active editor text from the target file when no durable draft exists", async () => {
+    const dir = await fixture();
+    await mkdir(resolve(dir, "factory"), { recursive: true });
+    await writeFile(resolve(dir, "factory/answer.md"), "existing target contents", "utf8");
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false });
+    try {
+      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
+      const state = await postEvent(server.url, { blockId: "orientation", action: "continue" }).then((response) => response.json() as any);
+      const editor = state.progress.blocks.find((block: any) => block.id === "edit-answer");
+      expect(editor).toMatchObject({ active: true, editorStatus: "editing", revision: 0, draftText: "existing target contents" });
+      expect(state.progress.blocks.filter((block: any) => "draftText" in block).map((block: any) => block.id)).toEqual(["edit-answer"]);
+      expect(JSON.stringify(state)).not.toContain("Private editor rubric");
+    } finally { await server.close(); }
+  });
+
+  it("restores durable active editor drafts after restart and accepts the next revision", async () => {
+    const dir = await fixture();
+    const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: new FakeEditorReviewAdapter(), editorReviewDebounceMs: 10_000 });
+    try {
+      await fetch(`${firstServer.url}/api/workbook/introduction`, { method: "POST" });
+      await postEvent(firstServer.url, { blockId: "orientation", action: "continue" });
+      const submitted = await postEditor(firstServer.url, { blockId: "edit-answer", revision: 1, text: "saved draft before restart" });
+      expect(submitted.status).toBe(202);
+    } finally { await firstServer.close(); }
+
+    const secondServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: new FakeEditorReviewAdapter(() => ({ status: "feedback", message: "next revision reviewed" })), editorReviewDebounceMs: 10_000 });
+    try {
+      const resumed = await fetch(`${secondServer.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(resumed.progress.activeBlockId).toBe("edit-answer");
+      expect(resumed.progress.blocks.find((block: any) => block.id === "edit-answer")).toMatchObject({
+        active: true,
+        editorStatus: "editing",
+        revision: 1,
+        draftText: "saved draft before restart"
+      });
+      const stale = await postEditor(secondServer.url, { blockId: "edit-answer", revision: 1, text: "stale after restart" });
+      expect(stale.status).toBe(409);
+      const next = await postEditor(secondServer.url, { blockId: "edit-answer", revision: 2, text: "next draft after restart" });
+      expect(next.status).toBe(202);
+      const nextState = await next.json() as any;
+      expect(nextState.progress.blocks.find((block: any) => block.id === "edit-answer")).toMatchObject({ revision: 2, draftText: "next draft after restart", editorStatus: "reviewing" });
+    } finally { await secondServer.close(); }
+  });
+
   it("reviews only the newest submitted editor revision after the debounce", async () => {
     const dir = await fixture();
     const reviewer = new FakeEditorReviewAdapter((request) => ({ status: "feedback", message: `rev ${request.draft.revision} needs the marker` }));
