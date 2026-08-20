@@ -127,6 +127,7 @@ async function loadWorkbookBlock(lessonDir: string, blockId: string, lessonPath:
   const { title, body: markdown } = extractHeading(body, 2, path);
   const base = { id: blockId, title, markdown };
   if (front.type === "terminal-practice") return { ...base, type: "terminal-practice", tutor: front.tutor! };
+  if (front.type === "editor-practice") return { ...base, type: "editor-practice", path: front.path!, tutor: front.tutor! };
   if (front.type === "reflection") return { ...base, type: "reflection", tutor: front.tutor! };
   if (front.type === "narrative") return { ...base, type: "narrative" };
   return { ...base, type: "lesson-transition" };

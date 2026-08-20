@@ -5,18 +5,19 @@
  * determines a document's kind, so there is no `kind` field anywhere here.
  */
 
-export type WorkbookBlockType = "narrative" | "terminal-practice" | "reflection" | "lesson-transition";
+export type WorkbookBlockType = "narrative" | "terminal-practice" | "editor-practice" | "reflection" | "lesson-transition";
 
-const BLOCK_TYPES: readonly WorkbookBlockType[] = ["narrative", "terminal-practice", "reflection", "lesson-transition"];
-const TUTOR_REQUIRED_TYPES = new Set<WorkbookBlockType>(["terminal-practice", "reflection"]);
+const BLOCK_TYPES: readonly WorkbookBlockType[] = ["narrative", "terminal-practice", "editor-practice", "reflection", "lesson-transition"];
+const TUTOR_REQUIRED_TYPES = new Set<WorkbookBlockType>(["terminal-practice", "editor-practice", "reflection"]);
 
 /** Every block gets its id from its filename, its title from its H2, and its body as learner Markdown. */
 export interface WorkbookBlockBase { id: string; type: WorkbookBlockType; title: string; markdown: string; }
 export interface NarrativeBlock extends WorkbookBlockBase { type: "narrative"; }
 export interface TerminalPracticeBlock extends WorkbookBlockBase { type: "terminal-practice"; tutor: string; }
+export interface EditorPracticeBlock extends WorkbookBlockBase { type: "editor-practice"; path: string; tutor: string; }
 export interface ReflectionBlock extends WorkbookBlockBase { type: "reflection"; tutor: string; }
 export interface LessonTransitionBlock extends WorkbookBlockBase { type: "lesson-transition"; }
-export type WorkbookBlock = NarrativeBlock | TerminalPracticeBlock | ReflectionBlock | LessonTransitionBlock;
+export type WorkbookBlock = NarrativeBlock | TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock | LessonTransitionBlock;
 
 /** The assembled lesson: title and dek come from lesson.md's H1 and first paragraph. */
 export interface WorkbookLesson {
@@ -37,7 +38,7 @@ export interface WorkbookManifest {}
 export interface PartManifest {}
 
 export interface LessonFrontMatter { durationMinutes: number; outcomes: string[]; blocks: string[]; }
-export interface BlockFrontMatter { type: WorkbookBlockType; tutor?: string; }
+export interface BlockFrontMatter { type: WorkbookBlockType; path?: string; tutor?: string; }
 
 const BLOCK_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
@@ -109,22 +110,33 @@ export function validateBlockFrontMatter(data: unknown, location: string): Block
   const errors: string[] = [];
   if (!isPlainObject(data)) fail(location, [`${location}: front matter must be a YAML mapping.`]);
   const record = data as Record<string, unknown>;
-  rejectUnknownFields(record, ["type", "tutor"], location, errors);
+  rejectUnknownFields(record, ["type", "path", "tutor"], location, errors);
 
   const type = record.type;
   const validType = typeof type === "string" && (BLOCK_TYPES as readonly string[]).includes(type);
   if (!validType) errors.push(`${location}: type must be one of ${BLOCK_TYPES.join(", ")}`);
+
+  const path = record.path;
+  if (validType && type === "editor-practice") {
+    if (!isNonEmptyString(path)) errors.push(`${location}: path is required for editor-practice blocks and must be a non-empty string`);
+  } else if (path !== undefined) {
+    errors.push(`${location}: path is only allowed for editor-practice blocks`);
+  }
 
   const tutor = record.tutor;
   const tutorRequired = validType && TUTOR_REQUIRED_TYPES.has(type as WorkbookBlockType);
   if (tutorRequired) {
     if (!isNonEmptyString(tutor)) errors.push(`${location}: tutor is required for ${type} blocks and must be a non-empty private string`);
   } else if (tutor !== undefined) {
-    errors.push(`${location}: tutor is only allowed for terminal-practice and reflection blocks`);
+    errors.push(`${location}: tutor is only allowed for terminal-practice, editor-practice, and reflection blocks`);
   }
 
   if (errors.length) fail(location, errors);
-  return { type: type as WorkbookBlockType, tutor: isNonEmptyString(tutor) ? tutor : undefined };
+  return {
+    type: type as WorkbookBlockType,
+    path: isNonEmptyString(path) ? path : undefined,
+    tutor: isNonEmptyString(tutor) ? tutor : undefined,
+  };
 }
 
 /** Validate a fully assembled lesson: its resolved title/dek/duration/outcomes and its ordered typed blocks. */
@@ -151,6 +163,9 @@ export function validateWorkbookLesson(value: unknown, location = "lesson"): Wor
     if (!validType) errors.push(`${path}.type is unsupported`);
     if (!isNonEmptyString(block.title)) errors.push(`${path}.title is required`);
     if (!isNonEmptyString(block.markdown)) errors.push(`${path}.markdown is required`);
+    if (validType && block.type === "editor-practice") {
+      if (!isNonEmptyString(block.path)) errors.push(`${path}.path is required`);
+    } else if (block.path !== undefined) errors.push(`${path}.path is not allowed for ${block.type} blocks`);
     const tutorRequired = validType && TUTOR_REQUIRED_TYPES.has(block.type as WorkbookBlockType);
     if (tutorRequired) { if (!isNonEmptyString(block.tutor)) errors.push(`${path}.tutor is required`); }
     else if (block.tutor !== undefined) errors.push(`${path}.tutor is not allowed for ${block.type} blocks`);

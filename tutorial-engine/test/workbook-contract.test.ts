@@ -53,6 +53,7 @@ async function fixture() {
     "blocks:",
     "  - intro",
     "  - practice",
+    "  - edit",
     "  - think",
     "  - onward",
     "---",
@@ -62,6 +63,7 @@ async function fixture() {
   ].join("\n"));
   await writeFile(resolve(migrated, "blocks/intro.md"), ["---", "type: narrative", "---", "## Intro Block", "", "Synthetic narrative body."].join("\n"));
   await writeFile(resolve(migrated, "blocks/practice.md"), ["---", "type: terminal-practice", "tutor: Synthetic tutor guidance.", "---", "## Practice Block", "", "Synthetic practice body."].join("\n"));
+  await writeFile(resolve(migrated, "blocks/edit.md"), ["---", "type: editor-practice", "path: factory/refactor.md", "tutor: Check one criterion.", "---", "## Edit Block", "", "Synthetic editor practice body."].join("\n"));
   await writeFile(resolve(migrated, "blocks/think.md"), ["---", "type: reflection", "tutor: Synthetic tutor guidance.", "---", "## Reflect Block", "", "Synthetic reflection question?"].join("\n"));
   await writeFile(resolve(migrated, "blocks/onward.md"), ["---", "type: lesson-transition", "---", "## Onward Block", "", "Synthetic transition body."].join("\n"));
 
@@ -86,6 +88,7 @@ describe("workbook lesson contract", () => {
     expect(lesson.blocks.map((block) => [block.id, block.type, block.title])).toEqual([
       ["intro", "narrative", "Intro Block"],
       ["practice", "terminal-practice", "Practice Block"],
+      ["edit", "editor-practice", "Edit Block"],
       ["think", "reflection", "Reflect Block"],
       ["onward", "lesson-transition", "Onward Block"],
     ]);
@@ -96,9 +99,14 @@ describe("workbook lesson contract", () => {
     if (practice?.type !== "terminal-practice") throw new Error("practice must be terminal-practice");
     expect(practice.tutor).toBe("Synthetic tutor guidance.");
     expect(practice.markdown).toBe("Synthetic practice body.");
+    const edit = lesson.blocks[2];
+    if (edit?.type !== "editor-practice") throw new Error("edit must be editor-practice");
+    expect(edit.path).toBe("factory/refactor.md");
+    expect(edit.tutor).toBe("Check one criterion.");
+    expect(edit.markdown).toBe("Synthetic editor practice body.");
     // The private tutor field never appears on narrative or transition blocks.
     expect((intro as any).tutor).toBeUndefined();
-    expect((lesson.blocks[3] as any).tutor).toBeUndefined();
+    expect((lesson.blocks[4] as any).tutor).toBeUndefined();
   });
 
   it("derives the rail from ordered part and lesson directories", async () => {
@@ -228,7 +236,7 @@ describe("workbook lesson contract", () => {
     const dir = await fixture();
     const lessonDir = resolve(dir, "lessons/02-alpha-part/10-first-lesson");
     // Remove the other authored block files so the only mismatch under test is the missing one.
-    await Promise.all(["practice", "think", "onward"].map((id) => unlink(resolve(lessonDir, `blocks/${id}.md`))));
+    await Promise.all(["practice", "edit", "think", "onward"].map((id) => unlink(resolve(lessonDir, `blocks/${id}.md`))));
     await writeFile(resolve(lessonDir, "lesson.md"), [
       "---", "durationMinutes: 12", "outcomes:", "  - X", "blocks:", "  - intro", "  - missing-block", "---",
       "# Title", "", "Dek.",
@@ -277,10 +285,34 @@ describe("workbook lesson contract", () => {
     expect(() => validateLessonFrontMatter({ durationMinutes: 5, outcomes: ["X"], blocks: ["Bad Id!"] }, "lesson.md")).toThrow(/blocks/);
   });
 
-  it("requires a non-empty tutor field for terminal-practice and reflection blocks", () => {
+  it("requires a non-empty tutor field for terminal-practice, reflection, and editor-practice blocks", () => {
     expect(() => validateBlockFrontMatter({ type: "terminal-practice" }, "blocks/x.md")).toThrow(/tutor/);
     expect(() => validateBlockFrontMatter({ type: "reflection", tutor: "   " }, "blocks/x.md")).toThrow(/tutor/);
+    expect(() => validateBlockFrontMatter({ type: "editor-practice", path: "factory/refactor.md" }, "blocks/edit.md")).toThrow(/tutor/);
     expect(validateBlockFrontMatter({ type: "terminal-practice", tutor: "Do X." }, "blocks/x.md")).toEqual({ type: "terminal-practice", tutor: "Do X." });
+  });
+
+  it("accepts editor-practice path and private tutor front matter", () => {
+    expect(validateBlockFrontMatter(
+      { type: "editor-practice", path: "factory/refactor.md", tutor: "Check one criterion." },
+      "blocks/edit.md",
+    )).toEqual({ type: "editor-practice", path: "factory/refactor.md", tutor: "Check one criterion." });
+  });
+
+  it("requires a non-empty path for editor-practice blocks", () => {
+    expect(() => validateBlockFrontMatter(
+      { type: "editor-practice", tutor: "Check it." }, "blocks/edit.md",
+    )).toThrow(/path/);
+    expect(() => validateBlockFrontMatter(
+      { type: "editor-practice", path: "   ", tutor: "Check it." }, "blocks/edit.md",
+    )).toThrow(/path/);
+  });
+
+  it("rejects a path field on non-editor-practice blocks", () => {
+    expect(() => validateBlockFrontMatter({ type: "narrative", path: "factory/x.md" }, "blocks/x.md")).toThrow(/path/);
+    expect(() => validateBlockFrontMatter({ type: "terminal-practice", path: "factory/x.md", tutor: "Do X." }, "blocks/x.md")).toThrow(/path/);
+    expect(() => validateBlockFrontMatter({ type: "reflection", path: "factory/x.md", tutor: "Think." }, "blocks/x.md")).toThrow(/path/);
+    expect(() => validateBlockFrontMatter({ type: "lesson-transition", path: "factory/x.md" }, "blocks/x.md")).toThrow(/path/);
   });
 
   it("rejects a tutor field on narrative and lesson-transition blocks", () => {
