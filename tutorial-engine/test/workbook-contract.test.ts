@@ -141,6 +141,15 @@ describe("workbook lesson contract", () => {
     await expect(loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "id")).rejects.toThrow(/exactly one H1/i);
   });
 
+  it("rejects extra lesson body content after the dek paragraph", async () => {
+    const dir = await fixture();
+    await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), [
+      "---", "durationMinutes: 12", "outcomes:", "  - X", "blocks:", "  - intro", "---",
+      "# Title", "", "Dek paragraph.", "", "Extra lesson body that belongs in a block.",
+    ].join("\n"));
+    await expect(loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "id")).rejects.toThrow(/extra content after the dek/i);
+  });
+
   it("rejects a block without exactly one H2 title heading", async () => {
     const dir = await fixture();
     await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/blocks/intro.md"), ["---", "type: narrative", "---", "# Wrong Level", "", "Body."].join("\n"));

@@ -6,21 +6,24 @@ import { WorkbookEventStore, nowEvent, project } from "../src/workbook/events.js
 import type { WorkbookLesson } from "../src/workbook/contract.js";
 
 /**
- * A minimal in-memory lesson: enough shape for the projection to advance
- * through, with synthetic ids so these tests exercise projection alone and
- * never depend on the root curriculum's words, paths, or block order.
+ * A minimal new-schema lesson: all listed blocks are sequenced. Narrative and
+ * transition blocks advance through the generic continuation event, terminal
+ * practice needs observer verification plus explicit completion, and reflection
+ * keeps its explicit tutor-mediated completion.
  */
 const LESSON_ID = "part/lesson";
 const lesson: WorkbookLesson = {
   id: LESSON_ID,
-  hero: { title: "Hero", dek: "Dek", meta: [] },
-  opening: { sectionLabel: "Label", heading: "Heading", markdown: "Body", outcomes: [] },
+  title: "Fixture lesson",
+  dek: "Fixture dek.",
+  durationMinutes: 10,
+  outcomes: ["Fixture outcome."],
   blocks: [
     { id: "narrate", type: "narrative", title: "Narrate", markdown: "Body" },
-    { id: "first-practice", type: "terminal-practice", title: "First", required: true, command: "c1", context: "x", expectedObservation: "o", help: {} },
-    { id: "second-practice", type: "terminal-practice", title: "Second", required: true, command: "c2", context: "x", expectedObservation: "o", help: {} },
-    { id: "reflect", type: "reflection", title: "Reflect", required: true, prompt: "?" },
-    { id: "finish", type: "lesson-transition", title: "Finish", required: true, label: "Finish", markdown: "Body" },
+    { id: "first-practice", type: "terminal-practice", title: "First", markdown: "Practice body", tutor: "Observe the first result." },
+    { id: "second-practice", type: "terminal-practice", title: "Second", markdown: "Practice body", tutor: "Observe the second result." },
+    { id: "reflect", type: "reflection", title: "Reflect", markdown: "Question?", tutor: "Discuss the question." },
+    { id: "finish", type: "lesson-transition", title: "Finish", markdown: "Body" },
   ],
 };
 
@@ -29,8 +32,28 @@ async function workspace() { const dir = await mkdtemp(resolve(tmpdir(), "workbo
 afterEach(async () => { await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))); dirs = []; });
 
 describe("workbook event projection", () => {
+  it("sequences every listed block and advances active no-task blocks only through continuation", () => {
+    const initial = project([], lesson);
+    expect(initial.activeBlockId).toBe("narrate");
+    expect(initial.blocks.map((block) => [block.id, block.emerged, block.ready, block.active])).toEqual([
+      ["narrate", true, true, true],
+      ["first-practice", false, false, false],
+      ["second-practice", false, false, false],
+      ["reflect", false, false, false],
+      ["finish", false, false, false],
+    ]);
+
+    const continued = project([nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" })], lesson);
+    expect(continued.activeBlockId).toBe("first-practice");
+    expect(continued.blocks.find((block) => block.id === "narrate")?.completed).toBe(true);
+    expect(continued.blocks.find((block) => block.id === "first-practice")).toMatchObject({ emerged: true, ready: true, active: true });
+  });
+
   it("keeps unexpected output as evidence without completing the active block", () => {
-    const events = [nowEvent({ type: "unexpected_output_submitted", lessonId: LESSON_ID, blockId: "first-practice", evidence: "command not found" })];
+    const events = [
+      nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }),
+      nowEvent({ type: "unexpected_output_submitted", lessonId: LESSON_ID, blockId: "first-practice", evidence: "command not found" }),
+    ];
     const state = project(events, lesson);
     expect(state.activeBlockId).toBe("first-practice");
     expect(state.blocks.find((block) => block.id === "first-practice")?.completed).toBe(false);
@@ -38,43 +61,56 @@ describe("workbook event projection", () => {
   });
 
   it("holds verified terminal practice at its checkpoint until the learner completes it", () => {
-    expect(project([], lesson).blocks.map((block) => [block.id, block.emerged])).toEqual([
-      ["narrate", true], ["first-practice", true], ["second-practice", false], ["reflect", false], ["finish", false]
-    ]);
-    const verified = [nowEvent({ type: "observation_verified", lessonId: LESSON_ID, blockId: "first-practice", source: "terminal_observer", summary: "The expected output appeared.", terminalHtml: "<pre class=\"frozen-terminal-output\">output</pre>" })];
+    const started = [nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" })];
+    const verified = [...started, nowEvent({ type: "observation_verified", lessonId: LESSON_ID, blockId: "first-practice", source: "terminal_observer", summary: "The expected output appeared.", terminalHtml: "<pre class=\"frozen-terminal-output\">output</pre>" })];
     const checkpoint = project(verified, lesson);
     expect(checkpoint.activeBlockId).toBe("first-practice");
     expect(checkpoint.blocks.find((block) => block.id === "first-practice")).toMatchObject({ verified: true, completed: false, feedback: "The expected output appeared.", terminalHtml: expect.stringContaining("frozen-terminal-output") });
     expect(checkpoint.blocks.find((block) => block.id === "second-practice")?.emerged).toBe(false);
 
+    const forgedCompletion = project([...started, nowEvent({ type: "block_completed", lessonId: LESSON_ID, blockId: "first-practice" })], lesson);
+    expect(forgedCompletion.activeBlockId).toBe("first-practice");
+    expect(forgedCompletion.blocks.find((block) => block.id === "first-practice")?.completed).toBe(false);
+
+    const events = [...verified, nowEvent({ type: "block_completed", lessonId: LESSON_ID, blockId: "first-practice" })];
+    expect(project(events, lesson).activeBlockId).toBe("second-practice");
+  });
+
+  it("uses reflection completion and generic transition continuation to complete the lesson", () => {
     const events = [
-      ...verified,
+      nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }),
+      nowEvent({ type: "observation_verified", lessonId: LESSON_ID, blockId: "first-practice", source: "terminal_observer", summary: "First done.", terminalHtml: "<pre>1</pre>" }),
       nowEvent({ type: "block_completed", lessonId: LESSON_ID, blockId: "first-practice" }),
-      nowEvent({ type: "observation_acknowledged", lessonId: LESSON_ID, blockId: "second-practice" }),
+      nowEvent({ type: "observation_verified", lessonId: LESSON_ID, blockId: "second-practice", source: "terminal_observer", summary: "Second done.", terminalHtml: "<pre>2</pre>" }),
+      nowEvent({ type: "block_completed", lessonId: LESSON_ID, blockId: "second-practice" }),
       nowEvent({ type: "reflection_submitted", lessonId: LESSON_ID, blockId: "reflect", response: "a reflection" }),
       nowEvent({ type: "reflection_reply_recorded", lessonId: LESSON_ID, blockId: "reflect", response: "A tutor reply." }),
       nowEvent({ type: "reflection_completed", lessonId: LESSON_ID, blockId: "reflect" }),
     ];
     expect(project(events, lesson).activeBlockId).toBe("finish");
     expect(project(events, lesson).blocks.map((block) => block.emerged)).toEqual([true, true, true, true, true]);
-    expect(project([...events, nowEvent({ type: "lesson_transitioned", lessonId: LESSON_ID, blockId: "finish" })], lesson).completedLessons).toEqual([LESSON_ID]);
+    expect(project([...events, nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "finish" })], lesson).completedLessons).toEqual([LESSON_ID]);
   });
 
   it("rebuilds resume state from JSONL events, not projection cache or scroll position", async () => {
     const dir = await workspace(); const store = new WorkbookEventStore(dir);
-    await store.append(nowEvent({ type: "observation_acknowledged", lessonId: LESSON_ID, blockId: "first-practice" }));
+    await store.append(nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }));
     await store.writeProjection({ activeLessonId: LESSON_ID, activeBlockId: "wrong", completedLessons: [], blocks: [], unexpected: {}, reflections: {}, reflectionConversations: {} });
-    expect(project(await store.read(), lesson).activeBlockId).toBe("second-practice");
+    expect(project(await store.read(), lesson).activeBlockId).toBe("first-practice");
   });
 
   it("writes workbook events in the tutor's neutral state directory", async () => {
     const dir = await workspace(); const store = new WorkbookEventStore(dir);
-    await store.append(nowEvent({ type: "observation_acknowledged", lessonId: LESSON_ID, blockId: "first-practice" }));
+    await store.append(nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }));
     expect(store.eventPath).toContain(".tutorial/.tmp/workbook/events.jsonl");
-    expect(await readFile(store.eventPath, "utf8")).toContain("observation_acknowledged");
+    expect(await readFile(store.eventPath, "utf8")).toContain("block_continued");
   });
 
   it("has no event that lets unrelated file changes complete terminal practice", () => {
-    expect(project([{ type: "file_change_observed", at: new Date().toISOString(), lessonId: LESSON_ID, blockId: "first-practice" } as any], lesson).activeBlockId).toBe("first-practice");
+    const events = [
+      nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }),
+      { type: "file_change_observed", at: new Date().toISOString(), lessonId: LESSON_ID, blockId: "first-practice" } as any,
+    ];
+    expect(project(events, lesson).activeBlockId).toBe("first-practice");
   });
 });

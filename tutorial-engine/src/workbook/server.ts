@@ -8,8 +8,9 @@ import type { TutorialLogger } from "../runtime-log.js";
 import { createTutorialLogger } from "../runtime-log.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 import { introductionCompleted, nowEvent, project, WorkbookEventStore, type WorkbookEvent } from "./events.js";
-import { assertDockerTerminalReady, OBSERVED_TERMINAL_MODE, PiTerminalObserver, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalObserver, type TerminalPtyFactory } from "./terminal.js";
+import { assertDockerTerminalReady, PiTerminalObserver, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalObserver, type TerminalPtyFactory } from "./terminal.js";
 import { PiReflectionConversationAdapter, type PracticeEvidence, type ReflectionConversationAdapter } from "./reflection.js";
+import type { WorkbookBlock, WorkbookLesson } from "./contract.js";
 
 const MIME_TYPES: Record<string, string> = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json; charset=utf-8" };
 const MAX_BODY_BYTES = 16_384;
@@ -63,23 +64,39 @@ function parseTerminalMessage(data: RawData) {
 }
 
 /**
- * The lesson whose progression is live: the first migrated lesson defined by the
- * authored workbook. Selection follows the curriculum, so no lesson ID is
- * hard-coded into the runtime.
+ * The lesson whose progression is live: the first incomplete lesson in the
+ * authored rail. Completed lessons stay completed; the server advances to the
+ * next lesson instead of pinning the learner to the first chapter.
  */
-function activeLesson(loaded: LoadedWorkbook) {
-  const lesson = loaded.chapters.find((chapter) => chapter.lesson)?.lesson;
+function activeLesson(loaded: LoadedWorkbook, events: WorkbookEvent[] = []): WorkbookLesson {
+  const lessons = loaded.chapters.map((chapter) => chapter.lesson).filter((lesson): lesson is WorkbookLesson => Boolean(lesson));
+  const lesson = lessons.find((candidate) => !project(events, candidate).completedLessons.includes(candidate.id)) ?? lessons.at(-1);
   if (!lesson) throw new Error("No workbook lesson is migrated.");
   return lesson;
 }
+function completedLessonIds(loaded: LoadedWorkbook, events: WorkbookEvent[]): string[] {
+  return loaded.chapters.flatMap((chapter) => chapter.lesson && project(events, chapter.lesson).completedLessons.includes(chapter.lesson.id) ? [chapter.lesson.id] : []);
+}
+function publicBlock(block: WorkbookBlock) {
+  const { tutor: _privateTutor, ...visible } = block as WorkbookBlock & { tutor?: string };
+  return visible;
+}
+function publicLesson(lesson: WorkbookLesson, blocks: WorkbookBlock[]) {
+  return { ...lesson, blocks: blocks.map(publicBlock) };
+}
 function publicState(loaded: LoadedWorkbook, events: WorkbookEvent[]) {
-  const lesson = activeLesson(loaded);
-  const progress = project(events, lesson);
+  const lesson = activeLesson(loaded, events);
+  const activeProgress = project(events, lesson);
+  const completedLessons = completedLessonIds(loaded, events);
+  const progress = { ...activeProgress, completedLessons };
   const introductionComplete = introductionCompleted(events);
-  const emerged = new Set(progress.blocks.filter((block) => block.emerged).map((block) => block.id));
-  const chapters = loaded.chapters.map((chapter) => chapter.lesson && introductionComplete
-    ? { ...chapter, lesson: { ...chapter.lesson, blocks: chapter.lesson.blocks.filter((block) => emerged.has(block.id)) } }
-    : { ...chapter, lesson: undefined, state: "unavailable" as const });
+  const emerged = new Set(activeProgress.blocks.filter((block) => block.emerged).map((block) => block.id));
+  const chapters = loaded.chapters.map((chapter) => {
+    if (!chapter.lesson || !introductionComplete) return { ...chapter, lesson: undefined };
+    if (completedLessons.includes(chapter.lesson.id)) return { ...chapter, lesson: publicLesson(chapter.lesson, chapter.lesson.blocks) };
+    if (chapter.lesson.id === lesson.id) return { ...chapter, lesson: publicLesson(chapter.lesson, chapter.lesson.blocks.filter((block) => emerged.has(block.id))) };
+    return { ...chapter, lesson: undefined };
+  });
   return { workbook: loaded.identity, introduction: loaded.introduction, introductionComplete, chapters, progress, adapter: { modelBackedHelp: false, note: "Free-text help is block-scoped. No model adapter is wired in this vertical slice." } };
 }
 
@@ -87,11 +104,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const log = options.logger ?? createTutorialLogger();
   await access(resolve(options.webRoot, "index.html"));
   const loaded = await loadWorkbook(options.target);
-  const lesson = activeLesson(loaded);
-  // Task 1 note: contract.ts's TerminalPracticeBlock no longer carries `terminalMode` (Phase 3
-  // makes the embedded terminal the only mode; that redesign is Task 2's scope). This cast only
-  // preserves today's runtime behavior for callers that still construct blocks with the field.
-  const embeddedTerminalEnabled = lesson.blocks.some((block) => block.type === "terminal-practice" && (block as { terminalMode?: string }).terminalMode === OBSERVED_TERMINAL_MODE);
+  const embeddedTerminalEnabled = options.terminalObserver !== undefined || options.terminalPtyFactory !== undefined;
   const host = options.host ?? LOOPBACK_HOST;
   if (embeddedTerminalEnabled && !isLoopbackHost(host)) throw new Error("The embedded terminal can only be enabled on a loopback host; it exposes an isolated container shell.");
   if (embeddedTerminalEnabled && !options.terminalPtyFactory) assertDockerTerminalReady();
@@ -103,12 +116,12 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const refreshEvents = async () => { eventsCache = await store.read(); return eventsCache; };
   const activeObservedBlock = (): ActiveObservedTerminalBlock | undefined => {
     if (!introductionCompleted(eventsCache)) return undefined;
+    const lesson = activeLesson(loaded, eventsCache);
     const projection = project(eventsCache, lesson);
     const active = projection.blocks.find((block) => block.active);
     const authored = lesson.blocks.find((block) => block.id === active?.id);
-    if (!authored || authored.type !== "terminal-practice" || (authored as { terminalMode?: string }).terminalMode !== OBSERVED_TERMINAL_MODE) return undefined;
-    const legacy = authored as unknown as { command: string; context: string; expectedObservation: string };
-    return { lessonId: lesson.id, blockId: authored.id, command: legacy.command, context: legacy.context, expectedObservation: legacy.expectedObservation };
+    if (!authored || authored.type !== "terminal-practice") return undefined;
+    return { lessonId: lesson.id, blockId: authored.id, command: authored.markdown, context: authored.markdown, expectedObservation: authored.tutor };
   };
   const completeFromObserver = async (block: ActiveObservedTerminalBlock, summary: string, terminalHtml: string) => {
     const events = await refreshEvents();
@@ -118,7 +131,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     // explicit completion event reveals the next required block.
     await store.append(nowEvent({ type: "observation_verified", lessonId: block.lessonId, blockId: block.blockId, source: "terminal_observer", summary, terminalHtml }));
     const updated = await refreshEvents();
-    await store.writeProjection(project(updated, lesson));
+    await store.writeProjection(project(updated, activeLesson(loaded, updated)));
     return publicState(loaded, updated);
   };
   const terminal = embeddedTerminalEnabled ? new WorkbookTerminalManager({
@@ -131,12 +144,13 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     logger: log
   }) : undefined;
   const reflectionEvidence = (): PracticeEvidence[] => {
+    const lesson = activeLesson(loaded, eventsCache);
     const current = project(eventsCache, lesson);
     const transcripts = new Map((terminal?.practiceTranscripts() ?? []).map((item) => [item.blockId, item.transcript]));
     return lesson.blocks.flatMap((block) => {
       const progress = current.blocks.find((item) => item.id === block.id);
       if (block.type !== "terminal-practice" || !progress?.emerged) return [];
-      return [{ blockId: block.id, title: block.title, expectedObservation: (block as { expectedObservation?: string }).expectedObservation ?? "", transcript: transcripts.get(block.id), unexpectedOutput: current.unexpected[block.id] ?? [], verified: progress.verified, feedback: progress.feedback }];
+      return [{ blockId: block.id, title: block.title, expectedObservation: block.tutor, transcript: transcripts.get(block.id), unexpectedOutput: current.unexpected[block.id] ?? [], verified: progress.verified, feedback: progress.feedback }];
     });
   };
   let server = createServer(async (request, response) => {
@@ -147,16 +161,18 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       const events = await refreshEvents();
       if (!introductionCompleted(events)) await store.append(nowEvent({ type: "workbook_introduction_completed" }));
       const updated = await refreshEvents();
-      await store.writeProjection(project(updated, lesson));
+      await store.writeProjection(project(updated, activeLesson(loaded, updated)));
       return sendJson(response, 202, publicState(loaded, updated));
     }
     if (request.method === "POST" && isRoute(url.pathname, "events")) {
       try {
         const body = await readJson(request);
-        if (!introductionCompleted(await refreshEvents())) return sendJson(response, 409, { error: "Complete the workbook introduction first." });
+        const latest = await refreshEvents();
+        if (!introductionCompleted(latest)) return sendJson(response, 409, { error: "Complete the workbook introduction first." });
+        const lesson = activeLesson(loaded, latest);
         const block = lesson.blocks.find((candidate) => candidate.id === body.blockId);
         if (!block) return sendJson(response, 400, { error: "Unknown blockId." });
-        const current = project(await refreshEvents(), lesson);
+        const current = project(latest, lesson);
         const progress = current.blocks.find((candidate) => candidate.id === block.id);
         // A block event is evidence for the current activity, never a way for a
         // browser request to skip the ordered lesson contract. Help remains
@@ -179,24 +195,23 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
               : { type: "reflection_follow_up_submitted", lessonId: lesson.id, blockId: block.id, response: learnerResponse }));
             const updated = await refreshEvents();
             const thread = project(updated, lesson).reflectionConversations[block.id] ?? [];
-            const reply = await reflectionConversation.reply({ prompt: (block as { prompt?: string }).prompt ?? "", message: learnerResponse, conversation: thread, practiceEvidence: reflectionEvidence() });
+            const reply = await reflectionConversation.reply({ prompt: block.tutor, message: learnerResponse, conversation: thread, practiceEvidence: reflectionEvidence() });
             await store.append(nowEvent({ type: "reflection_reply_recorded", lessonId: lesson.id, blockId: block.id, response: reply }));
-            const complete = await refreshEvents(); await store.writeProjection(project(complete, lesson));
+            const complete = await refreshEvents(); await store.writeProjection(project(complete, activeLesson(loaded, complete)));
             result = publicState(loaded, complete);
           }));
           return sendJson(response, 202, result);
         }
         let event: WorkbookEvent | undefined;
-        if (body.action === "acknowledge" && block.type === "terminal-practice") event = nowEvent({ type: "observation_acknowledged", lessonId: lesson.id, blockId: block.id });
         if (body.action === "complete" && block.type === "terminal-practice" && progress?.verified && !progress.completed) event = nowEvent({ type: "block_completed", lessonId: lesson.id, blockId: block.id });
+        if (body.action === "continue" && (block.type === "narrative" || block.type === "lesson-transition")) event = nowEvent({ type: "block_continued", lessonId: lesson.id, blockId: block.id });
         if (body.action === "unexpected" && block.type === "terminal-practice" && typeof body.evidence === "string") event = nowEvent({ type: "unexpected_output_submitted", lessonId: lesson.id, blockId: block.id, evidence: body.evidence });
         if (body.action === "reflection-complete" && block.type === "reflection" && (current.reflectionConversations[block.id] ?? []).some((turn) => turn.role === "tutor")) event = nowEvent({ type: "reflection_completed", lessonId: lesson.id, blockId: block.id });
-        if (body.action === "transition" && block.type === "lesson-transition") event = nowEvent({ type: "lesson_transitioned", lessonId: lesson.id, blockId: block.id });
         if (body.action === "help" && typeof body.request === "string") event = nowEvent({ type: "help_requested", lessonId: lesson.id, blockId: block.id, request: body.request });
         if (!event) return sendJson(response, 400, { error: "Invalid workbook action for this block." });
         await store.append(event);
         const events = await refreshEvents();
-        await store.writeProjection(project(events, lesson));
+        await store.writeProjection(project(events, activeLesson(loaded, events)));
         return sendJson(response, 202, publicState(loaded, events));
       } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." }); }
     }

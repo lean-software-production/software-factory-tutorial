@@ -1,47 +1,66 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { WebSocket } from "ws";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startWorkbookServer } from "../src/workbook/server.js";
-import type { TerminalObserver, TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
+import type { TerminalObservationRequest, TerminalObserver, TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
 import type { ReflectionConversationAdapter } from "../src/workbook/reflection.js";
 
 let dirs: string[] = [];
 
-// The fixture uses a lesson whose id is not "001", proving no lesson ID is
-// hard-coded into the runtime; the active lesson is the first migrated chapter
-// the authored workbook declares. It also omits docs/specs entirely, proving
-// the rail is derived from workbook.yaml alone.
-async function fixture(observed = false) {
+// The fixture uses only the new workbook Markdown contract: every document has
+// front matter, titles live in headings, lesson.md lists block IDs, and blocks
+// carry private tutor guidance only for terminal/reflection adapters.
+async function fixture() {
   const dir = await mkdtemp(resolve(tmpdir(), "workbook-server-")); dirs.push(dir);
   const partDir = resolve(dir, "lessons/01-loop");
-  const lessonDir = resolve(partDir, "01-first");
-  await mkdir(resolve(lessonDir, "blocks"), { recursive: true });
-  await writeFile(resolve(dir, "workbook.md"), [
-    "---", "title: Fixture workbook", "---",
-    "Welcome to the fixture workbook."
-  ].join("\n"));
-  await writeFile(resolve(partDir, "part.md"), "# Part 1 — Loop\n\nPart copy.\n");
-  await mkdir(resolve(partDir, "02-second"), { recursive: true });
-  await writeFile(resolve(partDir, "02-second/hero.md"), "# Second lesson\n");
-  await writeFile(resolve(lessonDir, "lesson.yaml"), [
-    "hero: hero.md", "opening: opening.md", "blocks:",
-    "  - id: run-supplied-command", "    type: terminal-practice", "    required: true", "    source: blocks/run-supplied-command.md",
-    "  - id: change-job", "    type: terminal-practice", "    required: true", "    source: blocks/change-job.md",
-    "  - id: reflection", "    type: reflection", "    required: true", "    source: blocks/reflection.md",
-    "  - id: transition", "    type: lesson-transition", "    required: true", "    source: blocks/transition.md",
-  ].join("\n"));
-  await writeFile(resolve(lessonDir, "hero.md"), ["---", "title: First lesson hero", "dek: A hero summary line.", "meta:", "  - Your terminal", "---"].join("\n"));
-  await writeFile(resolve(lessonDir, "opening.md"), ["---", "sectionLabel: What you will learn", "heading: An opening heading.", "outcomes:", "  - Do the thing.", "---", "The **payoff** sentence."].join("\n"));
-  await writeFile(resolve(lessonDir, "blocks/run-supplied-command.md"), ["---", "title: Run", "command: echo hello", "context: Root", "expectedObservation: Done", ...(observed ? ["terminalMode: observed-embedded-optional"] : []), "---"].join("\n"));
-  await writeFile(resolve(lessonDir, "blocks/change-job.md"), ["---", "title: Change", "command: echo again", "context: Root", "expectedObservation: Done", ...(observed ? ["terminalMode: observed-embedded-optional"] : []), "---"].join("\n"));
-  await writeFile(resolve(lessonDir, "blocks/reflection.md"), ["---", "title: Reflect", "prompt: Why?", "---"].join("\n"));
-  await writeFile(resolve(lessonDir, "blocks/transition.md"), ["---", "title: Finish", "label: Finish", "---", "Done."].join("\n"));
+  const first = resolve(partDir, "01-first");
+  const second = resolve(partDir, "02-second");
+  await mkdir(resolve(first, "blocks"), { recursive: true });
+  await mkdir(resolve(second, "blocks"), { recursive: true });
+  await writeFile(resolve(dir, "workbook.md"), ["---", "---", "# Fixture workbook", "", "Welcome to the fixture workbook."].join("\n"));
+  await writeFile(resolve(partDir, "part.md"), ["---", "---", "# Part 1 — Loop", "", "Part copy."].join("\n"));
+  await writeLesson(first, "First lesson", ["orientation", "run-supplied-command", "change-job", "reflection", "transition"]);
+  await writeBlock(first, "orientation", "narrative", "Orientation", "Start with the concept.");
+  await writeBlock(first, "run-supplied-command", "terminal-practice", "Run", "Run the supplied command.", "Observe run result.");
+  await writeBlock(first, "change-job", "terminal-practice", "Change", "Change the job and run again.", "Observe changed-job result.");
+  await writeBlock(first, "reflection", "reflection", "Reflect", "Why did this count as headless?", "Ask about harness and job.");
+  await writeBlock(first, "transition", "lesson-transition", "Finish", "Move to the next lesson.");
+  await writeLesson(second, "Second lesson", ["second-orientation", "second-finish"]);
+  await writeBlock(second, "second-orientation", "narrative", "Second orientation", "Second lesson starts here.");
+  await writeBlock(second, "second-finish", "lesson-transition", "Second finish", "Second lesson done.");
   await mkdir(resolve(dir, "web")); await writeFile(resolve(dir, "web/index.html"), "<!doctype html><div id=\"root\"></div>");
   return dir;
 }
+
+async function writeLesson(lessonDir: string, title: string, blocks: string[]) {
+  await writeFile(resolve(lessonDir, "lesson.md"), [
+    "---",
+    "durationMinutes: 10",
+    "outcomes:",
+    "  - Fixture outcome.",
+    "blocks:",
+    ...blocks.map((id) => `  - ${id}`),
+    "---",
+    `# ${title}`,
+    "",
+    `${title} dek.`,
+  ].join("\n"));
+}
+
+async function writeBlock(lessonDir: string, id: string, type: string, title: string, markdown: string, tutor?: string) {
+  await writeFile(resolve(lessonDir, `blocks/${id}.md`), [
+    "---",
+    `type: ${type}`,
+    ...(tutor ? [`tutor: ${tutor}`] : []),
+    "---",
+    `## ${title}`,
+    "",
+    markdown,
+  ].join("\n"));
+}
+
 class ServerFakePty implements TerminalPty {
   writes: string[] = [];
   data?: (data: string) => void;
@@ -70,90 +89,121 @@ function waitFor(ws: WebSocket, predicate: (message: any) => boolean): Promise<a
   });
 }
 
+async function postEvent(serverUrl: string, body: unknown) {
+  return fetch(`${serverUrl}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
+async function completeTerminal(serverUrl: string, blockId: string) {
+  const ws = await connect(serverUrl, serverUrl);
+  const verified = waitFor(ws, (message) => message.type === "verified-complete" && message.blockId === blockId);
+  ws.send(JSON.stringify({ type: "input", data: `run ${blockId}\r` }));
+  await verified;
+  ws.close();
+  return postEvent(serverUrl, { blockId, action: "complete" }).then((response) => response.json() as any);
+}
+
 afterEach(async () => { vi.useRealTimers(); await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))); dirs = []; });
 
 describe("workbook browser API", () => {
-  it("rejects an action for a required block that is not active", async () => {
+  it("rejects progress actions for blocks that are not active", async () => {
     const dir = await fixture(); const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0 });
     try {
       await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
       for (const body of [
-        { blockId: "change-job", action: "acknowledge" },
-        { blockId: "transition", action: "transition" }
+        { blockId: "change-job", action: "complete" },
+        { blockId: "transition", action: "continue" }
       ]) {
-        const response = await fetch(`${server.url}/api/workbook/events`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
-        });
+        const response = await postEvent(server.url, body);
         expect(response.status).toBe(409);
         expect((await response.json() as { error: string }).error).toMatch(/not active/i);
       }
       const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
-      expect(state.progress.activeBlockId).toBe("run-supplied-command");
+      expect(state.progress.activeBlockId).toBe("orientation");
       expect(state.progress.blocks.filter((block: any) => block.completed)).toEqual([]);
     } finally { await server.close(); }
   });
 
-  it("serves the first migrated lesson from the authored rail and leaves later chapters as stubs", async () => {
+  it("serves new-layout content without legacy state or private tutor data", async () => {
     const dir = await fixture(); const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0 });
     try {
       const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
-      // Identity and introduction come from the authored workbook, not the engine.
       expect(state.workbook).toMatchObject({ title: "Fixture workbook" });
       expect(state.introduction).toContain("Welcome to the fixture workbook.");
-      expect(state.chapters.map((chapter: any) => [chapter.id, chapter.state, chapter.partNumber, chapter.lessonNumber])).toEqual([["01-loop/01-first", "unavailable", 1, 1], ["01-loop/02-second", "unavailable", 1, 2]]);
-      expect(state.introductionComplete).toBe(false);
-      expect(state.chapters[0].lesson).toBeUndefined();
-      const blocked = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "acknowledge" }) });
+      expect(state.chapters.map((chapter: any) => [chapter.id, chapter.state, chapter.lesson])).toEqual([
+        ["01-loop/01-first", undefined, undefined],
+        ["01-loop/02-second", undefined, undefined],
+      ]);
+      const blocked = await postEvent(server.url, { blockId: "orientation", action: "continue" });
       expect(blocked.status).toBe(409);
       const introduced = await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" }).then((response) => response.json() as any);
-      expect(introduced.introductionComplete).toBe(true);
-      expect(introduced.chapters.map((chapter: any) => [chapter.id, chapter.state, chapter.partNumber, chapter.lessonNumber])).toEqual([["01-loop/01-first", "migrated", 1, 1], ["01-loop/02-second", "unavailable", 1, 2]]);
       expect(introduced.progress.activeLessonId).toBe("01-loop/01-first");
-      // Hero and opening are Markdown-derived authored content.
-      expect(introduced.chapters[0]).toMatchObject({ part: "Part 1 — Loop", partMarkdown: "Part copy." });
-      expect(introduced.chapters[0].lesson.hero).toMatchObject({ title: "First lesson hero", dek: "A hero summary line.", meta: ["Your terminal"] });
-      expect(introduced.chapters[0].lesson.opening).toMatchObject({ sectionLabel: "What you will learn", heading: "An opening heading.", outcomes: ["Do the thing."] });
-      expect(introduced.chapters[0].lesson.opening.markdown).toContain("**payoff**");
-      // Only emerged block content is serialized: the ahead command and prompt are absent.
-      expect(introduced.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["run-supplied-command"]);
-      expect(JSON.stringify(introduced)).not.toContain("echo again");
-      expect(JSON.stringify(introduced)).not.toContain("Why?");
-      const different = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "unexpected", evidence: "command failed" }) }).then((r) => r.json() as any);
-      expect(different.progress.activeBlockId).toBe("run-supplied-command");
-      const ack = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "acknowledge" }) }).then((r) => r.json() as any);
-      expect(ack.progress.activeBlockId).toBe("change-job");
-      expect(ack.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["run-supplied-command", "change-job"]);
+      expect(introduced.progress.activeBlockId).toBe("orientation");
+      expect(introduced.chapters[0]).toMatchObject({ id: "01-loop/01-first", part: "Part 1 — Loop", partMarkdown: "Part copy." });
+      expect(introduced.chapters[0].state).toBeUndefined();
+      expect(introduced.chapters[0].lesson).toMatchObject({ title: "First lesson", dek: "First lesson dek.", durationMinutes: 10, outcomes: ["Fixture outcome."] });
+      expect(introduced.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["orientation"]);
+      expect(JSON.stringify(introduced)).not.toContain("Observe run result");
+      const continued = await postEvent(server.url, { blockId: "orientation", action: "continue" }).then((response) => response.json() as any);
+      expect(continued.progress.activeBlockId).toBe("run-supplied-command");
+      expect(continued.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["orientation", "run-supplied-command"]);
+      expect(JSON.stringify(continued)).not.toContain("Observe run result");
     } finally { await server.close(); }
   });
 
-  it("discusses a reflection with the completed practice evidence before advancing", async () => {
+  it("passes private tutor guidance to terminal and reflection adapters", async () => {
     const dir = await fixture();
-    const requests: any[] = [];
-    const reflectionConversation: ReflectionConversationAdapter = { reply: async (request) => { requests.push(request); return "You connected the command result to the validation loop. What would a failing result tell you?"; } };
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, reflectionConversation });
+    const terminalRequests: TerminalObservationRequest[] = [];
+    const observer: TerminalObserver = { observe: async (request) => { terminalRequests.push(request); return { status: "complete", summary: "done" }; } };
+    const reflectionRequests: any[] = [];
+    const reflectionConversation: ReflectionConversationAdapter = { reply: async (request) => { reflectionRequests.push(request); return "You connected the command result to the validation loop."; } };
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: observer, terminalPtyFactory: () => new ServerFakePty(), terminalDebounceMs: 1, reflectionConversation });
     try {
       await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      for (const blockId of ["run-supplied-command", "change-job"]) await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, action: "acknowledge" }) });
-      const discussed = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "reflection", action: "reflection-submit", response: "It checks whether the work achieved the expected result." }) }).then((response) => response.json() as any);
+      await postEvent(server.url, { blockId: "orientation", action: "continue" });
+      await completeTerminal(server.url, "run-supplied-command");
+      await completeTerminal(server.url, "change-job");
+      expect(terminalRequests.map((request) => [request.blockId, request.expectedObservation])).toEqual([
+        ["run-supplied-command", "Observe run result."],
+        ["change-job", "Observe changed-job result."],
+      ]);
+      const discussed = await postEvent(server.url, { blockId: "reflection", action: "reflection-submit", response: "It checks whether the work achieved the expected result." }).then((response) => response.json() as any);
       expect(discussed.progress.activeBlockId).toBe("reflection");
       expect(discussed.progress.reflectionConversations.reflection).toEqual([
         { role: "learner", text: "It checks whether the work achieved the expected result." },
         { role: "tutor", text: expect.stringMatching(/connected/i) }
       ]);
-      expect(requests[0].practiceEvidence).toEqual(expect.arrayContaining([expect.objectContaining({ blockId: "run-supplied-command", expectedObservation: "Done" })]));
-      const complete = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "reflection", action: "reflection-complete" }) }).then((response) => response.json() as any);
-      expect(complete.progress.activeBlockId).toBe("transition");
+      expect(reflectionRequests[0].prompt).toBe("Ask about harness and job.");
+      expect(reflectionRequests[0].practiceEvidence).toEqual(expect.arrayContaining([expect.objectContaining({ blockId: "run-supplied-command", expectedObservation: "Observe run result." })]));
+      expect(JSON.stringify(discussed)).not.toContain("Ask about harness and job");
+    } finally { await server.close(); }
+  });
+
+  it("advances the active lesson after the current lesson completes", async () => {
+    const dir = await fixture();
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: { observe: async () => ({ status: "complete" }) }, terminalPtyFactory: () => new ServerFakePty(), terminalDebounceMs: 1, reflectionConversation: { reply: async () => "Tutor reply." } });
+    try {
+      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
+      await postEvent(server.url, { blockId: "orientation", action: "continue" });
+      await completeTerminal(server.url, "run-supplied-command");
+      await completeTerminal(server.url, "change-job");
+      await postEvent(server.url, { blockId: "reflection", action: "reflection-submit", response: "Reflection." });
+      await postEvent(server.url, { blockId: "reflection", action: "reflection-complete" });
+      const second = await postEvent(server.url, { blockId: "transition", action: "continue" }).then((response) => response.json() as any);
+      expect(second.progress.activeLessonId).toBe("01-loop/02-second");
+      expect(second.progress.activeBlockId).toBe("second-orientation");
+      expect(second.progress.completedLessons).toContain("01-loop/01-first");
+      expect(second.chapters[1].lesson.blocks.map((block: any) => block.id)).toEqual(["second-orientation"]);
     } finally { await server.close(); }
   });
 
   it("rejects embedded terminal on a non-loopback host", async () => {
-    const dir = await fixture(true);
+    const dir = await fixture();
     await expect(startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), host: "0.0.0.0", port: 0, terminalObserver: { observe: async () => ({ status: "waiting" }) } }))
       .rejects.toThrow(/loopback/i);
   });
 
   it("rejects terminal WebSocket origins that are not the workbook server", async () => {
-    const dir = await fixture(true);
+    const dir = await fixture();
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: { observe: async () => ({ status: "waiting" }) }, terminalPtyFactory: () => new ServerFakePty() });
     try {
       await expect(connect(server.url, "http://evil.test")).rejects.toThrow();
@@ -161,20 +211,21 @@ describe("workbook browser API", () => {
   });
 
   it("verified terminal practice holds a server-owned success checkpoint until completion", async () => {
-    const dir = await fixture(true);
+    const dir = await fixture();
     const pty = new ServerFakePty();
     const observer: TerminalObserver = { observe: async () => ({ status: "complete", summary: "done" }) };
     const factory: TerminalPtyFactory = () => pty;
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: observer, terminalPtyFactory: factory, terminalDebounceMs: 1 });
     try {
       await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
+      await postEvent(server.url, { blockId: "orientation", action: "continue" });
       const ws = await connect(server.url, server.url);
       const completed = waitFor(ws, (message) => message.type === "verified-complete");
       ws.send(JSON.stringify({ type: "input", data: "echo hello\r" }));
       const message = await completed;
       expect(message.state.progress.activeBlockId).toBe("run-supplied-command");
       expect(message.state.progress.blocks.find((block: any) => block.id === "run-supplied-command")).toMatchObject({ verified: true, completed: false, feedback: "done" });
-      const complete = await fetch(`${server.url}/api/workbook/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "run-supplied-command", action: "complete" }) }).then((response) => response.json() as any);
+      const complete = await postEvent(server.url, { blockId: "run-supplied-command", action: "complete" }).then((response) => response.json() as any);
       expect(complete.progress.activeBlockId).toBe("change-job");
       ws.close();
       const events = await readFile(resolve(dir, ".tutorial/.tmp/workbook/events.jsonl"), "utf8");
@@ -187,7 +238,7 @@ describe("workbook browser API", () => {
   });
 
   it("terminal advice never completes the active block or enters the event log", async () => {
-    const dir = await fixture(true);
+    const dir = await fixture();
     const pty = new ServerFakePty();
     const server = await startWorkbookServer({
       target: dir,
@@ -199,6 +250,7 @@ describe("workbook browser API", () => {
     });
     try {
       await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
+      await postEvent(server.url, { blockId: "orientation", action: "continue" });
       const ws = await connect(server.url, server.url);
       const advice = waitFor(ws, (message) => message.type === "advice");
       ws.send(JSON.stringify({ type: "input", data: "bad\r" }));
@@ -209,32 +261,6 @@ describe("workbook browser API", () => {
       const events = await readFile(resolve(dir, ".tutorial/.tmp/workbook/events.jsonl"), "utf8");
       expect(events).not.toContain("Run the authored command");
       expect(events).not.toContain("bad");
-    } finally { await server.close(); }
-  });
-
-  it("does not let terminal activity complete a non-active observed block", async () => {
-    const dir = await fixture(true);
-    const pty = new ServerFakePty();
-    const observed: string[] = [];
-    const server = await startWorkbookServer({
-      target: dir,
-      webRoot: resolve(dir, "web"),
-      port: 0,
-      terminalPtyFactory: () => pty,
-      terminalDebounceMs: 1,
-      terminalObserver: { observe: async (request) => { observed.push(request.blockId); return { status: "complete" }; } }
-    });
-    try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      const ws = await connect(server.url, server.url);
-      const completed = waitFor(ws, (message) => message.type === "verified-complete");
-      ws.send(JSON.stringify({ type: "input", data: "echo hello\r" }));
-      await completed;
-      expect(observed).toEqual(["run-supplied-command"]);
-      const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
-      expect(state.progress.activeBlockId).toBe("run-supplied-command");
-      expect(state.progress.blocks.find((block: any) => block.id === "run-supplied-command")?.verified).toBe(true);
-      ws.close();
     } finally { await server.close(); }
   });
 });

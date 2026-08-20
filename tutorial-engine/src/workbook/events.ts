@@ -9,6 +9,7 @@ export type WorkbookEvent =
   | { type: "observation_acknowledged"; at: string; lessonId: string; blockId: string }
   | { type: "observation_verified"; at: string; lessonId: string; blockId: string; source: "terminal_observer"; summary: string; terminalHtml: string }
   | { type: "block_completed"; at: string; lessonId: string; blockId: string }
+  | { type: "block_continued"; at: string; lessonId: string; blockId: string }
   | { type: "unexpected_output_submitted"; at: string; lessonId: string; blockId: string; evidence: string }
   | { type: "reflection_submitted"; at: string; lessonId: string; blockId: string; response: string }
   | { type: "reflection_follow_up_submitted"; at: string; lessonId: string; blockId: string; response: string }
@@ -21,34 +22,40 @@ export interface BlockProgress { id: string; type: string; emerged: boolean; rea
 export type ReflectionTurn = { role: "learner" | "tutor"; text: string };
 export interface WorkbookProjection { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]>; }
 
-const completionEvents = new Set<WorkbookEvent["type"]>(["observation_acknowledged", "block_completed", "reflection_completed", "lesson_transitioned"]);
 
 export function introductionCompleted(events: readonly WorkbookEvent[]): boolean {
   return events.some((event) => event.type === "workbook_introduction_completed");
 }
 
 export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson): WorkbookProjection {
-  const completed = new Set<string>();
+  const continued = new Set<string>();
+  const terminalCompletions = new Set<string>();
+  const reflectionCompletions = new Set<string>();
   const unexpected: Record<string, string[]> = {};
   const reflections: Record<string, string> = {};
   const reflectionConversations: Record<string, ReflectionTurn[]> = {};
   const verified = new Map<string, { summary: string; terminalHtml: string }>();
   for (const event of events) {
+    if (!("lessonId" in event) || event.lessonId !== lesson.id) continue;
     if (event.type === "unexpected_output_submitted") (unexpected[event.blockId] ??= []).push(event.evidence);
     if (event.type === "reflection_submitted") { reflections[event.blockId] = event.response; (reflectionConversations[event.blockId] ??= []).push({ role: "learner", text: event.response }); }
     if (event.type === "reflection_follow_up_submitted") (reflectionConversations[event.blockId] ??= []).push({ role: "learner", text: event.response });
     if (event.type === "reflection_reply_recorded") (reflectionConversations[event.blockId] ??= []).push({ role: "tutor", text: event.response });
-    if (event.type === "observation_verified" && event.lessonId === lesson.id) verified.set(event.blockId, { summary: event.summary, terminalHtml: event.terminalHtml });
-    if ("blockId" in event && event.lessonId === lesson.id && completionEvents.has(event.type)) completed.add(event.blockId);
+    if (event.type === "observation_verified") verified.set(event.blockId, { summary: event.summary, terminalHtml: event.terminalHtml });
+    if (event.type === "block_continued" || event.type === "lesson_transitioned") continued.add(event.blockId);
+    if (event.type === "block_completed") terminalCompletions.add(event.blockId);
+    if (event.type === "reflection_completed") reflectionCompletions.add(event.blockId);
   }
-  // Task 1 note: contract.ts's WorkbookBlock no longer carries `required` (the plan removes
-  // the flag entirely, since every listed block is part of the required sequence). Progression
-  // redesign is Task 2's scope (Phase 4); this cast only preserves today's runtime behavior for
-  // callers that still construct blocks with a `required` property.
-  const required = lesson.blocks.filter((block) => (block as { required?: boolean }).required);
-  const nextRequired = required.find((block) => !completed.has(block.id));
-  const active = nextRequired ?? required.at(-1) ?? lesson.blocks[0]!;
-  const activeIndex = lesson.blocks.findIndex((block) => block.id === active.id);
+
+  const completed = new Set<string>();
+  for (const block of lesson.blocks) {
+    if ((block.type === "narrative" || block.type === "lesson-transition") && continued.has(block.id)) completed.add(block.id);
+    if (block.type === "terminal-practice" && verified.has(block.id) && terminalCompletions.has(block.id)) completed.add(block.id);
+    if (block.type === "reflection" && reflectionCompletions.has(block.id)) completed.add(block.id);
+  }
+  const next = lesson.blocks.find((block) => !completed.has(block.id));
+  const active = next ?? lesson.blocks.at(-1) ?? lesson.blocks[0]!;
+  const activeIndex = Math.max(0, lesson.blocks.findIndex((block) => block.id === active.id));
   const blocks = lesson.blocks.map((block, index) => ({
     id: block.id,
     type: block.type,
@@ -57,10 +64,10 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
     feedback: verified.get(block.id)?.summary,
     terminalHtml: verified.get(block.id)?.terminalHtml,
     emerged: index <= activeIndex,
-    ready: !(block as { required?: boolean }).required || index <= activeIndex || completed.has(block.id),
-    active: block.id === active.id && nextRequired !== undefined
+    ready: index <= activeIndex,
+    active: next !== undefined && block.id === active.id
   }));
-  const lessonComplete = required.length > 0 && required.every((block) => completed.has(block.id));
+  const lessonComplete = lesson.blocks.length > 0 && lesson.blocks.every((block) => completed.has(block.id));
   return { activeLessonId: lesson.id, activeBlockId: active.id, completedLessons: lessonComplete ? [lesson.id] : [], blocks, unexpected, reflections, reflectionConversations };
 }
 
