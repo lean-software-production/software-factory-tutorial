@@ -1,13 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { defaultKeymap } from "@codemirror/commands";
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { Markdown } from "../../web/src/markdown";
 
-export type WorkbookBlockType = "narrative" | "terminal-practice" | "reflection" | "lesson-transition";
-export type Block = { id: string; type: WorkbookBlockType; title: string; markdown: string; label?: string; tutor?: string };
+export type WorkbookBlockType = "narrative" | "terminal-practice" | "editor-practice" | "reflection" | "lesson-transition";
+type BlockBase = { id: string; title: string; markdown: string; label?: string };
+export type NarrativeBlock = BlockBase & { type: "narrative" };
+export type TerminalPracticeBlock = BlockBase & { type: "terminal-practice" };
+export type EditorPracticeBlock = BlockBase & { type: "editor-practice"; path: string; tutor?: never };
+export type ReflectionBlock = BlockBase & { type: "reflection" };
+export type LessonTransitionBlock = BlockBase & { type: "lesson-transition" };
+export type Block = NarrativeBlock | TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock | LessonTransitionBlock;
 export type Lesson = { id: string; title: string; dek: string; durationMinutes: number; outcomes: string[]; blocks: Block[] };
 export type Chapter = { id: string; title: string; part: string; partMarkdown: string; partNumber: number; lessonNumber: number; lesson?: Lesson };
-export type BlockProgress = { id: string; type?: string; ready: boolean; active: boolean; completed: boolean; verified: boolean; feedback?: string; terminalHtml?: string; emerged: boolean };
+export type EditorStatus = "editing" | "reviewing" | "feedback" | "unlocked";
+export type BlockProgress = { id: string; type?: string; ready: boolean; active: boolean; completed: boolean; verified: boolean; feedback?: string; terminalHtml?: string; emerged: boolean; revision?: number; draftText?: string; editorStatus?: EditorStatus };
 export type ReflectionTurn = { role: "learner" | "tutor"; text: string };
 export type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]> };
 type Identity = { title: string };
@@ -25,12 +35,18 @@ async function post(blockId: string, body: object): Promise<State> {
   return response.json();
 }
 
+async function postEditorDraft(blockId: string, revision: number, text: string): Promise<State> {
+  const response = await fetch("/api/workbook/editor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision, text }) });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
 function progressFor(progress: Progress, id: string) { return progress.blocks.find((block) => block.id === id); }
 function domSafe(value: string) { return value.replace(/[^A-Za-z0-9_-]+/g, "-"); }
 function lessonElementId(lessonId: string) { return `lesson-${domSafe(lessonId)}`; }
 export function scrollActiveLessonIntoView(doc: Pick<Document, "getElementById">, activeLessonId: string) { doc.getElementById(lessonElementId(activeLessonId))?.scrollIntoView({ behavior: "smooth", block: "start" }); }
 function blockElementId(lessonId: string, blockId: string) { return `${lessonElementId(lessonId)}-block-${domSafe(blockId)}`; }
-function completedBlockState(block: Block): BlockProgress { return { id: block.id, type: block.type, ready: true, active: false, completed: true, verified: block.type === "terminal-practice", terminalHtml: block.type === "terminal-practice" ? "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" : undefined, emerged: true }; }
+function completedBlockState(block: Block): BlockProgress { return { id: block.id, type: block.type, ready: true, active: false, completed: true, verified: block.type === "terminal-practice", terminalHtml: block.type === "terminal-practice" ? "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" : undefined, editorStatus: block.type === "editor-practice" ? "unlocked" : undefined, emerged: true }; }
 function stateForBlock(progress: Progress, lessonId: string, block: Block): BlockProgress | undefined {
   if (lessonId === progress.activeLessonId) return progressFor(progress, block.id);
   if (progress.completedLessons.includes(lessonId)) return completedBlockState(block);
@@ -190,6 +206,79 @@ function TerminalBlock({ lessonId, block, state, unexpected, refresh }: { lesson
   </section>;
 }
 
+function editorStatusText(state: BlockProgress | undefined, completed: boolean): string {
+  if (completed || state?.editorStatus === "unlocked") return "Unlocked — the accepted revision has been written to the target file.";
+  if (state?.editorStatus === "reviewing") return "Reviewing your latest revision…";
+  if (state?.editorStatus === "feedback") return "Feedback received — keep editing and pause to request another review.";
+  return "Editing — changes are reviewed automatically after you pause.";
+}
+
+function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId: string; block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void }) {
+  const editorElement = useRef<HTMLDivElement | null>(null);
+  const editor = useRef<EditorView | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const activeRef = useRef(false);
+  const baseRevision = useRef(state?.revision ?? 0);
+  const [localError, setLocalError] = useState<string>();
+  const completed = Boolean(state?.completed || state?.editorStatus === "unlocked");
+  const canEdit = Boolean(state?.active && state.ready && !completed);
+  const initialText = state?.draftText ?? "";
+
+  useEffect(() => { baseRevision.current = state?.revision ?? baseRevision.current; }, [block.id, state?.revision]);
+  useEffect(() => { activeRef.current = canEdit; }, [canEdit]);
+
+  useEffect(() => {
+    if (!canEdit || !editorElement.current) return;
+    const parent = editorElement.current;
+    const scheduleReview = (text: string) => {
+      if (!activeRef.current) return;
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => {
+        if (!activeRef.current) return;
+        const revision = baseRevision.current + 1;
+        baseRevision.current = revision;
+        setLocalError(undefined);
+        postEditorDraft(block.id, revision, text).then(refresh).catch((error) => {
+          console.error(error);
+          setLocalError(error instanceof Error ? error.message : "Editor review failed. Keep editing and try again.");
+        });
+      }, 750);
+    };
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: initialText,
+        extensions: [
+          keymap.of(defaultKeymap),
+          EditorView.updateListener.of((update) => { if (update.docChanged) scheduleReview(update.state.doc.toString()); })
+        ]
+      }),
+      parent
+    });
+    editor.current = view;
+    return () => {
+      activeRef.current = false;
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = undefined;
+      view.destroy();
+      if (editor.current === view) editor.current = null;
+    };
+  }, [block.id, canEdit, initialText, refresh]);
+
+  const status = editorStatusText(state, completed);
+  return <section id={blockElementId(lessonId, block.id)} className={`work-block editor-practice ${state?.active ? "is-active" : ""}`}>
+    <p className="section-label">Practice · embedded editor</p>
+    <h2>{block.title}</h2>
+    <Markdown>{block.markdown}</Markdown>
+    <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
+    <div className="editor-status" role="status" aria-live="polite">{localError ?? status}</div>
+    {state?.feedback && !completed && <aside className="advice editor-feedback" aria-live="polite"><b>Inline feedback:</b> {state.feedback}</aside>}
+    <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />
+    {completed && <aside className="success-checkpoint editor-unlocked" aria-live="polite">
+      <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Unlocked</p><h3>Accepted revision unlocked the next step.</h3><p>{state?.feedback || "The latest accepted editor draft was written to the target file."}</p></div>
+    </aside>}
+  </section>;
+}
+
 function ReflectionBlock({ lessonId, block, state, turns, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; turns: ReflectionTurn[]; refresh(state: State): void }) {
   const hasTutorReply = turns.some((turn) => turn.role === "tutor");
   const [draft, setDraft] = useState("");
@@ -221,6 +310,7 @@ export function BlockView({ lessonId, block, progress, refresh }: { lessonId?: s
   const state = stateForBlock(progress, resolvedLessonId, block);
   if (block.type === "narrative") return <NarrativeBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
   if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} unexpected={activeLessonValue(progress, resolvedLessonId, progress.unexpected[block.id], [])} refresh={refresh} />;
+  if (block.type === "editor-practice") return <EditorPracticeBlockView lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
   if (block.type === "reflection") return <ReflectionBlock lessonId={resolvedLessonId} block={block} state={state} turns={activeLessonValue(progress, resolvedLessonId, progress.reflectionConversations[block.id], [])} refresh={refresh} />;
   return <TransitionBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
 }

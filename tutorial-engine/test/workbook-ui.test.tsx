@@ -1,6 +1,44 @@
-import { createElement } from "react";
+import { JSDOM } from "jsdom";
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@codemirror/state", () => ({
+  EditorState: { create: (config: any) => config }
+}));
+
+vi.mock("@codemirror/view", () => {
+  const listenerMarker = "__cmUpdateListener";
+  const flatten = (value: any): any[] => Array.isArray(value) ? value.flatMap(flatten) : [value];
+  class EditorView {
+    static updateListener = { of: (listener: (update: any) => void) => ({ [listenerMarker]: listener }) };
+    dom: HTMLElement;
+    contentDOM: HTMLElement;
+    #listeners: Array<(update: any) => void>;
+    constructor(options: { state: any; parent: HTMLElement }) {
+      this.dom = document.createElement("div");
+      this.dom.className = "cm-editor";
+      this.contentDOM = document.createElement("div");
+      this.contentDOM.className = "cm-content";
+      this.contentDOM.setAttribute("role", "textbox");
+      this.contentDOM.setAttribute("contenteditable", "true");
+      this.contentDOM.textContent = options.state.doc ?? "";
+      this.dom.append(this.contentDOM);
+      options.parent.append(this.dom);
+      this.#listeners = flatten(options.state.extensions).map((extension) => extension?.[listenerMarker]).filter(Boolean);
+      this.contentDOM.addEventListener("input", () => {
+        const text = this.contentDOM.textContent ?? "";
+        this.#listeners.forEach((listener) => listener({ docChanged: true, state: { doc: { toString: () => text } } }));
+      });
+    }
+    destroy() { this.dom.remove(); }
+  }
+  return { EditorView, keymap: { of: () => ({}) } };
+});
+
+vi.mock("@codemirror/commands", () => ({ defaultKeymap: [] }));
+
 import { BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Chapter, type Progress } from "../web-workbook/src/workbook-ui.js";
 
 const progress: Progress = {
@@ -57,7 +95,94 @@ function progressWithActiveDuplicate(blockId: string): Progress {
   };
 }
 
+const editorBlock = {
+  id: "edit-answer",
+  type: "editor-practice",
+  title: "Edit the answer",
+  markdown: "Update the answer file so it contains the acceptance marker.",
+  path: "factory/answer.md",
+  tutor: "Private editor rubric: require the acceptance marker."
+} as any;
+
+function activeEditorProgress(overrides: Partial<Progress["blocks"][number]> = {}): Progress {
+  return {
+    ...progress,
+    activeBlockId: editorBlock.id,
+    blocks: [{ id: editorBlock.id, type: "editor-practice", ready: true, active: true, completed: false, verified: false, emerged: true, editorStatus: "editing", ...overrides } as any],
+  };
+}
+
+let mountedRoot: Root | undefined;
+let dom: JSDOM | undefined;
+
+afterEach(async () => {
+  if (mountedRoot) await act(async () => { mountedRoot!.unmount(); });
+  mountedRoot = undefined;
+  dom?.window.close();
+  dom = undefined;
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+async function mount(element: ReturnType<typeof createElement>) {
+  dom = new JSDOM("<!doctype html><html><body><div id=\"root\"></div></body></html>", { url: "http://localhost/workbook" });
+  vi.stubGlobal("window", dom.window as any);
+  vi.stubGlobal("document", dom.window.document as any);
+  vi.stubGlobal("HTMLElement", dom.window.HTMLElement as any);
+  vi.stubGlobal("Event", dom.window.Event as any);
+  vi.stubGlobal("CustomEvent", dom.window.CustomEvent as any);
+  vi.stubGlobal("MutationObserver", dom.window.MutationObserver as any);
+  vi.stubGlobal("navigator", dom.window.navigator as any);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const container = dom.window.document.getElementById("root")!;
+  mountedRoot = createRoot(container);
+  await act(async () => { mountedRoot!.render(element); });
+  return container;
+}
+
 describe("workbook lesson UI", () => {
+  it("renders an active editor-practice block without exposing private tutor text", () => {
+    const markup = html(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress(), refresh: vi.fn() }));
+
+    expect(markup).toContain("Edit the answer");
+    expect(markup).toContain("factory/answer.md");
+    expect(markup).toContain("editor-surface");
+    expect(markup).toContain("role=\"status\"");
+    expect(markup).toMatch(/editing|review/i);
+    expect(markup).not.toContain("Private editor rubric");
+    expect(markup).not.toContain("Save");
+    expect(markup).not.toContain("Review");
+  });
+
+  it("debounces editor-practice edits and posts only the latest text at the next revision", async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn();
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ progress: activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any) }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0 }), refresh }));
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']");
+
+    expect(editor).not.toBeNull();
+    editor!.textContent = "first draft";
+    await act(async () => { editor!.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    await act(async () => { vi.advanceTimersByTime(375); });
+    editor!.textContent = "second draft";
+    await act(async () => { editor!.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    await act(async () => { vi.advanceTimersByTime(749); });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/workbook/editor");
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST", headers: { "Content-Type": "application/json" } });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ blockId: "edit-answer", revision: 1, text: "second draft" });
+  });
+
   it("renders the Markdown manifest lesson header, fixed outcomes section, and ordered Markdown blocks", () => {
     const markup = html(createElement(LessonView, { chapter: chapter(), progress, refresh: vi.fn() }));
 
