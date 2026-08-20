@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import type { WorkbookEvent } from "../../tutorial-engine/src/workbook/events.js";
-import type { PublicWorkbookState, V2ArtifactSnapshot, V2RecordedPublicState, V2SessionTrace } from "./types.js";
+import type { PublicWorkbookState, V2ArtifactSnapshot, V2RecordedPublicState, V2ReflectionEntry, V2SessionTrace, V2TerminalTranscriptEntry } from "./types.js";
 
 const PRIVATE_TEXT_PATTERNS = [/This is private tutor guidance/i, /Do not reveal an exact command/i, /Follow up until the learner/i];
 const DEFAULT_ARTIFACT_ROOTS = [".tmp"];
@@ -16,6 +16,18 @@ export function recordPublicState(trace: V2SessionTrace, label: string, state: u
   const recorded = { label, state: structuredClone(state) as PublicWorkbookState };
   trace.publicStates.push(recorded);
   return recorded;
+}
+
+export function recordTerminalTranscript(trace: V2SessionTrace, entry: V2TerminalTranscriptEntry): V2TerminalTranscriptEntry {
+  assertNoPrivateTutorState(entry, "terminalTranscript");
+  trace.terminalTranscript.push({ ...entry });
+  return entry;
+}
+
+export function recordReflectionTurn(trace: V2SessionTrace, entry: V2ReflectionEntry): V2ReflectionEntry {
+  assertNoPrivateTutorState(entry, "reflection");
+  trace.reflections.push({ ...entry });
+  return entry;
 }
 
 export async function readWorkbookEvents(workspaceRoot: string): Promise<WorkbookEvent[]> {
@@ -60,7 +72,7 @@ async function collectArtifacts(workspaceRoot: string, path: string, snapshots: 
   }
 }
 
-function assertNoPrivateTutorState(value: unknown, path = "state"): void {
+export function assertNoPrivateTutorState(value: unknown, path = "state"): void {
   if (typeof value === "string") {
     const privatePattern = PRIVATE_TEXT_PATTERNS.find((pattern) => pattern.test(value));
     if (privatePattern) throw new Error(`Refusing to record private tutor guidance at ${path}.`);
