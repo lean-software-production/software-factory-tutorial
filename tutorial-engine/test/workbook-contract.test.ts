@@ -20,6 +20,8 @@ const learnerVisibleAuthorDirections = [
   /\bthe\s+tutor\s+must\b/i,
   /\bteach\s+and\s+build\b/i,
   /\bbuild\s+this\s+lesson\b/i,
+  /\bsay\s+this\s+out\s+loud\s+in\s+the\s+lesson\b/i,
+  /\bsay\s+plainly\s+why\s+this\s+is\s+in\s+the\s+lesson\b/i,
 ];
 function exposesAuthorDirection(markdown: string) { return learnerVisibleAuthorDirections.some((pattern) => pattern.test(markdown)); }
 

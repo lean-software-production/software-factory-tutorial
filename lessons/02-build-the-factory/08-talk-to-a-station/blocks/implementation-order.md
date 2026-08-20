@@ -69,9 +69,8 @@ Work in this order. Complete each small step before moving to the next one:
    trap cleanup EXIT
    ```
 
-   Say plainly why this is in the lesson rather than left as an exercise. Every previous station
-   exited
-   on its own when its work was done. This one exits when someone tells it to, and if you Ctrl-C out
+   This matters because every previous station exited on its own when its work was done. This one
+   exits when someone tells it to, and if you Ctrl-C out
    of a run without this trap, you have left a model process and a `sleep` running on your station
    with nothing to stop them.
 

@@ -4,7 +4,7 @@ type: narrative
 
 ## What this costs
 
-Say this out loud in the lesson, because it is the trade and not a footnote.
+This is the trade, not a footnote.
 
 The validator keeps `read`, `grep`, `find` and `ls`. It can still search the calculator, open a
 file,
