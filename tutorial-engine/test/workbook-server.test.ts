@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { WebSocket } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startWorkbookServer } from "../src/workbook/server.js";
-import { EditorReviewAdapter, type EditorReviewDecision, type EditorReviewRequest } from "../src/workbook/editor.js";
+import { EditorDraftStore, EditorReviewAdapter, type EditorDraft, type EditorReviewDecision, type EditorReviewRequest } from "../src/workbook/editor.js";
 import type { TerminalObservationRequest, TerminalObserver, TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
 import type { ReflectionConversationAdapter } from "../src/workbook/reflection.js";
 
@@ -113,6 +113,16 @@ class FakeEditorReviewAdapter extends EditorReviewAdapter {
 }
 
 async function waitMs(ms: number) { await new Promise((resolvePromise) => setTimeout(resolvePromise, ms)); }
+
+function deferred<T = void>() {
+  let resolvePromise!: (value: T | PromiseLike<T>) => void;
+  let rejectPromise!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
+}
 
 async function waitForWorkbookState(serverUrl: string, predicate: (state: any) => boolean, description: string) {
   const deadline = Date.now() + 1_000;
@@ -282,6 +292,60 @@ describe("workbook browser API", () => {
       const events = await readFile(resolve(dir, ".tutorial/.tmp/workbook/events.jsonl"), "utf8");
       expect(events).not.toContain("editor_practice_unlocked");
     } finally { await server.close(); }
+  });
+
+  it("rejects same-revision editor submissions instead of replacing the accepted draft", async () => {
+    const dir = await fixture();
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: new FakeEditorReviewAdapter(), editorReviewDebounceMs: 1_000 });
+    try {
+      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
+      await postEvent(server.url, { blockId: "orientation", action: "continue" });
+      const first = await postEditor(server.url, { blockId: "edit-answer", revision: 1, text: "first accepted text" });
+      const replacement = await postEditor(server.url, { blockId: "edit-answer", revision: 1, text: "same revision replacement" });
+      expect(first.status).toBe(202);
+      expect(replacement.status).toBe(409);
+      expect(await replacement.json()).toMatchObject({ error: expect.stringMatching(/stale/i) });
+      await expect(new EditorDraftStore(dir).read("01-loop/01-first", "edit-answer")).resolves.toMatchObject({ revision: 1, text: "first accepted text" });
+    } finally { await server.close(); }
+  });
+
+  it("does not accept a newer editor draft during the promotion critical section", async () => {
+    const dir = await fixture();
+    const promoteStarted = deferred<void>();
+    const releasePromotion = deferred<void>();
+    const originalPromote = EditorDraftStore.prototype.promote;
+    vi.spyOn(EditorDraftStore.prototype, "promote").mockImplementation(async function (this: EditorDraftStore, block, draft: EditorDraft) {
+      promoteStarted.resolve();
+      await releasePromotion.promise;
+      return originalPromote.call(this, block, draft);
+    });
+    const reviewer = new FakeEditorReviewAdapter((request) => ({ status: "unlocked", revisionId: request.draft.revision }));
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: reviewer, editorReviewDebounceMs: 1 });
+    try {
+      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
+      await postEvent(server.url, { blockId: "orientation", action: "continue" });
+      const first = await postEditor(server.url, { blockId: "edit-answer", revision: 1, text: "approved before finalization" });
+      expect(first.status).toBe(202);
+      await promoteStarted.promise;
+
+      const newerPromise = postEditor(server.url, { blockId: "edit-answer", revision: 2, text: "newer draft during finalization" });
+      const earlyResponse = await Promise.race([
+        newerPromise.then((response) => response),
+        waitMs(100).then(() => undefined)
+      ]);
+      releasePromotion.resolve();
+      const newer = earlyResponse ?? await newerPromise;
+
+      expect(newer.status).toBe(409);
+      const state = await waitForWorkbookState(server.url, (state) => state.progress.activeBlockId === "run-supplied-command", "editor practice to finish finalization");
+      expect(state.progress.blocks.find((block: any) => block.id === "edit-answer")).toMatchObject({ completed: true, revision: 1, editorStatus: "unlocked" });
+      await expect(readFile(resolve(dir, "factory/answer.md"), "utf8")).resolves.toBe("approved before finalization");
+      const draft = await new EditorDraftStore(dir).read("01-loop/01-first", "edit-answer");
+      expect(draft).toMatchObject({ revision: 1, text: "approved before finalization" });
+    } finally {
+      releasePromotion.resolve();
+      await server.close();
+    }
   });
 
   it("rejects inactive editor submissions and unsafe declared editor paths without promotion", async () => {

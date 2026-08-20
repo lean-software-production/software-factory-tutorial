@@ -129,6 +129,21 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const editorReviewDebounceMs = Math.max(0, Math.min(options.editorReviewDebounceMs ?? 750, 10_000));
   const editorProgress = new Map<string, PublicEditorProgress>();
   const editorReviewTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const editorBlockLocks = new Map<string, Promise<void>>();
+  const withEditorBlockLock = async <T>(lessonId: string, blockId: string, work: () => Promise<T>): Promise<T> => {
+    const key = editorProgressKey(lessonId, blockId);
+    const previous = editorBlockLocks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolvePromise) => { release = resolvePromise; });
+    const tail = previous.catch(() => undefined).then(() => current);
+    editorBlockLocks.set(key, tail);
+    await previous.catch(() => undefined);
+    try { return await work(); }
+    finally {
+      release();
+      if (editorBlockLocks.get(key) === tail) editorBlockLocks.delete(key);
+    }
+  };
   const currentPublicState = (events: WorkbookEvent[]) => publicState(loaded, events, editorProgress);
   let reflectionQueue = Promise.resolve();
   if ((await store.read()).length === 0) await store.append(nowEvent({ type: "session_started" }));
@@ -159,33 +174,42 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     const key = editorProgressKey(lessonId, blockId);
     editorReviewTimers.delete(key);
     try {
-      await refreshEvents();
-      const active = activeEditorBlock();
-      if (!active || active.lesson.id !== lessonId || active.block.id !== blockId) return;
-      const draft = await editorDraftStore.read(lessonId, blockId);
-      if (!draft) return;
-      const decision = await editorReviewAdapter.review({ lessonId, blockId, privateBrief: active.block.tutor, draft });
-      await refreshEvents();
-      const currentActive = activeEditorBlock();
-      const currentDraft = await editorDraftStore.read(lessonId, blockId);
-      if (!currentActive || currentActive.lesson.id !== lessonId || currentActive.block.id !== blockId || !currentDraft || currentDraft.revision !== draft.revision) return;
-      if (decision.status === "feedback") {
-        setEditorFeedback(lessonId, blockId, draft.revision, decision.message);
-        return;
-      }
-      if (decision.revisionId !== draft.revision) {
-        setEditorFeedback(lessonId, blockId, draft.revision, `Reviewer tried to unlock stale revision ${decision.revisionId}; the current revision is ${draft.revision}. Revise and submit the current draft again.`);
-        return;
-      }
-      await editorDraftStore.promote(currentActive.block, draft);
-      await store.append(nowEvent({ type: "editor_practice_unlocked", lessonId, blockId, revisionId: draft.revision, path: currentActive.block.path }));
-      editorProgress.delete(key);
-      const updated = await refreshEvents();
-      await store.writeProjection(project(updated, activeLesson(loaded, updated)));
+      const request = await withEditorBlockLock(lessonId, blockId, async () => {
+        await refreshEvents();
+        const active = activeEditorBlock();
+        if (!active || active.lesson.id !== lessonId || active.block.id !== blockId) return undefined;
+        const draft = await editorDraftStore.read(lessonId, blockId);
+        if (!draft) return undefined;
+        return { privateBrief: active.block.tutor, draft };
+      });
+      if (!request) return;
+      const decision = await editorReviewAdapter.review({ lessonId, blockId, privateBrief: request.privateBrief, draft: request.draft });
+      await withEditorBlockLock(lessonId, blockId, async () => {
+        await refreshEvents();
+        const currentActive = activeEditorBlock();
+        const currentDraft = await editorDraftStore.read(lessonId, blockId);
+        if (!currentActive || currentActive.lesson.id !== lessonId || currentActive.block.id !== blockId || !currentDraft || currentDraft.revision !== request.draft.revision) return;
+        if (decision.status === "feedback") {
+          setEditorFeedback(lessonId, blockId, request.draft.revision, decision.message);
+          return;
+        }
+        if (decision.revisionId !== request.draft.revision) {
+          setEditorFeedback(lessonId, blockId, request.draft.revision, `Reviewer tried to unlock stale revision ${decision.revisionId}; the current revision is ${request.draft.revision}. Revise and submit the current draft again.`);
+          return;
+        }
+        await editorDraftStore.promote(currentActive.block, request.draft);
+        await store.append(nowEvent({ type: "editor_practice_unlocked", lessonId, blockId, revisionId: request.draft.revision, path: currentActive.block.path }));
+        editorProgress.delete(key);
+        const updated = await refreshEvents();
+        await store.writeProjection(project(updated, activeLesson(loaded, updated)));
+      });
     } catch (error) {
-      const latest = await editorDraftStore.read(lessonId, blockId).catch(() => undefined);
+      const latest = await withEditorBlockLock(lessonId, blockId, async () => {
+        const draft = await editorDraftStore.read(lessonId, blockId).catch(() => undefined);
+        if (draft) setEditorFeedback(lessonId, blockId, draft.revision, "Review is temporarily unavailable. Retrying the latest draft.");
+        return draft;
+      });
       if (!latest) return;
-      setEditorFeedback(lessonId, blockId, latest.revision, "Review is temporarily unavailable. Retrying the latest draft.");
       const retryDelay = Math.max(50, editorReviewDebounceMs);
       const existing = editorReviewTimers.get(key);
       if (existing) clearTimeout(existing);
@@ -243,24 +267,29 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     if (request.method === "POST" && isRoute(url.pathname, "editor")) {
       try {
         const body = await readJson(request);
-        const latest = await refreshEvents();
-        if (!introductionCompleted(latest)) return sendJson(response, 409, { error: "Complete the workbook introduction first." });
-        const active = activeEditorBlock();
         const blockId = typeof body.blockId === "string" ? body.blockId : "";
-        if (!active || active.block.id !== blockId) return sendJson(response, 409, { error: "This editor block is not active yet." });
-        try { await resolveEditorTarget(loaded.workspace, active.block.path); }
-        catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Unsafe editor target path." }); }
         const revision = body.revision;
         const text = body.text;
         if (!Number.isInteger(revision) || revision < 1) return sendJson(response, 400, { error: "Editor revision must be a positive integer." });
         if (typeof text !== "string") return sendJson(response, 400, { error: "Editor text must be a string." });
         if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) return sendJson(response, 400, { error: "Editor text is too large." });
-        const currentDraft = await editorDraftStore.read(active.lesson.id, active.block.id);
-        if (currentDraft && revision < currentDraft.revision) return sendJson(response, 409, { error: "Editor revision is stale." });
-        await editorDraftStore.write(active.lesson.id, active.block.id, revision, text);
-        editorProgress.set(editorProgressKey(active.lesson.id, active.block.id), { revision, editorStatus: "reviewing" });
-        enqueueEditorReview(active.lesson.id, active.block.id);
-        return sendJson(response, 202, currentPublicState(await refreshEvents()));
+        const latest = await refreshEvents();
+        if (!introductionCompleted(latest)) return sendJson(response, 409, { error: "Complete the workbook introduction first." });
+        const lesson = activeLesson(loaded, latest);
+        const result = await withEditorBlockLock(lesson.id, blockId, async () => {
+          await refreshEvents();
+          const active = activeEditorBlock();
+          if (!active || active.block.id !== blockId) return { status: 409, body: { error: "This editor block is not active yet." } };
+          try { await resolveEditorTarget(loaded.workspace, active.block.path); }
+          catch (error) { return { status: 400, body: { error: error instanceof Error ? error.message : "Unsafe editor target path." } }; }
+          const currentDraft = await editorDraftStore.read(active.lesson.id, active.block.id);
+          if (currentDraft && revision <= currentDraft.revision) return { status: 409, body: { error: "Editor revision is stale." } };
+          await editorDraftStore.write(active.lesson.id, active.block.id, revision, text);
+          editorProgress.set(editorProgressKey(active.lesson.id, active.block.id), { revision, editorStatus: "reviewing" });
+          enqueueEditorReview(active.lesson.id, active.block.id);
+          return { status: 202, body: currentPublicState(await refreshEvents()) };
+        });
+        return sendJson(response, result.status, result.body);
       } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." }); }
     }
     if (request.method === "POST" && isRoute(url.pathname, "events")) {
