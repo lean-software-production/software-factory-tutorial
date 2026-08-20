@@ -1,5 +1,8 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dockerContainerUser, WorkbookTerminalManager, type TerminalClient, type TerminalObserver, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
+import { dockerContainerUser, dockerRunArguments, WorkbookTerminalManager, type TerminalClient, type TerminalObserver, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
 
 class FakePty implements TerminalPty {
   writes: string[] = [];
@@ -41,11 +44,39 @@ function setup(observer: TerminalObserver = { observe: vi.fn(async () => ({ stat
   return { manager, ptys, completed, setActive: (next: any) => { active = next; }, observer };
 }
 
-afterEach(() => vi.useRealTimers());
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  vi.useRealTimers();
+  await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+  tempDirs.length = 0;
+});
 
 describe("WorkbookTerminalManager", () => {
   it("uses the host identity so the read-only Pi auth mount remains readable", () => {
     expect(dockerContainerUser()).toBe(`${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`);
+  });
+
+  it("mounts the workspace read-only and only learner work roots read-write", async () => {
+    const workspace = await mkdtemp(resolve(tmpdir(), "workbook-terminal-mounts-"));
+    tempDirs.push(workspace);
+    await mkdir(resolve(workspace, "factory/refactor/.tmp"), { recursive: true });
+    await mkdir(resolve(workspace, "calculator"));
+    await mkdir(resolve(workspace, ".tutorial/.tmp"), { recursive: true });
+    await mkdir(resolve(workspace, ".git"));
+    await writeFile(resolve(workspace, "auth.json"), "{}");
+
+    const args = dockerRunArguments({ workspace, name: "workbook-terminal-test", authPath: resolve(workspace, "auth.json") });
+    const mounts = args.filter((arg) => arg.startsWith("type=bind"));
+
+    expect(args).toContain("--read-only");
+    expect(mounts).toContain(`type=bind,src=${workspace},dst=/workspace,readonly`);
+    expect(mounts).toContain(`type=bind,src=${resolve(workspace, "factory")},dst=/workspace/factory`);
+    expect(mounts).toContain(`type=bind,src=${resolve(workspace, "calculator")},dst=/workspace/calculator`);
+    expect(mounts).toContain(`type=bind,src=${resolve(workspace, ".tutorial/.tmp")},dst=/workspace/.tutorial/.tmp`);
+    expect(mounts).toContain(`type=bind,src=${resolve(workspace, ".git")},dst=/workspace/.git`);
+    expect(mounts).toContain(`type=bind,src=${resolve(workspace, "auth.json")},dst=/home/learner/.pi/agent/auth.json,readonly`);
+    expect(mounts).not.toContain(`type=bind,src=${workspace},dst=/workspace`);
   });
 
   it("starts the PTY in the canonical workspace without writing a command", () => {
@@ -128,7 +159,7 @@ describe("WorkbookTerminalManager", () => {
     expect(client.messages.at(-1)).toMatchObject({ type: "verified-complete", state: { progressed: true } });
   });
 
-  it("reports a PTY startup failure without throwing through the server", () => {
+  it("reports a PTY startup failure without external-terminal fallback wording", () => {
     const manager = new WorkbookTerminalManager({
       workspace: "/tmp/workspace", getActiveBlock: () => undefined, observer: { observe: async () => ({ status: "waiting" }) },
       onVerifiedCompletion: async () => ({}), ptyFactory: () => { throw new Error("spawn failed"); }
@@ -136,6 +167,20 @@ describe("WorkbookTerminalManager", () => {
     const client = new FakeClient();
     expect(manager.attach(client)).toBe(true);
     expect(client.messages).toContainEqual({ type: "terminal-error", message: expect.stringMatching(/could not start/i) });
+    expect(JSON.stringify(client.messages)).not.toMatch(/external|own terminal|fallback/i);
+  });
+
+  it("reports observer failure without external-terminal fallback wording", async () => {
+    vi.useFakeTimers();
+    const { manager, ptys } = setup({ observe: async () => { throw new Error("adapter down"); } }, 5);
+    const client = new FakeClient();
+    manager.attach(client);
+    manager.receive({ type: "input", data: "npm test\r" });
+    ptys[0]!.emitData("output");
+    await vi.advanceTimersByTimeAsync(10);
+    const error = client.messages.find((message) => message.type === "observer-error");
+    expect(error).toMatchObject({ blockId: "practice", message: expect.stringMatching(/observer is unavailable/i) });
+    expect(error.message).not.toMatch(/external|own terminal|fallback/i);
   });
 
   it("keeps one client at a time, replays buffered output on reconnect, and cleans up the shell", () => {

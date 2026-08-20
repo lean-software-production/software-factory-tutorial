@@ -47,7 +47,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    cd "$(dirname "$0")"
    line="${1:?usage: watch.sh <line>}"
 
-   tail -f -n +1 "$line"/events/*.jsonl \
+   tail -f -n +1 "$line"/.tmp/events/*.jsonl \
      | jq -r --unbuffered '
          select(.type=="tool_execution_start")
          | "→ \(.toolName) \(.args.command // .args.path // "")"'
@@ -61,40 +61,55 @@ Build this lesson in this order. Complete each small step before moving to the n
    The line's name is an argument, not a constant. This watcher would work unchanged on a second line
    that nobody has built.
 
-2. **Watch a run.** Two terminals, both at the repository root. In the first:
+2. **Watch a run.** Use the tutor's embedded terminal as one shell session at the repository root.
+   Start the line as a background job, saving its unreadable JSON firehose to a regenerated file:
 
    ```sh
-   ./factory/refactor/run.sh
+   ./factory/refactor/run.sh > factory/refactor/.tmp/run-output.txt 2>&1 &
+   line_pid=$!
    ```
 
-   and in the second, while it works:
+   Then run the watcher in the foreground while the line works:
 
    ```sh
    ./factory/watch.sh refactor
    ```
 
-   Have the learner keep both visible. The terminal running the line is still an unreadable JSON
-   firehose, and the one watching it is a list of what the stations are doing. Neither script knows the
-   other exists.
+   Have the learner keep the terminal visible. The background line is still writing the record, and
+   the foreground watcher is a list of what the stations are doing. When enough events have
+   appeared, Ctrl-C stops the watcher, not the background line. If the line is still running,
+   `wait "$line_pid"` waits for it.
 
-3. **Add the running cost.** A second expression over the same stream, either as a second watcher in a
-   third terminal or as a flag on the first:
+3. **Add the running cost.** A second expression reads the same stream. In one embedded terminal,
+   start the tool watcher as a background job and run the cost watcher in the foreground:
 
    ```sh
-   tail -f -n +1 "$line"/events/*.jsonl \
+   ./factory/watch.sh refactor > factory/refactor/.tmp/watch-tools.txt &
+   watcher_pid=$!
+   tail -f -n +1 factory/refactor/.tmp/events/*.jsonl \
      | jq -r --unbuffered '
          select(.type=="message_end")
          | .message.usage.cost.total? // empty
          | "cost +\(.)"'
    ```
 
+   Press Ctrl-C when the cost stream has proved the point, then stop the background watcher if it is
+   still running:
+
+   ```sh
+   kill "$watcher_pid" 2>/dev/null || true
+   ```
+
    Two consumers, one record, no coordination between them. That is the property the lesson is for.
 
 ## Checks
 
-From the repository root, with the line running in another terminal:
+From the repository root in the embedded terminal, start the line as a background job and run the
+watcher in the foreground:
 
 ```sh
+./factory/refactor/run.sh > factory/refactor/.tmp/run-output.txt 2>&1 &
+line_pid=$!
 ./factory/watch.sh refactor
 ```
 
@@ -103,8 +118,9 @@ Verify by hand that:
 - output appears while the line is still working, not after it finishes;
 - the tool names shown correspond to what the stations are actually doing — file reads during
   validation, edits during a doer turn;
-- stopping the watcher with Ctrl-C does not affect the run at all;
-- starting a second watcher alongside the first works, and neither interferes with the other; and
+- stopping the foreground watcher with Ctrl-C does not affect the background run;
+- starting one watcher as a background job and another in the foreground works, and neither
+  interferes with the other; and
 - `./factory/watch.sh` with no argument fails with the usage message rather than doing something
   surprising.
 

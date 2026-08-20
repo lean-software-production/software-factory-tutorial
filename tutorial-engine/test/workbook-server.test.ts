@@ -173,8 +173,10 @@ describe("workbook browser API", () => {
         { role: "learner", text: "It checks whether the work achieved the expected result." },
         { role: "tutor", text: expect.stringMatching(/connected/i) }
       ]);
-      expect(reflectionRequests[0].prompt).toBe("Ask about harness and job.");
+      expect(reflectionRequests[0].question).toBe("Why did this count as headless?");
+      expect(reflectionRequests[0].tutor).toBe("Ask about harness and job.");
       expect(reflectionRequests[0].practiceEvidence).toEqual(expect.arrayContaining([expect.objectContaining({ blockId: "run-supplied-command", expectedObservation: "Observe run result." })]));
+      expect(JSON.stringify(discussed)).toContain("Why did this count as headless?");
       expect(JSON.stringify(discussed)).not.toContain("Ask about harness and job");
     } finally { await server.close(); }
   });

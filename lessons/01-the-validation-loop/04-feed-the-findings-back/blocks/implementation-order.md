@@ -22,7 +22,7 @@ No new files. Run this cycle, in this order:
    appended to its prompt. The whole command sits inside a subshell, so you are back at the
    repository root when it finishes:
 
-   ```sh
+   ```sh command
    (cd factory \
      && cat refactor.md .tmp/refactor-validate-findings.txt \
      | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))

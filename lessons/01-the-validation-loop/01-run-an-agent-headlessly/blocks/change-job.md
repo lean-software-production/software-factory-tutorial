@@ -15,7 +15,7 @@ tutor: |-
 
 Run this command from the repository root:
 
-```sh
+```sh command
 echo "What files make up this calculator, and what does each one appear to do?" \
   | (cd calculator && pi --no-session --tools read,grep,find,ls -p)
 ```

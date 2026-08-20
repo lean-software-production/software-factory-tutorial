@@ -13,7 +13,7 @@ import { createTutorialLogger } from "../runtime-log.js";
 
 export type ReflectionTurn = { role: "learner" | "tutor"; text: string };
 export type PracticeEvidence = { blockId: string; title: string; expectedObservation: string; transcript?: string; unexpectedOutput: string[]; verified?: boolean; feedback?: string };
-export interface ReflectionConversationRequest { prompt: string; message: string; conversation: ReflectionTurn[]; practiceEvidence: PracticeEvidence[]; }
+export interface ReflectionConversationRequest { question: string; tutor: string; message: string; conversation: ReflectionTurn[]; practiceEvidence: PracticeEvidence[]; }
 export interface ReflectionConversationAdapter { reply(request: ReflectionConversationRequest): Promise<string>; }
 
 const MAX_REPLY_CHARS = 1_200;
@@ -53,7 +53,7 @@ export class PiReflectionConversationAdapter implements ReflectionConversationAd
     });
     try {
       this.log.info(`Submitting reflection discussion (${request.conversation.length} previous turns).`);
-      const text = await collectAssistantText(session, JSON.stringify({ reflectionQuestion: request.prompt, practiceEvidence: request.practiceEvidence, conversation: request.conversation, learnerMessage: request.message }, null, 2));
+      const text = await collectAssistantText(session, JSON.stringify({ reflectionQuestion: request.question, tutorGuidance: request.tutor, practiceEvidence: request.practiceEvidence, conversation: request.conversation, learnerMessage: request.message }, null, 2));
       if (!text.trim()) throw new Error("Reflection tutor did not return text.");
       return text.trim().slice(0, MAX_REPLY_CHARS);
     } finally { session.dispose(); }

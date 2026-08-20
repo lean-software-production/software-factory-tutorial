@@ -27,7 +27,8 @@ async function post(blockId: string, body: object): Promise<State> {
 
 function progressFor(progress: Progress, id: string) { return progress.blocks.find((block) => block.id === id); }
 function domSafe(value: string) { return value.replace(/[^A-Za-z0-9_-]+/g, "-"); }
-function blockElementId(lessonId: string, blockId: string) { return `lesson-${domSafe(lessonId)}-block-${domSafe(blockId)}`; }
+function lessonElementId(lessonId: string) { return `lesson-${domSafe(lessonId)}`; }
+function blockElementId(lessonId: string, blockId: string) { return `${lessonElementId(lessonId)}-block-${domSafe(blockId)}`; }
 function completedBlockState(block: Block): BlockProgress { return { id: block.id, type: block.type, ready: true, active: false, completed: true, verified: block.type === "terminal-practice", terminalHtml: block.type === "terminal-practice" ? "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" : undefined, emerged: true }; }
 function stateForBlock(progress: Progress, lessonId: string, block: Block): BlockProgress | undefined {
   if (lessonId === progress.activeLessonId) return progressFor(progress, block.id);
@@ -37,9 +38,14 @@ function stateForBlock(progress: Progress, lessonId: string, block: Block): Bloc
 function activeLessonValue<T>(progress: Progress, lessonId: string, value: T | undefined, fallback: T): T { return lessonId === progress.activeLessonId ? value ?? fallback : fallback; }
 function commandForInsertion(command = "") { return command.replace(/\\\r?\n\s*/g, " "); }
 
-const SHELL_FENCE = /```(?:sh|bash|shell|zsh|console)\s*\n([\s\S]*?)```/i;
+const SHELL_FENCE = /^```([^`\n]*)\n([\s\S]*?)^```/gm;
+const SHELL_LANGUAGES = new Set(["sh", "bash", "shell", "zsh", "console"]);
 function shellCommandFrom(markdown: string): string | undefined {
-  return SHELL_FENCE.exec(markdown)?.[1]?.trim();
+  for (const match of markdown.matchAll(SHELL_FENCE)) {
+    const tokens = (match[1] ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (SHELL_LANGUAGES.has(tokens[0] ?? "") && tokens.includes("command")) return match[2]?.trim();
+  }
+  return undefined;
 }
 
 function EmbeddedTerminal({ block, command, active, completed, verified, refresh, onAdvice, onError, onStatus }: { block: Block; command?: string; active: boolean; completed: boolean; verified: boolean; refresh(state: State): void; onAdvice(message: string): void; onError(message: string): void; onStatus(message: string): void }) {
@@ -67,7 +73,7 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: nextTerminal.cols, rows: nextTerminal.rows }));
     };
     const dataDisposable = nextTerminal.onData((data) => { if (!verified && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data })); });
-    ws.addEventListener("open", () => { setConnected(true); onStatus("Terminal connected. This is a real local shell, not a sandbox."); sendResize(); });
+    ws.addEventListener("open", () => { setConnected(true); onStatus("Terminal connected in an isolated workbook container."); sendResize(); });
     ws.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
       if (message.type === "output") nextTerminal.write(message.data);
@@ -101,7 +107,7 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
   };
 
   return <div className="embedded-terminal-panel">
-    <div className="embedded-terminal-head"><div><b>Embedded terminal</b><p>Observed by the tutor. It runs as you in this repository; it is not a sandbox.</p></div><span className={connected ? "status connected" : "status"}>{connected ? "connected" : "offline"}</span></div>
+    <div className="embedded-terminal-head"><div><b>Embedded terminal</b><p>Observed by the tutor in an isolated container with write access only to learner work folders.</p></div><span className={connected ? "status connected" : "status"}>{connected ? "connected" : "offline"}</span></div>
     <div ref={terminalElement} className="embedded-terminal" aria-label="Embedded terminal" />
     {verified ? <div className="action-row"><span className="terminal-note">Your terminal transcript is preserved here as evidence of what you did.</span></div> : command && <div className="action-row"><button className="button primary" disabled={!connected} onClick={insertCommand}>Insert command — do not press Enter</button><span className="terminal-note">The button types a single-line equivalent only. You decide when to press Enter.</span></div>}
   </div>;
@@ -244,14 +250,14 @@ export function LessonRail({ title, chapters, progress, viewedLessonId, setViewe
       const complete = progress.completedLessons.includes(chapter.id);
       const current = chapter.id === progress.activeLessonId;
       if (!chapter.lesson) return <span key={chapter.id} className="lesson-row ahead unavailable" aria-disabled="true"><span>{chapter.title}</span></span>;
-      return <details key={chapter.id} className="lesson-nav" open={viewedLessonId === chapter.id}><summary><a href={`#lesson-${chapter.id}`} className={`lesson-row ${complete ? "done" : current ? "current" : "ahead"}`} onClick={() => setViewedLesson(chapter.id)}>{chapter.title}</a></summary>{viewedLessonId === chapter.id && <nav className="lesson-outline" aria-label={`${chapter.title} outline`}>{chapter.lesson.blocks.map((block) => <a href={`#${block.id}`} key={block.id} aria-current={block.id === progress.activeBlockId ? "true" : undefined}>{block.title}</a>)}</nav>}</details>;
+      return <details key={chapter.id} className="lesson-nav" open={viewedLessonId === chapter.id}><summary><a href={`#${lessonElementId(chapter.id)}`} className={`lesson-row ${complete ? "done" : current ? "current" : "ahead"}`} onClick={() => setViewedLesson(chapter.id)}>{chapter.title}</a></summary>{viewedLessonId === chapter.id && <nav className="lesson-outline" aria-label={`${chapter.title} outline`}>{chapter.lesson.blocks.map((block) => <a href={`#${blockElementId(chapter.id, block.id)}`} key={block.id} aria-current={block.id === progress.activeBlockId ? "true" : undefined}>{block.title}</a>)}</nav>}</details>;
     })}</div>)}</nav>
   </aside>;
 }
 
 export function LessonView({ chapter, progress, refresh }: { chapter: Chapter & { lesson: Lesson }; progress: Progress; refresh(state: State): void }) {
   return <article data-lesson-id={chapter.id} key={chapter.id} className="chapter">
-    <header id={`lesson-${chapter.id}`}><h1>{chapter.lesson.title}</h1><p className="dek">{chapter.lesson.dek}</p><div className="lesson-meta"><span className="chip duration">{chapter.lesson.durationMinutes} min</span></div></header>
+    <header id={lessonElementId(chapter.id)}><h1>{chapter.lesson.title}</h1><p className="dek">{chapter.lesson.dek}</p><div className="lesson-meta"><span className="chip duration">{chapter.lesson.durationMinutes} min</span></div></header>
     <section className="opening"><p className="section-label">What you will learn</p><h2>What you will learn</h2><ul className="outcomes">{chapter.lesson.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></section>
     {chapter.lesson.blocks.map((block) => <BlockView key={block.id} lessonId={chapter.id} block={block} progress={progress} refresh={refresh} />)}
   </article>;

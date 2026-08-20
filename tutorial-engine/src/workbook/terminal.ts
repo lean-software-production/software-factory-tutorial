@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import {
   DefaultResourceLoader,
   ModelRuntime,
@@ -15,13 +15,6 @@ import {
 import * as pty from "node-pty";
 import type { TutorialLogger } from "../runtime-log.js";
 import { createTutorialLogger } from "../runtime-log.js";
-// The embedded-terminal mode is a runtime/server concept, not an authored content-contract
-// field, so it lives here rather than in ./contract.js. (Task 1 note: contract.ts's Phase 1
-// removal of TerminalMode forced this relocation; Phase 3 will redesign embedded-only terminal
-// selection in a later task.)
-export type TerminalMode = "external" | "observed-embedded-optional";
-export const OBSERVED_TERMINAL_MODE: TerminalMode = "observed-embedded-optional";
-
 export type TerminalClient = { send(message: string): void; close(code?: number, reason?: string): void };
 export type TerminalMessage =
   | { type: "input"; data: string }
@@ -38,7 +31,9 @@ export interface TerminalPty {
 export interface TerminalPtyOptions { cwd: string; cols: number; rows: number; }
 interface DockerPty extends TerminalPty { stopContainer?(): void; }
 const WORKBOOK_TERMINAL_IMAGE = "lean-software-production/workbook-terminal:latest";
+const DEFAULT_WRITABLE_WORKSPACE_PATHS = ["factory", "calculator", ".tutorial/.tmp", ".git"] as const;
 export type TerminalPtyFactory = (options: TerminalPtyOptions) => TerminalPty;
+export interface DockerRunArgumentsOptions { workspace: string; name: string; authPath?: string; writableWorkspacePaths?: readonly string[]; }
 
 export interface ActiveObservedTerminalBlock {
   lessonId: string;
@@ -95,14 +90,36 @@ export function assertDockerTerminalReady(): void {
   if (image.error || image.status !== 0) throw new Error(`Docker image ${WORKBOOK_TERMINAL_IMAGE} is missing. Run npm run --workspace=tutorial-engine build:workbook-terminal.`);
 }
 
+function bindMount(src: string, dst: string, readonly = false): string {
+  return `type=bind,src=${src},dst=${dst}${readonly ? ",readonly" : ""}`;
+}
+
+function workspaceChildForMount(workspace: string, child: string): string | undefined {
+  const candidate = resolve(workspace, child);
+  if (!existsSync(candidate)) return undefined;
+  const realWorkspace = realpathSync(workspace);
+  const realCandidate = realpathSync(candidate);
+  const inside = relative(realWorkspace, realCandidate);
+  if (inside === "" || (!inside.startsWith("..") && !isAbsolute(inside))) return candidate;
+  throw new Error(`Refusing to mount ${child} because it resolves outside the workbook workspace.`);
+}
+
+export function dockerRunArguments(options: DockerRunArgumentsOptions): string[] {
+  const workspace = resolve(options.workspace);
+  const args = ["run", "-d", "--rm", "--name", options.name, "--label", "workbook-terminal=true", "--user", dockerContainerUser(), "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--mount", bindMount(workspace, "/workspace", true), "--workdir", "/workspace"];
+  for (const child of options.writableWorkspacePaths ?? DEFAULT_WRITABLE_WORKSPACE_PATHS) {
+    const source = workspaceChildForMount(workspace, child);
+    if (source) args.push("--mount", bindMount(source, `/workspace/${child}`));
+  }
+  if (options.authPath && existsSync(options.authPath)) args.push("--mount", bindMount(resolve(options.authPath), "/home/learner/.pi/agent/auth.json", true));
+  return args;
+}
+
 /** Starts a hardened, per-practice container; browser bytes can only reach docker exec. */
 export function createDockerPty(options: TerminalPtyOptions): TerminalPty {
   const workspace = resolve(options.cwd);
   const name = `workbook-terminal-${randomUUID()}`;
-  const auth = resolve(process.env.HOME ?? "", ".pi/agent/auth.json");
-  const args = ["run", "-d", "--rm", "--name", name, "--label", "workbook-terminal=true", "--user", dockerContainerUser(), "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--mount", `type=bind,src=${workspace},dst=/workspace,readonly`, "--workdir", "/workspace"];
-  // The auth file is intentionally the only host Pi state exposed. It is read-only.
-  if (existsSync(auth)) args.push("--mount", `type=bind,src=${auth},dst=/home/learner/.pi/agent/auth.json,readonly`);
+  const args = dockerRunArguments({ workspace, name, authPath: resolve(process.env.HOME ?? "", ".pi/agent/auth.json") });
   args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
   try { execFileSync("docker", args, { stdio: "ignore" }); }
   catch (error) { throw new Error(`Could not start isolated terminal container: ${error instanceof Error ? error.message : String(error)}`); }
@@ -114,10 +131,10 @@ export function createDockerPty(options: TerminalPtyOptions): TerminalPty {
 }
 
 /**
- * Owns one real local shell for the embedded workbook terminal. This is not a
- * sandbox: it runs as the learner, in the loaded workspace, and forwards only
- * bytes the browser explicitly sends. Terminal bytes, observer prompts, and
- * advice are transient and never become workbook progress events.
+ * Owns one shell in a hardened workbook container. The host workspace is mounted
+ * read-only except for explicit learner-work roots such as factory/ and
+ * calculator/. Terminal bytes, observer prompts, and advice are transient and
+ * never become workbook progress events.
  */
 export class WorkbookTerminalManager {
   readonly workspace: string;
@@ -159,7 +176,7 @@ export class WorkbookTerminalManager {
     catch (error) {
       this.#client = undefined;
       this.#log.info(`Embedded terminal could not start: ${error instanceof Error ? error.message : String(error)}`);
-      client.send(JSON.stringify({ type: "terminal-error", message: "The embedded terminal could not start on this machine. Use your own terminal instead." }));
+      client.send(JSON.stringify({ type: "terminal-error", message: "The embedded terminal could not start on this machine. Check that Docker is running and the workbook terminal image is built, then refresh." }));
       return true;
     }
     if (this.#replay) client.send(JSON.stringify({ type: "output", data: this.#replay }));
@@ -298,7 +315,7 @@ export class WorkbookTerminalManager {
         this.#client?.send(JSON.stringify({ type: "observer-status", blockId: block.blockId, status: "waiting" }));
       }
     } catch (error) {
-      const message = "Terminal observer is unavailable. Keep working, or use the external-terminal fallback below.";
+      const message = "Terminal observer is unavailable. Keep working in the embedded terminal; your next command will be checked again.";
       this.#lastError.set(key, message);
       this.#log.info(`Terminal observer failed for ${key}: ${error instanceof Error ? error.message : String(error)}`);
       this.#client?.send(JSON.stringify({ type: "observer-error", blockId: block.blockId, message }));

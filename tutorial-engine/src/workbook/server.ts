@@ -195,7 +195,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
               : { type: "reflection_follow_up_submitted", lessonId: lesson.id, blockId: block.id, response: learnerResponse }));
             const updated = await refreshEvents();
             const thread = project(updated, lesson).reflectionConversations[block.id] ?? [];
-            const reply = await reflectionConversation.reply({ prompt: block.tutor, message: learnerResponse, conversation: thread, practiceEvidence: reflectionEvidence() });
+            const reply = await reflectionConversation.reply({ question: block.markdown, tutor: block.tutor, message: learnerResponse, conversation: thread, practiceEvidence: reflectionEvidence() });
             await store.append(nowEvent({ type: "reflection_reply_recorded", lessonId: lesson.id, blockId: block.id, response: reply }));
             const complete = await refreshEvents(); await store.writeProjection(project(complete, activeLesson(loaded, complete)));
             result = publicState(loaded, complete);

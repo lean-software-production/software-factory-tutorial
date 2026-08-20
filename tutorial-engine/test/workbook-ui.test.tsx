@@ -26,7 +26,7 @@ const lesson = {
   outcomes: ["Run the supplied command.", "Explain what changed."],
   blocks: [
     { id: "orientation", type: "narrative", title: "Orientation", markdown: "Read **carefully**.\n\n- One\n- Two", tutor: "private narrative note" },
-    { id: "practice", type: "terminal-practice", title: "Practice", markdown: "Run this:\n\n```sh\necho hi \\\n  | cat\n```", tutor: "private practice guidance" },
+    { id: "practice", type: "terminal-practice", title: "Practice", markdown: "Run this:\n\n```sh command\necho hi \\\n  | cat\n```", tutor: "private practice guidance" },
     { id: "reflect", type: "reflection", title: "Reflect", markdown: "Why did it work?", tutor: "private reflection prompt" },
     { id: "transition", type: "lesson-transition", title: "Next", markdown: "Continue to **lesson two**." },
   ],
@@ -61,7 +61,7 @@ describe("workbook lesson UI", () => {
   it("renders the Markdown manifest lesson header, fixed outcomes section, and ordered Markdown blocks", () => {
     const markup = html(createElement(LessonView, { chapter: chapter(), progress, refresh: vi.fn() }));
 
-    expect(markup).toContain('<header id="lesson-part/lesson-one"><h1>Markdown Lesson</h1><p class="dek">Dek paragraph.</p><div class="lesson-meta"><span class="chip duration">14 min</span></div></header>');
+    expect(markup).toContain('<header id="lesson-part-lesson-one"><h1>Markdown Lesson</h1><p class="dek">Dek paragraph.</p><div class="lesson-meta"><span class="chip duration">14 min</span></div></header>');
     expect(markup).not.toContain('class="eyebrow"');
     expect(markup).toContain("What you will learn");
     expect(markup).toContain("Run the supplied command.");
@@ -91,13 +91,18 @@ describe("workbook lesson UI", () => {
     expect(activeReflection).not.toContain('data-completion-action="continue"');
   });
 
-  it("keeps embedded terminal as the only terminal path and inserts only authored shell fences", () => {
+  it("keeps embedded terminal as the only terminal path and inserts only authored command fences", () => {
     const activeTerminalProgress = { ...progress, activeBlockId: "practice", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "practice", ready: true, emerged: true })) };
     const withCommand = html(createElement(BlockView, { block: lesson.blocks[1], progress: activeTerminalProgress, refresh: vi.fn() }));
     expect(withCommand).toContain("Embedded terminal");
     expect(withCommand).toContain("Insert command");
     expect(withCommand).not.toContain("Use your own terminal");
     expect(withCommand).not.toContain("fallback");
+
+    const scriptSnippetBlock = { ...lesson.blocks[1], markdown: "Create this script:\n\n```sh\n#!/usr/bin/env bash\necho script body\n```" };
+    const withSnippet = html(createElement(BlockView, { block: scriptSnippetBlock, progress: activeTerminalProgress, refresh: vi.fn() }));
+    expect(withSnippet).toContain("Embedded terminal");
+    expect(withSnippet).not.toContain("Insert command");
 
     const clueOnlyBlock = { ...lesson.blocks[1], markdown: "Try the command you just edited, then compare its output." };
     const withoutCommand = html(createElement(BlockView, { block: clueOnlyBlock, progress: activeTerminalProgress, refresh: vi.fn() }));
@@ -119,6 +124,20 @@ describe("workbook lesson UI", () => {
     expect(markup).toContain("lesson-row current");
     expect(markup).toContain("Lesson Three");
     expect(markup).toContain("aria-disabled=\"true\"");
+  });
+
+  it("links lesson outlines to lesson-scoped safe block DOM ids", () => {
+    const unsafeLesson = { ...lesson, id: "part two/lesson#two", blocks: [{ ...lesson.blocks[0], id: "repeat block?" }] };
+    const chapters: Chapter[] = [{ id: unsafeLesson.id, title: "Unsafe", part: "Part Two", partMarkdown: "", partNumber: 2, lessonNumber: 1, lesson: unsafeLesson }];
+    const railProgress = { ...progress, activeLessonId: unsafeLesson.id, activeBlockId: "repeat block?", blocks: [{ id: "repeat block?", type: "narrative", ready: true, active: true, completed: false, verified: false, emerged: true }] };
+    const railMarkup = html(createElement(LessonRail, { title: "Workbook", chapters, progress: railProgress, viewedLessonId: unsafeLesson.id, setViewedLesson: vi.fn() }));
+    const lessonMarkup = html(createElement(LessonView, { chapter: chapters[0] as Chapter & { lesson: typeof unsafeLesson }, progress: railProgress, refresh: vi.fn() }));
+
+    expect(railMarkup).toContain('href="#lesson-part-two-lesson-two"');
+    expect(lessonMarkup).toContain('id="lesson-part-two-lesson-two"');
+    expect(railMarkup).toContain('href="#lesson-part-two-lesson-two-block-repeat-block-"');
+    expect(lessonMarkup).toContain('id="lesson-part-two-lesson-two-block-repeat-block-"');
+    expect(railMarkup).not.toContain('href="#repeat block?"');
   });
 
   it("does not let a completed lesson's duplicate narrative block continue the active lesson", () => {

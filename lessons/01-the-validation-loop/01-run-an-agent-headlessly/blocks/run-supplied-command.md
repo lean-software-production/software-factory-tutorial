@@ -14,7 +14,7 @@ tutor: |-
 
 Run this command from the repository root:
 
-```sh
+```sh command
 echo "Describe what this calculator does, in three sentences." \
   | (cd calculator && pi --no-session --tools read,grep,find,ls -p)
 ```
