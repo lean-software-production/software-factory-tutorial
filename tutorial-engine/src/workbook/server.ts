@@ -8,7 +8,7 @@ import type { TutorialLogger } from "../runtime-log.js";
 import { createTutorialLogger } from "../runtime-log.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 import { introductionCompleted, nowEvent, project, WorkbookEventStore, type WorkbookEvent } from "./events.js";
-import { assertDockerTerminalReady, createDockerPty, PiTerminalObserver, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalObserver, type TerminalPtyFactory } from "./terminal.js";
+import { assertDockerTerminalReady, createDockerPty, PiTerminalObserver, requireOpenCodeApiKey, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalObserver, type TerminalPtyFactory } from "./terminal.js";
 import { PiReflectionConversationAdapter, type PracticeEvidence, type ReflectionConversationAdapter } from "./reflection.js";
 import type { WorkbookBlock, WorkbookLesson } from "./contract.js";
 
@@ -107,7 +107,10 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const embeddedTerminalEnabled = options.embeddedTerminal ?? true;
   const host = options.host ?? LOOPBACK_HOST;
   if (embeddedTerminalEnabled && !isLoopbackHost(host)) throw new Error("The embedded terminal can only be enabled on a loopback host; it exposes an isolated container shell.");
-  if (embeddedTerminalEnabled && !options.terminalPtyFactory) assertDockerTerminalReady();
+  if (embeddedTerminalEnabled) {
+    requireOpenCodeApiKey();
+    if (!options.terminalPtyFactory) assertDockerTerminalReady(loaded.workspace);
+  }
   const store = new WorkbookEventStore(loaded.workspace);
   const reflectionConversation = options.reflectionConversation ?? new PiReflectionConversationAdapter(loaded.workspace, log);
   let reflectionQueue = Promise.resolve();

@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dockerContainerUser, dockerRunArguments, WorkbookTerminalManager, type TerminalClient, type TerminalObserver, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
+import { assertDockerTerminalReady, dockerContainerUser, dockerRunArguments, WorkbookTerminalManager, type TerminalClient, type TerminalObserver, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
 
 class FakePty implements TerminalPty {
   writes: string[] = [];
@@ -53,30 +53,88 @@ afterEach(async () => {
 });
 
 describe("WorkbookTerminalManager", () => {
-  it("uses the host identity so the read-only Pi auth mount remains readable", () => {
+  it("uses the host identity so the isolated Pi state is writable", () => {
     expect(dockerContainerUser()).toBe(`${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`);
   });
 
-  it("mounts the workspace read-only and only learner work roots read-write", async () => {
+  it("mounts only learner work roots read-write and supplies Pi with the API key", async () => {
     const workspace = await mkdtemp(resolve(tmpdir(), "workbook-terminal-mounts-"));
     tempDirs.push(workspace);
     await mkdir(resolve(workspace, "factory/refactor/.tmp"), { recursive: true });
     await mkdir(resolve(workspace, "calculator"));
     await mkdir(resolve(workspace, ".tutorial/.tmp"), { recursive: true });
     await mkdir(resolve(workspace, ".git"));
-    await writeFile(resolve(workspace, "auth.json"), "{}");
 
-    const args = dockerRunArguments({ workspace, name: "workbook-terminal-test", authPath: resolve(workspace, "auth.json") });
+    const args = dockerRunArguments({ workspace, name: "workbook-terminal-test", apiKey: "test-opencode-key" });
     const mounts = args.filter((arg) => arg.startsWith("type=bind"));
 
     expect(args).toContain("--read-only");
+    expect(args).toContain("--env");
+    expect(args).toContain("OPENCODE_API_KEY=test-opencode-key");
+    expect(args).toContain("--tmpfs");
+    expect(args.some((arg) => /^\/home\/learner\/\.pi\/agent:uid=.+,gid=.+,mode=0700$/.test(arg))).toBe(true);
     expect(mounts).toContain(`type=bind,src=${workspace},dst=/workspace,readonly`);
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, "factory")},dst=/workspace/factory`);
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, "calculator")},dst=/workspace/calculator`);
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, ".tutorial/.tmp")},dst=/workspace/.tutorial/.tmp`);
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, ".git")},dst=/workspace/.git`);
-    expect(mounts).toContain(`type=bind,src=${resolve(workspace, "auth.json")},dst=/home/learner/.pi/agent/auth.json,readonly`);
+    expect(mounts).not.toContain(expect.stringContaining("auth.json"));
     expect(mounts).not.toContain(`type=bind,src=${workspace},dst=/workspace`);
+  });
+
+  it("rejects terminal preflight before Docker work when OPENCODE_API_KEY is absent", () => {
+    const previous = process.env.OPENCODE_API_KEY;
+    delete process.env.OPENCODE_API_KEY;
+    try {
+      expect(() => assertDockerTerminalReady()).toThrow(/OPENCODE_API_KEY/);
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = previous;
+    }
+  });
+
+  it("preflights Pi authentication in the same isolated container it will run", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "workbook-fake-docker-"));
+    tempDirs.push(directory);
+    const capture = join(directory, "docker-args");
+    const docker = join(directory, "docker");
+    await writeFile(docker, "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\"\nprintf '%s\\n' --- >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\"\n");
+    await chmod(docker, 0o755);
+    const previousPath = process.env.PATH;
+    const previousKey = process.env.OPENCODE_API_KEY;
+    const previousCapture = process.env.WORKBOOK_TERMINAL_DOCKER_ARGS;
+    process.env.PATH = `${directory}:${previousPath}`;
+    process.env.OPENCODE_API_KEY = "test-opencode-key";
+    process.env.WORKBOOK_TERMINAL_DOCKER_ARGS = capture;
+    try {
+      assertDockerTerminalReady("/workspace");
+      const args = await readFile(capture, "utf8");
+      expect(args).toMatch(/run\n-d\n--rm\n--name\nworkbook-terminal-preflight-/);
+      expect(args).toContain("exec\nworkbook-terminal-preflight-");
+      expect(args).toContain("--input-type=module\n-e\n");
+      expect(args).toContain("rm\n-f\nworkbook-terminal-preflight-");
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+      if (previousKey === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = previousKey;
+      if (previousCapture === undefined) delete process.env.WORKBOOK_TERMINAL_DOCKER_ARGS; else process.env.WORKBOOK_TERMINAL_DOCKER_ARGS = previousCapture;
+    }
+  });
+
+  it("refuses startup when Pi cannot authenticate inside the terminal container", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "workbook-fake-docker-"));
+    tempDirs.push(directory);
+    const docker = join(directory, "docker");
+    await writeFile(docker, "#!/bin/sh\nif [ \"$1\" = exec ]; then exit 1; fi\n");
+    await chmod(docker, 0o755);
+    const previousPath = process.env.PATH;
+    const previousKey = process.env.OPENCODE_API_KEY;
+    process.env.PATH = `${directory}:${previousPath}`;
+    process.env.OPENCODE_API_KEY = "test-opencode-key";
+    try {
+      expect(() => assertDockerTerminalReady("/workspace")).toThrow(/could not authenticate pi/i);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+      if (previousKey === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = previousKey;
+    }
   });
 
   it("starts the PTY in the canonical workspace without writing a command", () => {

@@ -3,7 +3,7 @@ import * as terminalModule from "../src/workbook/terminal.js";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { WebSocket } from "ws";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startWorkbookServer } from "../src/workbook/server.js";
 import type { TerminalObservationRequest, TerminalObserver, TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
 import type { ReflectionConversationAdapter } from "../src/workbook/reflection.js";
@@ -103,7 +103,19 @@ async function completeTerminal(serverUrl: string, blockId: string) {
   return postEvent(serverUrl, { blockId, action: "complete" }).then((response) => response.json() as any);
 }
 
-afterEach(async () => { vi.useRealTimers(); vi.restoreAllMocks(); await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))); dirs = []; });
+let originalOpenCodeApiKey: string | undefined;
+beforeEach(() => {
+  originalOpenCodeApiKey = process.env.OPENCODE_API_KEY;
+  process.env.OPENCODE_API_KEY = "test-opencode-key";
+});
+afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  if (originalOpenCodeApiKey === undefined) delete process.env.OPENCODE_API_KEY;
+  else process.env.OPENCODE_API_KEY = originalOpenCodeApiKey;
+  await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
+  dirs = [];
+});
 
 describe("workbook browser API", () => {
   it("rejects progress actions for blocks that are not active", async () => {
@@ -219,6 +231,23 @@ describe("workbook browser API", () => {
       expect(events).toContain("terminal_observer");
       expect(ready).toHaveBeenCalledOnce();
     } finally { await server.close(); }
+  });
+
+  it("refuses to boot an embedded terminal without OPENCODE_API_KEY", async () => {
+    const dir = await fixture(true);
+    const previous = process.env.OPENCODE_API_KEY;
+    delete process.env.OPENCODE_API_KEY;
+    let server: Awaited<ReturnType<typeof startWorkbookServer>> | undefined;
+    try {
+      server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: { observe: async () => ({ status: "waiting" }) }, terminalPtyFactory: () => new ServerFakePty() });
+      expect.unreachable("embedded terminal boot should require OPENCODE_API_KEY");
+    } catch (error) {
+      expect(error).toHaveProperty("message", expect.stringMatching(/OPENCODE_API_KEY/));
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_API_KEY;
+      else process.env.OPENCODE_API_KEY = previous;
+      await server?.close();
+    }
   });
 
   it("rejects embedded terminal on a non-loopback host", async () => {
