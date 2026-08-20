@@ -4,10 +4,9 @@ type: narrative
 
 ## Why this needs no daemon
 
-You have three terminals, and each one does exactly one blocking thing: the first runs the line,
-the second follows a file, the third writes a line to a pipe and exits. Nothing has to read your
-typing and wait for a station to finish at the same time, which is the only genuinely awkward thing
-about this shape.
+One terminal can do all three jobs: start the line and watcher in the background, then write a line
+to a pipe and return. Nothing has to read your typing and wait for a station to finish at the same
+time, which is the only genuinely awkward thing about this shape.
 
 A daemon exists to connect a short-lived command to a handle held inside some other process. Here
 the
