@@ -261,7 +261,7 @@ export async function runPersonaSession(options: { repositoryRoot: string; works
     // finds the workspace the learner would actually have carried forward.
     await seedWorkspace(options.workspace, options.scenario.seed);
     const loaded = await loadLesson(options.workspace);
-    server = await startLocalServer({ lesson: loaded.definition, workspace: options.workspace, webRoot: options.webRoot, progress: loaded.progress });
+    server = await startLocalServer({ lesson: loaded.definition, workspace: options.workspace, webRoot: options.webRoot, progress: loaded.progress, resetLearnerArtifacts: async () => {} });
   } catch (error) {
     restoreEnvironment();
     throw error;
