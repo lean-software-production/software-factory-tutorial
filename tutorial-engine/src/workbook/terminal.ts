@@ -139,6 +139,10 @@ export function dockerRunArguments(options: DockerRunArgumentsOptions): string[]
   return args;
 }
 
+export function dockerExecArguments(name: string): string[] {
+  return ["exec", "-it", "--workdir", "/workspace", name, "/bin/bash", "-l"];
+}
+
 /** Starts a hardened, per-practice container; browser bytes can only reach docker exec. */
 export function createDockerPty(options: TerminalPtyOptions): TerminalPty {
   const workspace = resolve(options.cwd);
@@ -147,7 +151,7 @@ export function createDockerPty(options: TerminalPtyOptions): TerminalPty {
   args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
   try { execFileSync("docker", args, { stdio: "ignore" }); }
   catch (error) { throw new Error(`Could not start isolated terminal container: ${error instanceof Error ? error.message : String(error)}`); }
-  const instance = pty.spawn("docker", ["exec", "-it", "--workdir", "/workspace", name, "/bin/sh", "-l"], {
+  const instance = pty.spawn("docker", dockerExecArguments(name), {
     name: "xterm-256color", cols: options.cols, rows: options.rows, cwd: workspace, env: { ...process.env, TERM: "xterm-256color" }
   }) as DockerPty;
   instance.stopContainer = () => { try { execFileSync("docker", ["rm", "-f", name], { stdio: "ignore" }); } catch { /* removal is best effort; --rm cleans a stopped container. */ } };
