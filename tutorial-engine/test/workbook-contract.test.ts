@@ -141,6 +141,15 @@ describe("workbook lesson contract", () => {
     await expect(loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "id")).rejects.toThrow(/exactly one H1/i);
   });
 
+  it("rejects lesson prose before its H1 title heading", async () => {
+    const dir = await fixture();
+    await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), [
+      "---", "durationMinutes: 12", "outcomes:", "  - X", "blocks:", "  - intro", "  - practice", "  - think", "  - onward", "---",
+      "This prose appears before the title and must not become the dek.", "", "# Title",
+    ].join("\n"));
+    await expect(loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "id")).rejects.toThrow(/content before the H1 title/i);
+  });
+
   it("rejects extra lesson body content after the dek paragraph", async () => {
     const dir = await fixture();
     await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), [
@@ -154,6 +163,12 @@ describe("workbook lesson contract", () => {
     const dir = await fixture();
     await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/blocks/intro.md"), ["---", "type: narrative", "---", "# Wrong Level", "", "Body."].join("\n"));
     await expect(loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "id")).rejects.toThrow(/exactly one H2/i);
+  });
+
+  it("rejects block prose before its H2 title heading", async () => {
+    const dir = await fixture();
+    await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/blocks/intro.md"), ["---", "type: narrative", "---", "Body before title.", "", "## Intro", "", "Body after title."].join("\n"));
+    await expect(loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "id")).rejects.toThrow(/content before the H2 title/i);
   });
 
   it("rejects a lesson.md that lists a block file which does not exist", async () => {

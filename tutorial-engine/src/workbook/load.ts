@@ -71,8 +71,9 @@ function extractHeading(body: string, level: 1 | 2, location: string): { title: 
   const title = match[1]!.trim();
   if (!title) throw new Error(`${location} has an empty ${label} title heading.`);
   const start = match.index ?? 0;
+  if (body.slice(0, start).trim()) throw new Error(`${location} has content before the ${label} title heading.`);
   const end = start + match[0].length;
-  return { title, body: (body.slice(0, start) + body.slice(end)).trim() };
+  return { title, body: body.slice(end).trim() };
 }
 
 /** The first paragraph after a lesson's H1 is its dek; a lesson has no other authored content. */

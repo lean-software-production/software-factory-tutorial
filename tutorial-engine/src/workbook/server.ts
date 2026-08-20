@@ -8,14 +8,14 @@ import type { TutorialLogger } from "../runtime-log.js";
 import { createTutorialLogger } from "../runtime-log.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 import { introductionCompleted, nowEvent, project, WorkbookEventStore, type WorkbookEvent } from "./events.js";
-import { assertDockerTerminalReady, PiTerminalObserver, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalObserver, type TerminalPtyFactory } from "./terminal.js";
+import { assertDockerTerminalReady, createDockerPty, PiTerminalObserver, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalObserver, type TerminalPtyFactory } from "./terminal.js";
 import { PiReflectionConversationAdapter, type PracticeEvidence, type ReflectionConversationAdapter } from "./reflection.js";
 import type { WorkbookBlock, WorkbookLesson } from "./contract.js";
 
 const MIME_TYPES: Record<string, string> = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json; charset=utf-8" };
 const MAX_BODY_BYTES = 16_384;
 
-export interface WorkbookServerOptions { target: string; webRoot: string; port?: number; host?: string; logger?: TutorialLogger; terminalObserver?: TerminalObserver; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; reflectionConversation?: ReflectionConversationAdapter; }
+export interface WorkbookServerOptions { target: string; webRoot: string; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalObserver?: TerminalObserver; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; reflectionConversation?: ReflectionConversationAdapter; }
 export interface StartedWorkbookServer { url: string; port: number; host: string; close(): Promise<void>; }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
@@ -104,7 +104,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const log = options.logger ?? createTutorialLogger();
   await access(resolve(options.webRoot, "index.html"));
   const loaded = await loadWorkbook(options.target);
-  const embeddedTerminalEnabled = options.terminalObserver !== undefined || options.terminalPtyFactory !== undefined;
+  const embeddedTerminalEnabled = options.embeddedTerminal ?? true;
   const host = options.host ?? LOOPBACK_HOST;
   if (embeddedTerminalEnabled && !isLoopbackHost(host)) throw new Error("The embedded terminal can only be enabled on a loopback host; it exposes an isolated container shell.");
   if (embeddedTerminalEnabled && !options.terminalPtyFactory) assertDockerTerminalReady();
@@ -139,7 +139,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     getActiveBlock: activeObservedBlock,
     observer: options.terminalObserver ?? new PiTerminalObserver(loaded.workspace, log),
     onVerifiedCompletion: completeFromObserver,
-    ptyFactory: options.terminalPtyFactory,
+    ptyFactory: options.terminalPtyFactory ?? createDockerPty,
     debounceMs: options.terminalDebounceMs,
     logger: log
   }) : undefined;

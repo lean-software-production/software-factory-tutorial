@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import * as terminalModule from "../src/workbook/terminal.js";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { WebSocket } from "ws";
@@ -102,11 +103,11 @@ async function completeTerminal(serverUrl: string, blockId: string) {
   return postEvent(serverUrl, { blockId, action: "complete" }).then((response) => response.json() as any);
 }
 
-afterEach(async () => { vi.useRealTimers(); await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))); dirs = []; });
+afterEach(async () => { vi.useRealTimers(); vi.restoreAllMocks(); await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))); dirs = []; });
 
 describe("workbook browser API", () => {
   it("rejects progress actions for blocks that are not active", async () => {
-    const dir = await fixture(); const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0 });
+    const dir = await fixture(); const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false });
     try {
       await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
       for (const body of [
@@ -124,7 +125,7 @@ describe("workbook browser API", () => {
   });
 
   it("serves new-layout content without legacy state or private tutor data", async () => {
-    const dir = await fixture(); const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0 });
+    const dir = await fixture(); const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false });
     try {
       const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
       expect(state.workbook).toMatchObject({ title: "Fixture workbook" });
@@ -196,9 +197,32 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("enables the observed embedded terminal in the production server path", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty();
+    const ready = vi.spyOn(terminalModule, "assertDockerTerminalReady").mockImplementation(() => {});
+    vi.spyOn(terminalModule, "createDockerPty").mockImplementation(() => pty);
+    vi.spyOn(terminalModule.PiTerminalObserver.prototype, "observe").mockResolvedValue({ status: "complete", summary: "done" });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalDebounceMs: 1 });
+    try {
+      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
+      await postEvent(server.url, { blockId: "orientation", action: "continue" });
+      const ws = await connect(server.url, server.url);
+      const completed = waitFor(ws, (message) => message.type === "verified-complete" && message.blockId === "run-supplied-command");
+      ws.send(JSON.stringify({ type: "input", data: "run default terminal\r" }));
+      await completed;
+      ws.close();
+      const events = await readFile(resolve(dir, ".tutorial/.tmp/workbook/events.jsonl"), "utf8");
+      expect(events).toContain("observation_verified");
+      expect(events).toContain("terminal_observer");
+      expect(ready).toHaveBeenCalledOnce();
+    } finally { await server.close(); }
+  });
+
   it("rejects embedded terminal on a non-loopback host", async () => {
     const dir = await fixture();
-    await expect(startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), host: "0.0.0.0", port: 0, terminalObserver: { observe: async () => ({ status: "waiting" }) } }))
+    vi.spyOn(terminalModule, "assertDockerTerminalReady").mockImplementation(() => {});
+    await expect(startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), host: "0.0.0.0", port: 0 }))
       .rejects.toThrow(/loopback/i);
   });
 
