@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertDockerTerminalReady, dockerContainerUser, dockerRunArguments, WorkbookTerminalManager, type TerminalClient, type TerminalObserver, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
+import { assertDockerTerminalReady, dockerContainerUser, dockerExecArguments, dockerRunArguments, WorkbookTerminalManager, type TerminalClient, type TerminalObserver, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
 
 class FakePty implements TerminalPty {
   writes: string[] = [];
@@ -135,6 +135,12 @@ describe("WorkbookTerminalManager", () => {
       if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
       if (previousKey === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = previousKey;
     }
+  });
+
+  it("starts Bash so the interactive terminal edits command history", () => {
+    expect(dockerExecArguments("workbook-terminal-test")).toEqual([
+      "exec", "-it", "--workdir", "/workspace", "workbook-terminal-test", "/bin/bash", "-l"
+    ]);
   });
 
   it("starts the PTY in the canonical workspace without writing a command", () => {
