@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertDockerTerminalReady, dockerContainerUser, dockerExecArguments, dockerRunArguments, WorkbookTerminalManager, type TerminalClient, type TerminalObserver, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
+import { assertDockerTerminalReady, dockerContainerUser, dockerExecArguments, dockerRunArguments, WorkbookTerminalManager, type SubmitAttempt, type TerminalClient, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
 
 class FakePty implements TerminalPty {
   writes: string[] = [];
@@ -27,21 +27,19 @@ class FakeClient implements TerminalClient {
   close(): void { this.closed = true; }
 }
 
-function setup(observer: TerminalObserver = { observe: vi.fn(async () => ({ status: "waiting" })) }, debounceMs = 5, maxTranscriptBytes = 120) {
+function setup(submitAttempt: SubmitAttempt = vi.fn(async () => undefined), debounceMs = 5, maxTranscriptBytes = 120) {
   let active: any = { lessonId: "lesson", blockId: "practice", command: "npm test", context: "root", expectedObservation: "tests pass" };
   const ptys: FakePty[] = [];
   const factory: TerminalPtyFactory = ({ cwd }) => { const pty = new FakePty(); pty.cwd = cwd; ptys.push(pty); return pty; };
-  const completed: any[] = [];
   const manager = new WorkbookTerminalManager({
     workspace: "/tmp/workspace",
     getActiveBlock: () => active,
-    observer,
-    onVerifiedCompletion: async (block) => { completed.push(block); return { progressed: true }; },
+    submitAttempt,
     ptyFactory: factory,
     debounceMs,
     maxTranscriptBytes
   });
-  return { manager, ptys, completed, setActive: (next: any) => { active = next; }, observer };
+  return { manager, ptys, setActive: (next: any) => { active = next; }, submitAttempt };
 }
 
 const tempDirs: string[] = [];
@@ -162,19 +160,27 @@ describe("WorkbookTerminalManager", () => {
     expect(ptys[0]?.resizes).toEqual([[500, 200]]);
   });
 
-  it("debounces observation after command submission and keeps transcript bounded", async () => {
+  it("submits paused bounded transcripts and frozen terminal HTML as attempt evidence", async () => {
     vi.useFakeTimers();
-    const observe = vi.fn(async () => ({ status: "advice" as const, message: "Use npm test." }));
-    const { manager, ptys } = setup({ observe }, 20, 80);
+    const submitAttempt = vi.fn(async () => undefined);
+    const { manager, ptys } = setup(submitAttempt, 20, 80);
     const client = new FakeClient();
     manager.attach(client);
     manager.receive({ type: "input", data: `echo ${"x".repeat(80)}\r` });
-    expect(client.messages.at(-1)).toMatchObject({ type: "observer-status", blockId: "practice", status: "running" });
-    ptys[0]!.emitData("short output");
+    expect(client.messages.at(-1)).toMatchObject({ type: "attempt-status", blockId: "practice", status: "running" });
+    ptys[0]!.emitData("\u001b[32m<tag> short output\u001b[0m");
     await vi.advanceTimersByTimeAsync(25);
-    expect(observe).toHaveBeenCalledTimes(1);
-    expect(observe.mock.calls[0]![0].transcript.length).toBeLessThanOrEqual(80);
-    expect(client.messages.at(-1)).toMatchObject({ type: "advice", blockId: "practice", message: "Use npm test." });
+
+    expect(submitAttempt).toHaveBeenCalledTimes(1);
+    expect(submitAttempt.mock.calls[0]![0]).toMatchObject({
+      lessonId: "lesson",
+      blockId: "practice",
+      privateGuidance: "tests pass",
+      evidence: { kind: "terminal", terminalHtml: expect.stringContaining("&lt;tag&gt; short output") }
+    });
+    expect(submitAttempt.mock.calls[0]![0].evidence.transcript.length).toBeLessThanOrEqual(80);
+    expect(submitAttempt.mock.calls[0]![0].evidence.terminalHtml).not.toContain("\u001b[");
+    expect(client.messages.at(-1)).toMatchObject({ type: "attempt-status", blockId: "practice", status: "submitted" });
   });
 
   it("retains bounded terminal attempts as reflection evidence in memory", () => {
@@ -188,46 +194,35 @@ describe("WorkbookTerminalManager", () => {
     expect(evidence?.transcript).toContain("command not found");
   });
 
-  it("freezes escaped terminal output after verification and stops the isolated session", async () => {
+  it("does not submit attempts for inactive or non-observed blocks", async () => {
     vi.useFakeTimers();
-    const { manager, ptys } = setup({ observe: async () => ({ status: "complete" }) }, 5);
-    manager.attach(new FakeClient());
-    manager.receive({ type: "input", data: "echo '<tag>'\r" });
-    ptys[0]!.emitData("\u001b[32m<tag>\u001b[0m");
-    await vi.advanceTimersByTimeAsync(10);
-    expect(manager.frozenTerminalHtml()).toContain("&lt;tag&gt;");
-    expect(manager.frozenTerminalHtml()).not.toContain("\u001b[");
-    expect(ptys[0]?.killed).toBe(true);
-  });
-
-  it("does not observe inactive or non-observed blocks", async () => {
-    vi.useFakeTimers();
-    const observe = vi.fn(async () => ({ status: "complete" as const }));
-    const { manager, ptys, setActive } = setup({ observe }, 5);
+    const submitAttempt = vi.fn(async () => undefined);
+    const { manager, ptys, setActive } = setup(submitAttempt, 5);
     setActive(undefined);
     manager.attach(new FakeClient());
     manager.receive({ type: "input", data: "npm test\r" });
     ptys[0]!.emitData("pass");
     await vi.advanceTimersByTimeAsync(10);
-    expect(observe).not.toHaveBeenCalled();
+    expect(submitAttempt).not.toHaveBeenCalled();
   });
 
-  it("sends verified completion through the server-owned callback only", async () => {
+  it("reports attempt submission failure without external-terminal fallback wording", async () => {
     vi.useFakeTimers();
-    const { manager, ptys, completed } = setup({ observe: async () => ({ status: "complete", summary: "saw pass" }) }, 5);
+    const { manager, ptys } = setup(async () => { throw new Error("adapter down"); }, 5);
     const client = new FakeClient();
     manager.attach(client);
     manager.receive({ type: "input", data: "npm test\r" });
-    ptys[0]!.emitData("pass");
+    ptys[0]!.emitData("output");
     await vi.advanceTimersByTimeAsync(10);
-    expect(completed).toHaveLength(1);
-    expect(client.messages.at(-1)).toMatchObject({ type: "verified-complete", state: { progressed: true } });
+    const error = client.messages.find((message) => message.type === "attempt-error");
+    expect(error).toMatchObject({ blockId: "practice", message: expect.stringMatching(/could not submit/i) });
+    expect(error.message).not.toMatch(/external|own terminal|fallback/i);
   });
 
   it("reports a PTY startup failure without external-terminal fallback wording", () => {
     const manager = new WorkbookTerminalManager({
-      workspace: "/tmp/workspace", getActiveBlock: () => undefined, observer: { observe: async () => ({ status: "waiting" }) },
-      onVerifiedCompletion: async () => ({}), ptyFactory: () => { throw new Error("spawn failed"); }
+      workspace: "/tmp/workspace", getActiveBlock: () => undefined, submitAttempt: async () => undefined,
+      ptyFactory: () => { throw new Error("spawn failed"); }
     });
     const client = new FakeClient();
     expect(manager.attach(client)).toBe(true);
@@ -235,18 +230,6 @@ describe("WorkbookTerminalManager", () => {
     expect(JSON.stringify(client.messages)).not.toMatch(/external|own terminal|fallback/i);
   });
 
-  it("reports observer failure without external-terminal fallback wording", async () => {
-    vi.useFakeTimers();
-    const { manager, ptys } = setup({ observe: async () => { throw new Error("adapter down"); } }, 5);
-    const client = new FakeClient();
-    manager.attach(client);
-    manager.receive({ type: "input", data: "npm test\r" });
-    ptys[0]!.emitData("output");
-    await vi.advanceTimersByTimeAsync(10);
-    const error = client.messages.find((message) => message.type === "observer-error");
-    expect(error).toMatchObject({ blockId: "practice", message: expect.stringMatching(/observer is unavailable/i) });
-    expect(error.message).not.toMatch(/external|own terminal|fallback/i);
-  });
 
   it("keeps one client at a time, replays buffered output on reconnect, and cleans up the shell", () => {
     const { manager, ptys } = setup();

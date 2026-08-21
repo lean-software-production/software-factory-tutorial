@@ -22,6 +22,8 @@ export interface Attempt {
   successMessage?: string;
 }
 
+export type SubmitAttempt = (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }) => Promise<void>;
+
 type AttemptInput = Omit<Attempt, "id" | "version" | "status">;
 type AttemptPointer = { id: string; lessonId: string; blockId: string; version: number };
 

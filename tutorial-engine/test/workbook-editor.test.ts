@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { EditorPracticeBlock } from "../src/workbook/contract.js";
-import { EditorDraftStore, EditorReviewAdapter, type EditorReviewSessionFactory, resolveEditorTarget } from "../src/workbook/editor.js";
+import { AttemptStore } from "../src/workbook/attempts.js";
+import { promoteAcceptedEditorAttempt, resolveEditorTarget } from "../src/workbook/editor.js";
 
 const tempDirs: string[] = [];
 
@@ -40,10 +41,10 @@ describe("resolveEditorTarget", () => {
   });
 });
 
-describe("EditorDraftStore", () => {
-  it("keeps drafts separate from targets, reloads the newest revision, and promotes only the approved draft", async () => {
-    const workspace = await temporaryWorkspace("workbook-editor-drafts-");
-    const store = new EditorDraftStore(workspace);
+describe("promoteAcceptedEditorAttempt", () => {
+  it("promotes only the accepted current editor attempt", async () => {
+    const workspace = await temporaryWorkspace("workbook-editor-attempts-");
+    const attempts = new AttemptStore(workspace);
     const block: EditorPracticeBlock = {
       id: "block-id",
       type: "editor-practice",
@@ -53,104 +54,25 @@ describe("EditorDraftStore", () => {
       tutor: "private criteria"
     };
 
-    await store.write("lesson-id", block.id, 1, "first draft");
-    await store.write("lesson-id", block.id, 2, "second draft");
+    const first = await attempts.create({ lessonId: "lesson-id", blockId: block.id, evidence: { kind: "editor", text: "first draft" } });
+    const second = await attempts.create({ lessonId: "lesson-id", blockId: block.id, evidence: { kind: "editor", text: "accepted draft" } });
+    await attempts.acceptCurrent(second.id, "Looks good.");
 
+    await expect(promoteAcceptedEditorAttempt({ workspace, attempts, lessonId: "lesson-id", block, attemptId: first.id })).resolves.toBeUndefined();
     await expect(access(resolve(workspace, "factory/refactor.md"))).rejects.toThrow();
-    await expect(store.read("lesson-id", block.id)).resolves.toEqual({ revision: 2, text: "second draft" });
 
-    const approvedDraft = { revision: 3, text: "approved draft" };
-    await store.promote(block, approvedDraft);
-
-    await expect(readFile(resolve(workspace, "factory/refactor.md"), "utf8")).resolves.toBe("approved draft");
-  });
-});
-
-describe("EditorReviewAdapter", () => {
-  it("sends only the private brief and draft to the reviewer prompt", async () => {
-    const workspacePathThatMustNotLeak = "/private/workspace/path";
-    const privateBrief = "Pass only when the draft names the validator boundary.";
-    const draft = { revision: 2, text: "current learner draft" };
-    const seenPrompts: string[] = [];
-    const factory: EditorReviewSessionFactory = async () => ({
-      async prompt(prompt) {
-        seenPrompts.push(prompt);
-        return "Name the boundary explicitly.";
-      }
-    });
-
-    const result = await new EditorReviewAdapter(factory).review({ lessonId: "lesson-id", blockId: "block-id", privateBrief, draft });
-
-    expect(result).toEqual({ status: "feedback", message: "Name the boundary explicitly." });
-    expect(seenPrompts).toHaveLength(1);
-    expect(JSON.parse(seenPrompts[0]!)).toEqual({ privateBrief, draft });
-    expect(seenPrompts[0]).not.toContain(workspacePathThatMustNotLeak);
+    await expect(promoteAcceptedEditorAttempt({ workspace, attempts, lessonId: "lesson-id", block, attemptId: second.id })).resolves.toEqual({ path: resolve(await realpath(workspace), "factory/refactor.md") });
+    await expect(readFile(resolve(workspace, "factory/refactor.md"), "utf8")).resolves.toBe("accepted draft");
   });
 
-  it("waits without feedback while the reviewer says the draft is unfinished", async () => {
-    const factory: EditorReviewSessionFactory = async () => ({ async prompt() { return "WAITING"; } });
+  it("does not promote accepted attempts for another evidence kind", async () => {
+    const workspace = await temporaryWorkspace("workbook-editor-non-editor-");
+    const attempts = new AttemptStore(workspace);
+    const block: EditorPracticeBlock = { id: "block-id", type: "editor-practice", title: "Edit", markdown: "Edit.", path: "factory/refactor.md", tutor: "private" };
+    const terminal = await attempts.create({ lessonId: "lesson-id", blockId: block.id, evidence: { kind: "terminal", transcript: "pass", terminalHtml: "<pre>pass</pre>" } });
+    await attempts.acceptCurrent(terminal.id, "Terminal accepted.");
 
-    await expect(new EditorReviewAdapter(factory).review({
-      lessonId: "lesson-id",
-      blockId: "block-id",
-      privateBrief: "Approve the exact draft.",
-      draft: { revision: 1, text: "half written" }
-    })).resolves.toEqual({ status: "waiting" });
-  });
-
-  it("returns unlocked when the reviewer calls unlock_editor_practice for the current revision", async () => {
-    const factory: EditorReviewSessionFactory = async ({ customTools }) => ({
-      async prompt() {
-        await customTools[0]!.execute("tool-call", { revisionId: 4 }, undefined, undefined, {} as never);
-        return "";
-      }
-    });
-
-    await expect(new EditorReviewAdapter(factory).review({
-      lessonId: "lesson-id",
-      blockId: "block-id",
-      privateBrief: "Approve the exact draft.",
-      draft: { revision: 4, text: "approved text" }
-    })).resolves.toEqual({ status: "unlocked", revisionId: 4 });
-  });
-
-  it("rejects unlock calls for stale revisions as feedback", async () => {
-    const factory: EditorReviewSessionFactory = async ({ customTools }) => ({
-      async prompt() {
-        await customTools[0]!.execute("tool-call", { revisionId: 3 }, undefined, undefined, {} as never);
-        return "looks good";
-      }
-    });
-
-    const result = await new EditorReviewAdapter(factory).review({
-      lessonId: "lesson-id",
-      blockId: "block-id",
-      privateBrief: "Approve the exact draft.",
-      draft: { revision: 4, text: "newer text" }
-    });
-
-    expect(result.status).toBe("feedback");
-    expect(result).toMatchObject({ message: expect.stringMatching(/current revision|stale/i) });
-  });
-
-  it("exposes no built-in tools and exactly one bounded unlock tool", async () => {
-    const seenToolRequests: Array<Parameters<EditorReviewSessionFactory>[0]> = [];
-    const factory: EditorReviewSessionFactory = async (request) => {
-      seenToolRequests.push(request);
-      return { async prompt() { return "Keep revising."; } };
-    };
-
-    await new EditorReviewAdapter(factory).review({
-      lessonId: "lesson-id",
-      blockId: "block-id",
-      privateBrief: "Approve the exact draft.",
-      draft: { revision: 1, text: "draft" }
-    });
-
-    expect(seenToolRequests).toHaveLength(1);
-    expect(seenToolRequests[0]!.tools).toEqual([]);
-    expect(seenToolRequests[0]!.customTools.map((tool) => tool.name)).toEqual(["unlock_editor_practice"]);
-    expect(seenToolRequests[0]!.customTools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(["read", "write", "edit", "bash", "grep", "find", "ls"]));
-    expect(JSON.stringify(seenToolRequests[0]!.customTools[0]!.parameters)).toContain('"minimum":1');
+    await expect(promoteAcceptedEditorAttempt({ workspace, attempts, lessonId: "lesson-id", block, attemptId: terminal.id })).resolves.toBeUndefined();
+    await expect(access(resolve(workspace, "factory/refactor.md"))).rejects.toThrow();
   });
 });
