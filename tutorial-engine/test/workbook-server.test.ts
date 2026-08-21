@@ -75,10 +75,22 @@ class ServerFakePty implements TerminalPty {
 type QueuedDecision = TutorDecision | Error | Promise<TutorDecision> | ((review: TutorReview) => TutorDecision | Promise<TutorDecision>);
 class FakeTutor implements WorkbookTutor {
   reviews: TutorReview[] = [];
+  restores: readonly import("../src/workbook/timeline.js").WorkbookTimelineRecord[][] = [];
+  replies: Array<{ lessonId: string; blockId: string; learnerMessage: import("../src/workbook/timeline.js").TimelineMessage }> = [];
+  blockSummaries: Array<{ lessonId: string; blockId: string; coveredThroughId: string }> = [];
+  lessonSummaries: Array<{ lessonId: string; coveredThroughId: string }> = [];
   compactions = 0;
   disposed = false;
   queue: QueuedDecision[] = [];
+  replyQueue: Array<string | Error | Promise<string>> = [];
   constructor(...queue: QueuedDecision[]) { this.queue = queue; }
+  async restore(records: readonly import("../src/workbook/timeline.js").WorkbookTimelineRecord[]): Promise<void> { this.restores.push(records); }
+  async reply(input: { lessonId: string; blockId: string; learnerMessage: import("../src/workbook/timeline.js").TimelineMessage }): Promise<string> {
+    this.replies.push(input);
+    const next = this.replyQueue.shift() ?? "Try the workspace-relative path.";
+    if (next instanceof Error) throw next;
+    return next;
+  }
   async review(input: TutorReview): Promise<TutorDecision> {
     this.reviews.push(input);
     const next = this.queue.shift() ?? { accepted: false, feedback: "Keep going." };
@@ -86,6 +98,14 @@ class FakeTutor implements WorkbookTutor {
     return typeof next === "function" ? next(input) : next;
   }
   async compactAfterBlock(): Promise<void> { this.compactions++; }
+  async summarizeBlock(input: { lessonId: string; blockId: string; coveredThroughId: string }): Promise<string> {
+    this.blockSummaries.push(input);
+    return `Summary of ${input.blockId}.`;
+  }
+  async summarizeLesson(input: { lessonId: string; coveredThroughId: string }): Promise<string> {
+    this.lessonSummaries.push(input);
+    return `Summary of ${input.lessonId}.`;
+  }
   dispose(): void { this.disposed = true; }
 }
 
@@ -119,6 +139,10 @@ async function postEvent(serverUrl: string, body: unknown) {
 
 async function postEditor(serverUrl: string, body: unknown) {
   return fetch(`${serverUrl}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
+async function postMessage(serverUrl: string, body: unknown) {
+  return fetch(`${serverUrl}/api/workbook/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
 async function state(serverUrl: string) { return fetch(`${serverUrl}/api/workbook/state`).then((r) => r.json() as any); }
@@ -184,6 +208,61 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("records the first active authored block once and restores it after restart", async () => {
+    const dir = await fixture();
+    const firstTutor = new FakeTutor();
+    const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, workbookTutor: firstTutor });
+    let persisted: any[];
+    try {
+      const opened = await fetch(`${firstServer.url}/api/workbook/introduction`, { method: "POST" }).then((response) => response.json() as any);
+      const authored = opened.timeline.filter((record: any) => record.type === "message" && record.source === "authored");
+      expect(authored).toHaveLength(1);
+      expect(authored[0]).toMatchObject({ blockId: "orientation", presentation: "course", text: expect.stringContaining("## Orientation") });
+      expect(JSON.stringify(opened.timeline)).not.toContain("Private editor rubric");
+      persisted = (await state(firstServer.url)).timeline;
+      expect((await state(firstServer.url)).timeline).toEqual(persisted);
+    } finally { await firstServer.close(); }
+
+    const secondTutor = new FakeTutor();
+    const secondServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, workbookTutor: secondTutor });
+    try {
+      expect((await state(secondServer.url)).timeline).toEqual(persisted!);
+      expect(secondTutor.restores).toHaveLength(1);
+      expect(secondTutor.restores[0].filter((record) => record.type === "message" || record.type === "tutor_failed")).toEqual(persisted!);
+    } finally { await secondServer.close(); }
+  });
+
+  it("persists learner chat before its tutor reply without private guidance", async () => {
+    const dir = await fixture();
+    const tutor = new FakeTutor();
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, workbookTutor: tutor });
+    try {
+      await introduceAndOpenEditor(server.url);
+      const response = await postMessage(server.url, { blockId: "edit-answer", text: "Which path should I use?" });
+      expect(response.status).toBe(202);
+      const messages = (await state(server.url)).timeline.filter((record: any) => record.type === "message");
+      expect(messages.slice(-2).map((record: any) => [record.role, record.source, record.text])).toEqual([
+        ["user", "learner", "Which path should I use?"],
+        ["assistant", "tutor", "Try the workspace-relative path."],
+      ]);
+      expect(JSON.stringify(messages)).not.toContain("Private editor rubric");
+    } finally { await server.close(); }
+  });
+
+  it("records a public retryable failure instead of provider feedback when chat fails", async () => {
+    const dir = await fixture();
+    const tutor = new FakeTutor();
+    tutor.replyQueue.push(new Error("provider secret failure"));
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, workbookTutor: tutor });
+    try {
+      await introduceAndOpenEditor(server.url);
+      expect((await postMessage(server.url, { blockId: "edit-answer", text: "Which path?" })).status).toBe(202);
+      const timeline = (await state(server.url)).timeline;
+      expect(timeline.at(-1)).toMatchObject({ type: "tutor_failed", operation: "reply" });
+      expect(JSON.stringify(timeline)).not.toContain("provider secret failure");
+    } finally { await server.close(); }
+  });
+
   it("creates a reviewing editor attempt, promotes only after tutor acceptance, and continues generically", async () => {
     const dir = await fixture();
     const accepted = deferred<TutorDecision>();
@@ -205,7 +284,7 @@ describe("workbook browser API", () => {
       await expect(readFile(resolve(dir, "factory/answer.md"), "utf8")).resolves.toBe("factory acceptance marker");
       const continued = await postEvent(server.url, { blockId: "edit-answer", action: "continue" }).then((response) => response.json() as any);
       expect(continued.progress.activeBlockId).toBe("run-supplied-command");
-      await waitForWorkbookState(server.url, () => tutor.compactions === 1, "queued compaction");
+      await waitForWorkbookState(server.url, () => tutor.blockSummaries.some((summary) => summary.blockId === "edit-answer"), "queued block summary");
       expect(JSON.stringify(continued)).not.toContain("attemptId");
       expect(JSON.stringify(continued)).not.toContain("privateGuidance");
     } finally { await server.close(); }

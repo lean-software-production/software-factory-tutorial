@@ -6,7 +6,7 @@ import type { AttemptKind } from "./attempts.js";
 
 export type TimelineMetadata = { id: string; sequence: number; at: string };
 
-type WorkflowPayload =
+export type WorkflowPayload =
   | { type: "session_started" }
   | { type: "workbook_introduction_completed" }
   | { type: "observation_acknowledged"; lessonId: string; blockId: string }
@@ -61,7 +61,12 @@ export type TutorFailure = TimelineMetadata & {
 };
 
 export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TimelineMessage | BlockSummary | LessonSummary | TutorFailure;
-export type TimelineAppendInput = Omit<WorkbookWorkflowEvent, keyof TimelineMetadata> | Omit<TimelineMessage, keyof TimelineMetadata> | Omit<BlockSummary, keyof TimelineMetadata> | Omit<LessonSummary, keyof TimelineMetadata> | Omit<TutorFailure, keyof TimelineMetadata>;
+export type TimelineAppendInput =
+  | WorkflowPayload
+  | Omit<TimelineMessage, keyof TimelineMetadata>
+  | Omit<BlockSummary, keyof TimelineMetadata>
+  | Omit<LessonSummary, keyof TimelineMetadata>
+  | Omit<TutorFailure, keyof TimelineMetadata>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -106,14 +111,17 @@ export class WorkbookTimeline {
   }
 
   append(input: TimelineAppendInput): Promise<WorkbookTimelineRecord> {
-    return this.run(async () => {
-      const existing = await this.read();
-      const record = { ...input, id: randomUUID(), sequence: (existing.at(-1)?.sequence ?? 0) + 1, at: new Date().toISOString() } as WorkbookTimelineRecord;
-      await mkdir(dirname(this.eventPath), { recursive: true });
-      await appendFile(this.eventPath, `${JSON.stringify(record)}\n`, "utf8");
-      for (const listener of this.#listeners) listener(record);
-      return record;
-    });
+    return this.run(() => this.appendWithinRun(input));
+  }
+
+  /** Append as one step of an operation already serialized through run(). */
+  async appendWithinRun(input: TimelineAppendInput): Promise<WorkbookTimelineRecord> {
+    const existing = await this.read();
+    const record = { ...input, id: randomUUID(), sequence: (existing.at(-1)?.sequence ?? 0) + 1, at: new Date().toISOString() } as WorkbookTimelineRecord;
+    await mkdir(dirname(this.eventPath), { recursive: true });
+    await appendFile(this.eventPath, `${JSON.stringify(record)}\n`, "utf8");
+    for (const listener of this.#listeners) listener(record);
+    return record;
   }
 
   subscribe(listener: (record: WorkbookTimelineRecord) => void): () => void {

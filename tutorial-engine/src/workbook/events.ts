@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { tutorialStatePath } from "../tutorial-state.js";
 import type { WorkbookLesson } from "./contract.js";
 import type { AttemptKind } from "./attempts.js";
+import type { WorkbookTimelineRecord } from "./timeline.js";
 
 export type WorkbookEvent =
   | { type: "session_started"; at: string }
@@ -26,11 +27,17 @@ export type ReflectionTurn = { role: "learner" | "tutor"; text: string };
 export interface WorkbookProjection { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]>; }
 
 
-export function introductionCompleted(events: readonly WorkbookEvent[]): boolean {
+type ProjectedRecord = WorkbookEvent | WorkbookTimelineRecord;
+
+function isWorkflowEvent(record: ProjectedRecord): record is WorkbookEvent {
+  return record.type !== "message" && record.type !== "block_summarized" && record.type !== "lesson_summarized" && record.type !== "tutor_failed";
+}
+
+export function introductionCompleted(events: readonly ProjectedRecord[]): boolean {
   return events.some((event) => event.type === "workbook_introduction_completed");
 }
 
-export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson): WorkbookProjection {
+export function project(events: readonly ProjectedRecord[], lesson: WorkbookLesson): WorkbookProjection {
   const unexpected: Record<string, string[]> = {};
   const reflections: Record<string, string> = {};
   const reflectionConversations: Record<string, ReflectionTurn[]> = {};
@@ -40,7 +47,13 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
   const completed = new Set<string>();
   const activeBlock = () => lesson.blocks.find((block) => !completed.has(block.id));
 
-  for (const event of events) {
+  for (const record of events) {
+    if (record.type === "message" && record.lessonId === lesson.id && lesson.blocks.some((block) => block.id === record.blockId && block.type === "reflection")) {
+      if (record.source === "learner") (reflectionConversations[record.blockId] ??= []).push({ role: "learner", text: record.text });
+      if (record.source === "tutor" && record.presentation === "review") (reflectionConversations[record.blockId] ??= []).push({ role: "tutor", text: record.text });
+    }
+    if (!isWorkflowEvent(record)) continue;
+    const event = record;
     if (!("lessonId" in event) || event.lessonId !== lesson.id) continue;
     if (event.type === "unexpected_output_submitted") (unexpected[event.blockId] ??= []).push(event.evidence);
     if (event.type === "reflection_submitted") { reflections[event.blockId] = event.response; (reflectionConversations[event.blockId] ??= []).push({ role: "learner", text: event.response }); }
