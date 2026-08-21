@@ -1,23 +1,34 @@
 import { rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { EditorReviewAdapter, type EditorReviewDecision, type EditorReviewRequest } from "../../tutorial-engine/src/workbook/editor.js";
-import type { ReflectionConversationAdapter } from "../../tutorial-engine/src/workbook/reflection.js";
-import type { TerminalObserver, TerminalPty } from "../../tutorial-engine/src/workbook/terminal.js";
+import type { TerminalPty } from "../../tutorial-engine/src/workbook/terminal.js";
+import type { TutorDecision, TutorReview, WorkbookTutor } from "../../tutorial-engine/src/workbook/tutor.js";
 import { createV2WorkbookDriver, V2WorkbookDriver } from "../v2/driver.js";
-import { satisfactoryEditorDraft } from "../v2/scenarios.js";
+import { clueCommand, exactCommand, satisfactoryEditorDraft } from "../v2/scenarios.js";
 import { createEmptyV2SessionTrace } from "../v2/session.js";
 import { createEvaluationWorkspace, type CreateEvaluationWorkspaceOptions } from "../v2/workspace.js";
 
-class DriverFakeEditorReviewAdapter extends EditorReviewAdapter {
-  constructor(readonly calls: EditorReviewRequest[]) {
-    super(async () => ({ prompt: async () => "" }));
+class DriverFakeTutor implements WorkbookTutor {
+  readonly reviews: TutorReview[] = [];
+  compactions = 0;
+  disposed = false;
+
+  async review(input: TutorReview): Promise<TutorDecision> {
+    this.reviews.push(input);
+    const { evidence } = input.attempt;
+    if (evidence.kind === "editor") {
+      if (evidence.text.includes("editor-artifacts/evaluator-editor.txt") && evidence.text.includes("ready for promotion")) return { accepted: true, feedback: "Editor artifact accepted for promotion." };
+      return { accepted: false, feedback: "Name editor-artifacts/evaluator-editor.txt and explain the promotion intent." };
+    }
+    if (evidence.kind === "terminal") {
+      if (input.attempt.blockId === "exact-command" && evidence.transcript.includes("evaluator-command.txt") && evidence.transcript.includes("command block complete")) return { accepted: true, feedback: "verified exact-command" };
+      if (input.attempt.blockId === "clue-only" && evidence.transcript.includes("evaluator-clue.txt") && evidence.transcript.includes("clue block complete")) return { accepted: true, feedback: "verified clue-only" };
+      return { accepted: false, feedback: `Keep working on ${input.attempt.blockId}.` };
+    }
+    return { accepted: false, feedback: "Tutor reply that asks one public follow-up." };
   }
 
-  override async review(request: EditorReviewRequest): Promise<EditorReviewDecision> {
-    this.calls.push(request);
-    if (request.draft.text.includes("editor-artifacts/evaluator-editor.txt") && request.draft.text.includes("ready for promotion")) return { status: "unlocked", revisionId: request.draft.revision };
-    return { status: "feedback", message: "Name editor-artifacts/evaluator-editor.txt and explain the promotion intent." };
-  }
+  async compactAfterBlock(): Promise<void> { this.compactions++; }
+  dispose(): void { this.disposed = true; }
 }
 
 class DriverFakePty implements TerminalPty {
@@ -56,45 +67,28 @@ async function startDriver(options: CreateEvaluationWorkspaceOptions = {}) {
   const workspace = await createEvaluationWorkspace(options);
   tempRoots.push(workspace.root);
   const pty = new DriverFakePty();
-  const terminalRequests: unknown[] = [];
-  const terminalObserver: TerminalObserver = {
-    observe: async (request) => {
-      terminalRequests.push(request);
-      return { status: "complete", summary: `verified ${request.blockId}` };
-    }
-  };
-  const reflectionRequests: unknown[] = [];
-  const reflectionConversation: ReflectionConversationAdapter = {
-    reply: async (request) => {
-      reflectionRequests.push(request);
-      return "Tutor reply that asks one public follow-up.";
-    }
-  };
-  const editorRequests: EditorReviewRequest[] = [];
-  const editorReviewAdapter = new DriverFakeEditorReviewAdapter(editorRequests);
+  const workbookTutor = new DriverFakeTutor();
   const server = await workspace.startServer({
-    terminalObserver,
     terminalPtyFactory: () => pty,
     terminalDebounceMs: 1,
-    reflectionConversation,
-    editorReviewAdapter,
-    editorReviewDebounceMs: 1
+    workbookTutor
   });
   const trace = createEmptyV2SessionTrace("driver-test");
   const driver = createV2WorkbookDriver({ serverUrl: server.url, trace });
-  return { workspace, server, trace, driver, pty, terminalRequests, reflectionRequests, editorRequests };
+  return { workspace, server, trace, driver, pty, workbookTutor };
 }
 
 async function reachExactCommand(driver: V2WorkbookDriver) {
   await driver.completeIntroduction();
   await driver.continueBlock("orientation");
-  return driver.submitEditorDraft("editor-practice", satisfactoryEditorDraft);
+  await driver.submitEditorDraft("editor-practice", satisfactoryEditorDraft);
+  return driver.continueBlock("editor-practice");
 }
 
 async function reachReflection(driver: V2WorkbookDriver) {
   await reachExactCommand(driver);
-  await driver.submitTerminalCommand("exact-command", "mkdir -p .tmp && printf 'command block complete\\n' > .tmp/evaluator-command.txt && cat .tmp/evaluator-command.txt");
-  await driver.submitTerminalCommand("clue-only", "mkdir -p .tmp && printf 'clue block complete\\n' > .tmp/evaluator-clue.txt && cat .tmp/evaluator-clue.txt");
+  await driver.submitTerminalCommand("exact-command", exactCommand);
+  await driver.submitTerminalCommand("clue-only", clueCommand);
 }
 
 describe("v2 workbook driver", () => {
@@ -120,7 +114,7 @@ describe("v2 workbook driver", () => {
 
 
   it("submits editor drafts and records only public editor feedback", async () => {
-    const { server, trace, driver, editorRequests } = await startDriver();
+    const { server, trace, driver, workbookTutor } = await startDriver();
     try {
       await driver.completeIntroduction();
       await driver.continueBlock("orientation");
@@ -128,12 +122,13 @@ describe("v2 workbook driver", () => {
       const reviewed = await driver.submitEditorDraft("editor-practice", "This is a vague draft.");
 
       const editorBlock = reviewed.progress.blocks.find((block: any) => block.id === "editor-practice");
-      expect(editorBlock).toMatchObject({ active: true, completed: false, editorStatus: "feedback", revision: 1, feedback: expect.stringContaining("editor-artifacts/evaluator-editor.txt") });
+      expect(editorBlock).toMatchObject({ active: true, completed: false, editorStatus: "feedback", revision: 1, checkpoint: { status: "feedback", feedback: expect.stringContaining("editor-artifacts/evaluator-editor.txt") } });
       expect(trace.editors).toEqual([
         { blockId: "editor-practice", revision: 1, status: "reviewing" },
         { blockId: "editor-practice", revision: 1, status: "feedback", feedback: "Name editor-artifacts/evaluator-editor.txt and explain the promotion intent." }
       ]);
-      expect(editorRequests).toHaveLength(1);
+      expect(workbookTutor.reviews).toHaveLength(1);
+      expect(workbookTutor.reviews[0]).toMatchObject({ privateGuidance: expect.stringContaining("Private editor criterion"), attempt: { evidence: { kind: "editor", text: "This is a vague draft." } } });
       expect(JSON.stringify(trace)).not.toContain("Private editor criterion");
       expect(JSON.stringify(trace)).not.toContain('"tutor"');
     } finally {
@@ -166,7 +161,7 @@ describe("v2 workbook driver", () => {
   });
 
   it("submits reflections and records the public learner/tutor conversation", async () => {
-    const { server, trace, driver, reflectionRequests } = await startDriver();
+    const { server, trace, driver, workbookTutor } = await startDriver();
     try {
       await reachReflection(driver);
 
@@ -177,7 +172,7 @@ describe("v2 workbook driver", () => {
         { blockId: "reflection", role: "learner", text: "The exact block gave a command; the clue block required me to choose one." },
         { blockId: "reflection", role: "tutor", text: "Tutor reply that asks one public follow-up." }
       ]);
-      expect(reflectionRequests).toHaveLength(1);
+      expect(workbookTutor.reviews.filter((review) => review.attempt.blockId === "reflection")).toHaveLength(1);
       expect(JSON.stringify(trace)).not.toContain("Follow up until the learner");
       expect(JSON.stringify(trace)).not.toContain('"tutor":');
     } finally {
@@ -185,22 +180,22 @@ describe("v2 workbook driver", () => {
     }
   });
 
-  it("submits terminal commands over the embedded-terminal WebSocket and records observer completion", async () => {
-    const { server, trace, driver, pty, terminalRequests } = await startDriver();
+  it("submits terminal commands over the embedded-terminal WebSocket and records tutor-reviewed completion", async () => {
+    const { server, trace, driver, pty, workbookTutor } = await startDriver();
     try {
       await reachExactCommand(driver);
 
-      const completed = await driver.submitTerminalCommand("exact-command", "printf 'command block complete\\n'");
+      const completed = await driver.submitTerminalCommand("exact-command", exactCommand);
 
       expect(completed.progress.activeBlockId).toBe("clue-only");
-      expect(pty.writes).toEqual(["printf 'command block complete\\n'\r"]);
-      expect(terminalRequests).toHaveLength(1);
+      expect(pty.writes).toEqual([`${exactCommand}\r`]);
+      expect(workbookTutor.reviews.filter((review) => review.attempt.blockId === "exact-command")).toHaveLength(1);
       expect(trace.terminalTranscript).toEqual(expect.arrayContaining([
-        expect.objectContaining({ blockId: "exact-command", direction: "input", text: "printf 'command block complete\\n'\r" }),
-        expect.objectContaining({ blockId: "exact-command", direction: "output", text: expect.stringContaining("ran:printf") }),
-        expect.objectContaining({ blockId: "exact-command", direction: "observer", text: expect.stringContaining("verified exact-command") })
+        expect.objectContaining({ blockId: "exact-command", direction: "input", text: `${exactCommand}\r` }),
+        expect.objectContaining({ blockId: "exact-command", direction: "output", text: expect.stringContaining("ran:mkdir") }),
+        expect.objectContaining({ blockId: "exact-command", direction: "observer", text: expect.stringContaining("status:submitted") })
       ]));
-      expect(trace.publicStates.map((state) => state.label)).toContain("terminal:exact-command:verified");
+      expect(trace.publicStates.map((state) => state.label)).toContain("terminal:exact-command:reviewed:1");
       expect(trace.publicStates.map((state) => state.label)).toContain("terminal:exact-command:complete");
       expect(JSON.stringify(trace)).not.toContain("This is private tutor guidance");
     } finally {

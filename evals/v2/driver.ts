@@ -60,21 +60,23 @@ export class V2WorkbookDriver {
   async submitReflection(blockId: string, response: string, label = `reflection:${blockId}:submit`): Promise<WorkbookApiState> {
     const state = await this.submitWorkbookAction(blockId, "reflection-submit", { response }, label);
     this.#recordReflectionConversation(blockId, state);
-    return state;
+    if (this.#reflectionReviewComplete(blockId, state)) return state;
+    return this.#waitForReflectionReview(blockId, `${label}:reviewed`, this.#editorReviewTimeoutMs);
   }
 
   async submitReflectionFollowUp(blockId: string, response: string, label = `reflection:${blockId}:follow-up`): Promise<WorkbookApiState> {
     const state = await this.submitWorkbookAction(blockId, "reflection-follow-up", { response }, label);
     this.#recordReflectionConversation(blockId, state);
-    return state;
+    if (this.#reflectionReviewComplete(blockId, state)) return state;
+    return this.#waitForReflectionReview(blockId, `${label}:reviewed`, this.#editorReviewTimeoutMs);
   }
 
   async completeReflection(blockId: string, label = `reflection:${blockId}:complete`): Promise<WorkbookApiState> {
-    return this.submitWorkbookAction(blockId, "reflection-complete", {}, label);
+    return this.submitWorkbookAction(blockId, "continue", {}, label);
   }
 
   async completeTerminalBlock(blockId: string, label = `terminal:${blockId}:complete`): Promise<WorkbookApiState> {
-    return this.submitWorkbookAction(blockId, "complete", {}, label);
+    return this.submitWorkbookAction(blockId, "continue", {}, label);
   }
 
   async submitWorkbookAction(blockId: string, action: string, payload: Record<string, unknown> = {}, label = `${action}:${blockId}`): Promise<WorkbookApiState> {
@@ -93,8 +95,8 @@ export class V2WorkbookDriver {
 
   async submitTerminalCommand(blockId: string, command: string, options: SubmitTerminalCommandOptions = {}): Promise<WorkbookApiState> {
     const input = /[\r\n]$/.test(command) ? command : `${command}\r`;
-    const verifiedState = await this.#submitTerminalInput(blockId, input, options.label ?? `terminal:${blockId}:verified`, options.timeoutMs);
-    if (options.complete === false) return verifiedState;
+    const acceptedState = await this.#submitTerminalInput(blockId, input, options.label ?? `terminal:${blockId}`, options.timeoutMs);
+    if (options.complete === false) return acceptedState;
     return this.completeTerminalBlock(blockId);
   }
 
@@ -131,6 +133,26 @@ export class V2WorkbookDriver {
     }
   }
 
+  #reflectionReviewComplete(blockId: string, state: WorkbookApiState): boolean {
+    const blocks = state.progress?.blocks;
+    if (!Array.isArray(blocks)) return false;
+    const block = blocks.find((candidate: any) => candidate?.id === blockId);
+    const status = block?.checkpoint?.status;
+    return status === "feedback" || status === "accepted";
+  }
+
+  async #waitForReflectionReview(blockId: string, label: string, timeoutMs: number): Promise<WorkbookApiState> {
+    const deadline = Date.now() + timeoutMs;
+    let attempt = 0;
+    while (Date.now() <= deadline) {
+      await delay(25);
+      const state = await this.readState(`${label}:${++attempt}`);
+      this.#recordReflectionConversation(blockId, state);
+      if (this.#reflectionReviewComplete(blockId, state)) return state;
+    }
+    throw new Error(`Timed out waiting for reflection review for ${blockId}.`);
+  }
+
   async #waitForEditorReview(blockId: string, revision: number, label: string, timeoutMs: number): Promise<WorkbookApiState> {
     const deadline = Date.now() + timeoutMs;
     let attempt = 0;
@@ -148,17 +170,33 @@ export class V2WorkbookDriver {
     if (!Array.isArray(blocks)) return undefined;
     const block = blocks.find((candidate: any) => candidate?.id === blockId);
     if (!block || typeof block !== "object") return undefined;
-    const status = (block as { editorStatus?: unknown }).editorStatus;
+    const checkpoint = (block as { checkpoint?: { status?: unknown; feedback?: unknown } }).checkpoint;
+    const rawStatus = checkpoint?.status ?? (block as { editorStatus?: unknown }).editorStatus;
+    const status = rawStatus === "accepted" ? "unlocked" : rawStatus;
     const publicRevision = (block as { revision?: unknown }).revision;
     if ((status !== "reviewing" && status !== "feedback" && status !== "unlocked") || publicRevision !== revision) return undefined;
-    const feedback = typeof (block as { feedback?: unknown }).feedback === "string" ? (block as { feedback: string }).feedback : undefined;
+    const feedback = typeof checkpoint?.feedback === "string" ? checkpoint.feedback : typeof (block as { feedback?: unknown }).feedback === "string" ? (block as { feedback: string }).feedback : undefined;
     recordEditorStatus(this.trace, feedback === undefined ? { blockId, revision, status } : { blockId, revision, status, feedback });
     return status;
+  }
+
+  async #waitForAcceptedCheckpoint(blockId: string, label: string, timeoutMs: number): Promise<WorkbookApiState> {
+    const deadline = Date.now() + timeoutMs;
+    let attempt = 0;
+    while (Date.now() <= deadline) {
+      await delay(25);
+      const state = await this.readState(`${label}:reviewed:${++attempt}`);
+      const block = state.progress?.blocks?.find((candidate: any) => candidate?.id === blockId);
+      if (block?.checkpoint?.status === "accepted") return state;
+    }
+    throw new Error(`Timed out waiting for accepted terminal attempt for ${blockId}.`);
   }
 
   async #submitTerminalInput(blockId: string, input: string, label: string, timeoutMs = this.#terminalTimeoutMs): Promise<WorkbookApiState> {
     const ws = new this.#WebSocket(`${this.serverUrl.replace(/^http/, "ws")}/api/workbook/terminal`, { headers: { Origin: this.serverUrl } });
     let settled = false;
+    let reviewStarted = false;
+    let acceptedWaitStarted = false;
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`Timed out connecting to workbook terminal for ${blockId}.`)), timeoutMs);
@@ -168,7 +206,7 @@ export class V2WorkbookDriver {
 
       recordTerminalTranscript(this.trace, { blockId, direction: "input", text: input });
       return await new Promise<WorkbookApiState>((resolve, reject) => {
-        const timer = setTimeout(() => finish(new Error(`Timed out waiting for terminal verification for ${blockId}.`)), timeoutMs);
+        const timer = setTimeout(() => finish(new Error(`Timed out waiting for accepted terminal checkpoint for ${blockId}.`)), timeoutMs);
         const finish = (result: Error | WorkbookApiState) => {
           if (settled) return;
           settled = true;
@@ -194,18 +232,22 @@ export class V2WorkbookDriver {
             recordTerminalTranscript(this.trace, { blockId: message.blockId ?? blockId, direction: "observer", text: String(message.message ?? message.type) });
             return;
           }
-          if (message.type === "verified-complete" && message.blockId === blockId) {
-            recordTerminalTranscript(this.trace, { blockId, direction: "observer", text: String(message.summary ?? "verified") });
-            const recorded = recordPublicState(this.trace, label, message.state).state as WorkbookApiState;
-            finish(recorded);
+          if (message.type === "attempt-status" && message.blockId === blockId) {
+            const status = typeof message.status === "string" ? message.status : "reviewing";
+            recordTerminalTranscript(this.trace, { blockId, direction: "observer", text: `status:${status}` });
+            if (!acceptedWaitStarted && status === "submitted") {
+              reviewStarted = true;
+              acceptedWaitStarted = true;
+              void this.#waitForAcceptedCheckpoint(blockId, label, timeoutMs).then(finish, (error) => finish(error instanceof Error ? error : new Error(String(error))));
+            }
           }
         });
         ws.once("error", (error) => finish(error instanceof Error ? error : new Error(String(error))));
-        ws.once("close", () => { if (!settled) finish(new Error(`Workbook terminal closed before ${blockId} was verified.`)); });
+        ws.once("close", () => { if (!settled && !reviewStarted) finish(new Error(`Workbook terminal closed before ${blockId} was reviewed.`)); });
         ws.send(JSON.stringify({ type: "input", data: input }));
       });
     } finally {
-      if (!settled && ws.readyState === ws.OPEN) ws.close();
+      await closeWebSocket(ws);
     }
   }
 }
@@ -216,4 +258,22 @@ export function createV2WorkbookDriver(options: V2WorkbookDriverOptions): V2Work
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function closeWebSocket(ws: WebSocket): Promise<void> {
+  if (ws.readyState === ws.CLOSED) return Promise.resolve();
+  return new Promise((resolve) => {
+    let resolved = false;
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      ws.off("close", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, 250);
+    timer.unref?.();
+    ws.once("close", finish);
+    if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close();
+  });
 }
