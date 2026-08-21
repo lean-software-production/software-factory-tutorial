@@ -13,18 +13,24 @@ import {
 import { Type } from "typebox";
 import { createTutorialLogger, type TutorialLogger } from "../runtime-log.js";
 import type { Attempt } from "./attempts.js";
+import { projectPiHistory, type PiHistoryProjection } from "./pi-history.js";
+import type { TimelineMessage, WorkbookTimelineRecord } from "./timeline.js";
 
 export type TutorReview = { attempt: Attempt; privateGuidance: string };
 export type TutorDecision = { accepted: boolean; feedback: string };
 export interface WorkbookTutor {
+  restore(records: readonly WorkbookTimelineRecord[]): Promise<void>;
+  reply(input: { lessonId: string; blockId: string; learnerMessage: TimelineMessage }): Promise<string>;
   review(input: TutorReview): Promise<TutorDecision>;
   compactAfterBlock(): Promise<void>;
+  summarizeBlock(input: { lessonId: string; blockId: string; coveredThroughId: string }): Promise<string>;
+  summarizeLesson(input: { lessonId: string; coveredThroughId: string }): Promise<string>;
   dispose(): void;
 }
 
 export interface WorkbookTutorSession {
   prompt(prompt: string): Promise<string>;
-  compact(instruction: string): Promise<void>;
+  compact(instruction: string): Promise<{ summary: string }>;
   dispose(): void;
 }
 
@@ -32,6 +38,7 @@ export interface WorkbookTutorSessionFactoryRequest {
   systemPrompt: string;
   customTools: ToolDefinition[];
   tools: string[];
+  history: PiHistoryProjection;
 }
 
 export type WorkbookTutorSessionFactory = (request: WorkbookTutorSessionFactoryRequest) => Promise<WorkbookTutorSession>;
@@ -91,6 +98,20 @@ async function collectAssistantText(session: AgentSession, prompt: string): Prom
 }
 
 async function createPiWorkbookTutorSession(workspace: string, request: WorkbookTutorSessionFactoryRequest, log: TutorialLogger): Promise<WorkbookTutorSession> {
+  const sessionManager = SessionManager.inMemory(workspace);
+  if (request.history.summary) {
+    sessionManager.appendCustomMessageEntry("workbook-context-summary", request.history.summary.text, false, {
+      sourceEventId: request.history.summary.sourceEventId,
+      coveredThroughId: request.history.summary.coveredThroughId
+    });
+  }
+  for (const turn of request.history.turns) {
+    sessionManager.appendMessage({
+      role: turn.role,
+      content: [{ type: "text", text: turn.text }],
+      timestamp: Date.now()
+    } as never);
+  }
   const loader = new DefaultResourceLoader({
     cwd: workspace,
     agentDir: getAgentDir(),
@@ -114,7 +135,7 @@ async function createPiWorkbookTutorSession(workspace: string, request: Workbook
     customTools: request.customTools,
     tools: request.tools,
     modelRuntime,
-    sessionManager: SessionManager.inMemory(workspace),
+    sessionManager,
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } })
   });
   return {
@@ -122,9 +143,10 @@ async function createPiWorkbookTutorSession(workspace: string, request: Workbook
       log.info(`Submitting workbook attempt review (${prompt.length} characters).`);
       return collectAssistantText(session, prompt);
     },
-    async compact(instruction: string): Promise<void> {
+    async compact(instruction: string): Promise<{ summary: string }> {
       log.info("Compacting workbook tutor context after accepted checkpoint continuation.");
-      await session.compact(instruction);
+      const result = await session.compact(instruction);
+      return { summary: result.summary };
     },
     dispose(): void { session.dispose(); }
   };
@@ -141,6 +163,7 @@ export class RestrictedWorkbookTutor implements WorkbookTutor {
   readonly #log: TutorialLogger;
   readonly #sessionFactory: WorkbookTutorSessionFactory;
   #session?: WorkbookTutorSession;
+  #history: PiHistoryProjection = { turns: [] };
   #activeAttemptId: string | undefined;
   #acceptedAttemptId: string | undefined;
   #tail: Promise<unknown> = Promise.resolve();
@@ -149,6 +172,18 @@ export class RestrictedWorkbookTutor implements WorkbookTutor {
     this.workspace = options.workspace;
     this.#log = options.log ?? createTutorialLogger();
     this.#sessionFactory = options.sessionFactory ?? ((request) => createPiWorkbookTutorSession(options.workspace, request, this.#log));
+  }
+
+  restore(records: readonly WorkbookTimelineRecord[]): Promise<void> {
+    return this.#enqueue(async () => {
+      this.#history = projectPiHistory(records);
+      this.#session?.dispose();
+      this.#session = undefined;
+    });
+  }
+
+  reply(input: { lessonId: string; blockId: string; learnerMessage: TimelineMessage }): Promise<string> {
+    return this.#enqueue(async () => (await this.#ensureSession()).prompt(input.learnerMessage.text));
   }
 
   review(input: TutorReview): Promise<TutorDecision> {
@@ -176,6 +211,20 @@ export class RestrictedWorkbookTutor implements WorkbookTutor {
     });
   }
 
+  summarizeBlock(input: { lessonId: string; blockId: string; coveredThroughId: string }): Promise<string> {
+    return this.#enqueue(async () => {
+      const result = await (await this.#ensureSession()).compact(`Summarize only completed workbook block ${input.lessonId}/${input.blockId} through ${input.coveredThroughId}. Retain its goal, displayed course idea, accepted evidence in concise form, and material learner feedback. Do not claim filesystem, shell, network, or workspace observations.`);
+      return result.summary;
+    });
+  }
+
+  summarizeLesson(input: { lessonId: string; coveredThroughId: string }): Promise<string> {
+    return this.#enqueue(async () => {
+      const result = await (await this.#ensureSession()).compact(`Summarize only completed workbook lesson ${input.lessonId} through ${input.coveredThroughId}. Retain completed block goals, accepted evidence in concise form, and material learner context. Do not claim filesystem, shell, network, or workspace observations.`);
+      return result.summary;
+    });
+  }
+
   dispose(): void {
     this.#session?.dispose();
     this.#session = undefined;
@@ -197,7 +246,7 @@ export class RestrictedWorkbookTutor implements WorkbookTutor {
         return { content: [{ type: "text", text: "Accepted the current workbook attempt." }], details: { accepted: true } };
       }
     });
-    this.#session = await this.#sessionFactory({ systemPrompt: systemPrompt(), customTools: [accept], tools: [ACCEPT_TOOL_NAME] });
+    this.#session = await this.#sessionFactory({ systemPrompt: systemPrompt(), customTools: [accept], tools: [ACCEPT_TOOL_NAME], history: this.#history });
     return this.#session;
   }
 
