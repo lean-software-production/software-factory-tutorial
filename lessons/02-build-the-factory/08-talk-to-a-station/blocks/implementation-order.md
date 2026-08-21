@@ -105,7 +105,7 @@ Work in this order. Complete each small step before moving to the next one:
    an answer. Extend its `jq` so the assistant's words come through too:
 
    ```sh
-   tail -f -n +1 "$line"/events/*.jsonl \
+   tail -f -n +1 "$line"/.tmp/events/*.jsonl \
      | jq -rj --unbuffered '
          if .type=="tool_execution_start" then "\n→ \(.toolName)\n"
          elif .type=="message_update" and .assistantMessageEvent.type=="text_delta"

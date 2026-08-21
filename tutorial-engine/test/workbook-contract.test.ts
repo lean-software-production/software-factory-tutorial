@@ -194,6 +194,38 @@ describe("workbook lesson contract", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("begins lesson 005 with a Part 2 entry checkpoint", async () => {
+    const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
+    const lesson005 = workbook.chapters.find(
+      (chapter) => chapter.id === "02-build-the-factory/01-join-them-into-a-line");
+    const first = lesson005?.lesson.blocks[0];
+
+    expect(first?.id).toBe("part-2-entry-checkpoint");
+    expect(first?.type).toBe("reflection");
+  });
+
+  it("ends lesson 013 with a capstone closure", async () => {
+    const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
+    const lesson013 = workbook.chapters.find(
+      (chapter) => chapter.id === "02-build-the-factory/09-oversee-the-orchestrator");
+    const blocks = lesson013?.lesson.blocks ?? [];
+    const last = blocks[blocks.length - 1];
+
+    expect(last?.id).toBe("capstone-closure");
+    expect(last?.type).toBe("lesson-transition");
+  });
+
+  it("keeps every real block free of stale non-.tmp events paths", async () => {
+    const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
+    const stalePath = /factory\/refactor\/events\b|"\$line"\/events\b/;
+    const offenders = workbook.chapters.flatMap((chapter) =>
+      chapter.lesson.blocks
+        .filter((block) => stalePath.test(block.markdown))
+        .map((block) => `${chapter.id}/blocks/${block.id}`));
+
+    expect(offenders).toEqual([]);
+  });
+
   it("allows ordinary learner-facing examples that mention learner vocabulary", () => {
     expect(exposesAuthorDirection('The output may include "learner changed calculator.py" after the script runs.')).toBe(false);
   });

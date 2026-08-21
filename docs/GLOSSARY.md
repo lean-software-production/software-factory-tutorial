@@ -11,21 +11,23 @@ who has not yet joined anything has no referent for one.
 
 | Term | What it is | Introduced in |
 | --- | --- | --- |
-| **agent** | A harness with a job to be done. | [001](specs/001-run-an-agent-headlessly.md) |
-| **harness** | The ordinary software around a model: it prepares the input, calls the model, and handles what comes back. | [001](specs/001-run-an-agent-headlessly.md) |
-| **job to be done** | What you hand an agent. | [001](specs/001-run-an-agent-headlessly.md) |
-| **doer** | The agent that does the job and produces the work product. | [002](specs/002-build-a-doer.md) |
-| **validator** | The agent that verifies the job was done satisfactorily, given the work and the criteria. | [003](specs/003-build-a-validator.md) |
+| **agent** | A harness with a job to be done. | [001](../lessons/01-the-validation-loop/01-run-an-agent-headlessly/lesson.md) |
+| **harness** | The ordinary software around a model: it prepares the input, calls the model, and handles what comes back. | [001](../lessons/01-the-validation-loop/01-run-an-agent-headlessly/lesson.md) |
+| **job to be done** | What you hand an agent. | [001](../lessons/01-the-validation-loop/01-run-an-agent-headlessly/lesson.md) |
+| **doer** | The agent that does the job and produces the work product. | [002](../lessons/01-the-validation-loop/02-build-a-doer/lesson.md) |
+| **validator** | The agent that verifies the job was done satisfactorily, given the work and the criteria. | [003](../lessons/01-the-validation-loop/03-build-a-validator/lesson.md) |
 
 ## Part 2 — Build the factory
 
 | Term | What it is | Introduced in |
 | --- | --- | --- |
-| **assembly line** | An ordered sequence of stations, each station's output feeding the next. | [005](specs/005-join-them-into-an-assembly-line.md) |
-| **station** | An agent running in a non-interactive harness — handed its inputs, run to completion, no human in the conversation. Its internals may be a model call or ordinary deterministic code. | [005](specs/005-join-them-into-an-assembly-line.md), sharpened in [007](specs/007-compose-stations-and-branch.md) |
-| **iteration** | One turn of the line: the bounded batch of agent work between check-ins. | [005](specs/005-join-them-into-an-assembly-line.md) |
-| **orchestrator** | Whatever decides which station runs next, handles failures, and decides when the line is finished. In lesson 004 it is the learner; from 007 it is `run.sh`. | [007](specs/007-compose-stations-and-branch.md) |
-| **factory** | The software containing one or more assembly lines and the orchestrator that manages them — the unit you build, deploy and operate. | [005](specs/005-join-them-into-an-assembly-line.md), expanded in [010](specs/010-watch-it-while-it-runs.md) |
+| **assembly line** | An ordered sequence of stations, each station's output feeding the next. | [005](../lessons/02-build-the-factory/01-join-them-into-a-line/lesson.md) |
+| **station** | An agent running in a non-interactive harness — handed its inputs, run to completion, no human in the conversation. Its internals may be a model call or ordinary deterministic code. | [005](../lessons/02-build-the-factory/01-join-them-into-a-line/lesson.md), sharpened in [007](../lessons/02-build-the-factory/03-compose-and-branch/lesson.md) |
+| **iteration** | One turn of the line: the bounded batch of agent work between check-ins. | [005](../lessons/02-build-the-factory/01-join-them-into-a-line/lesson.md) |
+| **orchestrator** | Whatever decides which station runs next, handles failures, and decides when the line is finished. In lesson 004 it is the learner; from 007 it is `run.sh`. | [007](../lessons/02-build-the-factory/03-compose-and-branch/lesson.md) |
+| **record** | The JSON event log a station writes instead of printing for a human — one JSONL file per station per iteration, and what later stations and tools query instead of a terminal. | [009](../lessons/02-build-the-factory/05-record-what-happened/lesson.md) |
+| **factory** | The software containing one or more assembly lines and their orchestrator(s) — the unit built, deployed, and operated. | [005](../lessons/02-build-the-factory/01-join-them-into-a-line/lesson.md), expanded in [010](../lessons/02-build-the-factory/06-watch-it-while-it-runs/lesson.md) |
+| **operator** | The person who runs, watches, and asks questions of the factory from outside it, using `watch.sh`, `ask.sh`, and `steer.sh`, rather than performing a station's job by hand. | [013](../lessons/02-build-the-factory/09-oversee-the-orchestrator/lesson.md) |
 
 ## Words this tutorial does not use
 

@@ -74,10 +74,10 @@ Work in this order. Complete each small step before moving to the next one:
 
    ```sh
    jq -r 'select(.type=="tool_execution_start") | .toolName' \
-     factory/refactor/events/*.jsonl | sort | uniq -c
+     factory/refactor/.tmp/events/*.jsonl | sort | uniq -c
 
    jq -s '[.[] | select(.type=="message_end") | .message.usage.cost.total? // 0] | add' \
-     factory/refactor/events/*.jsonl
+     factory/refactor/.tmp/events/*.jsonl
    ```
 
    What it did, and what it cost. Both questions from the previous lesson's pressure test, from a

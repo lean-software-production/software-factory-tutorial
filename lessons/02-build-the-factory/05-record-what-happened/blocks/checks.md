@@ -14,7 +14,7 @@ From the repository root, run a fresh line and then inspect what it left behind:
 
 ```sh
 ./factory/refactor/run.sh
-ls factory/refactor/events/
+ls factory/refactor/.tmp/events/
 ```
 
 Verify by hand that:
@@ -30,5 +30,5 @@ Verify by hand that:
 The last one is the finding, not a defect. Measure it if you are unconvinced:
 
 ```sh
-wc -l factory/refactor/events/*.jsonl
+wc -l factory/refactor/.tmp/events/*.jsonl
 ```

@@ -32,7 +32,7 @@ Work in this order. Complete each small step before moving to the next one:
      echo "Each line is one JSON event. Answer only from what is in it."
      echo
      jq -c 'select(.type=="tool_execution_start" or .type=="message_end")' \
-       "$line"/events/*.jsonl
+       "$line"/.tmp/events/*.jsonl
    } | pi --no-session --no-tools -p
    ```
 
@@ -49,9 +49,9 @@ Work in this order. Complete each small step before moving to the next one:
    See the difference for yourself:
 
    ```sh
-   cat factory/refactor/events/*.jsonl | wc -l
+   cat factory/refactor/.tmp/events/*.jsonl | wc -l
    jq -c 'select(.type=="tool_execution_start" or .type=="message_end")' \
-     factory/refactor/events/*.jsonl | wc -l
+     factory/refactor/.tmp/events/*.jsonl | wc -l
    ```
 
    This is the first time the line has run into a limit that belongs to the model rather than to the

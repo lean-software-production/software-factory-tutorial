@@ -6,6 +6,7 @@ outcomes:
   - Update the station prompts and scripts so they use the shared criteria.
   - Create a run script that records a baseline, runs the doer, validates, and pauses after each iteration.
 blocks:
+  - part-2-entry-checkpoint
   - key-concept
   - implementation-order
   - checks
