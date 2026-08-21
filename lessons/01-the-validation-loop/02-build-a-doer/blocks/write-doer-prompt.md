@@ -2,11 +2,12 @@
 type: editor-practice
 path: factory/refactor.md
 tutor: |-
-  Check that factory/refactor.md gives the doer one concrete behaviour-preserving calculator
-  refactoring job, requires direct file edits, forbids tests, npm, and shell commands, and asks for
-  a concise response. Accept equivalent wording and a different small refactoring target, but not a
-  prompt that asks for multiple changes, permits command execution, or asks the doer to check its
-  own work.
+  Check that factory/refactor.md tells the doer to choose and make one small,
+  behaviour-preserving calculator refactoring, requires direct file edits, forbids tests, npm, and
+  shell commands, and asks for a concise response. The prompt must leave the choice of refactoring
+  to the doer. Accept equivalent wording that lets the doer select one small refactoring,
+  but not a prompt that asks for multiple changes, permits command execution, or asks the doer to
+  check its own work.
 ---
 
 ## Write the doer prompt
