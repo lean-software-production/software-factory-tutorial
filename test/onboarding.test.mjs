@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkPiAuthentication, describeDoerModel, describeTutorModel, modelReport } from "../scripts/setup.mjs";
@@ -8,6 +9,11 @@ import { tutorialArguments } from "../scripts/tutorial.mjs";
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 describe("tutorial launcher", () => {
+  it("starts the workbook from npm start", async () => {
+    const manifest = JSON.parse(await readFile(resolve(repositoryRoot, "package.json"), "utf8"));
+    assert.equal(manifest.scripts.start, "npm run tutorial:workbook");
+  });
+
   it("forwards engine options after the tutorial workspace target", () => {
     assert.deepEqual(tutorialArguments(["--port", "4310", "--no-open"]), [
       "run", "--workspace=tutorial-engine", "dev", "--", repositoryRoot, "--port", "4310", "--no-open"

@@ -13,6 +13,7 @@
     "tutorial-engine"
   ],
   "scripts": {
+    "start": "npm run tutorial:workbook",
     "setup": "node scripts/setup.mjs",
     "tutorial": "node scripts/tutorial.mjs",
     "test:onboarding": "node --test test/onboarding.test.mjs",
