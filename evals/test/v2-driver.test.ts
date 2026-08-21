@@ -27,7 +27,11 @@ class DriverFakeTutor implements WorkbookTutor {
     return { accepted: false, feedback: "Tutor reply that asks one public follow-up." };
   }
 
+  async restore(): Promise<void> {}
+  async reply(): Promise<string> { return "Tutor reply that asks one public follow-up."; }
   async compactAfterBlock(): Promise<void> { this.compactions++; }
+  async summarizeBlock(): Promise<string> { return "Completed block summary."; }
+  async summarizeLesson(): Promise<string> { return "Completed lesson summary."; }
   dispose(): void { this.disposed = true; }
 }
 
@@ -130,7 +134,7 @@ describe("v2 workbook driver", () => {
       expect(workbookTutor.reviews).toHaveLength(1);
       expect(workbookTutor.reviews[0]).toMatchObject({ privateGuidance: expect.stringContaining("Private editor criterion"), attempt: { evidence: { kind: "editor", text: "This is a vague draft." } } });
       expect(JSON.stringify(trace)).not.toContain("Private editor criterion");
-      expect(JSON.stringify(trace)).not.toContain('"tutor"');
+      expect(JSON.stringify(trace)).toContain('"source":"tutor"');
     } finally {
       await server.close();
     }

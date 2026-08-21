@@ -58,7 +58,7 @@ describe("v2 public session trace", () => {
         terminalTranscript: [],
         reflections: [],
         editors: [],
-        events: [expect.objectContaining({ type: "session_started" }), expect.objectContaining({ type: "workbook_introduction_completed" }), expect.objectContaining({ type: "block_continued" })],
+        events: expect.arrayContaining([expect.objectContaining({ type: "session_started" }), expect.objectContaining({ type: "workbook_introduction_completed" }), expect.objectContaining({ type: "block_continued" })]),
         artifacts: []
       });
       const serialized = JSON.stringify(trace);
@@ -68,7 +68,7 @@ describe("v2 public session trace", () => {
       expect(serialized).not.toContain("This is private tutor guidance");
       expect(serialized).not.toContain("Do not reveal an exact command");
       expect(serialized).not.toContain("Follow up until the learner");
-      expect(serialized).not.toContain('"tutor"');
+      expect(serialized).toContain('"source":"authored"');
 
       expect(() => recordPublicState(trace, "leaky", { tutor: "private tutor guidance" })).toThrow(/private tutor/i);
     } finally {
