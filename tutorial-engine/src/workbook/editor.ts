@@ -51,13 +51,19 @@ export interface PromoteAcceptedEditorAttemptOptions {
   attemptId: string;
 }
 
-export async function promoteAcceptedEditorAttempt(options: PromoteAcceptedEditorAttemptOptions): Promise<{ path: string } | undefined> {
+export async function promoteCurrentEditorAttempt(options: PromoteAcceptedEditorAttemptOptions): Promise<{ path: string } | undefined> {
   const attempt = await options.attempts.read(options.attemptId);
-  if (!attempt || attempt.status !== "accepted" || attempt.lessonId !== options.lessonId || attempt.blockId !== options.block.id || attempt.evidence.kind !== "editor") return undefined;
+  if (!attempt || attempt.lessonId !== options.lessonId || attempt.blockId !== options.block.id || attempt.evidence.kind !== "editor") return undefined;
   const current = await options.attempts.current(options.lessonId, options.block.id);
-  if (!current || current.id !== attempt.id || current.status !== "accepted") return undefined;
+  if (!current || current.id !== attempt.id || (current.status !== "reviewing" && current.status !== "accepted") || current.evidence.kind !== "editor") return undefined;
   const target = await resolveEditorTarget(options.workspace, options.block.path);
   await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, attempt.evidence.text, "utf8");
+  await writeFile(target, current.evidence.text, "utf8");
   return { path: target };
+}
+
+export async function promoteAcceptedEditorAttempt(options: PromoteAcceptedEditorAttemptOptions): Promise<{ path: string } | undefined> {
+  const attempt = await options.attempts.read(options.attemptId);
+  if (!attempt || attempt.status !== "accepted") return undefined;
+  return promoteCurrentEditorAttempt(options);
 }

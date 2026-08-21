@@ -10,9 +10,9 @@ import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 import { introductionCompleted, nowEvent, project, WorkbookEventStore, type BlockProgress, type WorkbookEvent } from "./events.js";
 import { assertDockerTerminalReady, createDockerPty, requireOpenCodeApiKey, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalPtyFactory } from "./terminal.js";
 import { appendTutorFeedback, submitReflectionAttempt } from "./reflection.js";
-import { promoteAcceptedEditorAttempt, resolveEditorTarget } from "./editor.js";
+import { promoteCurrentEditorAttempt, resolveEditorTarget } from "./editor.js";
 import { AttemptStore, type Attempt, type AttemptEvidence } from "./attempts.js";
-import { RestrictedWorkbookTutor, type WorkbookTutor } from "./tutor.js";
+import { RestrictedWorkbookTutor, type TutorDecision, type WorkbookTutor } from "./tutor.js";
 import type { EditorPracticeBlock, WorkbookBlock, WorkbookLesson } from "./contract.js";
 
 const MIME_TYPES: Record<string, string> = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json; charset=utf-8" };
@@ -114,11 +114,16 @@ function publicAttemptEvidence(attempt: Attempt): PublicCheckpoint["evidence"] {
 }
 function publicCheckpoint(attempt: Attempt | undefined, projected: BlockProgress["checkpoint"]): PublicCheckpoint | undefined {
   if (attempt && attempt.status !== "superseded") {
+    const evidence = publicAttemptEvidence(attempt);
+    if (attempt.status === "accepted") {
+      return projected
+        ? { status: "accepted", successMessage: attempt.successMessage ?? projected.summary, evidence }
+        : { status: "reviewing", evidence };
+    }
     return {
-      status: attempt.status === "accepted" ? "accepted" : attempt.status,
+      status: attempt.status,
       feedback: attempt.status === "feedback" ? attempt.feedback : undefined,
-      successMessage: attempt.status === "accepted" ? attempt.successMessage ?? projected?.summary : undefined,
-      evidence: publicAttemptEvidence(attempt)
+      evidence
     };
   }
   return projected ? { status: "accepted", successMessage: projected.summary, evidence: { kind: projected.kind } } : undefined;
@@ -175,6 +180,14 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const currentPublicState = (events: WorkbookEvent[]) => publicState(loaded, events, attempts);
 
   let closed = false;
+  const reviewFinalizers = new Set<Promise<void>>();
+  const trackReviewFinalizer = (work: () => Promise<void>): Promise<void> => {
+    const finalizer = work()
+      .catch((error) => log.info(`Workbook tutor finalization failed: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => { reviewFinalizers.delete(finalizer); });
+    reviewFinalizers.add(finalizer);
+    return finalizer;
+  };
   let submissionTail: Promise<unknown> = Promise.resolve();
   const withSubmissionLock = async <T>(work: () => Promise<T>): Promise<T> => {
     const run = submissionTail.catch(() => undefined).then(work);
@@ -203,51 +216,66 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     return events;
   };
 
+  const appendAcceptedCheckpoint = async (accepted: Attempt): Promise<void> => {
+    await store.append(nowEvent({ type: "attempt_accepted", lessonId: accepted.lessonId, blockId: accepted.blockId, attemptId: accepted.id, version: accepted.version, kind: accepted.evidence.kind, summary: accepted.successMessage ?? "Nice work — this attempt is accepted." }));
+    await writeCurrentProjection();
+  };
+
   const finishReview = async (attempt: Attempt, privateGuidance: string): Promise<void> => {
     if (closed) return;
-    let decision;
+    let decision: TutorDecision;
     try {
       decision = await tutor.review({ attempt, privateGuidance });
     } catch (error) {
       if (closed) return;
-      log.info(`Workbook tutor review failed for ${attempt.lessonId}/${attempt.blockId}: ${error instanceof Error ? error.message : String(error)}`);
-      const feedback = await attempts.markFeedback(attempt.id, REVIEW_FAILURE_FEEDBACK);
-      if (feedback?.evidence.kind === "reflection") await store.append(nowEvent({ type: "reflection_reply_recorded", lessonId: feedback.lessonId, blockId: feedback.blockId, response: feedback.feedback ?? REVIEW_FAILURE_FEEDBACK }));
-      await writeCurrentProjection();
+      await trackReviewFinalizer(async () => {
+        if (closed) return;
+        log.info(`Workbook tutor review failed for ${attempt.lessonId}/${attempt.blockId}: ${error instanceof Error ? error.message : String(error)}`);
+        const feedback = await attempts.markFeedback(attempt.id, REVIEW_FAILURE_FEEDBACK);
+        if (feedback?.evidence.kind === "reflection") await store.append(nowEvent({ type: "reflection_reply_recorded", lessonId: feedback.lessonId, blockId: feedback.blockId, response: feedback.feedback ?? REVIEW_FAILURE_FEEDBACK }));
+        await writeCurrentProjection();
+      });
       return;
     }
 
     if (closed) return;
-    await refreshEvents();
-    if (closed) return;
-    const active = activeAuthoredBlock();
-    const current = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
-    if (!active || active.lesson.id !== attempt.lessonId || active.block.id !== attempt.blockId || !current || current.id !== attempt.id) return;
+    await trackReviewFinalizer(async () => {
+      if (closed) return;
+      const latest = await refreshEvents();
+      if (closed) return;
+      const active = activeAuthoredBlock(latest);
+      const current = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
+      if (!active || active.lesson.id !== attempt.lessonId || active.block.id !== attempt.blockId || !current || current.id !== attempt.id || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(current.evidence, active.block)) return;
 
-    if (decision.accepted) {
-      const accepted = await attempts.acceptCurrent(attempt.id, decision.feedback);
-      if (!accepted) return;
-      if (accepted.evidence.kind === "editor" && active.block.type === "editor-practice") {
-        try {
-          const promoted = await promoteAcceptedEditorAttempt({ workspace: loaded.workspace, attempts, lessonId: active.lesson.id, block: active.block, attemptId: accepted.id });
-          if (!promoted) { await attempts.markFeedback(accepted.id, REVIEW_FAILURE_FEEDBACK); return; }
-        } catch (error) {
-          log.info(`Accepted editor attempt could not be promoted: ${error instanceof Error ? error.message : String(error)}`);
-          await attempts.markFeedback(accepted.id, REVIEW_FAILURE_FEEDBACK);
-          await writeCurrentProjection();
-          return;
+      if (decision.accepted) {
+        if (current.evidence.kind === "editor" && active.block.type === "editor-practice") {
+          try {
+            const promoted = await promoteCurrentEditorAttempt({ workspace: loaded.workspace, attempts, lessonId: active.lesson.id, block: active.block, attemptId: current.id });
+            if (!promoted) {
+              await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
+              await writeCurrentProjection();
+              return;
+            }
+          } catch (error) {
+            log.info(`Accepted editor attempt could not be promoted: ${error instanceof Error ? error.message : String(error)}`);
+            await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
+            await writeCurrentProjection();
+            return;
+          }
         }
+        if (closed) return;
+        const accepted = await attempts.acceptCurrent(current.id, decision.feedback);
+        if (!accepted) return;
+        await appendAcceptedCheckpoint(accepted);
+        return;
       }
-      await store.append(nowEvent({ type: "attempt_accepted", lessonId: accepted.lessonId, blockId: accepted.blockId, attemptId: accepted.id, version: accepted.version, kind: accepted.evidence.kind, summary: accepted.successMessage ?? decision.feedback }));
-      await writeCurrentProjection();
-      return;
-    }
 
-    const feedback = await attempts.markFeedback(attempt.id, decision.feedback);
-    if (feedback?.evidence.kind === "reflection") {
-      await store.append(nowEvent({ type: "reflection_reply_recorded", lessonId: feedback.lessonId, blockId: feedback.blockId, response: feedback.feedback ?? decision.feedback }));
-    }
-    await writeCurrentProjection();
+      const feedback = await attempts.markFeedback(current.id, decision.feedback);
+      if (feedback?.evidence.kind === "reflection") {
+        await store.append(nowEvent({ type: "reflection_reply_recorded", lessonId: feedback.lessonId, blockId: feedback.blockId, response: feedback.feedback ?? decision.feedback }));
+      }
+      await writeCurrentProjection();
+    });
   };
 
   const submitAttempt = async (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }): Promise<Attempt> => withSubmissionLock(async () => {
@@ -404,6 +432,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     terminal?.dispose();
     tutor.dispose();
     wss?.close();
+    await Promise.allSettled([...reviewFinalizers]);
     await new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise()));
   } };
 }

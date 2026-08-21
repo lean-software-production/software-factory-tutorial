@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { EditorPracticeBlock } from "../src/workbook/contract.js";
 import { AttemptStore } from "../src/workbook/attempts.js";
-import { promoteAcceptedEditorAttempt, resolveEditorTarget } from "../src/workbook/editor.js";
+import { promoteAcceptedEditorAttempt, promoteCurrentEditorAttempt, resolveEditorTarget } from "../src/workbook/editor.js";
 
 const tempDirs: string[] = [];
 
@@ -38,6 +38,28 @@ describe("resolveEditorTarget", () => {
     for (const path of ["../x", "/tmp/x", ".git/config", ".tutorial/state", ".tmp/output", "factory/escape/refactor.md"]) {
       await expect(resolveEditorTarget(workspace, path), path).rejects.toThrow(/outside|reserved|unsafe|absolute/i);
     }
+  });
+});
+
+describe("promoteCurrentEditorAttempt", () => {
+  it("promotes the current editor attempt before it is marked accepted", async () => {
+    const workspace = await temporaryWorkspace("workbook-editor-reviewing-attempt-");
+    const attempts = new AttemptStore(workspace);
+    const block: EditorPracticeBlock = {
+      id: "block-id",
+      type: "editor-practice",
+      title: "Refactor the line",
+      markdown: "Edit the draft.",
+      path: "factory/refactor.md",
+      tutor: "private criteria"
+    };
+
+    const attempt = await attempts.create({ lessonId: "lesson-id", blockId: block.id, evidence: { kind: "editor", text: "accepted draft" } });
+    await attempts.markReviewing(attempt.id);
+
+    await expect(promoteCurrentEditorAttempt({ workspace, attempts, lessonId: "lesson-id", block, attemptId: attempt.id })).resolves.toEqual({ path: resolve(await realpath(workspace), "factory/refactor.md") });
+    await expect(readFile(resolve(workspace, "factory/refactor.md"), "utf8")).resolves.toBe("accepted draft");
+    await expect(attempts.current("lesson-id", block.id)).resolves.toMatchObject({ id: attempt.id, status: "reviewing" });
   });
 });
 
