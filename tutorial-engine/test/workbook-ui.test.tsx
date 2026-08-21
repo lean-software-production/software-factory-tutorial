@@ -39,7 +39,7 @@ vi.mock("@codemirror/view", () => {
 
 vi.mock("@codemirror/commands", () => ({ defaultKeymap: [] }));
 
-import { BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Chapter, type Progress } from "../web-workbook/src/workbook-ui.js";
+import { AcceptanceConfetti, BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Chapter, type Progress } from "../web-workbook/src/workbook-ui.js";
 
 const progress: Progress = {
   activeLessonId: "part/lesson-one",
@@ -112,6 +112,14 @@ function activeEditorProgress(overrides: Partial<Progress["blocks"][number]> = {
   };
 }
 
+function activeBlockProgress(block: { id: string; type: string }, overrides: Partial<Progress["blocks"][number]> = {}): Progress {
+  return {
+    ...progress,
+    activeBlockId: block.id,
+    blocks: [{ id: block.id, type: block.type, ready: true, active: true, completed: false, verified: false, emerged: true, ...overrides } as any],
+  };
+}
+
 let mountedRoot: Root | undefined;
 let dom: JSDOM | undefined;
 
@@ -178,6 +186,111 @@ describe("workbook lesson UI", () => {
     expect(completedMarkup).not.toContain("editor-surface");
     expect(completedMarkup).not.toContain("role=\"status\"");
     expect(completedMarkup).not.toMatch(/Editing —|Reviewing your latest revision/);
+  });
+
+  it("renders shared accepted checkpoints with read-only evidence for editor, terminal, and reflection work", () => {
+    const editorMarkup = html(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({
+        editorStatus: undefined,
+        checkpoint: { status: "accepted", successMessage: "Tutor says the editor work is ready.", evidence: { kind: "editor", text: "accepted answer text" } }
+      } as any),
+      refresh: vi.fn()
+    }));
+    expect(editorMarkup).toContain("Tutor says the editor work is ready.");
+    expect(editorMarkup).toContain("accepted answer text");
+    expect(editorMarkup).toContain("Continue");
+    expect(editorMarkup).toContain("success-checkpoint");
+    expect(editorMarkup).not.toContain("editor-surface");
+
+    const terminalMarkup = html(createElement(BlockView, {
+      block: lesson.blocks[1],
+      progress: activeBlockProgress(lesson.blocks[1], {
+        checkpoint: { status: "accepted", successMessage: "Tutor accepted the terminal result.", evidence: { kind: "terminal", terminalHtml: "<pre class=\"frozen-terminal-output\">terminal transcript</pre>" } }
+      } as any),
+      refresh: vi.fn()
+    }));
+    expect(terminalMarkup).toContain("Tutor accepted the terminal result.");
+    expect(terminalMarkup).toContain("terminal transcript");
+    expect(terminalMarkup).toContain("Frozen terminal session");
+    expect(terminalMarkup).toContain("Continue");
+    expect(terminalMarkup).not.toContain("Embedded terminal");
+
+    const reflectionMarkup = html(createElement(BlockView, {
+      block: lesson.blocks[2],
+      progress: activeBlockProgress(lesson.blocks[2], {
+        checkpoint: { status: "accepted", successMessage: "Tutor accepted the reflection.", evidence: { kind: "reflection", conversation: [{ role: "learner", text: "My answer" }, { role: "tutor", text: "Tutor note" }] } }
+      } as any),
+      refresh: vi.fn()
+    }));
+    expect(reflectionMarkup).toContain("Tutor accepted the reflection.");
+    expect(reflectionMarkup).toContain("My answer");
+    expect(reflectionMarkup).toContain("Tutor note");
+    expect(reflectionMarkup).toContain("Continue");
+    expect(reflectionMarkup).not.toContain("Your reflection");
+  });
+
+  it("does not show checkpoint Continue for nonaccepted evaluated blocks", () => {
+    const terminalMarkup = html(createElement(BlockView, { block: lesson.blocks[1], progress: activeBlockProgress(lesson.blocks[1]), refresh: vi.fn() }));
+    const reflectionMarkup = html(createElement(BlockView, { block: lesson.blocks[2], progress: activeBlockProgress(lesson.blocks[2]), refresh: vi.fn() }));
+    const editorMarkup = html(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ checkpoint: { status: "feedback", feedback: "Try again.", evidence: { kind: "editor", text: "draft" } } } as any), refresh: vi.fn() }));
+
+    expect(terminalMarkup).not.toContain("success-checkpoint");
+    expect(terminalMarkup).not.toContain("Continue");
+    expect(reflectionMarkup).not.toContain("success-checkpoint");
+    expect(reflectionMarkup).not.toContain("Continue");
+    expect(editorMarkup).not.toContain("success-checkpoint");
+    expect(editorMarkup).not.toContain("Continue");
+  });
+
+  it("keeps a focused editor through feedback refreshes and removes it only after acceptance", async () => {
+    const refresh = vi.fn();
+    const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: "" } as any), refresh }));
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+    editor.focus();
+    expect(document.activeElement).toBe(editor);
+
+    await act(async () => {
+      mountedRoot!.render(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 1, draftText: "draft with feedback", checkpoint: { status: "feedback", feedback: "Keep going.", evidence: { kind: "editor", text: "draft with feedback" } } } as any), refresh }));
+    });
+
+    const refreshedEditor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']");
+    expect(refreshedEditor).not.toBeNull();
+    expect(document.activeElement).toBe(refreshedEditor);
+
+    await act(async () => {
+      mountedRoot!.render(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 2, editorStatus: undefined, checkpoint: { status: "accepted", successMessage: "Accepted.", evidence: { kind: "editor", text: "accepted text" } } } as any), refresh }));
+    });
+
+    expect(container.querySelector("[role='textbox'][contenteditable='true']")).toBeNull();
+    expect(container.textContent).toContain("Accepted.");
+    expect(container.textContent).toContain("accepted text");
+  });
+
+  it("shows one-second pointer-inert confetti only for new accepted keys and respects reduced motion", async () => {
+    vi.useFakeTimers();
+    const matchMedia = vi.fn((query: string) => ({ matches: false, media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() }));
+    vi.stubGlobal("matchMedia", matchMedia);
+    const container = await mount(createElement(AcceptanceConfetti, { acceptedKey: undefined }));
+    expect(container.querySelector(".acceptance-confetti")).toBeNull();
+
+    await act(async () => { mountedRoot!.render(createElement(AcceptanceConfetti, { acceptedKey: "lesson/block/editor/1" })); });
+    const layer = container.querySelector<HTMLElement>(".acceptance-confetti");
+    expect(layer).not.toBeNull();
+    expect(layer!.getAttribute("aria-hidden")).toBe("true");
+    expect(layer!.style.pointerEvents).toBe("none");
+
+    await act(async () => { vi.advanceTimersByTime(999); });
+    expect(container.querySelector(".acceptance-confetti")).not.toBeNull();
+    await act(async () => { vi.advanceTimersByTime(1); });
+    expect(container.querySelector(".acceptance-confetti")).toBeNull();
+
+    await act(async () => { mountedRoot!.render(createElement(AcceptanceConfetti, { acceptedKey: "lesson/block/editor/1" })); });
+    expect(container.querySelector(".acceptance-confetti")).toBeNull();
+
+    matchMedia.mockReturnValue({ matches: true, media: "(prefers-reduced-motion: reduce)", onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() });
+    await act(async () => { mountedRoot!.render(createElement(AcceptanceConfetti, { acceptedKey: "lesson/block/editor/2" })); });
+    expect(container.querySelector(".acceptance-confetti")).toBeNull();
   });
 
   it("debounces editor-practice edits and posts only the latest text at the next revision", async () => {

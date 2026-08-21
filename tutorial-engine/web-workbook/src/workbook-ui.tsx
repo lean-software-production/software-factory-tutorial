@@ -16,9 +16,17 @@ export type LessonTransitionBlock = BlockBase & { type: "lesson-transition" };
 export type Block = NarrativeBlock | TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock | LessonTransitionBlock;
 export type Lesson = { id: string; title: string; dek: string; durationMinutes: number; outcomes: string[]; blocks: Block[] };
 export type Chapter = { id: string; title: string; part: string; partMarkdown: string; partNumber: number; lessonNumber: number; lesson?: Lesson };
-export type EditorStatus = "editing" | "reviewing" | "feedback" | "unlocked";
-export type BlockProgress = { id: string; type?: string; ready: boolean; active: boolean; completed: boolean; verified: boolean; feedback?: string; terminalHtml?: string; emerged: boolean; revision?: number; draftText?: string; editorStatus?: EditorStatus };
+export type AttemptKind = "editor" | "terminal" | "reflection";
+export type EditorStatus = "editing" | "waiting" | "reviewing" | "feedback" | "unlocked";
 export type ReflectionTurn = { role: "learner" | "tutor"; text: string };
+export type PublicCheckpoint = {
+  status: "working" | "reviewing" | "feedback" | "accepted";
+  feedback?: string;
+  successMessage?: string;
+  summary?: string;
+  evidence?: { kind: AttemptKind; text?: string; terminalHtml?: string; conversation?: ReflectionTurn[] };
+};
+export type BlockProgress = { id: string; type?: string; ready: boolean; active: boolean; completed: boolean; verified: boolean; checkpoint?: PublicCheckpoint; feedback?: string; terminalHtml?: string; emerged: boolean; revision?: number; draftText?: string; editorStatus?: EditorStatus };
 export type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]> };
 type Identity = { title: string };
 export type State = { workbook: Identity; introduction: string; introductionComplete: boolean; chapters: Chapter[]; progress: Progress; adapter: { note?: string; modelBackedHelp?: boolean } };
@@ -173,6 +181,42 @@ function ContinueControls({ block, state, refresh }: { block: Block; state: Bloc
   </div>;
 }
 
+function checkpointMessage(checkpoint: PublicCheckpoint): string {
+  return checkpoint.successMessage ?? checkpoint.summary ?? checkpoint.feedback ?? "Nice work — the tutor accepted this attempt.";
+}
+
+function CheckpointEvidence({ checkpoint }: { checkpoint: PublicCheckpoint }) {
+  const evidence = checkpoint.evidence;
+  if (!evidence) return null;
+  if (evidence.kind === "editor") return <pre className="accepted-evidence accepted-editor-evidence" aria-label="Accepted editor evidence"><code>{evidence.text ?? ""}</code></pre>;
+  if (evidence.kind === "terminal") return <div className="frozen-terminal accepted-evidence" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: evidence.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} />;
+  return <div className="reflection-thread accepted-evidence" aria-label="Accepted reflection evidence">{(evidence.conversation ?? []).map((turn, index) => <div key={index} className={`reflection-turn ${turn.role}`}><b>{turn.role === "learner" ? "You" : "Tutor"}</b><p>{turn.text}</p></div>)}</div>;
+}
+
+export function AcceptedCheckpoint({ block, state, refresh }: { block: Block; state: BlockProgress; refresh(state: State): void }) {
+  const checkpoint = state.checkpoint;
+  const [pending, setPending] = useState(false);
+  if (checkpoint?.status !== "accepted") return null;
+  const continueAccepted = () => {
+    if (pending) return;
+    setPending(true);
+    post(block.id, { action: "continue" }).then(refresh).catch((error) => {
+      console.error(error);
+      setPending(false);
+    });
+  };
+  return <aside className="success-checkpoint accepted-checkpoint" aria-live="polite">
+    <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Accepted</p><h3>Nice work — accepted.</h3><p>{checkpointMessage(checkpoint)}</p><CheckpointEvidence checkpoint={checkpoint} /><button className="button primary" disabled={pending} onClick={continueAccepted}>{pending ? "Continuing…" : "Continue"}</button></div>
+  </aside>;
+}
+
+function AttemptCheckpointStatus({ state }: { state: BlockProgress | undefined }) {
+  const checkpoint = state?.checkpoint;
+  if (!checkpoint || checkpoint.status === "accepted") return null;
+  if (checkpoint.status === "feedback") return <aside className="advice" aria-live="polite"><b>Tutor feedback:</b> {checkpoint.feedback ?? "Keep going and try again."}</aside>;
+  return <aside className="observer-status" aria-live="polite">{checkpoint.status === "reviewing" ? "Reviewing your latest attempt…" : "Keep working — the tutor will review your evidence when you pause."}</aside>;
+}
+
 function NarrativeBlock({ lessonId, block, state, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void }) {
   return <section id={blockElementId(lessonId, block.id)} className={`work-block narrative ${state?.active ? "is-active" : ""}`}>
     <p className="section-label">The idea</p>
@@ -189,7 +233,8 @@ function TerminalBlock({ lessonId, block, state, unexpected, refresh }: { lesson
   const [observerError, setObserverError] = useState<string>();
   const [observerStatus, setObserverStatus] = useState<string>();
   const command = shellCommandFrom(block.markdown);
-  useEffect(() => { setObserverAdvice(undefined); setObserverError(undefined); setObserverStatus(undefined); }, [block.id, state?.completed]);
+  const accepted = state?.checkpoint?.status === "accepted";
+  useEffect(() => { setObserverAdvice(undefined); setObserverError(undefined); setObserverStatus(undefined); }, [block.id, state?.completed, state?.checkpoint?.status]);
   return <section id={blockElementId(lessonId, block.id)} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
     <p className="section-label">Practice · embedded terminal</p>
     <h2>{block.title}</h2>
@@ -197,15 +242,14 @@ function TerminalBlock({ lessonId, block, state, unexpected, refresh }: { lesson
     <div className="mode practice">
       <div className="mode-head"><span className="mode-icon" aria-hidden="true">›_</span><div><span className="tag">Terminal practice</span><h3>Run this in the embedded terminal</h3><p>The tutor watches this terminal for the expected result and keeps the transcript as evidence.</p></div></div>
       <div className="mode-body">
-        {state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : !state?.completed && <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={false} refresh={refresh} onAdvice={setObserverAdvice} onError={setObserverError} onStatus={setObserverStatus} />}
-        {state?.verified && !state?.completed ? <aside className="success-checkpoint" aria-live="polite">
-          <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Verified</p><h3>Nice work — you got it.</h3><p>{state.feedback || "You produced the expected result."}</p><button className="button primary" onClick={() => post(block.id, { action: "complete" }).then(refresh)}>Continue</button></div>
-        </aside> : <>
+        {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} /> : state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : !state?.completed && <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={false} refresh={refresh} onAdvice={setObserverAdvice} onError={setObserverError} onStatus={setObserverStatus} />}
+        {!accepted && <>
+          <AttemptCheckpointStatus state={state} />
           {observerStatus && !observerAdvice && !observerError && <aside className="observer-status" aria-live="polite">{observerStatus}</aside>}
           {observerAdvice && <aside className="advice" aria-live="polite"><b>Try this:</b> {observerAdvice}</aside>}
           {observerError && <aside className="advice warning" aria-live="polite">{observerError}</aside>}
         </>}
-        {!state?.completed && !state?.verified && <div className="local-help"><label>I saw something different<textarea value={evidence} onChange={(event) => setEvidence(event.target.value)} /></label><button className="button secondary" onClick={() => post(block.id, { action: "unexpected", evidence }).then(refresh)}>Record it and keep trying</button><label>Something else<textarea value={other} onChange={(event) => setOther(event.target.value)} /></label><button className="button secondary" onClick={() => { setOther(""); return post(block.id, { action: "help", request: other }).then(refresh); }}>Ask locally</button></div>}
+        {!state?.completed && !state?.verified && !accepted && <div className="local-help"><label>I saw something different<textarea value={evidence} onChange={(event) => setEvidence(event.target.value)} /></label><button className="button secondary" onClick={() => post(block.id, { action: "unexpected", evidence }).then(refresh)}>Record it and keep trying</button><label>Something else<textarea value={other} onChange={(event) => setOther(event.target.value)} /></label><button className="button secondary" onClick={() => { setOther(""); return post(block.id, { action: "help", request: other }).then(refresh); }}>Ask locally</button></div>}
         {unexpected.map((item, index) => <p className="evidence" key={index}>Recorded different output: {item}</p>)}
       </div>
     </div>
@@ -216,10 +260,11 @@ const EDITOR_REVIEW_POLL_INTERVAL_MS = 250;
 const EDITOR_REVIEW_MAX_POLLS = 480;
 
 function editorStatusText(state: BlockProgress | undefined, completed: boolean): string {
-  if (completed || state?.editorStatus === "unlocked") return "Unlocked — the accepted revision has been written to the target file.";
-  if (state?.editorStatus === "reviewing") return "Reviewing your latest revision…";
+  if (completed || state?.editorStatus === "unlocked" || state?.checkpoint?.status === "accepted") return "Unlocked — the accepted revision has been written to the target file.";
+  if (state?.checkpoint?.status === "reviewing" || state?.editorStatus === "reviewing") return "Reviewing your latest revision…";
+  if (state?.checkpoint?.status === "working") return "Keep writing — the tutor will review after you pause.";
   if (state?.editorStatus === "waiting") return "Keep writing — the reviewer will check again after you pause.";
-  if (state?.editorStatus === "feedback") return "Feedback received — keep editing and pause to request another review.";
+  if (state?.checkpoint?.status === "feedback" || state?.editorStatus === "feedback") return "Feedback received — keep editing and pause to request another review.";
   return "Editing — changes are reviewed automatically after you pause.";
 }
 
@@ -230,15 +275,17 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
   const activeRef = useRef(false);
   const baseRevision = useRef(state?.revision ?? 0);
   const [localError, setLocalError] = useState<string>();
+  const accepted = state?.checkpoint?.status === "accepted";
   const completed = Boolean(state?.completed || state?.editorStatus === "unlocked");
-  const canEdit = Boolean(state?.active && state.ready && !completed);
+  const canEdit = Boolean(state?.active && state.ready && !completed && !accepted);
   const initialText = state?.draftText ?? "";
 
   useEffect(() => { baseRevision.current = state?.revision ?? baseRevision.current; }, [block.id, state?.revision]);
   useEffect(() => { activeRef.current = canEdit; }, [canEdit]);
 
   useEffect(() => {
-    if (!canEdit || state?.editorStatus !== "reviewing" || !Number.isInteger(state.revision)) return;
+    const reviewing = state?.checkpoint?.status === "reviewing" || state?.editorStatus === "reviewing";
+    if (!canEdit || !reviewing || !Number.isInteger(state?.revision)) return;
     let cancelled = false;
     let polls = 0;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
@@ -250,8 +297,8 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
         readWorkbookState().then((next) => {
           if (cancelled) return;
           const nextProgress = progressFor(next.progress, block.id);
-          const nextStatus = nextProgress?.editorStatus;
-          const completedReview = Boolean(nextProgress?.completed || nextStatus === "feedback" || nextStatus === "unlocked" || !nextProgress?.active);
+          const nextStatus = nextProgress?.checkpoint?.status ?? nextProgress?.editorStatus;
+          const completedReview = Boolean(nextProgress?.completed || nextStatus === "feedback" || nextStatus === "accepted" || nextStatus === "unlocked" || !nextProgress?.active);
           refresh(next);
           if (completedReview || nextProgress?.revision !== revision || polls >= EDITOR_REVIEW_MAX_POLLS) return;
           poll();
@@ -266,7 +313,7 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
       cancelled = true;
       if (pollTimer) clearTimeout(pollTimer);
     };
-  }, [block.id, canEdit, refresh, state?.editorStatus, state?.revision]);
+  }, [block.id, canEdit, refresh, state?.checkpoint?.status, state?.editorStatus, state?.revision]);
 
   useEffect(() => {
     if (!canEdit || !editorElement.current) return;
@@ -313,16 +360,18 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
     <Markdown>{block.markdown}</Markdown>
     <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
     {canEdit && <div className="editor-status" role="status" aria-live="polite">{localError ?? status}</div>}
-    {canEdit && state?.feedback && <aside className="advice editor-feedback" aria-live="polite"><b>Inline feedback:</b> {state.feedback}</aside>}
+    {canEdit && (state?.checkpoint?.feedback || state?.feedback) && <aside className="advice editor-feedback" aria-live="polite"><b>Inline feedback:</b> {state.checkpoint?.feedback ?? state.feedback}</aside>}
     {canEdit && <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />}
-    {completed ? <aside className="success-checkpoint editor-unlocked" aria-live="polite">
+    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} /> : completed ? <aside className="success-checkpoint editor-unlocked" aria-live="polite">
       <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Unlocked</p><h3>Accepted revision unlocked the next step.</h3><p>{state?.feedback || "The latest accepted editor draft was written to the target file."}</p></div>
     </aside> : !canEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
   </section>;
 }
 
 function ReflectionBlock({ lessonId, block, state, turns, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; turns: ReflectionTurn[]; refresh(state: State): void }) {
-  const hasTutorReply = turns.some((turn) => turn.role === "tutor");
+  const accepted = state?.checkpoint?.status === "accepted";
+  const visibleTurns = accepted ? state?.checkpoint?.evidence?.conversation ?? turns : turns;
+  const hasTutorReply = visibleTurns.some((turn) => turn.role === "tutor");
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
   const submit = (action: "reflection-submit" | "reflection-follow-up") => {
@@ -330,10 +379,11 @@ function ReflectionBlock({ lessonId, block, state, turns, refresh }: { lessonId:
     post(block.id, { action, response: draft }).then((next) => { setDraft(""); refresh(next); }).finally(() => setPending(false));
   };
   return <section id={blockElementId(lessonId, block.id)} className={`work-block reflection ${state?.active ? "is-active" : ""}`}><p className="section-label">Reflection · discuss it</p><h2>{block.title}</h2><div className="question"><Markdown>{block.markdown}</Markdown></div>
-    {turns.length > 0 && <div className="reflection-thread" aria-live="polite">{turns.map((turn, index) => <div key={index} className={`reflection-turn ${turn.role}`}><b>{turn.role === "learner" ? "You" : "Tutor"}</b><p>{turn.text}</p></div>)}</div>}
-    {state?.completed ? <p className="next-ready">Reflection complete. The next step has appeared below.</p> : <>
+    {visibleTurns.length > 0 && !accepted && <div className="reflection-thread" aria-live="polite">{visibleTurns.map((turn, index) => <div key={index} className={`reflection-turn ${turn.role}`}><b>{turn.role === "learner" ? "You" : "Tutor"}</b><p>{turn.text}</p></div>)}</div>}
+    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} /> : state?.completed ? <p className="next-ready">Reflection complete. The next step has appeared below.</p> : <>
+      <AttemptCheckpointStatus state={state} />
       <label className="reflection-input">{hasTutorReply ? "Ask a clarifying question or add to your answer" : "Share your answer"}<textarea aria-label="Your reflection" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={pending} /></label>
-      <div className="action-row"><button className="button primary" disabled={pending || !draft.trim()} onClick={() => submit(hasTutorReply ? "reflection-follow-up" : "reflection-submit")}>{pending ? "Thinking…" : hasTutorReply ? "Send question" : "Discuss reflection"}</button>{hasTutorReply && <button className="button secondary" disabled={pending} onClick={() => { setPending(true); post(block.id, { action: "reflection-complete" }).then(refresh).finally(() => setPending(false)); }}>Continue</button>}</div>
+      <div className="action-row"><button className="button primary" disabled={pending || !draft.trim()} onClick={() => submit(hasTutorReply ? "reflection-follow-up" : "reflection-submit")}>{pending ? "Thinking…" : hasTutorReply ? "Send question" : "Discuss reflection"}</button></div>
     </>}
   </section>;
 }
@@ -400,6 +450,45 @@ function PartChapter({ chapter }: { chapter: Chapter }) {
   return <section id={`part-${chapter.id}`} className="part-chapter" aria-label={chapter.part}><div><p className="part-title">{chapter.part}</p><div className="part-copy"><Markdown>{chapter.partMarkdown}</Markdown></div></div></section>;
 }
 
+function reducedMotionPreferred(): boolean {
+  const query = "(prefers-reduced-motion: reduce)";
+  if (typeof matchMedia === "function") return matchMedia(query).matches;
+  if (typeof window !== "undefined" && typeof window.matchMedia === "function") return window.matchMedia(query).matches;
+  return false;
+}
+
+export function AcceptanceConfetti({ acceptedKey }: { acceptedKey: string | undefined }) {
+  const initialized = useRef(false);
+  const seen = useRef(new Set<string>());
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [visibleKey, setVisibleKey] = useState<string>();
+
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  useEffect(() => {
+    if (!initialized.current) {
+      initialized.current = true;
+      if (acceptedKey) seen.current.add(acceptedKey);
+      return;
+    }
+    if (!acceptedKey || seen.current.has(acceptedKey)) return;
+    seen.current.add(acceptedKey);
+    if (reducedMotionPreferred()) return;
+    if (timer.current) clearTimeout(timer.current);
+    setVisibleKey(acceptedKey);
+    timer.current = setTimeout(() => setVisibleKey(undefined), 1_000);
+  }, [acceptedKey]);
+
+  if (!visibleKey) return null;
+  return <div className="acceptance-confetti" aria-hidden="true" style={{ pointerEvents: "none" }}>{Array.from({ length: 24 }, (_, index) => <span key={`${visibleKey}-${index}`} className="confetti-particle" style={{ "--x": `${(index % 8) * 13 - 46}vw`, "--delay": `${(index % 6) * 35}ms`, "--hue": `${(index * 47) % 360}` } as React.CSSProperties} />)}</div>;
+}
+
+function activeAcceptedKey(progress: Progress): string | undefined {
+  const accepted = progress.blocks.find((block) => block.active && !block.completed && block.checkpoint?.status === "accepted");
+  if (!accepted?.checkpoint) return undefined;
+  const evidence = accepted.checkpoint.evidence;
+  return `${progress.activeLessonId}/${accepted.id}/${evidence?.kind ?? "attempt"}/${accepted.checkpoint.successMessage ?? accepted.checkpoint.summary ?? "accepted"}`;
+}
+
 export function App() {
   const [state, setState] = useState<State>();
   const [viewed, setViewed] = useState<string>();
@@ -423,6 +512,7 @@ export function App() {
   if (!state) return <p className="loading">Loading workbook…</p>;
   const viewedLesson = viewed ?? state.progress.activeLessonId;
   return <div className="shell">
+    <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} />
     <main><article className="page">
       <WorkbookIntroduction state={state} refresh={setState} />

@@ -29,7 +29,7 @@ type PublicCheckpoint = {
   evidence?: { kind: AttemptEvidence["kind"]; text?: string; terminalHtml?: string; conversation?: Array<{ role: "learner" | "tutor"; text: string }> };
 };
 
-type PublicBlockProgress = BlockProgress & { checkpoint?: PublicCheckpoint; draftText?: string; revision?: number; editorStatus?: "editing" | "reviewing" | "feedback" | "unlocked" };
+type PublicBlockProgress = Omit<BlockProgress, "checkpoint"> & { checkpoint?: PublicCheckpoint; draftText?: string; revision?: number; editorStatus?: "editing" | "reviewing" | "feedback" | "unlocked" };
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -132,7 +132,7 @@ async function publicState(loaded: LoadedWorkbook, events: WorkbookEvent[], atte
     const authored = lesson.blocks.find((candidate) => candidate.id === progressBlock.id);
     const currentAttempt = authored && isEvaluatedBlock(authored) ? await attempts.current(lesson.id, authored.id).catch(() => undefined) : undefined;
     const checkpoint = publicCheckpoint(currentAttempt, progressBlock.checkpoint);
-    const base: PublicBlockProgress = { ...progressBlock, checkpoint };
+    const base: PublicBlockProgress = checkpoint ? { ...progressBlock, checkpoint } : { ...progressBlock };
     if (authored?.type === "editor-practice" && progressBlock.active && progressBlock.ready && !progressBlock.completed) {
       if (currentAttempt?.evidence.kind === "editor") return { ...base, revision: currentAttempt.version, draftText: currentAttempt.evidence.text, editorStatus: checkpoint?.status === "reviewing" ? "reviewing" : checkpoint?.status === "feedback" ? "feedback" : "editing", feedback: checkpoint?.feedback };
       return { ...base, revision: 0, draftText: await readTargetDraftText(loaded.workspace, authored).catch(() => ""), editorStatus: "editing" };
@@ -332,7 +332,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         if (body.action === "continue" && (block.type === "narrative" || block.type === "lesson-transition")) event = nowEvent({ type: "block_continued", lessonId: lesson.id, blockId: block.id });
         if (body.action === "continue" && isEvaluatedBlock(block)) {
           const currentAttempt = await attempts.current(lesson.id, block.id).catch(() => undefined);
-          if (!currentAttempt || currentAttempt.status !== "accepted" || !progress.checkpoint) return sendJson(response, 409, { error: "This block has not been accepted yet." });
+          if (!currentAttempt || currentAttempt.status !== "accepted" || !progress?.checkpoint) return sendJson(response, 409, { error: "This block has not been accepted yet." });
           event = nowEvent({ type: "block_continued", lessonId: lesson.id, blockId: block.id });
         }
         if (body.action === "unexpected" && block.type === "terminal-practice" && typeof body.evidence === "string") event = nowEvent({ type: "unexpected_output_submitted", lessonId: lesson.id, blockId: block.id, evidence: body.evidence });
