@@ -119,6 +119,8 @@ describe("workbook lesson contract", () => {
       ["01-beta-part/01-beta-lesson", "First Part Title", "Beta Lesson Title"],
       ["02-alpha-part/10-first-lesson", "Second Part Title", "Synthetic Lesson Title"],
     ]);
+    // Lesson numbers are a single global sequence across parts, in directory order.
+    expect(loaded.chapters.map((chapter) => chapter.lessonNumber)).toEqual([1, 2]);
     const first = loaded.chapters.find((chapter) => chapter.id === "02-alpha-part/10-first-lesson");
     expect(first?.lesson.title).toBe("Synthetic Lesson Title");
     expect(first?.partMarkdown).toBe("Second part copy.");

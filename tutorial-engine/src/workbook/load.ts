@@ -164,12 +164,15 @@ export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
   const parts = await partDirectories(workspace);
   const chapterGroups = await Promise.all(parts.map(async (part, partIndex) => {
     const lessons = await lessonDirectories(part);
-    return Promise.all(lessons.map(async (directory, lessonIndex): Promise<WorkbookChapter> => {
+    return Promise.all(lessons.map(async (directory): Promise<Omit<WorkbookChapter, "lessonNumber">> => {
       const lessonDir = resolve(part.path, directory);
       const id = `${part.id}/${directory}`;
       const lesson = await loadWorkbookLesson(lessonDir, id);
-      return { id, title: lesson.title, part: part.title, partMarkdown: part.markdown, partNumber: partIndex + 1, lessonNumber: lessonIndex + 1, lesson };
+      return { id, title: lesson.title, part: part.title, partMarkdown: part.markdown, partNumber: partIndex + 1, lesson };
     }));
   }));
-  return { workspace, identity, introduction, chapters: chapterGroups.flat() };
+  // Lesson numbers are a single global sequence across parts, in directory order,
+  // rather than resetting at each part boundary.
+  const chapters = chapterGroups.flat().map((chapter, index) => ({ ...chapter, lessonNumber: index + 1 }));
+  return { workspace, identity, introduction, chapters };
 }
