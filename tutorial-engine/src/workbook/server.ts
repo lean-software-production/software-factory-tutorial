@@ -7,17 +7,29 @@ import { LOOPBACK_HOST } from "../server/local-server.js";
 import type { TutorialLogger } from "../runtime-log.js";
 import { createTutorialLogger } from "../runtime-log.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
-import { introductionCompleted, nowEvent, project, WorkbookEventStore, type WorkbookEvent } from "./events.js";
-import { assertDockerTerminalReady, createDockerPty, PiTerminalObserver, requireOpenCodeApiKey, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalObserver, type TerminalPtyFactory } from "./terminal.js";
-import { PiReflectionConversationAdapter, type PracticeEvidence, type ReflectionConversationAdapter } from "./reflection.js";
-import { EditorDraftStore, EditorReviewAdapter, PiEditorReviewAdapter, resolveEditorTarget } from "./editor.js";
+import { introductionCompleted, nowEvent, project, WorkbookEventStore, type BlockProgress, type WorkbookEvent } from "./events.js";
+import { assertDockerTerminalReady, createDockerPty, requireOpenCodeApiKey, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalPtyFactory } from "./terminal.js";
+import { appendTutorFeedback, submitReflectionAttempt } from "./reflection.js";
+import { promoteAcceptedEditorAttempt, resolveEditorTarget } from "./editor.js";
+import { AttemptStore, type Attempt, type AttemptEvidence } from "./attempts.js";
+import { RestrictedWorkbookTutor, type WorkbookTutor } from "./tutor.js";
 import type { EditorPracticeBlock, WorkbookBlock, WorkbookLesson } from "./contract.js";
 
 const MIME_TYPES: Record<string, string> = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json; charset=utf-8" };
 const MAX_BODY_BYTES = 16_384;
+const REVIEW_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please try another attempt in a moment.";
 
-export interface WorkbookServerOptions { target: string; webRoot: string; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalObserver?: TerminalObserver; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; reflectionConversation?: ReflectionConversationAdapter; editorReviewAdapter?: EditorReviewAdapter; editorReviewDebounceMs?: number; }
+export interface WorkbookServerOptions { target: string; webRoot: string; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; workbookTutor?: WorkbookTutor; }
 export interface StartedWorkbookServer { url: string; port: number; host: string; close(): Promise<void>; }
+
+type PublicCheckpoint = {
+  status: "working" | "reviewing" | "feedback" | "accepted";
+  feedback?: string;
+  successMessage?: string;
+  evidence?: { kind: AttemptEvidence["kind"]; text?: string; terminalHtml?: string; conversation?: Array<{ role: "learner" | "tutor"; text: string }> };
+};
+
+type PublicBlockProgress = BlockProgress & { checkpoint?: PublicCheckpoint; draftText?: string; revision?: number; editorStatus?: "editing" | "reviewing" | "feedback" | "unlocked" };
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -63,12 +75,14 @@ function parseTerminalMessage(data: RawData) {
   try { return JSON.parse(Buffer.isBuffer(data) ? data.toString("utf8") : Buffer.from(data as any).toString("utf8")); }
   catch { return undefined; }
 }
+function isEvaluatedBlock(block: WorkbookBlock): block is Extract<WorkbookBlock, { type: "editor-practice" | "terminal-practice" | "reflection" }> {
+  return block.type === "editor-practice" || block.type === "terminal-practice" || block.type === "reflection";
+}
+function evidenceMatchesBlock(evidence: AttemptEvidence, block: WorkbookBlock): boolean {
+  return (evidence.kind === "editor" && block.type === "editor-practice") || (evidence.kind === "terminal" && block.type === "terminal-practice") || (evidence.kind === "reflection" && block.type === "reflection");
+}
 
-/**
- * The lesson whose progression is live: the first incomplete lesson in the
- * authored rail. Completed lessons stay completed; the server advances to the
- * next lesson instead of pinning the learner to the first chapter.
- */
+/** The lesson whose progression is live: the first incomplete lesson in the authored rail. */
 function activeLesson(loaded: LoadedWorkbook, events: WorkbookEvent[] = []): WorkbookLesson {
   const lessons = loaded.chapters.map((chapter) => chapter.lesson).filter((lesson): lesson is WorkbookLesson => Boolean(lesson));
   const lesson = lessons.find((candidate) => !project(events, candidate).completedLessons.includes(candidate.id)) ?? lessons.at(-1);
@@ -85,13 +99,6 @@ function publicBlock(block: WorkbookBlock) {
 function publicLesson(lesson: WorkbookLesson, blocks: WorkbookBlock[]) {
   return { ...lesson, blocks: blocks.map(publicBlock) };
 }
-
-type PublicEditorProgress = { revision: number; editorStatus: "reviewing" | "waiting" | "feedback"; feedback?: string };
-type PublicEditorProgressByBlock = ReadonlyMap<string, PublicEditorProgress>;
-const editorProgressKey = (lessonId: string, blockId: string) => `${lessonId}\u0000${blockId}`;
-
-type PublicActiveEditorDraft = { revision: number; draftText: string };
-
 async function readTargetDraftText(workspace: string, block: EditorPracticeBlock): Promise<string> {
   const target = await resolveEditorTarget(workspace, block.path);
   try { return await readFile(target, "utf8"); }
@@ -100,27 +107,38 @@ async function readTargetDraftText(workspace: string, block: EditorPracticeBlock
     throw error;
   }
 }
-
-async function activeEditorDraftState(loaded: LoadedWorkbook, lessonId: string, block: EditorPracticeBlock, editorDraftStore: EditorDraftStore): Promise<PublicActiveEditorDraft> {
-  const durableDraft = await editorDraftStore.read(lessonId, block.id);
-  if (durableDraft) return { revision: durableDraft.revision, draftText: durableDraft.text };
-  try { return { revision: 0, draftText: await readTargetDraftText(loaded.workspace, block) }; }
-  catch { return { revision: 0, draftText: "" }; }
+function publicAttemptEvidence(attempt: Attempt): PublicCheckpoint["evidence"] {
+  if (attempt.evidence.kind === "editor") return { kind: "editor", text: attempt.evidence.text };
+  if (attempt.evidence.kind === "terminal") return { kind: "terminal", terminalHtml: attempt.evidence.terminalHtml };
+  return { kind: "reflection", conversation: [...attempt.evidence.conversation, { role: "learner", text: attempt.evidence.response }] };
+}
+function publicCheckpoint(attempt: Attempt | undefined, projected: BlockProgress["checkpoint"]): PublicCheckpoint | undefined {
+  if (attempt && attempt.status !== "superseded") {
+    return {
+      status: attempt.status === "accepted" ? "accepted" : attempt.status,
+      feedback: attempt.status === "feedback" ? attempt.feedback : undefined,
+      successMessage: attempt.status === "accepted" ? attempt.successMessage ?? projected?.summary : undefined,
+      evidence: publicAttemptEvidence(attempt)
+    };
+  }
+  return projected ? { status: "accepted", successMessage: projected.summary, evidence: { kind: projected.kind } } : undefined;
 }
 
-async function publicState(loaded: LoadedWorkbook, events: WorkbookEvent[], editorDraftStore: EditorDraftStore, editorProgress: PublicEditorProgressByBlock = new Map()) {
+async function publicState(loaded: LoadedWorkbook, events: WorkbookEvent[], attempts: AttemptStore) {
   const lesson = activeLesson(loaded, events);
   const activeProgress = project(events, lesson);
   const completedLessons = completedLessonIds(loaded, events);
-  const blocks = await Promise.all(activeProgress.blocks.map(async (block) => {
-    const overlay = editorProgress.get(editorProgressKey(activeProgress.activeLessonId, block.id));
-    const authored = lesson.blocks.find((candidate) => candidate.id === block.id);
-    const activeEditorDraft = authored?.type === "editor-practice" && block.active && block.ready && !block.completed
-      ? await activeEditorDraftState(loaded, activeProgress.activeLessonId, authored, editorDraftStore)
-      : undefined;
-    if (overlay && !block.completed) return { ...block, ...activeEditorDraft, revision: overlay.revision, editorStatus: overlay.editorStatus, feedback: overlay.feedback };
-    if (activeEditorDraft) return { ...block, revision: activeEditorDraft.revision, draftText: activeEditorDraft.draftText, editorStatus: block.editorStatus ?? "editing" as const };
-    return block;
+  const blocks = await Promise.all(activeProgress.blocks.map(async (progressBlock): Promise<PublicBlockProgress> => {
+    const authored = lesson.blocks.find((candidate) => candidate.id === progressBlock.id);
+    const currentAttempt = authored && isEvaluatedBlock(authored) ? await attempts.current(lesson.id, authored.id).catch(() => undefined) : undefined;
+    const checkpoint = publicCheckpoint(currentAttempt, progressBlock.checkpoint);
+    const base: PublicBlockProgress = { ...progressBlock, checkpoint };
+    if (authored?.type === "editor-practice" && progressBlock.active && progressBlock.ready && !progressBlock.completed) {
+      if (currentAttempt?.evidence.kind === "editor") return { ...base, revision: currentAttempt.version, draftText: currentAttempt.evidence.text, editorStatus: checkpoint?.status === "reviewing" ? "reviewing" : checkpoint?.status === "feedback" ? "feedback" : "editing", feedback: checkpoint?.feedback };
+      return { ...base, revision: 0, draftText: await readTargetDraftText(loaded.workspace, authored).catch(() => ""), editorStatus: "editing" };
+    }
+    if (authored?.type === "editor-practice" && currentAttempt?.status === "accepted") return { ...base, revision: currentAttempt.version, editorStatus: "unlocked" };
+    return base;
   }));
   const progress = { ...activeProgress, completedLessons, blocks };
   const introductionComplete = introductionCompleted(events);
@@ -146,140 +164,116 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     if (!options.terminalPtyFactory) assertDockerTerminalReady(loaded.workspace);
   }
   const store = new WorkbookEventStore(loaded.workspace);
-  const reflectionConversation = options.reflectionConversation ?? new PiReflectionConversationAdapter(loaded.workspace, log);
-  const editorDraftStore = new EditorDraftStore(loaded.workspace);
-  const editorReviewAdapter = options.editorReviewAdapter ?? new PiEditorReviewAdapter(loaded.workspace, log);
-  const editorReviewDebounceMs = Math.max(0, Math.min(options.editorReviewDebounceMs ?? 750, 10_000));
-  const editorProgress = new Map<string, PublicEditorProgress>();
-  const editorReviewTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const editorBlockLocks = new Map<string, Promise<void>>();
-  const withEditorBlockLock = async <T>(lessonId: string, blockId: string, work: () => Promise<T>): Promise<T> => {
-    const key = editorProgressKey(lessonId, blockId);
-    const previous = editorBlockLocks.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>((resolvePromise) => { release = resolvePromise; });
-    const tail = previous.catch(() => undefined).then(() => current);
-    editorBlockLocks.set(key, tail);
-    await previous.catch(() => undefined);
-    try { return await work(); }
-    finally {
-      release();
-      if (editorBlockLocks.get(key) === tail) editorBlockLocks.delete(key);
-    }
-  };
-  const currentPublicState = (events: WorkbookEvent[]) => publicState(loaded, events, editorDraftStore, editorProgress);
-  let reflectionQueue = Promise.resolve();
-  if ((await store.read()).length === 0) await store.append(nowEvent({ type: "session_started" }));
+  const attempts = new AttemptStore(loaded.workspace);
+  const tutor = options.workbookTutor ?? new RestrictedWorkbookTutor({ workspace: loaded.workspace, log });
   let eventsCache = await store.read();
+  if (eventsCache.length === 0) {
+    await store.append(nowEvent({ type: "session_started" }));
+    eventsCache = await store.read();
+  }
   const refreshEvents = async () => { eventsCache = await store.read(); return eventsCache; };
+  const currentPublicState = (events: WorkbookEvent[]) => publicState(loaded, events, attempts);
+
+  let submissionTail: Promise<unknown> = Promise.resolve();
+  const withSubmissionLock = async <T>(work: () => Promise<T>): Promise<T> => {
+    const run = submissionTail.catch(() => undefined).then(work);
+    submissionTail = run.catch(() => undefined);
+    return run;
+  };
+
+  const activeAuthoredBlock = (events = eventsCache): { lesson: WorkbookLesson; progress: ReturnType<typeof project>; blockProgress: BlockProgress; block: WorkbookBlock } | undefined => {
+    if (!introductionCompleted(events)) return undefined;
+    const lesson = activeLesson(loaded, events);
+    const progress = project(events, lesson);
+    const blockProgress = progress.blocks.find((block) => block.active && block.ready);
+    const block = lesson.blocks.find((candidate) => candidate.id === blockProgress?.id);
+    if (!blockProgress || !block) return undefined;
+    return { lesson, progress, blockProgress, block };
+  };
   const activeObservedBlock = (): ActiveObservedTerminalBlock | undefined => {
-    if (!introductionCompleted(eventsCache)) return undefined;
-    const lesson = activeLesson(loaded, eventsCache);
-    const projection = project(eventsCache, lesson);
-    const active = projection.blocks.find((block) => block.active);
-    const authored = lesson.blocks.find((block) => block.id === active?.id);
-    if (!authored || authored.type !== "terminal-practice") return undefined;
-    return { lessonId: lesson.id, blockId: authored.id, command: authored.markdown, context: authored.markdown, expectedObservation: authored.tutor };
+    const active = activeAuthoredBlock();
+    if (!active || active.block.type !== "terminal-practice") return undefined;
+    return { lessonId: active.lesson.id, blockId: active.block.id, command: active.block.markdown, context: active.block.markdown, expectedObservation: active.block.tutor };
   };
-  const activeEditorBlock = (): { lesson: WorkbookLesson; block: EditorPracticeBlock } | undefined => {
-    if (!introductionCompleted(eventsCache)) return undefined;
-    const lesson = activeLesson(loaded, eventsCache);
-    const projection = project(eventsCache, lesson);
-    const active = projection.blocks.find((block) => block.active && block.ready);
-    const authored = lesson.blocks.find((block) => block.id === active?.id);
-    if (!authored || authored.type !== "editor-practice") return undefined;
-    return { lesson, block: authored };
-  };
-  const setEditorFeedback = (lessonId: string, blockId: string, revision: number, feedback: string) => {
-    editorProgress.set(editorProgressKey(lessonId, blockId), { revision, editorStatus: "feedback", feedback: feedback.trim().slice(0, 1_000) || "Review is temporarily unavailable. Retrying the latest draft." });
-  };
-  const runEditorReview = async (lessonId: string, blockId: string): Promise<void> => {
-    const key = editorProgressKey(lessonId, blockId);
-    editorReviewTimers.delete(key);
-    try {
-      const request = await withEditorBlockLock(lessonId, blockId, async () => {
-        await refreshEvents();
-        const active = activeEditorBlock();
-        if (!active || active.lesson.id !== lessonId || active.block.id !== blockId) return undefined;
-        const draft = await editorDraftStore.read(lessonId, blockId);
-        if (!draft) return undefined;
-        return { privateBrief: active.block.tutor, draft };
-      });
-      if (!request) return;
-      const decision = await editorReviewAdapter.review({ lessonId, blockId, privateBrief: request.privateBrief, draft: request.draft });
-      await withEditorBlockLock(lessonId, blockId, async () => {
-        await refreshEvents();
-        const currentActive = activeEditorBlock();
-        const currentDraft = await editorDraftStore.read(lessonId, blockId);
-        if (!currentActive || currentActive.lesson.id !== lessonId || currentActive.block.id !== blockId || !currentDraft || currentDraft.revision !== request.draft.revision) return;
-        if (decision.status === "waiting") {
-          editorProgress.set(key, { revision: request.draft.revision, editorStatus: "waiting" });
-          return;
-        }
-        if (decision.status === "feedback") {
-          setEditorFeedback(lessonId, blockId, request.draft.revision, decision.message);
-          return;
-        }
-        if (decision.revisionId !== request.draft.revision) {
-          setEditorFeedback(lessonId, blockId, request.draft.revision, `Reviewer tried to unlock stale revision ${decision.revisionId}; the current revision is ${request.draft.revision}. Revise and submit the current draft again.`);
-          return;
-        }
-        await editorDraftStore.promote(currentActive.block, request.draft);
-        await store.append(nowEvent({ type: "editor_practice_unlocked", lessonId, blockId, revisionId: request.draft.revision, path: currentActive.block.path }));
-        editorProgress.delete(key);
-        const updated = await refreshEvents();
-        await store.writeProjection(project(updated, activeLesson(loaded, updated)));
-      });
-    } catch (error) {
-      const latest = await withEditorBlockLock(lessonId, blockId, async () => {
-        const draft = await editorDraftStore.read(lessonId, blockId).catch(() => undefined);
-        if (draft) setEditorFeedback(lessonId, blockId, draft.revision, "Review is temporarily unavailable. Retrying the latest draft.");
-        return draft;
-      });
-      if (!latest) return;
-      const retryDelay = Math.max(50, editorReviewDebounceMs);
-      const existing = editorReviewTimers.get(key);
-      if (existing) clearTimeout(existing);
-      editorReviewTimers.set(key, setTimeout(() => { void runEditorReview(lessonId, blockId); }, retryDelay));
-      log.info(`Editor-practice review failed; retrying latest draft. ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-  const enqueueEditorReview = (lessonId: string, blockId: string) => {
-    const key = editorProgressKey(lessonId, blockId);
-    const existing = editorReviewTimers.get(key);
-    if (existing) clearTimeout(existing);
-    editorReviewTimers.set(key, setTimeout(() => { void runEditorReview(lessonId, blockId); }, editorReviewDebounceMs));
-  };
-  const completeFromObserver = async (block: ActiveObservedTerminalBlock, summary: string, terminalHtml: string) => {
+
+  const writeCurrentProjection = async () => {
     const events = await refreshEvents();
-    const active = activeObservedBlock();
-    if (!active || active.lessonId !== block.lessonId || active.blockId !== block.blockId) return currentPublicState(events);
-    // Verification holds the learner at a visible success checkpoint. Only an
-    // explicit completion event reveals the next required block.
-    await store.append(nowEvent({ type: "observation_verified", lessonId: block.lessonId, blockId: block.blockId, source: "terminal_observer", summary, terminalHtml }));
-    const updated = await refreshEvents();
-    await store.writeProjection(project(updated, activeLesson(loaded, updated)));
-    return currentPublicState(updated);
+    await store.writeProjection(project(events, activeLesson(loaded, events)));
+    return events;
   };
+
+  const finishReview = async (attempt: Attempt, privateGuidance: string): Promise<void> => {
+    let decision;
+    try {
+      decision = await tutor.review({ attempt, privateGuidance });
+    } catch (error) {
+      log.info(`Workbook tutor review failed for ${attempt.lessonId}/${attempt.blockId}: ${error instanceof Error ? error.message : String(error)}`);
+      const feedback = await attempts.markFeedback(attempt.id, REVIEW_FAILURE_FEEDBACK);
+      if (feedback?.evidence.kind === "reflection") await store.append(nowEvent({ type: "reflection_reply_recorded", lessonId: feedback.lessonId, blockId: feedback.blockId, response: feedback.feedback ?? REVIEW_FAILURE_FEEDBACK }));
+      await writeCurrentProjection();
+      return;
+    }
+
+    await refreshEvents();
+    const active = activeAuthoredBlock();
+    const current = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
+    if (!active || active.lesson.id !== attempt.lessonId || active.block.id !== attempt.blockId || !current || current.id !== attempt.id) return;
+
+    if (decision.accepted) {
+      const accepted = await attempts.acceptCurrent(attempt.id, decision.feedback);
+      if (!accepted) return;
+      if (accepted.evidence.kind === "editor" && active.block.type === "editor-practice") {
+        try {
+          const promoted = await promoteAcceptedEditorAttempt({ workspace: loaded.workspace, attempts, lessonId: active.lesson.id, block: active.block, attemptId: accepted.id });
+          if (!promoted) { await attempts.markFeedback(accepted.id, REVIEW_FAILURE_FEEDBACK); return; }
+        } catch (error) {
+          log.info(`Accepted editor attempt could not be promoted: ${error instanceof Error ? error.message : String(error)}`);
+          await attempts.markFeedback(accepted.id, REVIEW_FAILURE_FEEDBACK);
+          await writeCurrentProjection();
+          return;
+        }
+      }
+      await store.append(nowEvent({ type: "attempt_accepted", lessonId: accepted.lessonId, blockId: accepted.blockId, attemptId: accepted.id, version: accepted.version, kind: accepted.evidence.kind, summary: accepted.successMessage ?? decision.feedback }));
+      await writeCurrentProjection();
+      return;
+    }
+
+    const feedback = await attempts.markFeedback(attempt.id, decision.feedback);
+    if (feedback?.evidence.kind === "reflection") {
+      await store.append(nowEvent({ type: "reflection_reply_recorded", lessonId: feedback.lessonId, blockId: feedback.blockId, response: feedback.feedback ?? decision.feedback }));
+    }
+    await writeCurrentProjection();
+  };
+
+  const submitAttempt = async (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }): Promise<Attempt> => withSubmissionLock(async () => {
+    const latest = await refreshEvents();
+    const active = activeAuthoredBlock(latest);
+    if (!active || active.lesson.id !== input.lessonId || active.block.id !== input.blockId || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(input.evidence, active.block)) throw new Error("This block is not active yet.");
+    const attempt = await attempts.create({ lessonId: input.lessonId, blockId: input.blockId, evidence: input.evidence });
+    const reviewing = await attempts.markReviewing(attempt.id) ?? attempt;
+    void finishReview(reviewing, input.privateGuidance);
+    return reviewing;
+  });
+
+  const requeueActiveAttempt = async (): Promise<void> => {
+    const active = activeAuthoredBlock(await refreshEvents());
+    if (!active || !isEvaluatedBlock(active.block)) return;
+    const current = await attempts.current(active.lesson.id, active.block.id).catch(() => undefined);
+    if (!current || current.status === "accepted" || current.status === "superseded") return;
+    const reviewing = await attempts.markReviewing(current.id) ?? current;
+    void finishReview(reviewing, active.block.tutor);
+  };
+  void requeueActiveAttempt();
+
   const terminal = embeddedTerminalEnabled ? new WorkbookTerminalManager({
     workspace: loaded.workspace,
     getActiveBlock: activeObservedBlock,
-    observer: options.terminalObserver ?? new PiTerminalObserver(loaded.workspace, log),
-    onVerifiedCompletion: completeFromObserver,
+    submitAttempt: async (input) => { await submitAttempt(input); },
     ptyFactory: options.terminalPtyFactory ?? createDockerPty,
     debounceMs: options.terminalDebounceMs,
     logger: log
   }) : undefined;
-  const reflectionEvidence = (): PracticeEvidence[] => {
-    const lesson = activeLesson(loaded, eventsCache);
-    const current = project(eventsCache, lesson);
-    const transcripts = new Map((terminal?.practiceTranscripts() ?? []).map((item) => [item.blockId, item.transcript]));
-    return lesson.blocks.flatMap((block) => {
-      const progress = current.blocks.find((item) => item.id === block.id);
-      if (block.type !== "terminal-practice" || !progress?.emerged) return [];
-      return [{ blockId: block.id, title: block.title, expectedObservation: block.tutor, transcript: transcripts.get(block.id), unexpectedOutput: current.unexpected[block.id] ?? [], verified: progress.verified, feedback: progress.feedback }];
-    });
-  };
+
   let server = createServer(async (request, response) => {
     headers(response);
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -287,37 +281,26 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     if (request.method === "POST" && isRoute(url.pathname, "introduction")) {
       const events = await refreshEvents();
       if (!introductionCompleted(events)) await store.append(nowEvent({ type: "workbook_introduction_completed" }));
-      const updated = await refreshEvents();
-      await store.writeProjection(project(updated, activeLesson(loaded, updated)));
+      const updated = await writeCurrentProjection();
       return sendJson(response, 202, await currentPublicState(updated));
     }
     if (request.method === "POST" && isRoute(url.pathname, "editor")) {
       try {
         const body = await readJson(request);
         const blockId = typeof body.blockId === "string" ? body.blockId : "";
-        const revision = body.revision;
-        const text = body.text;
-        if (!Number.isInteger(revision) || revision < 1) return sendJson(response, 400, { error: "Editor revision must be a positive integer." });
-        if (typeof text !== "string") return sendJson(response, 400, { error: "Editor text must be a string." });
+        const text = typeof body.text === "string" ? body.text : undefined;
+        if (text === undefined) return sendJson(response, 400, { error: "Editor text must be a string." });
         if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) return sendJson(response, 400, { error: "Editor text is too large." });
-        const latest = await refreshEvents();
-        if (!introductionCompleted(latest)) return sendJson(response, 409, { error: "Complete the workbook introduction first." });
-        const lesson = activeLesson(loaded, latest);
-        const result = await withEditorBlockLock(lesson.id, blockId, async () => {
-          await refreshEvents();
-          const active = activeEditorBlock();
-          if (!active || active.block.id !== blockId) return { status: 409, body: { error: "This editor block is not active yet." } };
-          try { await resolveEditorTarget(loaded.workspace, active.block.path); }
-          catch (error) { return { status: 400, body: { error: error instanceof Error ? error.message : "Unsafe editor target path." } }; }
-          const currentDraft = await editorDraftStore.read(active.lesson.id, active.block.id);
-          if (currentDraft && revision <= currentDraft.revision) return { status: 409, body: { error: "Editor revision is stale." } };
-          await editorDraftStore.write(active.lesson.id, active.block.id, revision, text);
-          editorProgress.set(editorProgressKey(active.lesson.id, active.block.id), { revision, editorStatus: "reviewing" });
-          enqueueEditorReview(active.lesson.id, active.block.id);
-          return { status: 202, body: await currentPublicState(await refreshEvents()) };
-        });
-        return sendJson(response, result.status, result.body);
-      } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." }); }
+        const active = activeAuthoredBlock(await refreshEvents());
+        if (!active || active.block.type !== "editor-practice" || active.block.id !== blockId) return sendJson(response, 409, { error: "This editor block is not active yet." });
+        try { await resolveEditorTarget(loaded.workspace, active.block.path); }
+        catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Unsafe editor target path." }); }
+        await submitAttempt({ lessonId: active.lesson.id, blockId: active.block.id, evidence: { kind: "editor", text }, privateGuidance: active.block.tutor });
+        return sendJson(response, 202, await currentPublicState(await refreshEvents()));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Bad request.";
+        return sendJson(response, /accepted work|not active/i.test(message) ? 409 : 400, { error: message });
+      }
     }
     if (request.method === "POST" && isRoute(url.pathname, "events")) {
       try {
@@ -329,44 +312,35 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         if (!block) return sendJson(response, 400, { error: "Unknown blockId." });
         const current = project(latest, lesson);
         const progress = current.blocks.find((candidate) => candidate.id === block.id);
-        // A block event is evidence for the current activity, never a way for a
-        // browser request to skip the ordered lesson contract. Help remains
-        // available on visible held blocks, but only the active activity can
-        // produce progress evidence.
-        if (body.action !== "help" && (!progress?.active || !progress.ready)) {
-          return sendJson(response, 409, { error: "This block is not active yet." });
-        }
+        if (body.action !== "help" && (!progress?.active || !progress.ready)) return sendJson(response, 409, { error: "This block is not active yet." });
+
         if ((body.action === "reflection-submit" || body.action === "reflection-follow-up") && block.type === "reflection") {
-          const learnerResponse = typeof body.response === "string" ? body.response.trim().slice(0, 4_000) : "";
-          if (!learnerResponse) return sendJson(response, 400, { error: "Write a reflection before discussing it." });
-          const conversation = current.reflectionConversations[block.id] ?? [];
+          const responseText = typeof body.response === "string" ? body.response : "";
+          const priorConversation = current.reflectionConversations[block.id] ?? [];
           const isFirst = body.action === "reflection-submit";
-          if ((isFirst && conversation.length > 0) || (!isFirst && !conversation.some((turn) => turn.role === "tutor"))) return sendJson(response, 409, { error: "Wait for the tutor reply before adding a follow-up." });
-          // Keep turns in request order if an eager browser submits twice.
-          let result: any;
-          await (reflectionQueue = reflectionQueue.then(async () => {
-            await store.append(nowEvent(isFirst
-              ? { type: "reflection_submitted", lessonId: lesson.id, blockId: block.id, response: learnerResponse }
-              : { type: "reflection_follow_up_submitted", lessonId: lesson.id, blockId: block.id, response: learnerResponse }));
-            const updated = await refreshEvents();
-            const thread = project(updated, lesson).reflectionConversations[block.id] ?? [];
-            const reply = await reflectionConversation.reply({ question: block.markdown, tutor: block.tutor, message: learnerResponse, conversation: thread, practiceEvidence: reflectionEvidence() });
-            await store.append(nowEvent({ type: "reflection_reply_recorded", lessonId: lesson.id, blockId: block.id, response: reply }));
-            const complete = await refreshEvents(); await store.writeProjection(project(complete, activeLesson(loaded, complete)));
-            result = await currentPublicState(complete);
-          }));
-          return sendJson(response, 202, result);
+          if ((isFirst && priorConversation.length > 0) || (!isFirst && !priorConversation.some((turn) => turn.role === "tutor"))) return sendJson(response, 409, { error: "Wait for the tutor reply before adding a follow-up." });
+          const learnerTurns = await submitReflectionAttempt({ lessonId: lesson.id, blockId: block.id, privateGuidance: block.tutor, response: responseText, conversation: priorConversation, submitAttempt: async () => undefined });
+          await store.append(nowEvent(isFirst
+            ? { type: "reflection_submitted", lessonId: lesson.id, blockId: block.id, response: learnerTurns.at(-1)!.text }
+            : { type: "reflection_follow_up_submitted", lessonId: lesson.id, blockId: block.id, response: learnerTurns.at(-1)!.text }));
+          await submitAttempt({ lessonId: lesson.id, blockId: block.id, privateGuidance: block.tutor, evidence: { kind: "reflection", response: learnerTurns.at(-1)!.text, conversation: priorConversation } });
+          const updated = await writeCurrentProjection();
+          return sendJson(response, 202, await currentPublicState(updated));
         }
+
         let event: WorkbookEvent | undefined;
-        if (body.action === "complete" && block.type === "terminal-practice" && progress?.verified && !progress.completed) event = nowEvent({ type: "block_completed", lessonId: lesson.id, blockId: block.id });
         if (body.action === "continue" && (block.type === "narrative" || block.type === "lesson-transition")) event = nowEvent({ type: "block_continued", lessonId: lesson.id, blockId: block.id });
+        if (body.action === "continue" && isEvaluatedBlock(block)) {
+          const currentAttempt = await attempts.current(lesson.id, block.id).catch(() => undefined);
+          if (!currentAttempt || currentAttempt.status !== "accepted" || !progress.checkpoint) return sendJson(response, 409, { error: "This block has not been accepted yet." });
+          event = nowEvent({ type: "block_continued", lessonId: lesson.id, blockId: block.id });
+        }
         if (body.action === "unexpected" && block.type === "terminal-practice" && typeof body.evidence === "string") event = nowEvent({ type: "unexpected_output_submitted", lessonId: lesson.id, blockId: block.id, evidence: body.evidence });
-        if (body.action === "reflection-complete" && block.type === "reflection" && (current.reflectionConversations[block.id] ?? []).some((turn) => turn.role === "tutor")) event = nowEvent({ type: "reflection_completed", lessonId: lesson.id, blockId: block.id });
         if (body.action === "help" && typeof body.request === "string") event = nowEvent({ type: "help_requested", lessonId: lesson.id, blockId: block.id, request: body.request });
         if (!event) return sendJson(response, 400, { error: "Invalid workbook action for this block." });
         await store.append(event);
-        const events = await refreshEvents();
-        await store.writeProjection(project(events, activeLesson(loaded, events)));
+        const events = await writeCurrentProjection();
+        if (event.type === "block_continued" && isEvaluatedBlock(block)) void tutor.compactAfterBlock();
         return sendJson(response, 202, await currentPublicState(events));
       } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." }); }
     }
@@ -420,9 +394,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const url = `http://${LOOPBACK_HOST}:${address.port}`;
   log.info(`Workbook tutor listening on ${url}. State: ${store.eventPath}${terminal ? " Embedded terminal enabled on loopback only." : ""}`);
   return { url, port: address.port, host, close: async () => {
-    for (const timer of editorReviewTimers.values()) clearTimeout(timer);
-    editorReviewTimers.clear();
     terminal?.dispose();
+    tutor.dispose();
     wss?.close();
     await new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise()));
   } };

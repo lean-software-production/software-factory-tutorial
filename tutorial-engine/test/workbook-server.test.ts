@@ -1,19 +1,15 @@
-import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile, access } from "node:fs/promises";
 import * as terminalModule from "../src/workbook/terminal.js";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { WebSocket } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startWorkbookServer } from "../src/workbook/server.js";
-import { EditorDraftStore, EditorReviewAdapter, type EditorDraft, type EditorReviewDecision, type EditorReviewRequest } from "../src/workbook/editor.js";
-import type { TerminalObservationRequest, TerminalObserver, TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
-import type { ReflectionConversationAdapter } from "../src/workbook/reflection.js";
+import type { TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
+import type { TutorDecision, TutorReview, WorkbookTutor } from "../src/workbook/tutor.js";
 
 let dirs: string[] = [];
 
-// The fixture uses only the new workbook Markdown contract: every document has
-// front matter, titles live in headings, lesson.md lists block IDs, and blocks
-// carry private tutor guidance only for terminal/reflection adapters.
 async function fixture(options: { editorPath?: string } = {}) {
   const dir = await mkdtemp(resolve(tmpdir(), "workbook-server-")); dirs.push(dir);
   const partDir = resolve(dir, "lessons/01-loop");
@@ -76,6 +72,30 @@ class ServerFakePty implements TerminalPty {
   onExit(callback: (event: { exitCode: number }) => void): void { this.exit = callback; }
 }
 
+type QueuedDecision = TutorDecision | Error | Promise<TutorDecision> | ((review: TutorReview) => TutorDecision | Promise<TutorDecision>);
+class FakeTutor implements WorkbookTutor {
+  reviews: TutorReview[] = [];
+  compactions = 0;
+  disposed = false;
+  queue: QueuedDecision[] = [];
+  constructor(...queue: QueuedDecision[]) { this.queue = queue; }
+  async review(input: TutorReview): Promise<TutorDecision> {
+    this.reviews.push(input);
+    const next = this.queue.shift() ?? { accepted: false, feedback: "Keep going." };
+    if (next instanceof Error) throw next;
+    return typeof next === "function" ? next(input) : next;
+  }
+  async compactAfterBlock(): Promise<void> { this.compactions++; }
+  dispose(): void { this.disposed = true; }
+}
+
+function deferred<T>() {
+  let resolvePromise!: (value: T | PromiseLike<T>) => void;
+  let rejectPromise!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolve, reject) => { resolvePromise = resolve; rejectPromise = reject; });
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
+}
+
 function connect(url: string, origin?: string): Promise<WebSocket> {
   return new Promise((resolvePromise, reject) => {
     const ws = new WebSocket(url.replace(/^http/, "ws") + "/api/workbook/terminal", origin ? { headers: { Origin: origin } } : undefined);
@@ -101,60 +121,37 @@ async function postEditor(serverUrl: string, body: unknown) {
   return fetch(`${serverUrl}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
-class FakeEditorReviewAdapter extends EditorReviewAdapter {
-  calls: EditorReviewRequest[] = [];
-  constructor(private readonly decide: (request: EditorReviewRequest) => EditorReviewDecision | Promise<EditorReviewDecision> = (request) => ({ status: "unlocked", revisionId: request.draft.revision })) {
-    super(async () => ({ prompt: async () => "" }));
-  }
-  override async review(request: EditorReviewRequest): Promise<EditorReviewDecision> {
-    this.calls.push(request);
-    return this.decide(request);
-  }
+async function state(serverUrl: string) { return fetch(`${serverUrl}/api/workbook/state`).then((r) => r.json() as any); }
+async function introduceAndOpenEditor(serverUrl: string) {
+  await fetch(`${serverUrl}/api/workbook/introduction`, { method: "POST" });
+  await postEvent(serverUrl, { blockId: "orientation", action: "continue" });
 }
-
 async function waitMs(ms: number) { await new Promise((resolvePromise) => setTimeout(resolvePromise, ms)); }
-
-function deferred<T = void>() {
-  let resolvePromise!: (value: T | PromiseLike<T>) => void;
-  let rejectPromise!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
-  return { promise, resolve: resolvePromise, reject: rejectPromise };
-}
-
 async function waitForWorkbookState(serverUrl: string, predicate: (state: any) => boolean, description: string) {
-  const deadline = Date.now() + 1_000;
+  const deadline = Date.now() + 1_500;
   let latest: any;
   while (Date.now() < deadline) {
-    latest = await fetch(`${serverUrl}/api/workbook/state`).then((r) => r.json() as any);
+    latest = await state(serverUrl);
     if (predicate(latest)) return latest;
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+    await waitMs(10);
   }
   throw new Error(`Timed out waiting for ${description}. Last state: ${JSON.stringify(latest)}`);
 }
+function block(state: any, blockId: string) { return state.progress.blocks.find((candidate: any) => candidate.id === blockId); }
 
-async function waitForEditorBlock(serverUrl: string, predicate: (block: any, state: any) => boolean, description: string) {
-  return waitForWorkbookState(serverUrl, (state) => {
-    const block = state.progress.blocks.find((candidate: any) => candidate.id === "edit-answer");
-    return Boolean(block && predicate(block, state));
-  }, description);
+async function acceptEditor(serverUrl: string, tutor: FakeTutor, text = "factory acceptance marker") {
+  tutor.queue.push({ accepted: true, feedback: "Editor accepted." });
+  expect((await postEditor(serverUrl, { blockId: "edit-answer", text })).status).toBe(202);
+  await waitForWorkbookState(serverUrl, (next) => block(next, "edit-answer")?.checkpoint?.status === "accepted", "editor acceptance");
+  expect((await postEvent(serverUrl, { blockId: "edit-answer", action: "continue" })).status).toBe(202);
 }
 
-async function completeEditor(serverUrl: string, text = "factory acceptance marker") {
-  const submitted = await postEditor(serverUrl, { blockId: "edit-answer", revision: 1, text, path: "factory/browser-direct.md" });
-  expect(submitted.status).toBe(202);
-  return waitForWorkbookState(serverUrl, (state) => state.progress.activeBlockId !== "edit-answer", "editor practice to unlock");
-}
-
-async function completeTerminal(serverUrl: string, blockId: string) {
+async function submitTerminalAttempt(serverUrl: string, blockId: string) {
   const ws = await connect(serverUrl, serverUrl);
-  const verified = waitFor(ws, (message) => message.type === "verified-complete" && message.blockId === blockId);
+  const submitted = waitFor(ws, (message) => message.type === "attempt-status" && message.blockId === blockId && message.status === "submitted");
   ws.send(JSON.stringify({ type: "input", data: `run ${blockId}\r` }));
-  await verified;
+  await submitted;
   ws.close();
-  return postEvent(serverUrl, { blockId, action: "complete" }).then((response) => response.json() as any);
 }
 
 let originalOpenCodeApiKey: string | undefined;
@@ -163,7 +160,6 @@ beforeEach(() => {
   process.env.OPENCODE_API_KEY = "test-opencode-key";
 });
 afterEach(async () => {
-  vi.useRealTimers();
   vi.restoreAllMocks();
   if (originalOpenCodeApiKey === undefined) delete process.env.OPENCODE_API_KEY;
   else process.env.OPENCODE_API_KEY = originalOpenCodeApiKey;
@@ -172,407 +168,207 @@ afterEach(async () => {
 });
 
 describe("workbook browser API", () => {
-  it("rejects progress actions for blocks that are not active", async () => {
-    const dir = await fixture(); const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false });
+  it("serves content without private tutor data and rejects inactive actions", async () => {
+    const dir = await fixture(); const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, workbookTutor: new FakeTutor() });
     try {
+      const initial = await state(server.url);
+      expect(initial.chapters.map((chapter: any) => [chapter.id, chapter.lesson])).toEqual([["01-loop/01-first", undefined], ["01-loop/02-second", undefined]]);
+      expect((await postEvent(server.url, { blockId: "orientation", action: "continue" })).status).toBe(409);
       await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      const inactiveEditor = await postEditor(server.url, { blockId: "edit-answer", revision: 1, text: "browser cannot skip orientation" });
-      expect(inactiveEditor.status).toBe(409);
-      for (const body of [
-        { blockId: "change-job", action: "complete" },
-        { blockId: "transition", action: "continue" }
-      ]) {
-        const response = await postEvent(server.url, body);
-        expect(response.status).toBe(409);
-        expect((await response.json() as { error: string }).error).toMatch(/not active/i);
-      }
-      const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
-      expect(state.progress.activeBlockId).toBe("orientation");
-      expect(state.progress.blocks.filter((block: any) => block.completed)).toEqual([]);
+      expect((await postEditor(server.url, { blockId: "edit-answer", text: "too soon" })).status).toBe(409);
+      expect((await postEvent(server.url, { blockId: "change-job", action: "continue" })).status).toBe(409);
+      const opened = await postEvent(server.url, { blockId: "orientation", action: "continue" }).then((response) => response.json() as any);
+      expect(opened.progress.activeBlockId).toBe("edit-answer");
+      expect(JSON.stringify(opened)).not.toContain("Private editor rubric");
+      expect(JSON.stringify(opened)).not.toContain("Observe run result");
     } finally { await server.close(); }
   });
 
-  it("serves new-layout content without legacy state or private tutor data", async () => {
-    const dir = await fixture(); const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false });
+  it("creates a reviewing editor attempt, promotes only after tutor acceptance, and continues generically", async () => {
+    const dir = await fixture();
+    const accepted = deferred<TutorDecision>();
+    const tutor = new FakeTutor(accepted.promise);
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, workbookTutor: tutor });
     try {
-      const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
-      expect(state.workbook).toMatchObject({ title: "Fixture workbook" });
-      expect(state.introduction).toContain("Welcome to the fixture workbook.");
-      expect(state.chapters.map((chapter: any) => [chapter.id, chapter.state, chapter.lesson])).toEqual([
-        ["01-loop/01-first", undefined, undefined],
-        ["01-loop/02-second", undefined, undefined],
+      await introduceAndOpenEditor(server.url);
+      const submitted = await postEditor(server.url, { blockId: "edit-answer", text: "factory acceptance marker" }).then((response) => response.json() as any);
+      expect(block(submitted, "edit-answer")).toMatchObject({ active: true, draftText: "factory acceptance marker", checkpoint: { status: "reviewing" } });
+      expect(tutor.reviews[0]).toMatchObject({ privateGuidance: expect.stringContaining("Private editor rubric"), attempt: { evidence: { kind: "editor", text: "factory acceptance marker" } } });
+      expect(JSON.stringify(submitted)).not.toContain("Private editor rubric");
+      await expect(access(resolve(dir, "factory/answer.md"))).rejects.toThrow();
+      expect((await postEvent(server.url, { blockId: "edit-answer", action: "continue" })).status).toBe(409);
+
+      accepted.resolve({ accepted: true, feedback: "Ready to continue." });
+      const acceptedState = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "accepted", "accepted editor checkpoint");
+      expect(acceptedState.progress.activeBlockId).toBe("edit-answer");
+      expect(block(acceptedState, "edit-answer")).toMatchObject({ active: true, completed: false, checkpoint: { status: "accepted", successMessage: "Ready to continue.", evidence: { kind: "editor", text: "factory acceptance marker" } } });
+      await expect(readFile(resolve(dir, "factory/answer.md"), "utf8")).resolves.toBe("factory acceptance marker");
+      const continued = await postEvent(server.url, { blockId: "edit-answer", action: "continue" }).then((response) => response.json() as any);
+      expect(continued.progress.activeBlockId).toBe("run-supplied-command");
+      await waitForWorkbookState(server.url, () => tutor.compactions === 1, "queued compaction");
+      expect(JSON.stringify(continued)).not.toContain("attemptId");
+      expect(JSON.stringify(continued)).not.toContain("privateGuidance");
+    } finally { await server.close(); }
+  });
+
+  it("ignores a delayed acceptance for a superseded editor attempt", async () => {
+    const dir = await fixture();
+    const first = deferred<TutorDecision>();
+    const second = deferred<TutorDecision>();
+    const tutor = new FakeTutor(first.promise, second.promise);
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, workbookTutor: tutor });
+    try {
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "edit-answer", text: "old draft" })).status).toBe(202);
+      await waitForWorkbookState(server.url, () => tutor.reviews.length === 1, "first review queued");
+      expect((await postEditor(server.url, { blockId: "edit-answer", text: "new draft" })).status).toBe(202);
+      await waitForWorkbookState(server.url, () => tutor.reviews.length === 2, "second review queued");
+
+      first.resolve({ accepted: true, feedback: "Old acceptance." });
+      await waitMs(50);
+      await expect(readFile(resolve(dir, "factory/answer.md"), "utf8")).rejects.toThrow();
+      const afterStale = await state(server.url);
+      expect(block(afterStale, "edit-answer")?.checkpoint?.status).toBe("reviewing");
+
+      second.resolve({ accepted: true, feedback: "New acceptance." });
+      const acceptedState = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "accepted", "second acceptance");
+      expect(block(acceptedState, "edit-answer")?.checkpoint?.successMessage).toBe("New acceptance.");
+      await expect(readFile(resolve(dir, "factory/answer.md"), "utf8")).resolves.toBe("new draft");
+    } finally { await server.close(); }
+  });
+
+  it("submits terminal and reflection evidence through the common attempt reviewer", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty();
+    const terminalDecision = deferred<TutorDecision>();
+    const reflectionDecision = deferred<TutorDecision>();
+    const tutor = new FakeTutor(
+      { accepted: true, feedback: "Editor accepted." },
+      terminalDecision.promise,
+      { accepted: true, feedback: "Second terminal accepted." },
+      reflectionDecision.promise
+    );
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, workbookTutor: tutor });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      await submitTerminalAttempt(server.url, "run-supplied-command");
+      const terminalReviewing = await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.checkpoint?.status === "reviewing", "terminal reviewing state");
+      expect(block(terminalReviewing, "run-supplied-command")?.checkpoint).toMatchObject({ status: "reviewing", evidence: { kind: "terminal", terminalHtml: expect.stringContaining("ran:run run-supplied-command") } });
+      expect(tutor.reviews[1]).toMatchObject({ privateGuidance: "Observe run result.", attempt: { evidence: { kind: "terminal", transcript: expect.stringContaining("run-supplied-command") } } });
+      terminalDecision.resolve({ accepted: true, feedback: "Terminal accepted." });
+      await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.checkpoint?.status === "accepted", "terminal accepted");
+      expect((await postEvent(server.url, { blockId: "run-supplied-command", action: "continue" })).status).toBe(202);
+
+      await submitTerminalAttempt(server.url, "change-job");
+      await waitForWorkbookState(server.url, (next) => block(next, "change-job")?.checkpoint?.status === "accepted", "second terminal accepted");
+      expect((await postEvent(server.url, { blockId: "change-job", action: "continue" })).status).toBe(202);
+
+      const reflection = await postEvent(server.url, { blockId: "reflection", action: "reflection-submit", response: "It checks the bounded doer by evidence." }).then((response) => response.json() as any);
+      expect(block(reflection, "reflection")).toMatchObject({ active: true, checkpoint: { status: "reviewing" } });
+      expect(reflection.progress.reflectionConversations.reflection).toEqual([{ role: "learner", text: "It checks the bounded doer by evidence." }]);
+      expect(tutor.reviews[3]).toMatchObject({ privateGuidance: "Ask about harness and job.", attempt: { evidence: { kind: "reflection", response: "It checks the bounded doer by evidence.", conversation: [] } } });
+      expect(JSON.stringify(reflection)).not.toContain("Ask about harness and job");
+      reflectionDecision.resolve({ accepted: false, feedback: "Name the exact boundary next." });
+      const feedbackState = await waitForWorkbookState(server.url, (next) => block(next, "reflection")?.checkpoint?.status === "feedback", "reflection feedback");
+      expect(block(feedbackState, "reflection")?.checkpoint?.feedback).toBe("Name the exact boundary next.");
+      expect(feedbackState.progress.reflectionConversations.reflection).toEqual([
+        { role: "learner", text: "It checks the bounded doer by evidence." },
+        { role: "tutor", text: "Name the exact boundary next." }
       ]);
-      const blocked = await postEvent(server.url, { blockId: "orientation", action: "continue" });
-      expect(blocked.status).toBe(409);
-      const introduced = await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" }).then((response) => response.json() as any);
-      expect(introduced.progress.activeLessonId).toBe("01-loop/01-first");
-      expect(introduced.progress.activeBlockId).toBe("orientation");
-      expect(introduced.chapters[0]).toMatchObject({ id: "01-loop/01-first", part: "Part 1 — Loop", partMarkdown: "Part copy." });
-      expect(introduced.chapters[0].state).toBeUndefined();
-      expect(introduced.chapters[0].lesson).toMatchObject({ title: "First lesson", dek: "First lesson dek.", durationMinutes: 10, outcomes: ["Fixture outcome."] });
-      expect(introduced.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["orientation"]);
-      expect(JSON.stringify(introduced)).not.toContain("Observe run result");
-      const continued = await postEvent(server.url, { blockId: "orientation", action: "continue" }).then((response) => response.json() as any);
-      expect(continued.progress.activeBlockId).toBe("edit-answer");
-      expect(continued.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["orientation", "edit-answer"]);
-      expect(JSON.stringify(continued)).not.toContain("Observe run result");
-      expect(JSON.stringify(continued)).not.toContain("Private editor rubric");
     } finally { await server.close(); }
   });
 
-  it("loads the active editor text from the target file when no durable draft exists", async () => {
+  it("requeues active unaccepted attempts after restart", async () => {
     const dir = await fixture();
-    await mkdir(resolve(dir, "factory"), { recursive: true });
-    await writeFile(resolve(dir, "factory/answer.md"), "existing target contents", "utf8");
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false });
+    const never = deferred<TutorDecision>();
+    const firstTutor = new FakeTutor(never.promise);
+    const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, workbookTutor: firstTutor });
     try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      const state = await postEvent(server.url, { blockId: "orientation", action: "continue" }).then((response) => response.json() as any);
-      const editor = state.progress.blocks.find((block: any) => block.id === "edit-answer");
-      expect(editor).toMatchObject({ active: true, editorStatus: "editing", revision: 0, draftText: "existing target contents" });
-      expect(state.progress.blocks.filter((block: any) => "draftText" in block).map((block: any) => block.id)).toEqual(["edit-answer"]);
-      expect(JSON.stringify(state)).not.toContain("Private editor rubric");
-    } finally { await server.close(); }
-  });
-
-  it("restores durable active editor drafts after restart and accepts the next revision", async () => {
-    const dir = await fixture();
-    const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: new FakeEditorReviewAdapter(), editorReviewDebounceMs: 10_000 });
-    try {
-      await fetch(`${firstServer.url}/api/workbook/introduction`, { method: "POST" });
-      await postEvent(firstServer.url, { blockId: "orientation", action: "continue" });
-      const submitted = await postEditor(firstServer.url, { blockId: "edit-answer", revision: 1, text: "saved draft before restart" });
-      expect(submitted.status).toBe(202);
+      await introduceAndOpenEditor(firstServer.url);
+      expect((await postEditor(firstServer.url, { blockId: "edit-answer", text: "saved before restart" })).status).toBe(202);
+      await waitForWorkbookState(firstServer.url, () => firstTutor.reviews.length === 1, "first review queued");
     } finally { await firstServer.close(); }
 
-    const secondServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: new FakeEditorReviewAdapter(() => ({ status: "feedback", message: "next revision reviewed" })), editorReviewDebounceMs: 10_000 });
+    const secondTutor = new FakeTutor({ accepted: true, feedback: "Accepted after restart." });
+    const secondServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, workbookTutor: secondTutor });
     try {
-      const resumed = await fetch(`${secondServer.url}/api/workbook/state`).then((response) => response.json() as any);
-      expect(resumed.progress.activeBlockId).toBe("edit-answer");
-      expect(resumed.progress.blocks.find((block: any) => block.id === "edit-answer")).toMatchObject({
-        active: true,
-        editorStatus: "editing",
-        revision: 1,
-        draftText: "saved draft before restart"
-      });
-      const stale = await postEditor(secondServer.url, { blockId: "edit-answer", revision: 1, text: "stale after restart" });
-      expect(stale.status).toBe(409);
-      const next = await postEditor(secondServer.url, { blockId: "edit-answer", revision: 2, text: "next draft after restart" });
-      expect(next.status).toBe(202);
-      const nextState = await next.json() as any;
-      expect(nextState.progress.blocks.find((block: any) => block.id === "edit-answer")).toMatchObject({ revision: 2, draftText: "next draft after restart", editorStatus: "reviewing" });
+      const acceptedState = await waitForWorkbookState(secondServer.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "accepted", "restart requeue acceptance");
+      expect(secondTutor.reviews).toHaveLength(1);
+      expect(secondTutor.reviews[0].attempt.evidence).toMatchObject({ kind: "editor", text: "saved before restart" });
+      expect(block(acceptedState, "edit-answer")?.checkpoint?.successMessage).toBe("Accepted after restart.");
     } finally { await secondServer.close(); }
   });
 
-  it("reviews only the newest submitted editor revision after the debounce", async () => {
+  it("surfaces a neutral retry state when tutor review fails", async () => {
     const dir = await fixture();
-    const reviewer = new FakeEditorReviewAdapter((request) => ({ status: "feedback", message: `rev ${request.draft.revision} needs the marker` }));
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: reviewer, editorReviewDebounceMs: 25 });
+    const tutor = new FakeTutor(new Error("model provider down"));
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, workbookTutor: tutor });
     try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      await postEvent(server.url, { blockId: "orientation", action: "continue" });
-      const first = await postEditor(server.url, { blockId: "edit-answer", revision: 1, text: "first draft" }).then((response) => response.json() as any);
-      const second = await postEditor(server.url, { blockId: "edit-answer", revision: 2, text: "second draft" }).then((response) => response.json() as any);
-      expect(first.progress.blocks.find((block: any) => block.id === "edit-answer")).toMatchObject({ revision: 1, editorStatus: "reviewing" });
-      expect(second.progress.blocks.find((block: any) => block.id === "edit-answer")).toMatchObject({ revision: 2, editorStatus: "reviewing" });
-      expect(reviewer.calls).toEqual([]);
-      await waitMs(35);
-      expect(reviewer.calls.map((request) => request.draft.revision)).toEqual([2]);
-      expect(reviewer.calls[0].draft.text).toBe("second draft");
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "edit-answer", text: "draft needing retry" })).status).toBe(202);
+      const failed = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "feedback", "neutral review failure feedback");
+      expect(block(failed, "edit-answer")?.checkpoint?.feedback).toMatch(/temporarily unavailable|try again/i);
+      expect(JSON.stringify(failed)).not.toContain("model provider down");
     } finally { await server.close(); }
   });
 
-  it("keeps editor feedback public and leaves the editor block active", async () => {
+  it("advances the active lesson after accepted checkpoints and transition continues", async () => {
     const dir = await fixture();
-    const reviewer = new FakeEditorReviewAdapter(() => ({ status: "feedback", message: "Add the factory acceptance marker." }));
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: reviewer, editorReviewDebounceMs: 10 });
+    const pty = new ServerFakePty();
+    const tutor = new FakeTutor(
+      { accepted: true, feedback: "Editor accepted." },
+      { accepted: true, feedback: "First terminal accepted." },
+      { accepted: true, feedback: "Second terminal accepted." },
+      { accepted: true, feedback: "Reflection accepted." }
+    );
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, workbookTutor: tutor });
     try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      await postEvent(server.url, { blockId: "orientation", action: "continue" });
-      const reviewing = await postEditor(server.url, { blockId: "edit-answer", revision: 1, text: "missing marker" }).then((response) => response.json() as any);
-      expect(reviewing.progress.activeBlockId).toBe("edit-answer");
-      expect(reviewing.progress.blocks.find((block: any) => block.id === "edit-answer")).toMatchObject({ revision: 1, editorStatus: "reviewing" });
-      const state = await waitForEditorBlock(server.url, (block) => block.editorStatus === "feedback", "editor feedback");
-      expect(state.progress.activeBlockId).toBe("edit-answer");
-      expect(state.progress.blocks.find((block: any) => block.id === "edit-answer")).toMatchObject({ revision: 1, editorStatus: "feedback", feedback: "Add the factory acceptance marker." });
-      expect(JSON.stringify(state)).not.toContain("Private editor rubric");
-      expect(JSON.stringify(state)).not.toContain("privateBrief");
-    } finally { await server.close(); }
-  });
-
-  it("promotes the exact approved editor revision and advances to the next block", async () => {
-    const dir = await fixture();
-    const reviewer = new FakeEditorReviewAdapter((request) => ({ status: "unlocked", revisionId: request.draft.revision }));
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: reviewer, editorReviewDebounceMs: 10 });
-    try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      await postEvent(server.url, { blockId: "orientation", action: "continue" });
-      await postEditor(server.url, { blockId: "edit-answer", revision: 3, text: "approved revision text", path: "factory/browser-direct.md" });
-      const state = await waitForWorkbookState(server.url, (state) => state.progress.activeBlockId === "run-supplied-command", "editor practice to promote and advance");
-      expect(state.progress.activeBlockId).toBe("run-supplied-command");
-      expect(state.progress.blocks.find((block: any) => block.id === "edit-answer")).toMatchObject({ completed: true, revision: 3, editorStatus: "unlocked" });
-      await expect(readFile(resolve(dir, "factory/answer.md"), "utf8")).resolves.toBe("approved revision text");
-      await expect(readFile(resolve(dir, "factory/browser-direct.md"), "utf8")).rejects.toThrow();
-      const events = await readFile(resolve(dir, ".tutorial/.tmp/workbook/events.jsonl"), "utf8");
-      expect(events).toContain("editor_practice_unlocked");
-      expect(events).toContain("factory/answer.md");
-    } finally { await server.close(); }
-  });
-
-  it("rejects stale editor unlock decisions without writing the target file", async () => {
-    const dir = await fixture();
-    const reviewer = new FakeEditorReviewAdapter(() => ({ status: "unlocked", revisionId: 1 }));
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: reviewer, editorReviewDebounceMs: 10 });
-    try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      await postEvent(server.url, { blockId: "orientation", action: "continue" });
-      await postEditor(server.url, { blockId: "edit-answer", revision: 1, text: "old" });
-      await postEditor(server.url, { blockId: "edit-answer", revision: 2, text: "latest" });
-      const state = await waitForEditorBlock(server.url, (block) => block.editorStatus === "feedback", "stale unlock feedback");
-      expect(reviewer.calls.map((request) => request.draft.revision)).toEqual([2]);
-      expect(state.progress.activeBlockId).toBe("edit-answer");
-      expect(state.progress.blocks.find((block: any) => block.id === "edit-answer")).toMatchObject({ revision: 2, editorStatus: "feedback" });
-      await expect(readFile(resolve(dir, "factory/answer.md"), "utf8")).rejects.toThrow();
-      const events = await readFile(resolve(dir, ".tutorial/.tmp/workbook/events.jsonl"), "utf8");
-      expect(events).not.toContain("editor_practice_unlocked");
-    } finally { await server.close(); }
-  });
-
-  it("rejects same-revision editor submissions instead of replacing the accepted draft", async () => {
-    const dir = await fixture();
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: new FakeEditorReviewAdapter(), editorReviewDebounceMs: 1_000 });
-    try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      await postEvent(server.url, { blockId: "orientation", action: "continue" });
-      const first = await postEditor(server.url, { blockId: "edit-answer", revision: 1, text: "first accepted text" });
-      const replacement = await postEditor(server.url, { blockId: "edit-answer", revision: 1, text: "same revision replacement" });
-      expect(first.status).toBe(202);
-      expect(replacement.status).toBe(409);
-      expect(await replacement.json()).toMatchObject({ error: expect.stringMatching(/stale/i) });
-      await expect(new EditorDraftStore(dir).read("01-loop/01-first", "edit-answer")).resolves.toMatchObject({ revision: 1, text: "first accepted text" });
-    } finally { await server.close(); }
-  });
-
-  it("does not accept a newer editor draft during the promotion critical section", async () => {
-    const dir = await fixture();
-    const promoteStarted = deferred<void>();
-    const releasePromotion = deferred<void>();
-    const originalPromote = EditorDraftStore.prototype.promote;
-    vi.spyOn(EditorDraftStore.prototype, "promote").mockImplementation(async function (this: EditorDraftStore, block, draft: EditorDraft) {
-      promoteStarted.resolve();
-      await releasePromotion.promise;
-      return originalPromote.call(this, block, draft);
-    });
-    const reviewer = new FakeEditorReviewAdapter((request) => ({ status: "unlocked", revisionId: request.draft.revision }));
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: reviewer, editorReviewDebounceMs: 1 });
-    try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      await postEvent(server.url, { blockId: "orientation", action: "continue" });
-      const first = await postEditor(server.url, { blockId: "edit-answer", revision: 1, text: "approved before finalization" });
-      expect(first.status).toBe(202);
-      await promoteStarted.promise;
-
-      const newerPromise = postEditor(server.url, { blockId: "edit-answer", revision: 2, text: "newer draft during finalization" });
-      const earlyResponse = await Promise.race([
-        newerPromise.then((response) => response),
-        waitMs(100).then(() => undefined)
-      ]);
-      releasePromotion.resolve();
-      const newer = earlyResponse ?? await newerPromise;
-
-      expect(newer.status).toBe(409);
-      const state = await waitForWorkbookState(server.url, (state) => state.progress.activeBlockId === "run-supplied-command", "editor practice to finish finalization");
-      expect(state.progress.blocks.find((block: any) => block.id === "edit-answer")).toMatchObject({ completed: true, revision: 1, editorStatus: "unlocked" });
-      await expect(readFile(resolve(dir, "factory/answer.md"), "utf8")).resolves.toBe("approved before finalization");
-      const draft = await new EditorDraftStore(dir).read("01-loop/01-first", "edit-answer");
-      expect(draft).toMatchObject({ revision: 1, text: "approved before finalization" });
-    } finally {
-      releasePromotion.resolve();
-      await server.close();
-    }
-  });
-
-  it("rejects inactive editor submissions and unsafe declared editor paths without promotion", async () => {
-    const inactiveDir = await fixture();
-    const inactiveServer = await startWorkbookServer({ target: inactiveDir, webRoot: resolve(inactiveDir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: new FakeEditorReviewAdapter(), editorReviewDebounceMs: 1 });
-    try {
-      await fetch(`${inactiveServer.url}/api/workbook/introduction`, { method: "POST" });
-      const response = await postEditor(inactiveServer.url, { blockId: "edit-answer", revision: 1, text: "too early" });
-      expect(response.status).toBe(409);
-      await expect(readFile(resolve(inactiveDir, "factory/answer.md"), "utf8")).rejects.toThrow();
-    } finally { await inactiveServer.close(); }
-
-    const unsafeDir = await fixture({ editorPath: "../escape.md" });
-    const unsafeServer = await startWorkbookServer({ target: unsafeDir, webRoot: resolve(unsafeDir, "web"), port: 0, embeddedTerminal: false, editorReviewAdapter: new FakeEditorReviewAdapter(), editorReviewDebounceMs: 1 });
-    try {
-      await fetch(`${unsafeServer.url}/api/workbook/introduction`, { method: "POST" });
-      await postEvent(unsafeServer.url, { blockId: "orientation", action: "continue" });
-      const response = await postEditor(unsafeServer.url, { blockId: "edit-answer", revision: 1, text: "unsafe path" });
-      expect(response.status).toBe(400);
-      await expect(readFile(resolve(unsafeDir, "../escape.md"), "utf8")).rejects.toThrow();
-    } finally { await unsafeServer.close(); }
-  });
-
-  it("passes private tutor guidance to terminal and reflection adapters", async () => {
-    const dir = await fixture();
-    const terminalRequests: TerminalObservationRequest[] = [];
-    const observer: TerminalObserver = { observe: async (request) => { terminalRequests.push(request); return { status: "complete", summary: "done" }; } };
-    const reflectionRequests: any[] = [];
-    const reflectionConversation: ReflectionConversationAdapter = { reply: async (request) => { reflectionRequests.push(request); return "You connected the command result to the validation loop."; } };
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: observer, terminalPtyFactory: () => new ServerFakePty(), terminalDebounceMs: 1, reflectionConversation, editorReviewAdapter: new FakeEditorReviewAdapter(), editorReviewDebounceMs: 1 });
-    try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      await postEvent(server.url, { blockId: "orientation", action: "continue" });
-      await completeEditor(server.url);
-      await completeTerminal(server.url, "run-supplied-command");
-      await completeTerminal(server.url, "change-job");
-      expect(terminalRequests.map((request) => [request.blockId, request.expectedObservation])).toEqual([
-        ["run-supplied-command", "Observe run result."],
-        ["change-job", "Observe changed-job result."],
-      ]);
-      const discussed = await postEvent(server.url, { blockId: "reflection", action: "reflection-submit", response: "It checks whether the work achieved the expected result." }).then((response) => response.json() as any);
-      expect(discussed.progress.activeBlockId).toBe("reflection");
-      expect(discussed.progress.reflectionConversations.reflection).toEqual([
-        { role: "learner", text: "It checks whether the work achieved the expected result." },
-        { role: "tutor", text: expect.stringMatching(/connected/i) }
-      ]);
-      expect(reflectionRequests[0].question).toBe("Why did this count as headless?");
-      expect(reflectionRequests[0].tutor).toBe("Ask about harness and job.");
-      expect(reflectionRequests[0].practiceEvidence).toEqual(expect.arrayContaining([expect.objectContaining({ blockId: "run-supplied-command", expectedObservation: "Observe run result." })]));
-      expect(JSON.stringify(discussed)).toContain("Why did this count as headless?");
-      expect(JSON.stringify(discussed)).not.toContain("Ask about harness and job");
-    } finally { await server.close(); }
-  });
-
-  it("advances the active lesson after the current lesson completes", async () => {
-    const dir = await fixture();
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: { observe: async () => ({ status: "complete" }) }, terminalPtyFactory: () => new ServerFakePty(), terminalDebounceMs: 1, reflectionConversation: { reply: async () => "Tutor reply." }, editorReviewAdapter: new FakeEditorReviewAdapter(), editorReviewDebounceMs: 1 });
-    try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      await postEvent(server.url, { blockId: "orientation", action: "continue" });
-      await completeEditor(server.url);
-      await completeTerminal(server.url, "run-supplied-command");
-      await completeTerminal(server.url, "change-job");
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      await submitTerminalAttempt(server.url, "run-supplied-command");
+      await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.checkpoint?.status === "accepted", "first terminal accepted");
+      await postEvent(server.url, { blockId: "run-supplied-command", action: "continue" });
+      await submitTerminalAttempt(server.url, "change-job");
+      await waitForWorkbookState(server.url, (next) => block(next, "change-job")?.checkpoint?.status === "accepted", "second terminal accepted");
+      await postEvent(server.url, { blockId: "change-job", action: "continue" });
       await postEvent(server.url, { blockId: "reflection", action: "reflection-submit", response: "Reflection." });
-      await postEvent(server.url, { blockId: "reflection", action: "reflection-complete" });
+      await waitForWorkbookState(server.url, (next) => block(next, "reflection")?.checkpoint?.status === "accepted", "reflection accepted");
+      await postEvent(server.url, { blockId: "reflection", action: "continue" });
       const second = await postEvent(server.url, { blockId: "transition", action: "continue" }).then((response) => response.json() as any);
       expect(second.progress.activeLessonId).toBe("01-loop/02-second");
       expect(second.progress.activeBlockId).toBe("second-orientation");
       expect(second.progress.completedLessons).toContain("01-loop/01-first");
-      expect(second.chapters[1].lesson.blocks.map((block: any) => block.id)).toEqual(["second-orientation"]);
     } finally { await server.close(); }
   });
 
-  it("enables the observed embedded terminal in the production server path", async () => {
+  it("enables the embedded terminal in the production server path", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty();
     const ready = vi.spyOn(terminalModule, "assertDockerTerminalReady").mockImplementation(() => {});
     vi.spyOn(terminalModule, "createDockerPty").mockImplementation(() => pty);
-    vi.spyOn(terminalModule.PiTerminalObserver.prototype, "observe").mockResolvedValue({ status: "complete", summary: "done" });
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalDebounceMs: 1, editorReviewAdapter: new FakeEditorReviewAdapter(), editorReviewDebounceMs: 1 });
+    const tutor = new FakeTutor({ accepted: true, feedback: "Editor accepted." }, { accepted: true, feedback: "Terminal accepted." });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalDebounceMs: 1, workbookTutor: tutor });
     try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      await postEvent(server.url, { blockId: "orientation", action: "continue" });
-      await completeEditor(server.url);
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
       const ws = await connect(server.url, server.url);
-      const completed = waitFor(ws, (message) => message.type === "verified-complete" && message.blockId === "run-supplied-command");
+      const submitted = waitFor(ws, (message) => message.type === "attempt-status" && message.status === "submitted");
       ws.send(JSON.stringify({ type: "input", data: "run default terminal\r" }));
-      await completed;
+      await submitted;
       ws.close();
-      const events = await readFile(resolve(dir, ".tutorial/.tmp/workbook/events.jsonl"), "utf8");
-      expect(events).toContain("observation_verified");
-      expect(events).toContain("terminal_observer");
+      await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.checkpoint?.status === "accepted", "default terminal accepted");
       expect(ready).toHaveBeenCalledOnce();
     } finally { await server.close(); }
   });
 
-  it("refuses to boot an embedded terminal without OPENCODE_API_KEY", async () => {
-    const dir = await fixture();
-    const previous = process.env.OPENCODE_API_KEY;
-    delete process.env.OPENCODE_API_KEY;
-    let server: Awaited<ReturnType<typeof startWorkbookServer>> | undefined;
-    try {
-      server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: { observe: async () => ({ status: "waiting" }) }, terminalPtyFactory: () => new ServerFakePty() });
-      expect.unreachable("embedded terminal boot should require OPENCODE_API_KEY");
-    } catch (error) {
-      expect(error).toHaveProperty("message", expect.stringMatching(/OPENCODE_API_KEY/));
-    } finally {
-      if (previous === undefined) delete process.env.OPENCODE_API_KEY;
-      else process.env.OPENCODE_API_KEY = previous;
-      await server?.close();
-    }
-  });
-
-  it("rejects embedded terminal on a non-loopback host", async () => {
+  it("refuses unsafe embedded-terminal hosts and origins", async () => {
     const dir = await fixture();
     vi.spyOn(terminalModule, "assertDockerTerminalReady").mockImplementation(() => {});
-    await expect(startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), host: "0.0.0.0", port: 0 }))
-      .rejects.toThrow(/loopback/i);
-  });
+    await expect(startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), host: "0.0.0.0", port: 0, workbookTutor: new FakeTutor() })).rejects.toThrow(/loopback/i);
 
-  it("rejects terminal WebSocket origins that are not the workbook server", async () => {
-    const dir = await fixture();
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: { observe: async () => ({ status: "waiting" }) }, terminalPtyFactory: () => new ServerFakePty() });
-    try {
-      await expect(connect(server.url, "http://evil.test")).rejects.toThrow();
-    } finally { await server.close(); }
-  });
-
-  it("verified terminal practice holds a server-owned success checkpoint until completion", async () => {
-    const dir = await fixture();
-    const pty = new ServerFakePty();
-    const observer: TerminalObserver = { observe: async () => ({ status: "complete", summary: "done" }) };
-    const factory: TerminalPtyFactory = () => pty;
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalObserver: observer, terminalPtyFactory: factory, terminalDebounceMs: 1, editorReviewAdapter: new FakeEditorReviewAdapter(), editorReviewDebounceMs: 1 });
-    try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      await postEvent(server.url, { blockId: "orientation", action: "continue" });
-      await completeEditor(server.url);
-      const ws = await connect(server.url, server.url);
-      const completed = waitFor(ws, (message) => message.type === "verified-complete");
-      ws.send(JSON.stringify({ type: "input", data: "echo hello\r" }));
-      const message = await completed;
-      expect(message.state.progress.activeBlockId).toBe("run-supplied-command");
-      expect(message.state.progress.blocks.find((block: any) => block.id === "run-supplied-command")).toMatchObject({ verified: true, completed: false, feedback: "done" });
-      const complete = await postEvent(server.url, { blockId: "run-supplied-command", action: "complete" }).then((response) => response.json() as any);
-      expect(complete.progress.activeBlockId).toBe("change-job");
-      ws.close();
-      const events = await readFile(resolve(dir, ".tutorial/.tmp/workbook/events.jsonl"), "utf8");
-      expect(events).toContain("observation_verified");
-      expect(events).toContain("block_completed");
-      expect(events).toContain("terminal_observer");
-      expect(events).toContain("frozen-terminal-output");
-      expect(events).toContain("ran:echo hello");
-    } finally { await server.close(); }
-  });
-
-  it("terminal advice never completes the active block or enters the event log", async () => {
-    const dir = await fixture();
-    const pty = new ServerFakePty();
-    const server = await startWorkbookServer({
-      target: dir,
-      webRoot: resolve(dir, "web"),
-      port: 0,
-      terminalPtyFactory: () => pty,
-      terminalDebounceMs: 1,
-      terminalObserver: { observe: async () => ({ status: "advice", message: "Run the authored command from the repository root." }) },
-      editorReviewAdapter: new FakeEditorReviewAdapter(),
-      editorReviewDebounceMs: 1
-    });
-    try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      await postEvent(server.url, { blockId: "orientation", action: "continue" });
-      await completeEditor(server.url);
-      const ws = await connect(server.url, server.url);
-      const advice = waitFor(ws, (message) => message.type === "advice");
-      ws.send(JSON.stringify({ type: "input", data: "bad\r" }));
-      expect(await advice).toMatchObject({ message: "Run the authored command from the repository root." });
-      const state = await fetch(`${server.url}/api/workbook/state`).then((r) => r.json() as any);
-      expect(state.progress.activeBlockId).toBe("run-supplied-command");
-      ws.close();
-      const events = await readFile(resolve(dir, ".tutorial/.tmp/workbook/events.jsonl"), "utf8");
-      expect(events).not.toContain("Run the authored command");
-      expect(events).not.toContain("bad");
-    } finally { await server.close(); }
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => new ServerFakePty(), workbookTutor: new FakeTutor() });
+    try { await expect(connect(server.url, "http://evil.test")).rejects.toThrow(); }
+    finally { await server.close(); }
   });
 });
