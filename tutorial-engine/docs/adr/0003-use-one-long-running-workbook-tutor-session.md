@@ -4,7 +4,9 @@ Date: 2026-08-20
 
 ## Status
 
-accepted
+superseded
+
+Superseded by [4. Use the workbook event log as canonical tutor history](0004-use-the-workbook-event-log-as-canonical-tutor-history.md)
 
 ## Context
 
