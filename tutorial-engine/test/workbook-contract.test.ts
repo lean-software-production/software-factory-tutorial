@@ -217,6 +217,21 @@ describe("workbook lesson contract", () => {
     expect(last?.type).toBe("lesson-transition");
   });
 
+  it("defines factory in lesson 013 with the canonical glossary wording", async () => {
+    // Regression test: an earlier draft of the lesson-013 key-concept block defined
+    // "factory" as containing "the line" (singular, this one line) rather than the
+    // canonical "one or more assembly lines and their orchestrator(s)" definition
+    // that docs/GLOSSARY.md and lesson 010 use. Pin the exact canonical phrase here
+    // so a future edit cannot drift from it again.
+    const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
+    const lesson013 = workbook.chapters.find(
+      (chapter) => chapter.id === "02-build-the-factory/09-oversee-the-orchestrator");
+    const keyConcept = lesson013?.lesson.blocks.find((block) => block.id === "key-concept");
+
+    expect(keyConcept?.markdown.replace(/\s+/g, " ")).toContain(
+      "the software containing one or more assembly lines and their orchestrator(s), the unit built, deployed, and operated");
+  });
+
   it("keeps every real block free of stale non-.tmp events paths", async () => {
     const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
     const stalePath = /factory\/refactor\/events\b|"\$line"\/events\b/;

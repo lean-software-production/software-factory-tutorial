@@ -27,11 +27,9 @@ jobs: starting a line, handing each station its inputs, choosing what runs next 
 branches, handling failures, and deciding when the line is finished. You wrote every one of them.
 The branch arrived in 007, the ending in 008, and the rest has been there since 005.
 
-**The factory is `factory/`** — the software containing the line and the orchestrator that manages
-it,
-which the lexicon calls the unit you build, deploy and operate. The three scripts above the line are
-not what make it a factory; they are the third verb. Each takes a line's name as an argument and
-would
+**The factory is `factory/`** — the software containing one or more assembly lines and their
+orchestrator(s), the unit built, deployed, and operated. The three scripts above the line are not
+what make it a factory; they are the third verb. Each takes a line's name as an argument and would
 work unchanged on a second line, which is the only reason it is honest to call a folder with one
 line
 in it a factory at all.

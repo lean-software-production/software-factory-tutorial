@@ -132,24 +132,30 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function mount(element: ReturnType<typeof createElement>) {
+// Every test in this file renders a component into a fresh JSDOM document, so
+// only `window`, `document`, and the React act() environment flag are stubbed
+// here. Globals that only App() needs (a window scroll listener and a
+// scrollIntoView polyfill JSDOM does not implement) are stubbed by callers
+// that actually mount App(), via the optional stubExtraGlobals hook below.
+async function mount(element: ReturnType<typeof createElement>, stubExtraGlobals?: (win: JSDOM["window"]) => void) {
   dom = new JSDOM("<!doctype html><html><body><div id=\"root\"></div></body></html>", { url: "http://localhost/workbook" });
-  // jsdom does not implement scrollIntoView; App() calls it on mount.
-  if (!dom.window.HTMLElement.prototype.scrollIntoView) dom.window.HTMLElement.prototype.scrollIntoView = () => {};
   vi.stubGlobal("window", dom.window as any);
   vi.stubGlobal("document", dom.window.document as any);
-  vi.stubGlobal("HTMLElement", dom.window.HTMLElement as any);
-  vi.stubGlobal("Event", dom.window.Event as any);
-  vi.stubGlobal("CustomEvent", dom.window.CustomEvent as any);
-  vi.stubGlobal("MutationObserver", dom.window.MutationObserver as any);
-  vi.stubGlobal("navigator", dom.window.navigator as any);
-  vi.stubGlobal("addEventListener", dom.window.addEventListener.bind(dom.window) as any);
-  vi.stubGlobal("removeEventListener", dom.window.removeEventListener.bind(dom.window) as any);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  stubExtraGlobals?.(dom.window);
   const container = dom.window.document.getElementById("root")!;
   mountedRoot = createRoot(container);
   await act(async () => { mountedRoot!.render(element); });
   return container;
+}
+
+// App() listens for window scroll events to highlight the viewed lesson and
+// calls scrollIntoView on mount; JSDOM implements neither, so only the test
+// that mounts the full App() shell stubs them, scoped to that one call.
+function stubAppShellGlobals(win: JSDOM["window"]) {
+  if (!win.HTMLElement.prototype.scrollIntoView) win.HTMLElement.prototype.scrollIntoView = () => {};
+  vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+  vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
 }
 
 describe("workbook lesson UI", () => {
@@ -484,11 +490,15 @@ describe("workbook lesson UI", () => {
     const railProgress = { ...progress, activeLessonId: chapterOne.id };
     const railMarkup = html(createElement(LessonRail, { title: "Workbook", chapters, progress: railProgress, viewedLessonId: chapterOne.id, setViewedLesson: vi.fn() }));
 
-    expect(railMarkup).toContain("Lesson 1");
-    expect(railMarkup).toContain("Lesson 2");
+    // Exact rail labels, not a bare "Lesson 1" substring: that would also
+    // match "Lesson 10: ...", silently accepting a wrong global number.
+    expect(railMarkup).toContain(">Lesson 1: Markdown Lesson</a>");
+    expect(railMarkup).toContain(">Lesson 2: Second Lesson</a>");
+    expect(railMarkup).not.toMatch(/Lesson 1\d/);
 
     const lessonMarkup = html(createElement(LessonView, { chapter: chapterOne, progress: railProgress, refresh: vi.fn() }));
-    expect(lessonMarkup).toContain("Lesson 1");
+    expect(lessonMarkup).toContain('<p class="eyebrow">Lesson 1</p>');
+    expect(lessonMarkup).not.toMatch(/<p class="eyebrow">Lesson 1\d/);
   });
 
   it("renders each part roadmap once even when a part has multiple lessons", async () => {
@@ -505,7 +515,7 @@ describe("workbook lesson UI", () => {
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const container = await mount(createElement(App));
+    const container = await mount(createElement(App), stubAppShellGlobals);
 
     expect(container.querySelectorAll(".part-chapter")).toHaveLength(2);
     expect(container.textContent).toContain("Part A copy.");
