@@ -174,6 +174,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const refreshEvents = async () => { eventsCache = await store.read(); return eventsCache; };
   const currentPublicState = (events: WorkbookEvent[]) => publicState(loaded, events, attempts);
 
+  let closed = false;
   let submissionTail: Promise<unknown> = Promise.resolve();
   const withSubmissionLock = async <T>(work: () => Promise<T>): Promise<T> => {
     const run = submissionTail.catch(() => undefined).then(work);
@@ -203,10 +204,12 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   };
 
   const finishReview = async (attempt: Attempt, privateGuidance: string): Promise<void> => {
+    if (closed) return;
     let decision;
     try {
       decision = await tutor.review({ attempt, privateGuidance });
     } catch (error) {
+      if (closed) return;
       log.info(`Workbook tutor review failed for ${attempt.lessonId}/${attempt.blockId}: ${error instanceof Error ? error.message : String(error)}`);
       const feedback = await attempts.markFeedback(attempt.id, REVIEW_FAILURE_FEEDBACK);
       if (feedback?.evidence.kind === "reflection") await store.append(nowEvent({ type: "reflection_reply_recorded", lessonId: feedback.lessonId, blockId: feedback.blockId, response: feedback.feedback ?? REVIEW_FAILURE_FEEDBACK }));
@@ -214,7 +217,9 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       return;
     }
 
+    if (closed) return;
     await refreshEvents();
+    if (closed) return;
     const active = activeAuthoredBlock();
     const current = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
     if (!active || active.lesson.id !== attempt.lessonId || active.block.id !== attempt.blockId || !current || current.id !== attempt.id) return;
@@ -246,6 +251,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   };
 
   const submitAttempt = async (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }): Promise<Attempt> => withSubmissionLock(async () => {
+    if (closed) throw new Error("Workbook server is closed.");
     const latest = await refreshEvents();
     const active = activeAuthoredBlock(latest);
     if (!active || active.lesson.id !== input.lessonId || active.block.id !== input.blockId || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(input.evidence, active.block)) throw new Error("This block is not active yet.");
@@ -394,6 +400,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const url = `http://${LOOPBACK_HOST}:${address.port}`;
   log.info(`Workbook tutor listening on ${url}. State: ${store.eventPath}${terminal ? " Embedded terminal enabled on loopback only." : ""}`);
   return { url, port: address.port, host, close: async () => {
+    closed = true;
     terminal?.dispose();
     tutor.dispose();
     wss?.close();
