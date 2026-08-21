@@ -51,6 +51,44 @@ describe("workbook event projection", () => {
     expect(continued.blocks.find((block) => block.id === "edit-answer")).toMatchObject({ emerged: true, ready: true, active: true, editorStatus: "editing" });
   });
 
+  it("holds accepted evaluated attempts at a common checkpoint until the learner continues", () => {
+    const started = [nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" })];
+    const accepted = [
+      ...started,
+      nowEvent({ type: "attempt_accepted", lessonId: LESSON_ID, blockId: "edit-answer", attemptId: "attempt-1", version: 1, kind: "editor", summary: "The answer is ready." }),
+    ];
+
+    const checkpoint = project(accepted, lesson);
+    expect(checkpoint.activeBlockId).toBe("edit-answer");
+    expect(checkpoint.blocks.find((block) => block.id === "edit-answer")).toMatchObject({
+      active: true,
+      completed: false,
+      checkpoint: { status: "accepted", summary: "The answer is ready.", kind: "editor" },
+    });
+    expect(checkpoint.blocks.find((block) => block.id === "first-practice")?.emerged).toBe(false);
+
+    const continued = project([...accepted, nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "edit-answer" })], lesson);
+    expect(continued.activeBlockId).toBe("first-practice");
+    expect(continued.blocks.find((block) => block.id === "edit-answer")).toMatchObject({ completed: true });
+
+    const earlyAcceptance = project([
+      nowEvent({ type: "attempt_accepted", lessonId: LESSON_ID, blockId: "first-practice", attemptId: "early", version: 1, kind: "terminal", summary: "Early terminal accept." }),
+      ...started,
+      nowEvent({ type: "attempt_accepted", lessonId: LESSON_ID, blockId: "edit-answer", attemptId: "attempt-2", version: 1, kind: "editor", summary: "Editor accepted." }),
+      nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "edit-answer" }),
+    ], lesson);
+    expect(earlyAcceptance.activeBlockId).toBe("first-practice");
+    expect(earlyAcceptance.blocks.find((block) => block.id === "first-practice")).toMatchObject({ completed: false, checkpoint: undefined });
+
+    const staleAcceptance = project([
+      ...accepted,
+      nowEvent({ type: "attempt_accepted", lessonId: LESSON_ID, blockId: "first-practice", attemptId: "stale", version: 1, kind: "terminal", summary: "Stale terminal accept." }),
+      nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "edit-answer" }),
+    ], lesson);
+    expect(staleAcceptance.activeBlockId).toBe("first-practice");
+    expect(staleAcceptance.blocks.find((block) => block.id === "first-practice")).toMatchObject({ completed: false, checkpoint: undefined });
+  });
+
   it("keeps unexpected output as evidence without completing the active block", () => {
     const events = [
       nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }),

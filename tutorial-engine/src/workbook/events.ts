@@ -2,12 +2,14 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { tutorialStatePath } from "../tutorial-state.js";
 import type { WorkbookLesson } from "./contract.js";
+import type { AttemptKind } from "./attempts.js";
 
 export type WorkbookEvent =
   | { type: "session_started"; at: string }
   | { type: "workbook_introduction_completed"; at: string }
   | { type: "observation_acknowledged"; at: string; lessonId: string; blockId: string }
   | { type: "observation_verified"; at: string; lessonId: string; blockId: string; source: "terminal_observer"; summary: string; terminalHtml: string }
+  | { type: "attempt_accepted"; at: string; lessonId: string; blockId: string; attemptId: string; version: number; kind: AttemptKind; summary: string }
   | { type: "block_completed"; at: string; lessonId: string; blockId: string }
   | { type: "block_continued"; at: string; lessonId: string; blockId: string }
   | { type: "unexpected_output_submitted"; at: string; lessonId: string; blockId: string; evidence: string }
@@ -19,7 +21,7 @@ export type WorkbookEvent =
   | { type: "help_requested"; at: string; lessonId: string; blockId: string; request: string }
   | { type: "lesson_transitioned"; at: string; lessonId: string; blockId: string };
 
-export interface BlockProgress { id: string; type: string; emerged: boolean; ready: boolean; active: boolean; completed: boolean; verified: boolean; feedback?: string; terminalHtml?: string; revision?: number; editorStatus?: "editing" | "reviewing" | "feedback" | "unlocked"; }
+export interface BlockProgress { id: string; type: string; emerged: boolean; ready: boolean; active: boolean; completed: boolean; verified: boolean; checkpoint?: { status: "accepted"; summary: string; kind: AttemptKind }; feedback?: string; terminalHtml?: string; revision?: number; editorStatus?: "editing" | "reviewing" | "feedback" | "unlocked"; }
 export type ReflectionTurn = { role: "learner" | "tutor"; text: string };
 export interface WorkbookProjection { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]>; }
 
@@ -34,6 +36,7 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
   const reflectionConversations: Record<string, ReflectionTurn[]> = {};
   const verified = new Map<string, { summary: string; terminalHtml: string }>();
   const editorUnlocks = new Map<string, { revision: number; path: string }>();
+  const acceptedCheckpoints = new Map<string, { summary: string; kind: AttemptKind }>();
   const completed = new Set<string>();
   const activeBlock = () => lesson.blocks.find((block) => !completed.has(block.id));
 
@@ -47,7 +50,8 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
 
     const active = activeBlock();
     if (!active || active.id !== event.blockId) continue;
-    if (event.type === "block_continued" && (active.type === "narrative" || active.type === "lesson-transition")) completed.add(active.id);
+    if (event.type === "attempt_accepted" && (active.type === "editor-practice" || active.type === "terminal-practice" || active.type === "reflection")) acceptedCheckpoints.set(active.id, { summary: event.summary, kind: event.kind });
+    if (event.type === "block_continued" && (active.type === "narrative" || active.type === "lesson-transition" || acceptedCheckpoints.has(active.id))) completed.add(active.id);
     if (event.type === "lesson_transitioned" && active.type === "lesson-transition") completed.add(active.id);
     if (event.type === "block_completed" && active.type === "terminal-practice" && verified.has(active.id)) completed.add(active.id);
     if (event.type === "reflection_completed" && active.type === "reflection") completed.add(active.id);
@@ -63,12 +67,14 @@ export function project(events: readonly WorkbookEvent[], lesson: WorkbookLesson
   const blocks = lesson.blocks.map((block, index) => {
     const unlock = editorUnlocks.get(block.id);
     const terminalFeedback = verified.get(block.id);
+    const checkpoint = acceptedCheckpoints.get(block.id);
     const isActive = next !== undefined && block.id === active.id;
     return {
       id: block.id,
       type: block.type,
       completed: completed.has(block.id),
       verified: verified.has(block.id),
+      checkpoint: checkpoint ? { status: "accepted" as const, summary: checkpoint.summary, kind: checkpoint.kind } : undefined,
       feedback: terminalFeedback?.summary,
       terminalHtml: terminalFeedback?.terminalHtml,
       revision: unlock?.revision,
