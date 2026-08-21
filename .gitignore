@@ -12,5 +12,6 @@ factory/**/.tmp/
 .tutorial/
 .superpowers/
 .pi/git/
+.pi/settings.json
 .local/
 evals/reports/
