@@ -1,5 +1,14 @@
 # Software factory tutorial
 
+## Agent workflow
+
+For implementation work, always use `superpowers:subagent-driven-development`. Work autonomously
+through the approved plan, including implementation, review, verification, and branch handoff. Do
+not pause for progress updates, routine clarifications, or choices that can be resolved from the
+plan and repository. Ask Matt only when an irreversible or security-sensitive action requires his
+consent, an external side effect needs approval, or a genuine product decision remains unresolved
+by the plan and codebase.
+
 ## Tutorial-engine architecture decisions
 
 Record durable tutorial-engine architecture decisions as ADRs in `tutorial-engine/docs/adr/`. ADRgen is

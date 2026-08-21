@@ -10,5 +10,6 @@
 # baselines, commit messages and iteration records a run regenerates.
 factory/**/.tmp/
 .tutorial/
+.superpowers/
 .local/
 evals/reports/
