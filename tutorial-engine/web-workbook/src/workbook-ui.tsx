@@ -5,6 +5,8 @@ import { EditorView, keymap } from "@codemirror/view";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { Markdown } from "../../web/src/markdown";
+import { ActivityBand } from "./activity-band";
+import { TimelineThread, type PublicTimelineRecord } from "./timeline-thread";
 
 export type WorkbookBlockType = "narrative" | "terminal-practice" | "editor-practice" | "reflection" | "lesson-transition";
 type BlockBase = { id: string; title: string; markdown: string; label?: string };
@@ -29,7 +31,7 @@ export type PublicCheckpoint = {
 export type BlockProgress = { id: string; type?: string; ready: boolean; active: boolean; completed: boolean; verified: boolean; checkpoint?: PublicCheckpoint; feedback?: string; terminalHtml?: string; emerged: boolean; revision?: number; draftText?: string; editorStatus?: EditorStatus };
 export type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]> };
 type Identity = { title: string };
-export type State = { workbook: Identity; introduction: string; introductionComplete: boolean; chapters: Chapter[]; progress: Progress; adapter: { note?: string; modelBackedHelp?: boolean } };
+export type State = { workbook: Identity; introduction: string; introductionComplete: boolean; chapters: Chapter[]; progress: Progress; adapter: { note?: string; modelBackedHelp?: boolean }; timeline?: readonly PublicTimelineRecord[] };
 
 async function completeIntroduction(): Promise<State> {
   const response = await fetch("api/workbook/introduction", { method: "POST" });
@@ -45,6 +47,18 @@ async function post(blockId: string, body: object): Promise<State> {
 
 async function postEditorDraft(blockId: string, revision: number, text: string): Promise<State> {
   const response = await fetch("/api/workbook/editor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision, text }) });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+async function postTutorMessage(blockId: string, text: string): Promise<State> {
+  const response = await fetch("/api/workbook/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, text }) });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+async function retryTutorOperation(failureId: string): Promise<State> {
+  const response = await fetch("/api/workbook/retry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId }) });
   if (!response.ok) throw new Error(await response.text());
   return response.json();
 }
@@ -438,11 +452,12 @@ export function LessonRail({ title, chapters, progress, viewedLessonId, setViewe
   </aside>;
 }
 
-export function LessonView({ chapter, progress, refresh }: { chapter: Chapter & { lesson: Lesson }; progress: Progress; refresh(state: State): void }) {
+export function LessonView({ chapter, progress, refresh, renderBlocks = true, children }: { chapter: Chapter & { lesson: Lesson }; progress: Progress; refresh(state: State): void; renderBlocks?: boolean; children?: React.ReactNode }) {
   return <article data-lesson-id={chapter.id} key={chapter.id} className="chapter">
     <header id={lessonElementId(chapter.id)}><h1>{chapter.lesson.title}</h1><p className="dek">{chapter.lesson.dek}</p><div className="lesson-meta"><span className="chip duration">{chapter.lesson.durationMinutes} min</span></div></header>
     <section className="opening"><p className="section-label">What you will learn</p><h2>What you will learn</h2><ul className="outcomes">{chapter.lesson.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></section>
-    {chapter.lesson.blocks.map((block) => <BlockView key={block.id} lessonId={chapter.id} block={block} progress={progress} refresh={refresh} />)}
+    {renderBlocks && chapter.lesson.blocks.map((block) => <BlockView key={block.id} lessonId={chapter.id} block={block} progress={progress} refresh={refresh} />)}
+    {children}
   </article>;
 }
 
@@ -511,12 +526,18 @@ export function App() {
   const emerged = useMemo(() => state?.chapters.filter((chapter): chapter is Chapter & { lesson: Lesson } => Boolean(chapter.lesson)) ?? [], [state]);
   if (!state) return <p className="loading">Loading workbook…</p>;
   const viewedLesson = viewed ?? state.progress.activeLessonId;
+  const activeChapter = emerged.find((chapter) => chapter.id === state.progress.activeLessonId);
+  const activeBlock = activeChapter?.lesson.blocks.find((block) => block.id === state.progress.activeBlockId);
+  const hasTimeline = state.timeline !== undefined;
   return <div className="shell">
     <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} />
     <main><article className="page">
       <WorkbookIntroduction state={state} refresh={setState} />
-      {emerged.map((chapter) => <React.Fragment key={chapter.id}><PartChapter chapter={chapter} /><LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}
+      {hasTimeline && activeChapter ? <LessonView chapter={activeChapter} progress={state.progress} refresh={setState} renderBlocks={false}>
+        {activeBlock && <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} />}
+        <TimelineThread records={state.timeline} activeBlockId={state.progress.activeBlockId} onSend={(text) => postTutorMessage(state.progress.activeBlockId, text).then((next) => setState(next))} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />
+      </LessonView> : emerged.map((chapter) => <React.Fragment key={chapter.id}><PartChapter chapter={chapter} /><LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}
     </article></main>
   </div>;
 }
