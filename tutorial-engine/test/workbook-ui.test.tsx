@@ -725,6 +725,75 @@ describe("workbook lesson UI", () => {
     expect(activeMarkup).toContain("Insert command");
   });
 
+  it("renders the unopened introduction through the timeline with a composer and durable intro target", async () => {
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro should not render as a standalone section.",
+      introductionComplete: false,
+      chapters: [chapter({ lesson: undefined } as any)],
+      progress,
+      adapter: {},
+      timeline: [{ type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook:introduction", blockId: "__introduction__", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nTimeline intro copy." }]
+    } as any;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.querySelector(".workbook-intro")).toBeNull();
+    expect(container.querySelector(".current-activity-band")).toBeNull();
+    expect(container.textContent).toContain("Timeline intro copy.");
+    expect(container.textContent).not.toContain("Intro should not render as a standalone section.");
+    expect(container.querySelector("textarea[name='message']")?.getAttribute("aria-label")).toBe("Message the tutor");
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+    textarea.value = "Can I ask first?";
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    const sendButton = container.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!;
+    await act(async () => { sendButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+    const messageCall = fetchMock.mock.calls.find(([url]) => url === "/api/workbook/messages");
+    expect(messageCall).toBeTruthy();
+    expect(JSON.parse((messageCall![1] as RequestInit).body as string)).toEqual({ blockId: "__introduction__", text: "Can I ask first?" });
+
+    const continueButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Ready to continue")!;
+    await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+    expect(fetchMock.mock.calls.some(([url, init]) => url === "api/workbook/introduction" && (init as RequestInit | undefined)?.method === "POST")).toBe(true);
+  });
+
+  it("renders conversational intro, part, lesson frame, and block content only in the timeline", async () => {
+    const conversationalLesson = { ...lesson, dek: "TIMELINE_ONLY_DEK", outcomes: ["TIMELINE_ONLY_OUTCOME"], blocks: [{ ...lesson.blocks[0], markdown: "Block body duplicated only if document blocks render." }] };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "TIMELINE_ONLY_INTRO",
+      introductionComplete: true,
+      chapters: [chapter({ partMarkdown: "TIMELINE_ONLY_PART_COPY", lesson: conversationalLesson })],
+      progress,
+      adapter: {},
+      timeline: [
+        { type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook:introduction", blockId: "__introduction__", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nTIMELINE_ONLY_INTRO" },
+        { type: "message", id: "part", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "workbook:part:part-one", blockId: "__part__", role: "assistant", source: "authored", presentation: "course", text: "# Part One\n\nTIMELINE_ONLY_PART_COPY" },
+        { type: "message", id: "frame", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: lesson.id, blockId: "__lesson_frame__", role: "assistant", source: "authored", presentation: "course", text: "# Markdown Lesson\n\nTIMELINE_ONLY_DEK\n\n## What you will learn\n\n- TIMELINE_ONLY_OUTCOME" },
+        { type: "message", id: "block", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: lesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nBlock body duplicated only if document blocks render." },
+      ]
+    } as any;
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    const text = container.textContent ?? "";
+    expect(container.querySelector(".workbook-intro")).toBeNull();
+    expect(container.querySelector(".part-chapter")).toBeNull();
+    expect(container.querySelector(".opening")).toBeNull();
+    expect(text.match(/TIMELINE_ONLY_INTRO/g)).toHaveLength(1);
+    expect(text.match(/TIMELINE_ONLY_PART_COPY/g)).toHaveLength(1);
+    expect(text.match(/TIMELINE_ONLY_DEK/g)).toHaveLength(1);
+    expect(text.match(/TIMELINE_ONLY_OUTCOME/g)).toHaveLength(1);
+    expect(text.match(/Block body duplicated only if document blocks render\./g)).toHaveLength(1);
+  });
+
   it("renders the active narrative timeline note with a manual Continue before the fixed composer", async () => {
     const state = {
       workbook: { title: "Workbook" },

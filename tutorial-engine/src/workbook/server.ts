@@ -8,7 +8,7 @@ import type { TutorialLogger } from "../runtime-log.js";
 import { createTutorialLogger } from "../runtime-log.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 import { introductionCompleted, project, type BlockProgress } from "./events.js";
-import { authoredBlockText } from "./pi-history.js";
+import { INTRODUCTION_BLOCK_ID, INTRODUCTION_LESSON_ID, LESSON_FRAME_BLOCK_ID, PART_BLOCK_ID, authoredBlockText, authoredIntroductionText, authoredLessonFrameText, authoredPartText, partLessonId } from "./pi-history.js";
 import { assertDockerTerminalReady, createDockerPty, requireOpenCodeApiKey, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalPtyFactory } from "./terminal.js";
 import { submitReflectionAttempt } from "./reflection.js";
 import { promoteCurrentEditorAttempt, resolveEditorTarget } from "./editor.js";
@@ -161,7 +161,18 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     return record;
   };
   const transact = <T>(operation: () => Promise<T>): Promise<T> => timeline.run(operation);
+  const authoredMessageExists = (lessonId: string, blockId: string): boolean => records.some((record) => record.type === "message" && record.source === "authored" && record.lessonId === lessonId && record.blockId === blockId);
+  const ensureAuthoredIntroduction = async (): Promise<void> => {
+    if (!authoredMessageExists(INTRODUCTION_LESSON_ID, INTRODUCTION_BLOCK_ID)) await append({ type: "message", lessonId: INTRODUCTION_LESSON_ID, blockId: INTRODUCTION_BLOCK_ID, role: "assistant", source: "authored", presentation: "course", text: authoredIntroductionText(loaded.identity, loaded.introduction) });
+  };
+  const chapterForLesson = (lessonId: string) => loaded.chapters.find((chapter) => chapter.lesson?.id === lessonId);
+  const ensureAuthoredLessonOpenings = async (lesson: WorkbookLesson): Promise<void> => {
+    const chapter = chapterForLesson(lesson.id);
+    if (chapter?.partId && chapter.part && !authoredMessageExists(partLessonId(chapter.partId), PART_BLOCK_ID)) await append({ type: "message", lessonId: partLessonId(chapter.partId), blockId: PART_BLOCK_ID, role: "assistant", source: "authored", presentation: "course", text: authoredPartText({ title: chapter.part, markdown: chapter.partMarkdown }) });
+    if (!authoredMessageExists(lesson.id, LESSON_FRAME_BLOCK_ID)) await append({ type: "message", lessonId: lesson.id, blockId: LESSON_FRAME_BLOCK_ID, role: "assistant", source: "authored", presentation: "course", text: authoredLessonFrameText(lesson) });
+  };
   if (records.length === 0) await append({ type: "session_started" });
+  await ensureAuthoredIntroduction();
 
   const activeAuthoredBlock = (source = records): { lesson: WorkbookLesson; progress: ReturnType<typeof project>; blockProgress: BlockProgress; block: WorkbookBlock } | undefined => {
     if (!introductionCompleted(source)) return undefined;
@@ -185,6 +196,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     };
   };
   const mainContext = async (): Promise<MainTutorContext> => ({ records, activeContext: await activeBlockContext() });
+  const isIntroductionTarget = (lessonId: string, blockId: string): boolean => lessonId === INTRODUCTION_LESSON_ID && blockId === INTRODUCTION_BLOCK_ID;
   const requireTutorText = (text: string, label: TutorFailure["operation"]): string => {
     const trimmed = text.trim();
     if (!trimmed) throw new Error(`Empty tutor response for ${label}.`);
@@ -194,8 +206,9 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const ensureAuthoredActiveBlock = async (): Promise<void> => {
     const active = activeAuthoredBlock();
     if (!active) return;
+    await ensureAuthoredLessonOpenings(active.lesson);
     let coveredThroughId = records.at(-1)?.id ?? active.block.id;
-    if (!records.some((record) => record.type === "message" && record.source === "authored" && record.lessonId === active.lesson.id && record.blockId === active.block.id)) {
+    if (!authoredMessageExists(active.lesson.id, active.block.id)) {
       const authored = await append({ type: "message", lessonId: active.lesson.id, blockId: active.block.id, role: "assistant", source: "authored", presentation: "course", text: authoredBlockText(active.block) });
       coveredThroughId = authored.id;
     }
@@ -342,7 +355,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   catch (error) {
     restoringFailed = true;
     log.info(`Workbook tutor restoration failed: ${error instanceof Error ? error.message : String(error)}`);
-    await appendFailure({ lessonId: activeAuthoredBlock()?.lesson.id ?? "workbook", blockId: activeAuthoredBlock()?.block.id ?? "introduction", requestId: "restore", operation: "restore", publicMessage: TUTOR_UNAVAILABLE });
+    const active = activeAuthoredBlock();
+    await appendFailure({ lessonId: active?.lesson.id ?? INTRODUCTION_LESSON_ID, blockId: active?.block.id ?? INTRODUCTION_BLOCK_ID, requestId: "restore", operation: "restore", publicMessage: TUTOR_UNAVAILABLE });
   }
 
   const activeObservedBlock = (): ActiveObservedTerminalBlock | undefined => {
@@ -411,15 +425,16 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         if (Buffer.byteLength(text, "utf8") > MAX_MESSAGE_BYTES) return sendJson(response, 400, { error: "Message text is too large." });
         return transact(async () => {
           const active = activeAuthoredBlock();
-          if (!active || active.block.id !== blockId) return sendJson(response, 409, { error: "This block is not active yet." });
-          const learnerMessage = await append({ type: "message", lessonId: active.lesson.id, blockId, role: "user", source: "learner", presentation: "chat", text });
+          const target = active && active.block.id === blockId ? { lessonId: active.lesson.id, blockId, active } : !introductionCompleted(records) && isIntroductionTarget(INTRODUCTION_LESSON_ID, blockId) ? { lessonId: INTRODUCTION_LESSON_ID, blockId: INTRODUCTION_BLOCK_ID, active: undefined } : undefined;
+          if (!target) return sendJson(response, 409, { error: "This block is not active yet." });
+          const learnerMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "user", source: "learner", presentation: "chat", text });
           try {
             const reply = requireTutorText(await mainTutor.reply({ ...(await mainContext()), learnerMessage: learnerMessage as TimelineMessage }), "reply");
-            const tutorMessage = await append({ type: "message", lessonId: active.lesson.id, blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: reply, inReplyTo: learnerMessage.id });
-            await refreshBlockBriefing(active, tutorMessage.id);
+            const tutorMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: reply, inReplyTo: learnerMessage.id });
+            if (target.active) await refreshBlockBriefing(target.active, tutorMessage.id);
           } catch (error) {
-            log.info(`Workbook tutor reply failed for ${active.lesson.id}/${blockId}: ${error instanceof Error ? error.message : String(error)}`);
-            await appendFailure({ lessonId: active.lesson.id, blockId, requestId: learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE });
+            log.info(`Workbook tutor reply failed for ${target.lessonId}/${target.blockId}: ${error instanceof Error ? error.message : String(error)}`);
+            await appendFailure({ lessonId: target.lessonId, blockId: target.blockId, requestId: learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE });
           }
           sendJson(response, 202, await currentPublicState());
         });

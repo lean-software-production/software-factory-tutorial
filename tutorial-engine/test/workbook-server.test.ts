@@ -264,6 +264,84 @@ afterEach(async () => {
 });
 
 describe("workbook browser API", () => {
+  it("opens the introduction as durable tutor conversation before any real block is active", async () => {
+    const dir = await fixture();
+    const firstTutor = new FakeMainTutor();
+    firstTutor.replyQueue.push(new Error("intro provider secret"));
+    const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: firstTutor, blockTutor: new FakeBlockTutor() });
+    let persistedTimeline: any[];
+    try {
+      const initial = await state(firstServer.url);
+      expect(initial.introductionComplete).toBe(false);
+      expect(initial.timeline.filter((record: any) => record.type === "message")).toEqual([
+        expect.objectContaining({ lessonId: "workbook:introduction", blockId: "__introduction__", role: "assistant", source: "authored", presentation: "course", text: expect.stringContaining("# Fixture workbook") })
+      ]);
+      expect(initial.timeline[0].text).toContain("Welcome to the fixture workbook.");
+      expect((await postHint(firstServer.url, { blockId: "__introduction__" })).status).toBe(409);
+      expect((await postEditor(firstServer.url, { blockId: "edit-answer", text: "too soon" })).status).toBe(409);
+
+      const response = await postMessage(firstServer.url, { blockId: "__introduction__", text: "Can I ask before we start?" });
+      expect(response.status).toBe(202);
+      const chatted = await response.json() as any;
+      expect(chatted.introductionComplete).toBe(false);
+      expect(firstTutor.replies).toHaveLength(1);
+      expect(firstTutor.replies[0]).toMatchObject({ activeContext: undefined, learnerMessage: { lessonId: "workbook:introduction", blockId: "__introduction__", text: "Can I ask before we start?" } });
+      expect(chatted.timeline.slice(-2)).toEqual([
+        expect.objectContaining({ lessonId: "workbook:introduction", blockId: "__introduction__", role: "user", source: "learner", presentation: "chat", text: "Can I ask before we start?" }),
+        expect.objectContaining({ lessonId: "workbook:introduction", blockId: "__introduction__", type: "tutor_failed", operation: "reply" }),
+      ]);
+      expect(JSON.stringify(chatted.timeline)).not.toContain("intro provider secret");
+      const retryFailure = chatted.timeline.at(-1);
+      const retried = await fetch(`${firstServer.url}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId: retryFailure.failureId }) }).then((retry) => retry.json() as any);
+      expect(firstTutor.replies).toHaveLength(2);
+      expect(firstTutor.replies[1]).toMatchObject({ activeContext: undefined, learnerMessage: { lessonId: "workbook:introduction", blockId: "__introduction__", text: "Can I ask before we start?" } });
+      expect(retried.timeline.at(-1)).toMatchObject({ lessonId: "workbook:introduction", blockId: "__introduction__", role: "assistant", source: "main_tutor", presentation: "chat", text: "Try the workspace-relative path." });
+      persistedTimeline = retried.timeline;
+    } finally { await firstServer.close(); }
+
+    const secondTutor = new FakeMainTutor();
+    const secondServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: secondTutor, blockTutor: new FakeBlockTutor() });
+    try {
+      const restored = await state(secondServer.url);
+      expect(restored.timeline).toEqual(persistedTimeline!);
+      expect(restored.introductionComplete).toBe(false);
+      expect(secondTutor.restores).toHaveLength(1);
+      expect(secondTutor.restores[0].activeContext).toBeUndefined();
+      expect(secondTutor.restores[0].records.filter((record) => record.type === "message")).toEqual(persistedTimeline!.filter((record) => record.type === "message"));
+      expect((await postMessage(secondServer.url, { blockId: "__introduction__", text: "Still before the first block?" })).status).toBe(202);
+    } finally { await secondServer.close(); }
+  });
+
+  it("continues the introduction by recording part, lesson frame, and first block authored messages once", async () => {
+    const dir = await fixture();
+    const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });
+    let authoredAfterContinue: any[];
+    try {
+      const opened = await fetch(`${firstServer.url}/api/workbook/introduction`, { method: "POST" }).then((response) => response.json() as any);
+      authoredAfterContinue = opened.timeline.filter((record: any) => record.type === "message" && record.source === "authored");
+      expect(authoredAfterContinue.map((record: any) => [record.lessonId, record.blockId])).toEqual([
+        ["workbook:introduction", "__introduction__"],
+        ["workbook:part:loop", "__part__"],
+        ["001-first", "__lesson_frame__"],
+        ["001-first", "orientation"],
+      ]);
+      expect(authoredAfterContinue[1].text).toContain("# Part 1 — Loop");
+      expect(authoredAfterContinue[1].text).toContain("Part copy.");
+      expect(authoredAfterContinue[2].text).toContain("# First lesson");
+      expect(authoredAfterContinue[2].text).toContain("First lesson dek.");
+      expect(authoredAfterContinue[2].text).toContain("- Fixture outcome.");
+      expect(authoredAfterContinue[3].text).toContain("## Orientation");
+      expect(opened.progress.activeBlockId).toBe("orientation");
+      expect(JSON.stringify(opened.timeline)).not.toContain("Private editor rubric");
+    } finally { await firstServer.close(); }
+
+    const secondServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });
+    try {
+      const restoredAuthored = (await state(secondServer.url)).timeline.filter((record: any) => record.type === "message" && record.source === "authored");
+      expect(restoredAuthored).toEqual(authoredAfterContinue!);
+    } finally { await secondServer.close(); }
+  });
+
   it("serves content without private tutor data and rejects inactive actions", async () => {
     const dir = await fixture(); const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });
     try {
@@ -476,8 +554,8 @@ describe("workbook browser API", () => {
     try {
       const opened = await fetch(`${firstServer.url}/api/workbook/introduction`, { method: "POST" }).then((response) => response.json() as any);
       const authored = opened.timeline.filter((record: any) => record.type === "message" && record.source === "authored");
-      expect(authored).toHaveLength(1);
-      expect(authored[0]).toMatchObject({ blockId: "orientation", presentation: "course", text: expect.stringContaining("## Orientation") });
+      expect(authored.filter((record: any) => record.lessonId === "001-first" && record.blockId === "orientation")).toHaveLength(1);
+      expect(authored.at(-1)).toMatchObject({ blockId: "orientation", presentation: "course", text: expect.stringContaining("## Orientation") });
       expect(JSON.stringify(opened.timeline)).not.toContain("Private editor rubric");
       persisted = (await state(firstServer.url)).timeline;
       expect((await state(firstServer.url)).timeline).toEqual(persisted);

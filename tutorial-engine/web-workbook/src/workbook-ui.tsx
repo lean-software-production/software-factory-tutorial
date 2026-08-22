@@ -18,7 +18,7 @@ export type ReflectionBlock = BlockBase & { type: "reflection" };
 export type LessonTransitionBlock = BlockBase & { type: "lesson-transition" };
 export type Block = NarrativeBlock | TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock | LessonTransitionBlock;
 export type Lesson = { id: string; title: string; dek: string; durationMinutes: number; outcomes: string[]; blocks: Block[] };
-export type Chapter = { id: string; title: string; part?: string; partMarkdown?: string; partNumber?: number; lessonNumber: number; lesson?: Lesson };
+export type Chapter = { id: string; title: string; partId?: string; part?: string; partMarkdown?: string; partNumber?: number; lessonNumber: number; lesson?: Lesson };
 export type AttemptKind = "editor" | "terminal" | "reflection";
 export type EditorStatus = "editing" | "waiting" | "reviewing" | "feedback" | "unlocked";
 export type ReflectionTurn = { role: "learner" | "tutor"; text: string };
@@ -51,6 +51,9 @@ async function postEditorDraft(blockId: string, revision: number, text: string):
   if (!response.ok) throw new Error(await response.text());
   return response.json();
 }
+
+const INTRODUCTION_BLOCK_ID = "__introduction__";
+const INTRODUCTION_LESSON_ID = "workbook:introduction";
 
 async function postTutorMessage(blockId: string, text: string): Promise<State> {
   const response = await fetch("/api/workbook/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, text }) });
@@ -426,6 +429,21 @@ function WorkbookIntroduction({ state, refresh }: { state: State; refresh(state:
   </section>;
 }
 
+function IntroductionContinue({ refresh }: { refresh(state: State): void }) {
+  const [pending, setPending] = useState(false);
+  const continueIntroduction = () => {
+    if (pending) return;
+    setPending(true);
+    completeIntroduction().then(refresh).catch((error) => {
+      console.error(error);
+      setPending(false);
+    });
+  };
+  return <div className="continuation-controls introduction-continuation">
+    <button className="button primary introduction-continue" disabled={pending} onClick={continueIntroduction}>{pending ? "Continuing…" : "Ready to continue"}</button>
+  </div>;
+}
+
 export function LessonRail({ title, chapters, progress, viewedLessonId, setViewedLesson }: { title: string; chapters: Chapter[]; progress: Progress; viewedLessonId: string; setViewedLesson(id: string): void }) {
   const renderChapter = (chapter: Chapter) => {
     const complete = progress.completedLessons.includes(chapter.id);
@@ -522,21 +540,29 @@ export function App() {
   const activeBlockProgress = state.progress.blocks.find((block) => block.id === state.progress.activeBlockId);
   const hasTimeline = state.timeline !== undefined;
   const sendTutorText = (text: string) => {
-    if (activeBlock?.type === "reflection") {
+    if (state.introductionComplete && activeBlock?.type === "reflection") {
       const turns = state.progress.reflectionConversations[activeBlock.id] ?? [];
       return post(activeBlock.id, { action: turns.length > 0 ? "reflection-follow-up" : "reflection-submit", response: text }).then((next) => setState(next));
     }
-    return postTutorMessage(state.progress.activeBlockId, text).then((next) => setState(next));
+    return postTutorMessage(state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID, text).then((next) => setState(next));
+  };
+  const renderTimelineContinuation = (record: PublicTimelineRecord) => {
+    if (record.type !== "message" || record.source !== "authored") return null;
+    if (!state.introductionComplete && record.lessonId === INTRODUCTION_LESSON_ID && record.blockId === INTRODUCTION_BLOCK_ID) return <IntroductionContinue refresh={setState} />;
+    if (activeBlock && activeBlockProgress && record.lessonId === state.progress.activeLessonId && record.blockId === activeBlock.id && ["narrative", "lesson-transition"].includes(activeBlock.type)) return <ContinueControls block={activeBlock} state={activeBlockProgress} refresh={setState} />;
+    return null;
   };
   return <div className="shell">
     <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} />
     <main><article className="page">
-      <WorkbookIntroduction state={state} refresh={setState} />
-      {hasTimeline && activeChapter ? <LessonView chapter={activeChapter} progress={state.progress} refresh={setState} renderBlocks={false}>
-        {activeBlock && <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onHint={(blockId) => postBlockHint(blockId).then((next) => setState(next))} />}
-        <TimelineThread records={state.timeline} activeLessonId={state.progress.activeLessonId} activeBlockId={state.progress.activeBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} inputDisabled={activeBlock?.type === "reflection" && activeBlockProgress?.checkpoint?.status === "reviewing"} renderContinuation={(record) => activeBlock && activeBlockProgress && record.source === "authored" && record.lessonId === state.progress.activeLessonId && record.blockId === activeBlock.id && ["narrative", "lesson-transition"].includes(activeBlock.type) ? <ContinueControls block={activeBlock} state={activeBlockProgress} refresh={setState} /> : null} />
-      </LessonView> : emerged.map((chapter, index) => <React.Fragment key={chapter.id}>{(index === 0 || chapter.part !== emerged[index - 1]!.part) && <PartChapter chapter={chapter} />}<LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}
+      {hasTimeline ? <>
+        {activeChapter && activeBlock && <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onHint={(blockId) => postBlockHint(blockId).then((next) => setState(next))} />}
+        <TimelineThread records={state.timeline} activeLessonId={state.introductionComplete ? state.progress.activeLessonId : INTRODUCTION_LESSON_ID} activeBlockId={state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} inputDisabled={state.introductionComplete && activeBlock?.type === "reflection" && activeBlockProgress?.checkpoint?.status === "reviewing"} renderContinuation={renderTimelineContinuation} />
+      </> : <>
+        <WorkbookIntroduction state={state} refresh={setState} />
+        {emerged.map((chapter, index) => <React.Fragment key={chapter.id}>{(index === 0 || chapter.part !== emerged[index - 1]!.part) && <PartChapter chapter={chapter} />}<LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}
+      </>}
     </article></main>
   </div>;
 }
