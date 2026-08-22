@@ -193,6 +193,27 @@ async function postHint(serverUrl: string, body: unknown) {
 }
 
 async function state(serverUrl: string) { return fetch(`${serverUrl}/api/workbook/state`).then((r) => r.json() as any); }
+async function timelineSnapshot(serverUrl: string): Promise<any[]> {
+  const controller = new AbortController();
+  const response = await fetch(`${serverUrl}/api/workbook/timeline`, { signal: controller.signal });
+  if (!response.body) throw new Error("Timeline stream did not expose a body.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    while (!text.includes("\n\n")) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    controller.abort();
+  }
+  const match = text.match(/event: timeline\ndata: (.*)\n\n/s);
+  if (!match) throw new Error(`Timeline stream did not include an initial event: ${text}`);
+  return JSON.parse(match[1]);
+}
 async function privateTimeline(workspace: string): Promise<WorkbookTimelineRecord[]> {
   const text = await readFile(tutorialStatePath(workspace, "workbook", "events.jsonl"), "utf8");
   return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as WorkbookTimelineRecord);
@@ -354,6 +375,32 @@ describe("workbook browser API", () => {
       expect(mainTutor.reviews[0].readiness).toMatchObject({ readiness: "likely_ready", text: "This looks ready for main review." });
       expect(block(feedback, "edit-answer")?.checkpoint?.feedback).toBe("Add the exact marker before this can continue.");
       expect(feedback.timeline.some((record: any) => record.type === "attempt_accepted")).toBe(false);
+    } finally { await server.close(); }
+  });
+
+  it("sanitizes retryable public failures so raw attempt ids never appear in state or timeline", async () => {
+    const dir = await fixture();
+    const mainTutor = new FakeMainTutor(new Error("model provider down"));
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor, blockTutor: new FakeBlockTutor() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "edit-answer", text: "draft that triggers a review failure" })).status).toBe(202);
+      const failedState = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "feedback", "review failure");
+      const privateFailure = (await privateTimeline(dir)).find((record): record is Extract<WorkbookTimelineRecord, { type: "tutor_failed" }> => record.type === "tutor_failed" && record.operation === "review");
+      expect(privateFailure).toBeTruthy();
+      expect(privateFailure!.requestId).toMatch(/[0-9a-f-]{36}/);
+
+      const publicFailure = failedState.timeline.find((record: any) => record.type === "tutor_failed" && record.operation === "review");
+      expect(publicFailure).toMatchObject({ type: "tutor_failed", operation: "review", failureId: privateFailure!.id });
+      expect(publicFailure).not.toHaveProperty("requestId");
+      expect(JSON.stringify(failedState)).not.toContain(privateFailure!.requestId);
+
+      const publicTimeline = await timelineSnapshot(server.url);
+      expect(JSON.stringify(publicTimeline)).not.toContain(privateFailure!.requestId);
+      expect(publicTimeline.find((record: any) => record.type === "tutor_failed" && record.operation === "review")).toMatchObject({ failureId: privateFailure!.id });
+
+      const retry = await fetch(`${server.url}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId: publicFailure.failureId }) });
+      expect(retry.status).toBe(202);
     } finally { await server.close(); }
   });
 

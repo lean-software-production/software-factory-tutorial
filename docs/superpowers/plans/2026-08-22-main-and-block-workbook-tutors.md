@@ -514,3 +514,19 @@ Focused verification:
 npm run --workspace=tutorial-engine test -- test/workbook-block-tutor.test.ts
 node --test test/onboarding.test.mjs
 ```
+
+## Task 4 review finding fix report
+
+- Added a server regression for review-failure paths proving raw private attempt IDs stay out of
+  public `/state` payloads and `/timeline` SSE snapshots.
+- Projected `tutor_failed` records through a public shape that omits private `requestId` and exposes
+  `failureId` for retry routing.
+- Updated the workbook timeline UI type and retry button to use `failureId` rather than the timeline
+  record ID.
+
+Focused verification:
+
+```sh
+npm run --workspace=tutorial-engine test -- test/workbook-server.test.ts
+npm run --workspace=tutorial-engine build:web:workbook
+```

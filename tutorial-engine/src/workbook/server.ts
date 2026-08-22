@@ -34,7 +34,8 @@ type PublicCheckpoint = {
   evidence?: { kind: AttemptEvidence["kind"]; text?: string; terminalHtml?: string; conversation?: Array<{ role: "learner" | "tutor"; text: string }> };
 };
 type PublicBlockProgress = Omit<BlockProgress, "checkpoint"> & { checkpoint?: PublicCheckpoint; draftText?: string; revision?: number; editorStatus?: "editing" | "reviewing" | "feedback" | "unlocked" };
-type PublicTimelineRecord = Extract<WorkbookTimelineRecord, { type: "message" | "tutor_failed" }>;
+type PublicTutorFailure = Omit<TutorFailure, "requestId"> & { failureId: string };
+type PublicTimelineRecord = TimelineMessage | PublicTutorFailure;
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -100,7 +101,13 @@ function publicCheckpoint(attempt: Attempt | undefined, projected: BlockProgress
   }
   return projected ? { status: "accepted", successMessage: projected.summary, evidence: { kind: projected.kind } } : undefined;
 }
-function publicTimeline(records: readonly WorkbookTimelineRecord[]): PublicTimelineRecord[] { return records.filter((record): record is PublicTimelineRecord => record.type === "message" || record.type === "tutor_failed"); }
+function publicTimelineRecord(record: WorkbookTimelineRecord): PublicTimelineRecord | undefined {
+  if (record.type === "message") return record;
+  if (record.type !== "tutor_failed") return undefined;
+  const { requestId: _privateRequestId, ...publicFailure } = record;
+  return { ...publicFailure, failureId: record.id };
+}
+function publicTimeline(records: readonly WorkbookTimelineRecord[]): PublicTimelineRecord[] { return records.flatMap((record) => { const publicRecord = publicTimelineRecord(record); return publicRecord ? [publicRecord] : []; }); }
 
 async function publicState(loaded: LoadedWorkbook, records: WorkbookTimelineRecord[], attempts: AttemptStore) {
   const lesson = activeLesson(loaded, records);
@@ -377,7 +384,10 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     if (request.method === "GET" && isRoute(url.pathname, "timeline")) {
       response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
       response.write(`event: timeline\ndata: ${JSON.stringify(publicTimeline(records))}\n\n`);
-      const unsubscribe = timeline.subscribe((record) => { if (record.type === "message" || record.type === "tutor_failed") response.write(`event: record\ndata: ${JSON.stringify(record)}\n\n`); });
+      const unsubscribe = timeline.subscribe((record) => {
+        const publicRecord = publicTimelineRecord(record);
+        if (publicRecord) response.write(`event: record\ndata: ${JSON.stringify(publicRecord)}\n\n`);
+      });
       request.on("close", unsubscribe);
       return;
     }
