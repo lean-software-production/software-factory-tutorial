@@ -503,6 +503,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
             const priorConversation = current.reflectionConversations[block.id] ?? [];
             const first = body.action === "reflection-submit";
             if ((first && priorConversation.length > 0) || (!first && priorConversation.length === 0)) return sendJson(response, 409, { error: "Use a follow-up after the first reflection message." });
+            const currentAttempt = await attempts.current(lesson.id, block.id).catch(() => undefined);
+            if (!first && currentAttempt?.status === "reviewing") return sendJson(response, 409, { error: "Wait for the tutor to finish reviewing before sending a follow-up." });
             const learnerTurns = await submitReflectionAttempt({ lessonId: lesson.id, blockId: block.id, privateGuidance: block.tutor, response: responseText, conversation: priorConversation, submitAttempt: async () => undefined });
             await append({ type: "message", lessonId: lesson.id, blockId: block.id, role: "user", source: "learner", presentation: "chat", text: learnerTurns.at(-1)!.text });
             await createAttempt({ lessonId: lesson.id, blockId: block.id, privateGuidance: block.tutor, evidence: { kind: "reflection", response: learnerTurns.at(-1)!.text, conversation: priorConversation } });

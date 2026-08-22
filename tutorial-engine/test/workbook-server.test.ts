@@ -621,6 +621,40 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("rejects a reflection follow-up while the current attempt is reviewing", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty();
+    const pendingReflection = deferred<TutorDecision>();
+    const tutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      { outcome: "accepted", message: "First terminal accepted." },
+      { outcome: "accepted", message: "Second terminal accepted." },
+      pendingReflection.promise
+    );
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, mainTutor: tutor, blockTutor: new FakeBlockTutor() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      await submitTerminalAttempt(server.url, "run-supplied-command");
+      await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.checkpoint?.status === "accepted", "first terminal accepted");
+      await postEvent(server.url, { blockId: "run-supplied-command", action: "continue" });
+      await submitTerminalAttempt(server.url, "change-job");
+      await waitForWorkbookState(server.url, (next) => block(next, "change-job")?.checkpoint?.status === "accepted", "second terminal accepted");
+      await postEvent(server.url, { blockId: "change-job", action: "continue" });
+
+      expect((await postEvent(server.url, { blockId: "reflection", action: "reflection-submit", response: "It was headless." })).status).toBe(202);
+      await waitForWorkbookState(server.url, (next) => block(next, "reflection")?.checkpoint?.status === "reviewing", "reflection reviewing state");
+      const followUp = await postEvent(server.url, { blockId: "reflection", action: "reflection-follow-up", response: "The validator cannot run commands." });
+      expect(followUp.status).toBe(409);
+      expect(tutor.reviews).toHaveLength(4);
+      const afterRejected = await state(server.url);
+      expect(afterRejected.progress.reflectionConversations.reflection).toEqual([{ role: "learner", text: "It was headless." }]);
+    } finally {
+      pendingReflection.resolve({ outcome: "feedback", message: "Late feedback." });
+      await server.close();
+    }
+  });
+
   it("allows a reflection follow-up after a quiet working review", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty();

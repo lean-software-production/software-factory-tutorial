@@ -8,13 +8,14 @@ export type PublicTimelineRecord =
 type InternalTimelineRecord = { type: "block_tutor_briefed" | "block_tutor_readiness" | "block_summarized" | "lesson_summarized"; id: string; sequence: number; at: string; lessonId?: string; blockId?: string; text?: string };
 type TimelineThreadRecord = PublicTimelineRecord | InternalTimelineRecord;
 
-export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, renderContinuation }: {
+export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, renderContinuation, inputDisabled = false }: {
   records: readonly TimelineThreadRecord[];
   activeLessonId: string;
   activeBlockId: string;
   onSend(text: string): Promise<void>;
   onRetry(failureId: string): Promise<void>;
   renderContinuation?(record: TimelineMessageRecord): React.ReactNode;
+  inputDisabled?: boolean;
 }) {
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
@@ -23,7 +24,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     const form = (event.currentTarget || event.target) as HTMLFormElement;
     const formText = (form.elements.namedItem("message") as HTMLTextAreaElement | null)?.value ?? "";
     const text = (draft.trim() || formText.trim());
-    if (pending || !text) return;
+    if (inputDisabled || pending || !text) return;
     setPending(true);
     try {
       await onSend(text);
@@ -40,6 +41,6 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
       const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : record.presentation === "hint" ? " hint" : ""}`;
       return <article key={record.id} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b><p>{record.text}</p></article>;
     })}
-    <form className="timeline-input fixed-composer" onSubmit={send}><label>Message the tutor<textarea name="message" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} onChange={(event) => setDraft(event.target.value)} disabled={pending} /></label><button className="button primary" disabled={pending || !draft.trim()}>{pending ? "Thinking…" : "Send"}</button></form>
+    <form className="timeline-input fixed-composer" onSubmit={send}><label>Message the tutor<textarea name="message" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} onChange={(event) => setDraft(event.target.value)} disabled={inputDisabled || pending} /></label><button className="button primary" disabled={inputDisabled || pending || !draft.trim()}>{pending ? "Thinking…" : "Send"}</button></form>
   </section>;
 }
