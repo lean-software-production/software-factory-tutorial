@@ -9,6 +9,7 @@ const noopRetry = vi.fn(async () => undefined);
 describe("TimelineThread", () => {
   it("distinguishes authored, tutor, learner, and review messages in chronological order", () => {
     const markup = renderToStaticMarkup(createElement(TimelineThread, {
+      activeLessonId: "lesson",
       activeBlockId: "write",
       onSend: noopSend,
       onRetry: noopRetry,
@@ -28,6 +29,7 @@ describe("TimelineThread", () => {
 
   it("renders main and block tutor public sources as Tutor bubbles and hides internal block tutor records", () => {
     const markup = renderToStaticMarkup(createElement(TimelineThread, {
+      activeLessonId: "lesson",
       activeBlockId: "write",
       onSend: noopSend,
       onRetry: noopRetry,

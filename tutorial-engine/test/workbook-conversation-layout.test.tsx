@@ -35,6 +35,7 @@ describe("workbook fixed conversation layout", () => {
     const markup = renderToStaticMarkup(createElement("main", null,
       createElement(ActivityBand, { lessonId: "part/lesson", activeBlock: editorBlock, progress, refresh: vi.fn(), onHint: vi.fn(async () => undefined) }),
       createElement(TimelineThread, {
+        activeLessonId: "part/lesson",
         activeBlockId: editorBlock.id,
         onSend: vi.fn(async () => undefined),
         onRetry: vi.fn(async () => undefined),
@@ -71,6 +72,7 @@ describe("workbook fixed conversation layout", () => {
 
   it("keeps main tutor and block tutor messages left aligned as Tutor bubbles", () => {
     const markup = renderToStaticMarkup(createElement(TimelineThread, {
+      activeLessonId: "part/lesson",
       activeBlockId: editorBlock.id,
       onSend: vi.fn(async () => undefined),
       onRetry: vi.fn(async () => undefined),

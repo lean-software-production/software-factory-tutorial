@@ -530,3 +530,19 @@ Focused verification:
 npm run --workspace=tutorial-engine test -- test/workbook-server.test.ts
 npm run --workspace=tutorial-engine build:web:workbook
 ```
+
+## Task 5 review finding fix report
+
+- Added an App regression with a completed prior lesson and an active later lesson that both use
+  `orientation`, proving Continue appears only under the active lesson's authored note and advances
+  from the current lesson.
+- Changed `TimelineThread` to require an active lesson ID as well as active block ID before rendering
+  continuation controls.
+- Kept App's continuation callback scoped to the active lesson ID and block ID so stale timeline
+  records cannot host the active Continue control.
+
+Focused verification:
+
+```sh
+npm run --workspace=tutorial-engine test -- test/workbook-ui.test.tsx test/timeline-thread.test.tsx test/workbook-conversation-layout.test.tsx test/conversation-layout.test.tsx
+```

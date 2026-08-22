@@ -8,8 +8,9 @@ export type PublicTimelineRecord =
 type InternalTimelineRecord = { type: "block_tutor_briefed" | "block_tutor_readiness" | "block_summarized" | "lesson_summarized"; id: string; sequence: number; at: string; lessonId?: string; blockId?: string; text?: string };
 type TimelineThreadRecord = PublicTimelineRecord | InternalTimelineRecord;
 
-export function TimelineThread({ records, activeBlockId, onSend, onRetry, renderContinuation }: {
+export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, renderContinuation }: {
   records: readonly TimelineThreadRecord[];
+  activeLessonId: string;
   activeBlockId: string;
   onSend(text: string): Promise<void>;
   onRetry(failureId: string): Promise<void>;
@@ -35,7 +36,7 @@ export function TimelineThread({ records, activeBlockId, onSend, onRetry, render
     {records.map((record) => {
       if (record.type === "tutor_failed") return <aside key={record.id} className="timeline-message tutor failure" aria-live="polite"><b>Tutor unavailable</b><p>{record.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(record.failureId)}>Retry</button></aside>;
       if (record.type !== "message") return null;
-      if (record.presentation === "course") return <React.Fragment key={record.id}><article className="timeline-message authored"><p className="section-label">Course note</p><Markdown>{record.text}</Markdown></article>{record.blockId === activeBlockId && renderContinuation?.(record)}</React.Fragment>;
+      if (record.presentation === "course") return <React.Fragment key={record.id}><article className="timeline-message authored"><p className="section-label">Course note</p><Markdown>{record.text}</Markdown></article>{record.lessonId === activeLessonId && record.blockId === activeBlockId && renderContinuation?.(record)}</React.Fragment>;
       const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : record.presentation === "hint" ? " hint" : ""}`;
       return <article key={record.id} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b><p>{record.text}</p></article>;
     })}

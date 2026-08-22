@@ -26,6 +26,7 @@ describe("workbook conversation layout", () => {
   it("places the sticky live activity before the chronological thread", () => {
     const band = createElement(ActivityBand, { lessonId: "part/lesson", activeBlock: terminalBlock, progress, refresh: vi.fn() });
     const thread = createElement(TimelineThread, {
+      activeLessonId: "part/lesson",
       activeBlockId: terminalBlock.id,
       onSend: vi.fn(async () => undefined),
       onRetry: vi.fn(async () => undefined),
@@ -40,6 +41,7 @@ describe("workbook conversation layout", () => {
 
   it("keeps authored and tutor messages left while learner messages use the learner alignment class", () => {
     const markup = renderToStaticMarkup(createElement(TimelineThread, {
+      activeLessonId: "part/lesson",
       activeBlockId: terminalBlock.id,
       onSend: vi.fn(async () => undefined),
       onRetry: vi.fn(async () => undefined),

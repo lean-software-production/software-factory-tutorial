@@ -645,6 +645,63 @@ describe("workbook lesson UI", () => {
     expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "orientation", action: "continue" });
   });
 
+  it("places timeline Continue only after the active lesson note when a completed lesson reused the block id", async () => {
+    const priorLesson = { ...lesson, id: "part/lesson-one", title: "Completed Lesson" };
+    const activeLesson = { ...lesson, id: "part/lesson-two", title: "Active Duplicate Lesson" };
+    const activeProgress: Progress = {
+      ...progress,
+      activeLessonId: activeLesson.id,
+      activeBlockId: "orientation",
+      completedLessons: [priorLesson.id],
+      blocks: [
+        { id: "orientation", type: "narrative", ready: true, active: true, completed: false, verified: false, emerged: true },
+        { id: "practice", type: "terminal-practice", ready: false, active: false, completed: false, verified: false, emerged: false },
+        { id: "transition", type: "lesson-transition", ready: false, active: false, completed: false, verified: false, emerged: false },
+      ],
+    };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [
+        chapter({ id: priorLesson.id, lessonNumber: 1, title: priorLesson.title, lesson: priorLesson }),
+        chapter({ id: activeLesson.id, lessonNumber: 2, title: activeLesson.title, lesson: activeLesson }),
+      ],
+      progress: activeProgress,
+      adapter: {},
+      timeline: [
+        { type: "message", id: "old-course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: priorLesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nOld completed orientation note." },
+        { type: "message", id: "active-course", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: activeLesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nActive lesson orientation note." },
+      ],
+    } as any;
+    const continuedState = {
+      ...state,
+      progress: {
+        ...activeProgress,
+        activeBlockId: "transition",
+        blocks: activeProgress.blocks.map((block) => block.id === "orientation" ? { ...block, active: false, completed: true } : { ...block, active: block.id === "transition", ready: block.id === "transition", emerged: block.id === "transition" }),
+      },
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? continuedState : state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    const text = container.textContent ?? "";
+    expect(text.indexOf("Old completed orientation note.")).toBeLessThan(text.indexOf("Active lesson orientation note."));
+    expect(text.indexOf("Active lesson orientation note.")).toBeLessThan(text.indexOf("Continue"));
+    expect(container.querySelectorAll(".continuation-controls")).toHaveLength(1);
+
+    const continueButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
+    await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+
+    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
+    expect(eventCall).toBeTruthy();
+    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "orientation", action: "continue" });
+    expect(container.textContent).toContain("Next");
+  });
+
   it("posts a block hint from the sticky terminal/editor band and disables the hint button while pending", async () => {
     let resolveHint: ((value: any) => void) | undefined;
     const hintedState = {
