@@ -11,6 +11,12 @@ import {
   type WorkbookIdentity,
   type WorkbookLesson,
 } from "./contract.js";
+import {
+  buildLessonCatalog,
+  resolveLessonReferences,
+  type LessonReferenceTarget,
+  type ReferenceContext,
+} from "./lesson-links.js";
 
 export interface WorkbookChapter {
   id: string;
@@ -154,25 +160,90 @@ export async function loadWorkbookLesson(lessonDir: string, id: string): Promise
   return validateWorkbookLesson({ id, title, dek, durationMinutes: front.durationMinutes, outcomes: front.outcomes, blocks }, lessonPath);
 }
 
+interface ChapterDraft extends Omit<WorkbookChapter, "lessonNumber"> {
+  partIndex: number;
+  lessonDir: string;
+  lessonPath: string;
+}
+
+/**
+ * Load every authored document, then resolve every canonical `[[lesson:...]]`
+ * reference to standard Markdown. References are only resolvable once every
+ * chapter has been discovered and globally numbered, so `loadWorkbookLesson()`
+ * stays raw and standalone: resolution happens here, and only here, against a
+ * catalog built from the final chapter order.
+ */
 export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
   const workspace = await realpath(resolve(target));
   const workbookPath = resolve(workspace, WORKBOOK_DOCUMENT);
   const { data, title, body } = await readTitledDocument(workbookPath, 1);
   validateWorkbookManifest(data, workbookPath);
   const identity: WorkbookIdentity = { title };
-  const introduction = body;
   const parts = await partDirectories(workspace);
   const chapterGroups = await Promise.all(parts.map(async (part, partIndex) => {
     const lessons = await lessonDirectories(part);
-    return Promise.all(lessons.map(async (directory): Promise<Omit<WorkbookChapter, "lessonNumber">> => {
+    return Promise.all(lessons.map(async (directory): Promise<ChapterDraft> => {
       const lessonDir = resolve(part.path, directory);
       const id = `${part.id}/${directory}`;
       const lesson = await loadWorkbookLesson(lessonDir, id);
-      return { id, title: lesson.title, part: part.title, partMarkdown: part.markdown, partNumber: partIndex + 1, lesson };
+      return {
+        id,
+        title: lesson.title,
+        part: part.title,
+        partMarkdown: part.markdown,
+        partNumber: partIndex + 1,
+        lesson,
+        partIndex,
+        lessonDir,
+        lessonPath: resolve(lessonDir, LESSON_DOCUMENT),
+      };
     }));
   }));
   // Lesson numbers are a single global sequence across parts, in directory order,
   // rather than resetting at each part boundary.
-  const chapters = chapterGroups.flat().map((chapter, index) => ({ ...chapter, lessonNumber: index + 1 }));
+  const drafts = chapterGroups.flat().map((chapter, index) => ({ ...chapter, lessonNumber: index + 1 }));
+
+  const catalogEntries: LessonReferenceTarget[] = drafts.map((chapter) => ({
+    id: chapter.id,
+    lessonNumber: chapter.lessonNumber,
+    title: chapter.title,
+  }));
+  const catalog = buildLessonCatalog(catalogEntries);
+
+  // workbook.md may not reference any lesson.
+  const introduction = resolveLessonReferences(body, catalog, { kind: "workbook", path: workbookPath });
+
+  // A part's earlier-reference boundary is the global number of its own first lesson.
+  let nextLessonNumber = 1;
+  const partFirstLessonNumbers = chapterGroups.map((group) => {
+    const first = nextLessonNumber;
+    nextLessonNumber += group.length;
+    return first;
+  });
+  const resolvedPartMarkdown = parts.map((part, index) => resolveLessonReferences(
+    part.markdown,
+    catalog,
+    { kind: "part", path: resolve(part.path, PART_DOCUMENT), firstLessonNumber: partFirstLessonNumbers[index]! },
+  ));
+
+  const chapters: WorkbookChapter[] = drafts.map((chapter) => {
+    const context: ReferenceContext = { kind: "lesson", path: chapter.lessonPath, lessonId: chapter.id, lessonNumber: chapter.lessonNumber };
+    const dek = resolveLessonReferences(chapter.lesson.dek, catalog, context);
+    const blocks = chapter.lesson.blocks.map((block) => {
+      const blockPath = resolve(chapter.lessonDir, BLOCKS_DIR, `${block.id}.md`);
+      return { ...block, markdown: resolveLessonReferences(block.markdown, catalog, { ...context, path: blockPath }) };
+    });
+    const lesson = validateWorkbookLesson({ ...chapter.lesson, dek, blocks }, chapter.lessonPath);
+    return {
+      id: chapter.id,
+      title: chapter.title,
+      part: chapter.part,
+      partMarkdown: resolvedPartMarkdown[chapter.partIndex]!,
+      partNumber: chapter.partNumber,
+      lessonNumber: chapter.lessonNumber,
+      lesson,
+    };
+  });
+
   return { workspace, identity, introduction, chapters };
 }
