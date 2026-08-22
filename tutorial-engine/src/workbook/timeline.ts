@@ -25,13 +25,18 @@ export type WorkflowPayload =
 
 export type WorkbookWorkflowEvent = WorkflowPayload & TimelineMetadata;
 
+export type TimelineMessageSource = "authored" | "learner" | "main_tutor" | "block_tutor";
+export type MainTutorSource = Extract<TimelineMessageSource, "main_tutor">;
+export type TimelinePresentation = "course" | "chat" | "hint" | "review";
+export type TutorPresentation = Extract<TimelinePresentation, "chat" | "hint" | "review">;
+
 export type TimelineMessage = TimelineMetadata & {
   type: "message";
   lessonId: string;
   blockId: string;
   role: "assistant" | "user";
-  source: "authored" | "learner" | "tutor";
-  presentation: "course" | "chat" | "review";
+  source: TimelineMessageSource;
+  presentation: TimelinePresentation;
   text: string;
   inReplyTo?: string;
 };
@@ -51,6 +56,23 @@ export type LessonSummary = TimelineMetadata & {
   coveredThroughId: string;
 };
 
+export type BlockTutorBriefing = TimelineMetadata & {
+  type: "block_tutor_briefed";
+  lessonId: string;
+  blockId: string;
+  text: string;
+  coveredThroughId: string;
+};
+
+export type BlockTutorReadiness = TimelineMetadata & {
+  type: "block_tutor_readiness";
+  lessonId: string;
+  blockId: string;
+  attemptId: string;
+  readiness: "likely_ready" | "still_working";
+  text: string;
+};
+
 export type TutorFailure = TimelineMetadata & {
   type: "tutor_failed";
   lessonId: string;
@@ -60,12 +82,14 @@ export type TutorFailure = TimelineMetadata & {
   publicMessage: string;
 };
 
-export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TimelineMessage | BlockSummary | LessonSummary | TutorFailure;
+export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TimelineMessage | BlockSummary | LessonSummary | BlockTutorBriefing | BlockTutorReadiness | TutorFailure;
 export type TimelineAppendInput =
   | WorkflowPayload
   | Omit<TimelineMessage, keyof TimelineMetadata>
   | Omit<BlockSummary, keyof TimelineMetadata>
   | Omit<LessonSummary, keyof TimelineMetadata>
+  | Omit<BlockTutorBriefing, keyof TimelineMetadata>
+  | Omit<BlockTutorReadiness, keyof TimelineMetadata>
   | Omit<TutorFailure, keyof TimelineMetadata>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

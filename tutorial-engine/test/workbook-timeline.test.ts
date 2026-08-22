@@ -61,4 +61,37 @@ describe("WorkbookTimeline", () => {
     expect(records.map(({ id, sequence }) => [id, sequence])).toEqual([["legacy:1", 1], ["legacy:2", 2]]);
     expect((await timeline.append({ type: "session_started" })).sequence).toBe(3);
   });
+
+  it("persists block tutor support records in sequence order", async () => {
+    const timeline = new WorkbookTimeline(await workspace());
+
+    const briefing = await timeline.append({
+      type: "block_tutor_briefed",
+      lessonId: "lesson",
+      blockId: "editor",
+      text: "Coach this block by asking for the learner's edited script.",
+      coveredThroughId: "message-7"
+    });
+    const readiness = await timeline.append({
+      type: "block_tutor_readiness",
+      lessonId: "lesson",
+      blockId: "editor",
+      attemptId: "attempt-3",
+      readiness: "likely_ready",
+      text: "The learner's third attempt satisfies the block goal."
+    });
+
+    expect(briefing).toMatchObject({ type: "block_tutor_briefed", sequence: 1, lessonId: "lesson", blockId: "editor", coveredThroughId: "message-7" });
+    expect(readiness).toMatchObject({ type: "block_tutor_readiness", sequence: 2, lessonId: "lesson", blockId: "editor", attemptId: "attempt-3", readiness: "likely_ready" });
+    expect(briefing.id).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(readiness.id).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(readiness.id).not.toBe(briefing.id);
+
+    const jsonl = await readFile(timeline.eventPath, "utf8");
+    expect(jsonl.trim().split("\n").map((line) => JSON.parse(line))).toMatchObject([
+      { id: briefing.id, sequence: 1, type: "block_tutor_briefed", text: "Coach this block by asking for the learner's edited script." },
+      { id: readiness.id, sequence: 2, type: "block_tutor_readiness", text: "The learner's third attempt satisfies the block goal." }
+    ]);
+    expect(await timeline.read()).toEqual([briefing, readiness]);
+  });
 });

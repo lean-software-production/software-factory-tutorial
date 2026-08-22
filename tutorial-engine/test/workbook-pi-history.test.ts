@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authoredBlockText, projectPiHistory } from "../src/workbook/pi-history.js";
+import { authoredBlockText, projectMainTutorHistory, projectPiHistory, type ActiveBlockContext } from "../src/workbook/pi-history.js";
 import type { WorkbookTimelineRecord } from "../src/workbook/timeline.js";
 
 function record<T extends Omit<WorkbookTimelineRecord, "id" | "sequence" | "at">>(sequence: number, value: T): WorkbookTimelineRecord {
@@ -11,7 +11,7 @@ describe("workbook Pi history", () => {
     const history = projectPiHistory([
       record(1, { type: "message", lessonId: "lesson", blockId: "write", role: "assistant", source: "authored", presentation: "course", text: "## Write it\n\nUse `.tmp`." }),
       record(2, { type: "message", lessonId: "lesson", blockId: "write", role: "user", source: "learner", presentation: "chat", text: "Which path should I use?" }),
-      record(3, { type: "message", lessonId: "lesson", blockId: "write", role: "assistant", source: "tutor", presentation: "chat", text: "Write the generated file under `.tmp`." }),
+      record(3, { type: "message", lessonId: "lesson", blockId: "write", role: "assistant", source: "main_tutor", presentation: "chat", text: "Write the generated file under `.tmp`." }),
     ]);
 
     expect(history).toEqual({
@@ -41,5 +41,50 @@ describe("workbook Pi history", () => {
   it("formats the title and markdown the learner sees for authored history", () => {
     expect(authoredBlockText({ id: "write", type: "narrative", title: "Write it", markdown: "Use `.tmp`." }))
       .toBe("## Write it\n\nUse `.tmp`.");
+  });
+
+  it("projects active block context separately from learner-visible history", () => {
+    const records: WorkbookTimelineRecord[] = [
+      record(1, { type: "message", lessonId: "lesson", blockId: "complete", role: "assistant", source: "authored", presentation: "course", text: "Completed block" }),
+      record(2, { type: "block_summarized", lessonId: "lesson", blockId: "complete", text: "The completed block is done.", coveredThroughId: "1" }),
+      record(3, { type: "message", lessonId: "lesson", blockId: "active", role: "assistant", source: "authored", presentation: "course", text: "## Active block\n\nEdit the script." }),
+      record(4, { type: "message", lessonId: "lesson", blockId: "active", role: "assistant", source: "block_tutor", presentation: "hint", text: "Try changing the generated filename." }),
+    ];
+    const activeContext: ActiveBlockContext = {
+      lessonId: "lesson",
+      blockId: "active",
+      title: "Active block",
+      markdown: "Edit the script.",
+      authorGuidance: "Do not reveal this private rubric.",
+      attempts: [
+        { id: "attempt-1", lessonId: "lesson", blockId: "active", version: 1, status: "superseded", evidence: { kind: "editor", text: "first" } },
+        { id: "attempt-2", lessonId: "lesson", blockId: "active", version: 2, status: "working", evidence: { kind: "editor", text: "second" } },
+      ]
+    };
+
+    const publicHistory = projectPiHistory(records);
+    const mainHistory = projectMainTutorHistory(records, activeContext);
+
+    expect(publicHistory).toEqual({
+      summary: { sourceEventId: "2", text: "The completed block is done.", coveredThroughId: "1" },
+      turns: [
+        { sourceEventId: "3", role: "assistant", text: "## Active block\n\nEdit the script." },
+        { sourceEventId: "4", role: "assistant", text: "Try changing the generated filename." },
+      ]
+    });
+    expect(JSON.stringify(publicHistory)).not.toContain("private rubric");
+    expect(mainHistory.turns).toEqual(publicHistory.turns);
+    expect(mainHistory.activeContext).toMatchObject({ name: "workbook-active-block", sourceEventIds: ["3", "4"] });
+    expect(JSON.parse(mainHistory.activeContext?.text ?? "{}")).toMatchObject({
+      lessonId: "lesson",
+      blockId: "active",
+      title: "Active block",
+      markdown: "Edit the script.",
+      authorGuidance: "Do not reveal this private rubric.",
+      attempts: [
+        { id: "attempt-1", version: 1, status: "superseded", evidence: { kind: "editor", text: "first" } },
+        { id: "attempt-2", version: 2, status: "working", evidence: { kind: "editor", text: "second" } },
+      ]
+    });
   });
 });

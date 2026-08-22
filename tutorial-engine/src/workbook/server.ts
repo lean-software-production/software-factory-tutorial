@@ -172,7 +172,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     await append({ type: "tutor_failed", ...input });
   };
   const appendReviewMessage = async (attempt: Attempt, text: string): Promise<void> => {
-    await append({ type: "message", lessonId: attempt.lessonId, blockId: attempt.blockId, role: "assistant", source: "tutor", presentation: "review", text });
+    await append({ type: "message", lessonId: attempt.lessonId, blockId: attempt.blockId, role: "assistant", source: "main_tutor", presentation: "review", text });
   };
   const appendAcceptedCheckpoint = async (accepted: Attempt): Promise<void> => {
     await append({ type: "attempt_accepted", lessonId: accepted.lessonId, blockId: accepted.blockId, attemptId: accepted.id, version: accepted.version, kind: accepted.evidence.kind, summary: accepted.successMessage ?? "Nice work — this attempt is accepted." });
@@ -298,7 +298,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
           const learnerMessage = await append({ type: "message", lessonId: active.lesson.id, blockId, role: "user", source: "learner", presentation: "chat", text });
           try {
             const reply = await tutor.reply({ lessonId: active.lesson.id, blockId, learnerMessage: learnerMessage as TimelineMessage });
-            await append({ type: "message", lessonId: active.lesson.id, blockId, role: "assistant", source: "tutor", presentation: "chat", text: reply, inReplyTo: learnerMessage.id });
+            await append({ type: "message", lessonId: active.lesson.id, blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: reply, inReplyTo: learnerMessage.id });
           } catch (error) {
             log.info(`Workbook tutor reply failed for ${active.lesson.id}/${blockId}: ${error instanceof Error ? error.message : String(error)}`);
             await appendFailure({ lessonId: active.lesson.id, blockId, requestId: learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE });
@@ -317,7 +317,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
             const index = records.findIndex((record) => record.id === failure.id);
             const learnerMessage = [...records.slice(0, index)].reverse().find((record): record is TimelineMessage => record.type === "message" && record.source === "learner" && record.lessonId === failure.lessonId && record.blockId === failure.blockId);
             if (!learnerMessage) return sendJson(response, 409, { error: "The original learner message is unavailable." });
-            try { await append({ type: "message", lessonId: failure.lessonId, blockId: failure.blockId, role: "assistant", source: "tutor", presentation: "chat", text: await tutor.reply({ lessonId: failure.lessonId, blockId: failure.blockId, learnerMessage }), inReplyTo: learnerMessage.id }); }
+            try { await append({ type: "message", lessonId: failure.lessonId, blockId: failure.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: await tutor.reply({ lessonId: failure.lessonId, blockId: failure.blockId, learnerMessage }), inReplyTo: learnerMessage.id }); }
             catch { await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE }); }
           } else if (failure.operation === "restore") {
             try { await tutor.restore(records); restoringFailed = false; await requeueActiveAttempt(); }

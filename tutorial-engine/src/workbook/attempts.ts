@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { tutorialStatePath } from "../tutorial-state.js";
@@ -101,6 +102,28 @@ export class AttemptStore {
     const pointer = await readJson<AttemptPointer>(this.#idPath(id));
     if (!pointer || pointer.id !== id) return undefined;
     return this.#readPointer(pointer);
+  }
+
+  async list(lessonId: string, blockId: string): Promise<Attempt[]> {
+    assertIdentifier(lessonId, "Attempt lesson ID");
+    assertIdentifier(blockId, "Attempt block ID");
+    let entries: Dirent[];
+    try {
+      entries = await readdir(this.#blockDirectory(lessonId, blockId), { withFileTypes: true });
+    } catch (error: any) {
+      if (error?.code === "ENOENT") return [];
+      throw error;
+    }
+    const pointers = entries.flatMap((entry): AttemptPointer[] => {
+      if (!entry.isFile()) return [];
+      const match = /^(\d+)-([0-9a-f-]{36})\.json$/i.exec(entry.name);
+      const version = match?.[1];
+      const id = match?.[2];
+      if (!version || !id) return [];
+      return [{ id, lessonId, blockId, version: Number(version) }];
+    }).sort((left, right) => left.version - right.version);
+    const attempts = await Promise.all(pointers.map((pointer) => this.#readPointer(pointer)));
+    return attempts.filter((attempt): attempt is Attempt => Boolean(attempt));
   }
 
   async markReviewing(id: string): Promise<Attempt | undefined> {

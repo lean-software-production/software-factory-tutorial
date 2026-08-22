@@ -30,7 +30,7 @@ export interface WorkbookProjection { activeLessonId: string; activeBlockId: str
 type ProjectedRecord = WorkbookEvent | WorkbookTimelineRecord;
 
 function isWorkflowEvent(record: ProjectedRecord): record is WorkbookEvent {
-  return record.type !== "message" && record.type !== "block_summarized" && record.type !== "lesson_summarized" && record.type !== "tutor_failed";
+  return record.type !== "message" && record.type !== "block_summarized" && record.type !== "lesson_summarized" && record.type !== "block_tutor_briefed" && record.type !== "block_tutor_readiness" && record.type !== "tutor_failed";
 }
 
 export function introductionCompleted(events: readonly ProjectedRecord[]): boolean {
@@ -50,7 +50,7 @@ export function project(events: readonly ProjectedRecord[], lesson: WorkbookLess
   for (const record of events) {
     if (record.type === "message" && record.lessonId === lesson.id && lesson.blocks.some((block) => block.id === record.blockId && block.type === "reflection")) {
       if (record.source === "learner") (reflectionConversations[record.blockId] ??= []).push({ role: "learner", text: record.text });
-      if (record.source === "tutor" && record.presentation === "review") (reflectionConversations[record.blockId] ??= []).push({ role: "tutor", text: record.text });
+      if (record.source === "main_tutor" && record.presentation === "review") (reflectionConversations[record.blockId] ??= []).push({ role: "tutor", text: record.text });
     }
     if (!isWorkflowEvent(record)) continue;
     const event = record;

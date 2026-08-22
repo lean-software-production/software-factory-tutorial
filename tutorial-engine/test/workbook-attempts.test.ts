@@ -59,4 +59,19 @@ describe("AttemptStore", () => {
     await expect(store.read(terminal.id)).resolves.toMatchObject({ evidence: terminal.evidence });
     await expect(store.read(reflection.id)).resolves.toMatchObject({ evidence: reflection.evidence });
   });
+
+  it("lists every versioned attempt for a block in ascending version order", async () => {
+    const workspace = await temporaryWorkspace("workbook-attempt-history-");
+    const attempts = new AttemptStore(workspace);
+
+    await attempts.create({ lessonId: "lesson", blockId: "editor", evidence: { kind: "editor", text: "first" } });
+    await attempts.create({ lessonId: "lesson", blockId: "editor", evidence: { kind: "editor", text: "second" } });
+    await attempts.create({ lessonId: "lesson", blockId: "editor", evidence: { kind: "editor", text: "third" } });
+
+    expect(await attempts.list("lesson", "editor")).toMatchObject([
+      { version: 1, status: "superseded", evidence: { kind: "editor", text: "first" } },
+      { version: 2, status: "superseded", evidence: { kind: "editor", text: "second" } },
+      { version: 3, status: "working", evidence: { kind: "editor", text: "third" } },
+    ]);
+  });
 });

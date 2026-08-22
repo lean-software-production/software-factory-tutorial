@@ -243,7 +243,7 @@ describe("workbook browser API", () => {
       const messages = (await state(server.url)).timeline.filter((record: any) => record.type === "message");
       expect(messages.slice(-2).map((record: any) => [record.role, record.source, record.text])).toEqual([
         ["user", "learner", "Which path should I use?"],
-        ["assistant", "tutor", "Try the workspace-relative path."],
+        ["assistant", "main_tutor", "Try the workspace-relative path."],
       ]);
       expect(JSON.stringify(messages)).not.toContain("Private editor rubric");
     } finally { await server.close(); }
