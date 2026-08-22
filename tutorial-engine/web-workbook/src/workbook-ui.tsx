@@ -517,7 +517,9 @@ export function App() {
   const emerged = useMemo(() => state?.chapters.filter((chapter): chapter is Chapter & { lesson: Lesson } => Boolean(chapter.lesson)) ?? [], [state]);
   if (!state) return <p className="loading">Loading workbook…</p>;
   const viewedLesson = viewed ?? state.progress.activeLessonId;
-  const activeChapter = emerged.find((chapter) => chapter.id === state.progress.activeLessonId);
+  const activeChapterIndex = emerged.findIndex((chapter) => chapter.id === state.progress.activeLessonId);
+  const activeChapter = activeChapterIndex === -1 ? undefined : emerged[activeChapterIndex];
+  const showActivePartCard = activeChapter !== undefined && (activeChapterIndex === 0 || emerged[activeChapterIndex - 1]!.part !== activeChapter.part);
   const activeBlock = activeChapter?.lesson.blocks.find((block) => block.id === state.progress.activeBlockId);
   const activeBlockProgress = state.progress.blocks.find((block) => block.id === state.progress.activeBlockId);
   const hasTimeline = state.timeline !== undefined;
@@ -533,10 +535,13 @@ export function App() {
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} />
     <main><article className="page">
       <WorkbookIntroduction state={state} refresh={setState} />
-      {hasTimeline && activeChapter ? <LessonView chapter={activeChapter} progress={state.progress} refresh={setState} renderBlocks={false}>
+      {hasTimeline && activeChapter ? <>
+        {showActivePartCard && <PartChapter chapter={activeChapter} />}
+        <LessonView chapter={activeChapter} progress={state.progress} refresh={setState} renderBlocks={false}>
         {activeBlock && <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onHint={(blockId) => postBlockHint(blockId).then((next) => setState(next))} />}
         <TimelineThread records={state.timeline} activeLessonId={state.progress.activeLessonId} activeBlockId={state.progress.activeBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} inputDisabled={activeBlock?.type === "reflection" && activeBlockProgress?.checkpoint?.status === "reviewing"} renderContinuation={(record) => activeBlock && activeBlockProgress && record.source === "authored" && record.lessonId === state.progress.activeLessonId && record.blockId === activeBlock.id && ["narrative", "lesson-transition"].includes(activeBlock.type) ? <ContinueControls block={activeBlock} state={activeBlockProgress} refresh={setState} /> : null} />
-      </LessonView> : emerged.map((chapter, index) => <React.Fragment key={chapter.id}>{(index === 0 || chapter.part !== emerged[index - 1]!.part) && <PartChapter chapter={chapter} />}<LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}
+      </LessonView>
+      </> : emerged.map((chapter, index) => <React.Fragment key={chapter.id}>{(index === 0 || chapter.part !== emerged[index - 1]!.part) && <PartChapter chapter={chapter} />}<LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}
     </article></main>
   </div>;
 }
