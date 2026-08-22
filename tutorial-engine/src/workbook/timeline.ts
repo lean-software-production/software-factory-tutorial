@@ -78,7 +78,7 @@ export type TutorFailure = TimelineMetadata & {
   lessonId: string;
   blockId: string;
   requestId: string;
-  operation: "reply" | "review" | "restore" | "block_summary" | "lesson_summary";
+  operation: "reply" | "hint" | "briefing" | "readiness" | "review" | "restore" | "block_summary" | "lesson_summary";
   publicMessage: string;
 };
 
