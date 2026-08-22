@@ -39,7 +39,7 @@ Changed `tutorial-engine/web-workbook/src/timeline-thread.tsx`:
 Changed `tutorial-engine/web-workbook/src/styles.css`:
 
 - Removed the fixed dock form's visible card styling by setting the docked `.timeline-input` padding, border, radius, background, and shadow to the compact transparent treatment.
-- Added compact textarea styling: `field-sizing: content`, one-line min height, bounded max height, `overflow-y: auto`, and `resize: none`.
+- Added compact textarea styling: one-line min height, bounded max height, overflow behavior, and `resize: none`.
 
 Changed `tutorial-engine/test/workbook-ui.test.tsx`:
 
@@ -109,4 +109,70 @@ Tests  292 passed (292)
 
 ## Concerns
 
-- The CSS autogrow uses `field-sizing: content`; browsers without support will still start at one row and become scrollable, but may not visually grow before reaching the scrollable behavior.
+- Round 1 resolved the original `field-sizing: content` fallback concern by replacing CSS-only autogrow with JS-backed sizing.
+
+## Round 1 fix evidence
+
+Review findings addressed:
+
+- Major: replaced reliance on `field-sizing: content` with JS-backed autosizing in `TimelineThread`. The textarea height is recalculated from `scrollHeight` whenever `draft` changes, capped at 160px, and switches to vertical scrolling at the cap.
+- Medium: added behavioral tests for growth, max capping, overflow behavior, and operation without `field-sizing` support by asserting inline JS-calculated height and overflow values from stubbed `scrollHeight`.
+- Low: kept minimal hook assertions for markup, and added behavior-level autosizing coverage so the sizing logic is tested directly.
+
+Round 1 RED command:
+
+```sh
+cd /Users/matt/git/lean-software-production/software-factory-tutorial/.worktrees/workbook-composer-compact/tutorial-engine && npm test -- test/workbook-ui.test.tsx -t "auto-sizes|caps docked"
+```
+
+Expected RED output before production changes:
+
+```text
+Test Files  1 failed (1)
+Tests  2 failed | 32 skipped (34)
+
+× auto-sizes the docked composer from one line as draft content grows
+AssertionError: expected '' to be '42px'
+
+× caps docked composer growth and enables vertical scrolling without field-sizing support
+AssertionError: expected '' to be '160px'
+```
+
+Round 1 focused autosizing tests after implementation:
+
+```sh
+cd /Users/matt/git/lean-software-production/software-factory-tutorial/.worktrees/workbook-composer-compact/tutorial-engine && npm test -- test/workbook-ui.test.tsx -t "auto-sizes|caps docked"
+```
+
+Output:
+
+```text
+Test Files  1 passed (1)
+Tests  2 passed | 32 skipped (34)
+```
+
+Round 1 focused UI tests:
+
+```sh
+cd /Users/matt/git/lean-software-production/software-factory-tutorial/.worktrees/workbook-composer-compact/tutorial-engine && npm test -- test/workbook-ui.test.tsx
+```
+
+Output:
+
+```text
+Test Files  1 passed (1)
+Tests  34 passed (34)
+```
+
+Round 1 full tutorial-engine check:
+
+```sh
+cd /Users/matt/git/lean-software-production/software-factory-tutorial/.worktrees/workbook-composer-compact/tutorial-engine && npm run check
+```
+
+Output:
+
+```text
+Test Files  38 passed (38)
+Tests  294 passed (294)
+```

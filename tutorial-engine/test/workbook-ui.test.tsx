@@ -225,9 +225,54 @@ describe("workbook lesson UI", () => {
     expect(form).not.toBeNull();
     expect(textarea.getAttribute("aria-label")).toBe("Message the tutor");
     expect(textarea.classList.contains("timeline-composer-textarea")).toBe(true);
+    expect(textarea.rows).toBe(1);
     expect(container.querySelector("label")).toBeNull();
     expect(container.textContent).not.toContain("Message the tutor");
     expect(container.querySelector(".round-send")?.getAttribute("aria-label")).toBe("Send message");
+  });
+
+  it("auto-sizes the docked composer from one line as draft content grows", async () => {
+    const container = await mount(createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend: vi.fn(async () => undefined),
+      onRetry: vi.fn(async () => undefined),
+      records: []
+    }));
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+    let scrollHeight = 42;
+    Object.defineProperty(textarea, "scrollHeight", { configurable: true, get: () => scrollHeight });
+
+    textarea.value = "Line one";
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+
+    expect(textarea.style.height).toBe("42px");
+    expect(textarea.style.overflowY).toBe("hidden");
+
+    scrollHeight = 94;
+    textarea.value = "Line one\nLine two\nLine three";
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+
+    expect(textarea.style.height).toBe("94px");
+    expect(textarea.style.overflowY).toBe("hidden");
+  });
+
+  it("caps docked composer growth and enables vertical scrolling without field-sizing support", async () => {
+    const container = await mount(createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend: vi.fn(async () => undefined),
+      onRetry: vi.fn(async () => undefined),
+      records: []
+    }));
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+    Object.defineProperty(textarea, "scrollHeight", { configurable: true, get: () => 240 });
+
+    textarea.value = "Line one\nLine two\nLine three\nLine four\nLine five\nLine six";
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+
+    expect(textarea.style.height).toBe("160px");
+    expect(textarea.style.overflowY).toBe("auto");
   });
 
   it("renders an active editor-practice block without exposing private tutor text", () => {
