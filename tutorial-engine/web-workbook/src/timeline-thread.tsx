@@ -36,6 +36,9 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     setPendingEchoes((echoes) => [...echoes, { id: echoId, text: trimmed }]);
     try {
       await onSend(trimmed);
+    } catch (error) {
+      setDraft(text);
+      throw error;
     } finally {
       setPendingEchoes((echoes) => echoes.filter((echo) => echo.id !== echoId));
       setPending(false);

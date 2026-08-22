@@ -251,6 +251,42 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector(".timeline-message.learner")).toBeNull();
   });
 
+  it("restores the draft if onSend rejects, but still removes the pending echo", async () => {
+    let rejectSend!: (error: Error) => void;
+    const onSend = vi.fn(() => new Promise<void>((_resolve, reject) => { rejectSend = reject; }));
+    const container = await mount(createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend,
+      onRetry: vi.fn(async () => undefined),
+      records: []
+    }));
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+
+    textarea.value = "What should I try next?";
+    textarea.focus();
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    await act(async () => { textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+
+    expect(onSend).toHaveBeenCalledWith("What should I try next?");
+    expect(textarea.value).toBe("");
+    expect(container.querySelector(".timeline-message.learner")).not.toBeNull();
+
+    const onUnhandledRejection = (error: unknown) => { void error; };
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      await act(async () => {
+        rejectSend(new Error("send failed"));
+        await Promise.resolve().then(() => Promise.resolve());
+      });
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+
+    expect(textarea.value).toBe("What should I try next?");
+    expect(container.querySelector(".timeline-message.learner")).toBeNull();
+  });
+
   it("scrolls the newest conversation entry into view but not for course-only records", async () => {
     const scrollIntoView = vi.fn();
     const baseRecords = [
