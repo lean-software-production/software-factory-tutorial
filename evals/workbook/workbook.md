@@ -1,4 +1,8 @@
 ---
+parts:
+  - id: evaluator
+    lessons:
+      - 001-live-session
 ---
 # V2 Live Evaluator Workbook
 

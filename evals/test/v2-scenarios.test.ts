@@ -6,7 +6,7 @@ import { clueCommand, deterministicV2Gate, exactCommand, findV2Scenario, satisfa
 import { createEmptyV2SessionTrace } from "../v2/session.js";
 import type { V2SessionTrace } from "../v2/types.js";
 
-const lessonId = "01-evaluator/01-live-session";
+const lessonId = "001-live-session";
 function event(event: Record<string, unknown>): WorkbookEvent {
   return { at: "2026-08-20T00:00:00.000Z", ...event } as WorkbookEvent;
 }

@@ -7,7 +7,7 @@ import { createEmptyV2SessionTrace } from "../v2/session.js";
 import type { V2GateResult } from "../v2/scenarios.js";
 import type { V2SessionTrace } from "../v2/types.js";
 
-const lessonId = "01-evaluator/01-live-session";
+const lessonId = "001-live-session";
 const exactCommand = "mkdir -p .tmp && printf 'command block complete\\n' > .tmp/evaluator-command.txt && cat .tmp/evaluator-command.txt";
 
 function event(event: Record<string, unknown>): WorkbookEvent {

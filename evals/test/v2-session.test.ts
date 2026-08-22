@@ -85,7 +85,7 @@ describe("v2 public session trace", () => {
     await writeFile(resolve(workspace.root, ".tutorial/.tmp/workbook/events.jsonl"), `${JSON.stringify({
       type: "observation_verified",
       at: "2026-08-20T00:00:00.000Z",
-      lessonId: "01-evaluator/01-live-session",
+      lessonId: "001-live-session",
       blockId: "exact-command",
       source: "terminal_observer",
       summary: "This is private tutor guidance for the live evaluator's exact-command scenario.",

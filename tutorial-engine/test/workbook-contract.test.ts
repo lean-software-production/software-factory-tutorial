@@ -183,21 +183,10 @@ describe("workbook lesson contract", () => {
     expect((lesson.blocks[4] as any).tutor).toBeUndefined();
   });
 
-  it("derives the rail from ordered part and lesson directories", async () => {
+  it("does not fall back to legacy nested part directories when no flat lessons exist", async () => {
     const dir = await fixture();
     const loaded = await loadWorkbook(dir);
-    expect(loaded.identity.title).toBe("Fixture Workbook Identity");
-    expect(loaded.introduction).toBe("Fixture introduction prose.");
-    // Parts sort by directory name, so 01-beta-part precedes 02-alpha-part.
-    expect(loaded.chapters.map((chapter) => [chapter.id, chapter.part, chapter.title])).toEqual([
-      ["01-beta-part/01-beta-lesson", "First Part Title", "Beta Lesson Title"],
-      ["02-alpha-part/10-first-lesson", "Second Part Title", "Synthetic Lesson Title"],
-    ]);
-    // Lesson numbers are a single global sequence across parts, in directory order.
-    expect(loaded.chapters.map((chapter) => chapter.lessonNumber)).toEqual([1, 2]);
-    const first = loaded.chapters.find((chapter) => chapter.id === "02-alpha-part/10-first-lesson");
-    expect(first?.lesson.title).toBe("Synthetic Lesson Title");
-    expect(first?.partMarkdown).toBe("Second part copy.");
+    expect(loaded.chapters).toEqual([]);
   });
 
   it("discovers flat lessons in numeric directory order and leaves part fields absent when workbook parts are absent", async () => {
@@ -351,12 +340,12 @@ describe("workbook lesson contract", () => {
       "Second part copy referencing [Lesson 1: First Flat Lesson](#lesson-001-first-lesson).");
   });
 
-  it("rejects a malformed lesson reference in a legacy nested part.md, naming the part.md file itself", async () => {
-    const dir = await fixture();
-    await writeFile(resolve(dir, "lessons/01-beta-part/part.md"), "---\n---\n# First Part Title\n\n[[lesson:]]\n");
+  it("rejects a malformed lesson reference in a flat part document, naming the parts file itself", async () => {
+    const dir = await flatFixture(flatPartsManifest());
+    await writePartDocument(dir, "part-one", "Part One Title", "[[lesson:]]");
     const message = await messageFrom(loadWorkbook(dir));
     expect(message).toMatch(/empty lesson reference/i);
-    expect(message).toContain(resolve(dir, "lessons/01-beta-part/part.md"));
+    expect(message).toContain(resolve(dir, "parts/part-one.md"));
   });
 
   it("keeps the real workbook free of unresolved [[lesson: reference tokens", async () => {
@@ -373,8 +362,8 @@ describe("workbook lesson contract", () => {
   });
 
   it("loads the real migrated lesson 001 content unchanged", async () => {
-    const lessonDir = resolve(import.meta.dirname, "../../lessons/01-the-validation-loop/01-run-an-agent-headlessly");
-    const lesson = await loadWorkbookLesson(lessonDir, "01-the-validation-loop/01-run-an-agent-headlessly");
+    const lessonDir = resolve(import.meta.dirname, "../../lessons/001-run-an-agent-headlessly");
+    const lesson = await loadWorkbookLesson(lessonDir, "001-run-an-agent-headlessly");
     expect(lesson.title).toBe("Run an agent headlessly");
     expect(lesson.durationMinutes).toBe(10);
     expect(lesson.blocks.map((block) => block.id)).toEqual(["orientation", "run-supplied-command", "change-job", "reflection", "transition"]);
@@ -385,8 +374,8 @@ describe("workbook lesson contract", () => {
   });
 
   it("loads the real migrated lesson 002 editor-practice blocks", async () => {
-    const lessonDir = resolve(import.meta.dirname, "../../lessons/01-the-validation-loop/02-build-a-doer");
-    const lesson = await loadWorkbookLesson(lessonDir, "01-the-validation-loop/02-build-a-doer");
+    const lessonDir = resolve(import.meta.dirname, "../../lessons/002-build-a-doer");
+    const lesson = await loadWorkbookLesson(lessonDir, "002-build-a-doer");
     expect(lesson.blocks.map((block) => block.id)).toEqual([
       "key-concept",
       "write-doer-prompt",
@@ -415,19 +404,19 @@ describe("workbook lesson contract", () => {
     expect(workbook.identity.title).toBe("Software Factory Tutorial");
     expect(workbook.chapters).toHaveLength(13);
     expect(workbook.chapters.map((chapter) => chapter.id)).toEqual([
-      "01-the-validation-loop/01-run-an-agent-headlessly",
-      "01-the-validation-loop/02-build-a-doer",
-      "01-the-validation-loop/03-build-a-validator",
-      "01-the-validation-loop/04-feed-the-findings-back",
-      "02-build-the-factory/01-join-them-into-a-line",
-      "02-build-the-factory/02-read-only-validator",
-      "02-build-the-factory/03-compose-and-branch",
-      "02-build-the-factory/04-take-the-pause-off",
-      "02-build-the-factory/05-record-what-happened",
-      "02-build-the-factory/06-watch-it-while-it-runs",
-      "02-build-the-factory/07-ask-what-happened",
-      "02-build-the-factory/08-talk-to-a-station",
-      "02-build-the-factory/09-oversee-the-orchestrator",
+      "001-run-an-agent-headlessly",
+      "002-build-a-doer",
+      "003-build-a-validator",
+      "004-feed-the-findings-back",
+      "005-join-them-into-a-line",
+      "006-read-only-validator",
+      "007-compose-and-branch",
+      "008-take-the-pause-off",
+      "009-record-what-happened",
+      "010-watch-it-while-it-runs",
+      "011-ask-what-happened",
+      "012-talk-to-a-station",
+      "013-oversee-the-orchestrator",
     ]);
     expect(workbook.chapters.every((chapter) => chapter.lesson)).toBe(true);
   });
@@ -445,7 +434,7 @@ describe("workbook lesson contract", () => {
   it("begins lesson 005 with a Part 2 entry checkpoint", async () => {
     const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
     const lesson005 = workbook.chapters.find(
-      (chapter) => chapter.id === "02-build-the-factory/01-join-them-into-a-line");
+      (chapter) => chapter.id === "005-join-them-into-a-line");
     const first = lesson005?.lesson.blocks[0];
 
     expect(first?.id).toBe("part-2-entry-checkpoint");
@@ -455,7 +444,7 @@ describe("workbook lesson contract", () => {
   it("ends lesson 013 with a capstone closure", async () => {
     const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
     const lesson013 = workbook.chapters.find(
-      (chapter) => chapter.id === "02-build-the-factory/09-oversee-the-orchestrator");
+      (chapter) => chapter.id === "013-oversee-the-orchestrator");
     const blocks = lesson013?.lesson.blocks ?? [];
     const last = blocks[blocks.length - 1];
 
@@ -471,7 +460,7 @@ describe("workbook lesson contract", () => {
     // so a future edit cannot drift from it again.
     const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
     const lesson013 = workbook.chapters.find(
-      (chapter) => chapter.id === "02-build-the-factory/09-oversee-the-orchestrator");
+      (chapter) => chapter.id === "013-oversee-the-orchestrator");
     const keyConcept = lesson013?.lesson.blocks.find((block) => block.id === "key-concept");
 
     expect(keyConcept?.markdown.replace(/\s+/g, " ")).toContain(

@@ -36,7 +36,6 @@ export interface LoadedWorkbook { workspace: string; identity: WorkbookIdentity;
 const WORKBOOK_DOCUMENT = "workbook.md";
 const LESSONS_ROOT = "lessons";
 const PARTS_ROOT = "parts";
-const PART_DOCUMENT = "part.md";
 const LESSON_DOCUMENT = "lesson.md";
 const BLOCKS_DIR = "blocks";
 
@@ -105,8 +104,6 @@ async function readTitledDocument(path: string, level: 1 | 2): Promise<{ data: R
 
 interface LoadedPart { id: string; title: string; markdown: string; path: string; }
 interface FlatLessonDirectory { id: string; path: string; }
-/** A legacy part's `path` is its part.md file, matching LoadedPart's convention; `dir` is its containing directory, used to discover its lessons. */
-interface LegacyPartDirectory extends LoadedPart { dir: string; }
 
 function compareWorkbookIds(left: string, right: string): number {
   return left.localeCompare(right, undefined, { numeric: true });
@@ -165,24 +162,6 @@ function validateFlatParts(manifestParts: readonly WorkbookPartManifest[], lesso
   if (duplicates.size) errors.push(`${workbookPath}: parts duplicates lesson id(s): ${[...duplicates].sort(compareWorkbookIds).join(", ")}`);
   if (omitted.length) errors.push(`${workbookPath}: parts omits lesson id(s) present on disk: ${omitted.join(", ")}`);
   if (errors.length) throw new Error(errors.join("\n"));
-}
-
-async function legacyPartDirectories(workspace: string): Promise<LegacyPartDirectory[]> {
-  const root = resolve(workspace, LESSONS_ROOT);
-  const entries = await directoryEntries(root);
-  const dirs = entries.filter((entry) => entry.isDirectory()).sort((a, b) => compareWorkbookIds(a.name, b.name));
-  return Promise.all(dirs.map(async (entry) => {
-    const dir = resolve(root, entry.name);
-    const partPath = resolve(dir, PART_DOCUMENT);
-    const { data, title, body } = await readTitledDocument(partPath, 1);
-    validatePartManifest(data, partPath);
-    return { id: entry.name, title, markdown: body, path: partPath, dir };
-  }));
-}
-
-async function legacyLessonDirectories(part: LegacyPartDirectory): Promise<string[]> {
-  const entries = await directoryEntries(part.dir);
-  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort(compareWorkbookIds);
 }
 
 /** A block id resolves to blocks/<id>.md by convention; the filename supplies its id. */
@@ -250,13 +229,7 @@ async function draftForLesson(id: string, lessonDir: string, part: LoadedPart | 
 async function flatChapterGroups(workspace: string, manifest: WorkbookManifest, workbookPath: string): Promise<{ parts: LoadedPart[]; groups: ChapterDraft[][] }> {
   const lessons = await flatLessonDirectories(workspace);
   if (!manifest.parts) {
-    if (lessons.length > 0) return { parts: [], groups: [await Promise.all(lessons.map((lesson) => draftForLesson(lesson.id, lesson.path, undefined, undefined)))] };
-    const legacyParts = await legacyPartDirectories(workspace);
-    const legacyGroups = await Promise.all(legacyParts.map(async (part, partIndex) => {
-      const directories = await legacyLessonDirectories(part);
-      return Promise.all(directories.map((directory) => draftForLesson(`${part.id}/${directory}`, resolve(part.dir, directory), part, partIndex)));
-    }));
-    return { parts: legacyParts, groups: legacyGroups };
+    return { parts: [], groups: lessons.length > 0 ? [await Promise.all(lessons.map((lesson) => draftForLesson(lesson.id, lesson.path, undefined, undefined)))] : [] };
   }
 
   validateFlatParts(manifest.parts, lessons, workbookPath);

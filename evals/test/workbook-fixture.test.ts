@@ -30,7 +30,7 @@ describe("v2 live-evaluation workbook fixture", () => {
     expect(workbook.chapters).toHaveLength(1);
 
     const chapter = workbook.chapters[0]!;
-    expect(chapter.id).toBe("01-evaluator/01-live-session");
+    expect(chapter.id).toBe("001-live-session");
     expect(chapter.part).toBe("Evaluator Fixture");
     expect(chapter.partMarkdown).toContain("isolated from the authored curriculum");
     expect(chapter.title).toBe("Live evaluator session");
