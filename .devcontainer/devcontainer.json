@@ -8,13 +8,16 @@
 	],
 	"containerEnv": {
 		"PI_CODING_AGENT_DIR": "/home/vscode/.tutorial-state/pi-agent",
-		// The tutor's model. The `pi -p` doer the lessons drive gets its own,
-		// seeded into the state volume by post-create.sh, so the two stay
-		// independent: the tutor teaches, the doer is meant to be cheap, fast
-		// and fallible. Both values assume the OpenCode Zen provider this image
-		// is built around; a participant who logged in elsewhere falls back to
-		// Pi's own pick, and `npm run setup` reports which. Override for one
-		// shell with `export TUTOR_MODEL=...`.
+		// The main tutor's model. The fast block helper and the `pi -p` doer the
+		// lessons drive are separate roles: the main tutor teaches, the block
+		// helper gives quick read-only hints, and the doer is meant to be cheap,
+		// fast, and fallible. The block helper normally follows Pi's own pick
+		// unless BLOCK_TUTOR_MODEL is exported; the doer default is seeded into
+		// the state volume by post-create.sh. These values assume the OpenCode
+		// Zen provider this image is built around; a participant who logged in
+		// elsewhere falls back to Pi's own pick, and `npm run setup` reports
+		// which. Override the main tutor for one shell with
+		// `export TUTOR_MODEL=...`.
 		"TUTOR_MODEL": "opencode-go/deepseek-v4-flash"
 	},
 	// An OpenCode Zen key on the host authenticates Pi without an interactive

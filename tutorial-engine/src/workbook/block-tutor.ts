@@ -54,7 +54,7 @@ Private material boundary: never quote or reveal private briefing text, author g
 
 Hint mode: give one concise next hint for the active block.
 
-Assessment mode: assess only the supplied attempt snapshot and active block context. Do not accept or reject the attempt. Report only whether the learner is likely ready for the main tutor's review or still working by calling report_attempt_readiness({ readiness, rationale }). The only readiness values are likely_ready and still_working. The rationale must not say the attempt is accepted, rejected, passed, or failed.`;
+Assessment mode: assess only the supplied attempt snapshot and active block context. Do not accept or reject the attempt. Report only whether the learner is likely ready for the main tutor's review or still working by calling report_attempt_readiness({ readiness, rationale }). The only readiness values are likely_ready and still_working. The rationale must not say the attempt is accepted, passing, rejected, or failed.`;
 }
 
 function hintPrompt(input: { context: ActiveBlockContext; briefing: string }): string {
@@ -78,7 +78,7 @@ ${JSON.stringify(input.context, null, 2)}
 Untrusted attempt snapshot to assess:
 ${JSON.stringify(input.attempt, null, 2)}
 
-Call ${READINESS_TOOL_NAME} with readiness likely_ready when this attempt appears ready for the main tutor to review, or still_working when it needs more learner work. Return only a concise public rationale. Do not accept the attempt, reject it, say it passed, or say it failed.`;
+Call ${READINESS_TOOL_NAME} with readiness likely_ready when this attempt appears ready for the main tutor to review, or still_working when it needs more learner work. Return only a concise public rationale. Do not accept the attempt, reject it, say it is passing, or say it failed.`;
 }
 
 function trimmedRequired(text: string, label: string): string {
@@ -97,7 +97,7 @@ function privateFragments(text: string): string[] {
     const normalized = normalizedGuardText(fragment);
     if (normalized.length >= minimumLength) fragments.add(normalized);
   };
-  add(text, 8);
+  add(text, 1);
   for (const fragment of text.split(/\n+|[.!?]\s+/u)) add(fragment, 20);
   return [...fragments];
 }
@@ -115,7 +115,7 @@ function assertNoPrivateMaterial(text: string, privateTexts: string[]): void {
 
 function assertNoReadinessAcceptanceClaims(text: string, label: string): void {
   const normalized = normalizedGuardText(text);
-  if (/\baccept(?:ed|s|ing)?\b/u.test(normalized) || /\breject(?:ed|s|ing)?\b/u.test(normalized) || /\bpass(?:ed|es)?\b/u.test(normalized) || /\bfail(?:ed|s|ing)?\b/u.test(normalized)) {
+  if (/\baccept(?:ed|s|ing)?\b/u.test(normalized) || /\breject(?:ed|s|ing)?\b/u.test(normalized) || /\bpass(?:ed|es|ing)?\b/u.test(normalized) || /\bfail(?:ed|s|ing)?\b/u.test(normalized)) {
     throw new Error(`Block tutor ${label} included an acceptance claim.`);
   }
 }

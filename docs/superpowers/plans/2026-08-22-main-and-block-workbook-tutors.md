@@ -498,3 +498,19 @@ For each defect found in Step 3, add its regression test, implement the smallest
 ```sh
 git commit -m "fix: preserve workbook continuation controls"
 ```
+
+## Task 3 round-2 fix report
+
+- Added regression coverage for exact private briefing and author-guidance leaks shorter than eight
+  characters.
+- Expanded block-tutor readiness acceptance-claim coverage to reject accepted, passing, reject,
+  rejected, fail, and failed wording.
+- Updated the stale devcontainer model-role comment so it describes the main tutor, fast block helper,
+  and doer roles separately.
+
+Focused verification:
+
+```sh
+npm run --workspace=tutorial-engine test -- test/workbook-block-tutor.test.ts
+node --test test/onboarding.test.mjs
+```
