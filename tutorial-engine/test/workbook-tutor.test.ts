@@ -183,6 +183,15 @@ describe("MainWorkbookTutor", () => {
     await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-3"), privateGuidance: "Accept only complete answers." })).resolves.toEqual({ outcome: "working" });
   });
 
+  it("rejects empty material review feedback instead of inventing generic feedback", async () => {
+    const session = new FakeSession({ systemPrompt: "", customTools: [], tools: [], history: { turns: [] } });
+    const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", sessionFactory: async () => session });
+
+    session.promptResponses.push("  \n\t  ");
+
+    await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-empty-feedback"), privateGuidance: "Accept only complete answers." })).rejects.toThrow(/empty tutor response/i);
+  });
+
   it("creates no public text for working reviews and rejects empty ordinary replies", async () => {
     const session = new FakeSession({ systemPrompt: "", customTools: [], tools: [], history: { turns: [] } });
     const requests: WorkbookTutorSessionFactoryRequest[] = [];

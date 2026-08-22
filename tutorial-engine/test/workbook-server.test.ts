@@ -349,16 +349,16 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("keeps an incomplete attempt reviewing without a visible review message when the main tutor says working", async () => {
+  it("keeps an incomplete attempt quietly working without a visible review message when the main tutor says working", async () => {
     const dir = await fixture();
     const mainTutor = new FakeMainTutor({ outcome: "working" });
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor, blockTutor: new FakeBlockTutor() });
     try {
       await introduceAndOpenEditor(server.url);
       expect((await postEditor(server.url, { blockId: "edit-answer", text: "unfinished" })).status).toBe(202);
-      const reviewing = await waitForWorkbookState(server.url, () => mainTutor.reviews.length === 1, "working review");
-      expect(block(reviewing, "edit-answer")?.checkpoint?.status).toBe("reviewing");
-      expect(reviewing.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
+      const working = await waitForWorkbookState(server.url, (next) => mainTutor.reviews.length === 1 && block(next, "edit-answer")?.checkpoint?.status === "working", "quiet working review");
+      expect(block(working, "edit-answer")?.checkpoint?.status).toBe("working");
+      expect(working.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
     } finally { await server.close(); }
   });
 
@@ -375,6 +375,22 @@ describe("workbook browser API", () => {
       expect(mainTutor.reviews[0].readiness).toMatchObject({ readiness: "likely_ready", text: "This looks ready for main review." });
       expect(block(feedback, "edit-answer")?.checkpoint?.feedback).toBe("Add the exact marker before this can continue.");
       expect(feedback.timeline.some((record: any) => record.type === "attempt_accepted")).toBe(false);
+    } finally { await server.close(); }
+  });
+
+  it("still asks the main tutor to review when block-tutor readiness fails", async () => {
+    const dir = await fixture();
+    const mainTutor = new FakeMainTutor({ outcome: "feedback", message: "Main tutor can still judge this draft." });
+    const blockTutor = new FakeBlockTutor();
+    blockTutor.readinessQueue.push(new Error("invalid readiness payload"));
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor, blockTutor });
+    try {
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "edit-answer", text: "almost" })).status).toBe(202);
+      const feedback = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "feedback" && mainTutor.reviews.length === 1, "main review after readiness failure");
+      expect(mainTutor.reviews[0].readiness).toBeUndefined();
+      expect(block(feedback, "edit-answer")?.checkpoint?.feedback).toBe("Main tutor can still judge this draft.");
+      expect(feedback.timeline.filter((record: any) => record.type === "tutor_failed" && record.operation === "readiness")).toHaveLength(1);
     } finally { await server.close(); }
   });
 
@@ -605,6 +621,38 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("allows a reflection follow-up after a quiet working review", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty();
+    const tutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      { outcome: "accepted", message: "First terminal accepted." },
+      { outcome: "accepted", message: "Second terminal accepted." },
+      { outcome: "working" },
+      { outcome: "feedback", message: "Now name the exact boundary." }
+    );
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, mainTutor: tutor, blockTutor: new FakeBlockTutor() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      await submitTerminalAttempt(server.url, "run-supplied-command");
+      await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.checkpoint?.status === "accepted", "first terminal accepted");
+      await postEvent(server.url, { blockId: "run-supplied-command", action: "continue" });
+      await submitTerminalAttempt(server.url, "change-job");
+      await waitForWorkbookState(server.url, (next) => block(next, "change-job")?.checkpoint?.status === "accepted", "second terminal accepted");
+      await postEvent(server.url, { blockId: "change-job", action: "continue" });
+
+      expect((await postEvent(server.url, { blockId: "reflection", action: "reflection-submit", response: "It was headless." })).status).toBe(202);
+      await waitForWorkbookState(server.url, (next) => block(next, "reflection")?.checkpoint?.status === "working", "quiet reflection working state");
+      const followUp = await postEvent(server.url, { blockId: "reflection", action: "reflection-follow-up", response: "The validator cannot run commands." });
+      expect(followUp.status).toBe(202);
+      const feedbackState = await waitForWorkbookState(server.url, (next) => block(next, "reflection")?.checkpoint?.status === "feedback", "reflection follow-up feedback");
+      expect(tutor.reviews).toHaveLength(5);
+      expect(tutor.reviews[4].attempt.evidence).toMatchObject({ kind: "reflection", response: "The validator cannot run commands.", conversation: [{ role: "learner", text: "It was headless." }] });
+      expect(block(feedbackState, "reflection")?.checkpoint?.feedback).toBe("Now name the exact boundary.");
+    } finally { await server.close(); }
+  });
+
   it("requeues active unaccepted attempts after restart", async () => {
     const dir = await fixture();
     const never = deferred<TutorDecision>();
@@ -636,6 +684,20 @@ describe("workbook browser API", () => {
       const failed = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "feedback", "neutral review failure feedback");
       expect(block(failed, "edit-answer")?.checkpoint?.feedback).toMatch(/temporarily unavailable|try again/i);
       expect(JSON.stringify(failed)).not.toContain("model provider down");
+    } finally { await server.close(); }
+  });
+
+  it("surfaces a neutral retry state when main review feedback is empty", async () => {
+    const dir = await fixture();
+    const tutor = new FakeMainTutor({ outcome: "feedback", message: "   " });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: tutor, blockTutor: new FakeBlockTutor() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "edit-answer", text: "draft needing a real message" })).status).toBe(202);
+      const failed = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "feedback", "neutral empty feedback failure");
+      expect(block(failed, "edit-answer")?.checkpoint?.feedback).toMatch(/temporarily unavailable|try again/i);
+      expect(failed.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
+      expect(failed.timeline.at(-1)).toMatchObject({ type: "tutor_failed", operation: "review" });
     } finally { await server.close(); }
   });
 

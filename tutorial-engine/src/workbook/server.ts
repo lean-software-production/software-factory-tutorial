@@ -248,13 +248,12 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       readiness = await readinessFinalizer;
       if (!readiness || closed) return;
     } catch (error) {
-      const failure = transact(async () => {
+      await transact(async () => {
         if (closed) return;
         log.info(`Workbook block tutor readiness failed for ${attempt.lessonId}/${attempt.blockId}: ${error instanceof Error ? error.message : String(error)}`);
         await appendFailure({ lessonId: attempt.lessonId, blockId: attempt.blockId, requestId: attempt.id, operation: "readiness", publicMessage: REVIEW_FAILURE_FEEDBACK });
       });
-      trackFinalizer(failure);
-      return;
+      if (closed) return;
     }
 
     let decision: TutorDecision;
@@ -275,12 +274,16 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       const active = activeAuthoredBlock();
       const current = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
       if (!active || active.lesson.id !== attempt.lessonId || active.block.id !== attempt.blockId || !current || current.id !== attempt.id || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(current.evidence, active.block)) return;
-      if (decision.outcome === "working") return;
+      if (decision.outcome === "working") {
+        await attempts.markWorking(current.id);
+        return;
+      }
 
       let message: string;
       try { message = requireTutorText(decision.message, "review"); }
       catch {
         log.info(`Workbook tutor review returned empty text for ${attempt.lessonId}/${attempt.blockId}.`);
+        await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
         await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK });
         return;
       }
@@ -499,7 +502,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
             const responseText = typeof body.response === "string" ? body.response : "";
             const priorConversation = current.reflectionConversations[block.id] ?? [];
             const first = body.action === "reflection-submit";
-            if ((first && priorConversation.length > 0) || (!first && !priorConversation.some((turn) => turn.role === "tutor"))) return sendJson(response, 409, { error: "Wait for the tutor reply before adding a follow-up." });
+            if ((first && priorConversation.length > 0) || (!first && priorConversation.length === 0)) return sendJson(response, 409, { error: "Use a follow-up after the first reflection message." });
             const learnerTurns = await submitReflectionAttempt({ lessonId: lesson.id, blockId: block.id, privateGuidance: block.tutor, response: responseText, conversation: priorConversation, submitAttempt: async () => undefined });
             await append({ type: "message", lessonId: lesson.id, blockId: block.id, role: "user", source: "learner", presentation: "chat", text: learnerTurns.at(-1)!.text });
             await createAttempt({ lessonId: lesson.id, blockId: block.id, privateGuidance: block.tutor, evidence: { kind: "reflection", response: learnerTurns.at(-1)!.text, conversation: priorConversation } });

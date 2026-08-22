@@ -524,8 +524,7 @@ export function App() {
   const sendTutorText = (text: string) => {
     if (activeBlock?.type === "reflection") {
       const turns = state.progress.reflectionConversations[activeBlock.id] ?? [];
-      const hasTutorReply = turns.some((turn) => turn.role === "tutor");
-      return post(activeBlock.id, { action: hasTutorReply ? "reflection-follow-up" : "reflection-submit", response: text }).then((next) => setState(next));
+      return post(activeBlock.id, { action: turns.length > 0 ? "reflection-follow-up" : "reflection-submit", response: text }).then((next) => setState(next));
     }
     return postTutorMessage(state.progress.activeBlockId, text).then((next) => setState(next));
   };

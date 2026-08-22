@@ -130,6 +130,10 @@ export class AttemptStore {
     return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "reviewing", feedback: undefined }));
   }
 
+  async markWorking(id: string): Promise<Attempt | undefined> {
+    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "working", feedback: undefined }));
+  }
+
   async markFeedback(id: string, message: string): Promise<Attempt | undefined> {
     const feedback = message.trim().slice(0, 1_000) || "The tutor is ready to check your next attempt.";
     return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback }));

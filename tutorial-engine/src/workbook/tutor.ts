@@ -11,6 +11,7 @@ import {
   type ToolDefinition
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { TUTOR_MODEL_ENV, resolveTutorModel } from "../agent/pi-adapter.js";
 import { createTutorialLogger, type TutorialLogger } from "../runtime-log.js";
 import type { Attempt } from "./attempts.js";
 import { projectMainTutorHistory, type ActiveBlockContext, type MainTutorHistoryProjection } from "./pi-history.js";
@@ -53,7 +54,6 @@ export type WorkbookTutorSessionFactory = (request: WorkbookTutorSessionFactoryR
 
 const ACCEPT_TOOL_NAME = "accept_current_attempt";
 const WORKING_TOOL_NAME = "mark_attempt_still_working";
-const FALLBACK_FEEDBACK = "The tutor could not give specific feedback. Please revise or try again.";
 const FALLBACK_ACCEPTED = "Accepted — this attempt satisfies the block.";
 
 type LegacyRestoreInput = readonly WorkbookTimelineRecord[];
@@ -127,8 +127,7 @@ Compact the workbook tutor context now that the learner continued from an accept
 }
 
 function publicText(text: string): string {
-  const message = text.trim();
-  return message ? message.slice(0, 1_000) : FALLBACK_FEEDBACK;
+  return requiredText(text, "review feedback").slice(0, 1_000);
 }
 
 function acceptedText(text: string): string {
@@ -194,12 +193,16 @@ async function createPiWorkbookTutorSession(workspace: string, request: Workbook
   });
   await loader.reload();
   const modelRuntime = await ModelRuntime.create();
+  const choice = resolveTutorModel(modelRuntime, process.env[TUTOR_MODEL_ENV]);
+  if (choice.warning) log.info(choice.warning);
   const { session } = await createAgentSession({
     cwd: workspace,
     resourceLoader: loader,
     customTools: request.customTools,
     tools: request.tools,
     modelRuntime,
+    model: choice.model,
+    thinkingLevel: choice.thinkingLevel,
     sessionManager,
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } })
   });

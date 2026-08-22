@@ -774,4 +774,40 @@ describe("workbook lesson UI", () => {
     expect(eventCall).toBeTruthy();
     expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "reflect", action: "reflection-submit", response: "My reflection answer" });
   });
+
+  it("routes a second reflection message as a follow-up after quiet working state", async () => {
+    const reflectionProgress: Progress = {
+      ...progress,
+      activeBlockId: "reflect",
+      blocks: [{ id: "reflect", type: "reflection", ready: true, active: true, completed: false, verified: false, emerged: true, checkpoint: { status: "working", evidence: { kind: "reflection", conversation: [{ role: "learner", text: "First answer" }] } } } as any],
+      reflectionConversations: { reflect: [{ role: "learner", text: "First answer" }] }
+    };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [lesson.blocks[2]] } as any })],
+      progress: reflectionProgress,
+      adapter: {},
+      timeline: [
+        { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "authored", presentation: "course", text: "## Reflect\n\nWhat changed?" },
+        { type: "message", id: "learner", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "reflect", role: "user", source: "learner", presentation: "chat", text: "First answer" }
+      ]
+    } as any;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? state : state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>(".timeline-input textarea")!;
+    textarea.value = "Second answer";
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    const sendButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Send")!;
+    await act(async () => { sendButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+
+    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
+    expect(eventCall).toBeTruthy();
+    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "reflect", action: "reflection-follow-up", response: "Second answer" });
+  });
 });
