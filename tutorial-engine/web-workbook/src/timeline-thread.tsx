@@ -19,19 +19,37 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
 }) {
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
-  const send = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = (event.currentTarget || event.target) as HTMLFormElement;
-    const formText = (form.elements.namedItem("message") as HTMLTextAreaElement | null)?.value ?? "";
-    const text = (draft.trim() || formText.trim());
-    if (inputDisabled || pending || !text) return;
+  const submitText = async (text: string) => {
+    const trimmed = text.trim();
+    if (inputDisabled || pending || !trimmed) return;
     setPending(true);
     try {
-      await onSend(text);
+      await onSend(trimmed);
       setDraft("");
     } finally {
       setPending(false);
     }
+  };
+  const send = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = (event.currentTarget || event.target) as HTMLFormElement;
+    const formText = (form.elements.namedItem("message") as HTMLTextAreaElement | null)?.value ?? "";
+    await submitText(draft || formText);
+  };
+  const handleComposerKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    if (event.shiftKey) {
+      const textarea = event.currentTarget;
+      const start = textarea.selectionStart ?? textarea.value.length;
+      const end = textarea.selectionEnd ?? start;
+      const nextDraft = `${textarea.value.slice(0, start)}\n${textarea.value.slice(end)}`;
+      textarea.value = nextDraft;
+      textarea.selectionStart = textarea.selectionEnd = start + 1;
+      setDraft(nextDraft);
+      return;
+    }
+    void submitText(draft || event.currentTarget.value);
   };
   return <section className="timeline-thread has-fixed-composer" aria-label="Tutor conversation">
     {records.map((record) => {
@@ -41,6 +59,11 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
       const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : record.presentation === "hint" ? " hint" : ""}`;
       return <article key={record.id} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b><p>{record.text}</p></article>;
     })}
-    <form className="timeline-input fixed-composer" onSubmit={send}><label>Message the tutor<textarea name="message" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} onChange={(event) => setDraft(event.target.value)} disabled={inputDisabled || pending} /></label><button className="button primary" disabled={inputDisabled || pending || !draft.trim()}>{pending ? "Thinking…" : "Send"}</button></form>
+    <div className="timeline-composer-dock fixed-composer">
+      <form className="timeline-input fixed-composer" onSubmit={send}>
+        <label>Message the tutor<textarea name="message" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} disabled={inputDisabled || pending} /></label>
+        <button className="round-send" aria-label="Send message" title="Send message" disabled={inputDisabled || pending || !draft.trim()}>{pending ? "…" : "↑"}</button>
+      </form>
+    </div>
   </section>;
 }

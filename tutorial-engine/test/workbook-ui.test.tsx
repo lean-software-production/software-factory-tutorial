@@ -44,6 +44,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
   return { ...actual, lessonElementId: vi.fn(actual.lessonElementId) };
 });
 
+import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { AcceptanceConfetti, App, BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Chapter, type Progress } from "../web-workbook/src/workbook-ui.js";
 import { lessonAnchorHref, lessonElementId } from "../src/workbook/lesson-links.js";
 
@@ -148,6 +149,8 @@ async function mount(element: ReturnType<typeof createElement>, stubExtraGlobals
   vi.stubGlobal("window", dom.window as any);
   vi.stubGlobal("document", dom.window.document as any);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  if (!("attachEvent" in dom.window.HTMLElement.prototype)) dom.window.HTMLElement.prototype.attachEvent = () => {};
+  if (!("detachEvent" in dom.window.HTMLElement.prototype)) dom.window.HTMLElement.prototype.detachEvent = () => {};
   stubExtraGlobals?.(dom.window);
   const container = dom.window.document.getElementById("root")!;
   mountedRoot = createRoot(container);
@@ -165,6 +168,61 @@ function stubAppShellGlobals(win: JSDOM["window"]) {
 }
 
 describe("workbook lesson UI", () => {
+  it("submits the typed tutor message with Enter", async () => {
+    const onSend = vi.fn(async () => undefined);
+    const container = await mount(createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend,
+      onRetry: vi.fn(async () => undefined),
+      records: []
+    }));
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+
+    textarea.value = "What should I try next?";
+    textarea.focus();
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    await act(async () => { textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+
+    expect(onSend).toHaveBeenCalledWith("What should I try next?");
+  });
+
+  it("keeps Shift+Enter in the tutor composer as a newline without submitting", async () => {
+    const onSend = vi.fn(async () => undefined);
+    const container = await mount(createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend,
+      onRetry: vi.fn(async () => undefined),
+      records: []
+    }));
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+
+    textarea.value = "Line one";
+    textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
+    textarea.focus();
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    await act(async () => { textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true })); });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("Line one\n");
+  });
+
+  it("exposes the docked composer and round send layout hooks", () => {
+    const markup = html(createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend: vi.fn(async () => undefined),
+      onRetry: vi.fn(async () => undefined),
+      records: []
+    }));
+
+    expect(markup).toContain('class="timeline-composer-dock fixed-composer"');
+    expect(markup).toContain('timeline-composer');
+    expect(markup).toContain('class="round-send"');
+    expect(markup).toContain('aria-label="Send message"');
+  });
+
   it("renders an active editor-practice block without exposing private tutor text", () => {
     const markup = html(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress(), refresh: vi.fn() }));
 
@@ -763,11 +821,11 @@ describe("workbook lesson UI", () => {
 
     expect(container.textContent).not.toContain("Get a hint");
     expect(container.textContent).not.toContain("Your reflection");
-    expect(container.querySelector(".timeline-input.fixed-composer")).not.toBeNull();
+    expect(container.querySelector(".timeline-composer-dock.fixed-composer")).not.toBeNull();
     const textarea = container.querySelector<HTMLTextAreaElement>(".timeline-input textarea")!;
     textarea.value = "My reflection answer";
     await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
-    const sendButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Send")!;
+    const sendButton = container.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!;
     await act(async () => { sendButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
     const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
@@ -801,7 +859,7 @@ describe("workbook lesson UI", () => {
     await act(async () => { await Promise.resolve(); });
 
     const textarea = container.querySelector<HTMLTextAreaElement>(".timeline-input textarea")!;
-    const sendButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Send")!;
+    const sendButton = container.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!;
     expect(textarea.disabled).toBe(true);
     expect(sendButton.disabled).toBe(true);
   });
@@ -834,7 +892,7 @@ describe("workbook lesson UI", () => {
     const textarea = container.querySelector<HTMLTextAreaElement>(".timeline-input textarea")!;
     textarea.value = "Second answer";
     await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
-    const sendButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Send")!;
+    const sendButton = container.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!;
     await act(async () => { sendButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
     const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
