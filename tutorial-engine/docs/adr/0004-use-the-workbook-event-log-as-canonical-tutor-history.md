@@ -4,7 +4,9 @@ Date: 2026-08-21
 
 ## Status
 
-accepted
+superseded
+
+Superseded by [5. Use a main tutor with on-demand block tutors](0005-use-a-main-tutor-with-on-demand-block-tutors.md)
 
 Supersedes [3. Use one long-running workbook tutor session](0003-use-one-long-running-workbook-tutor-session.md)
 
