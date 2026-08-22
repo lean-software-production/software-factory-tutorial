@@ -239,8 +239,6 @@ function NarrativeBlock({ lessonId, block, state, refresh }: { lessonId: string;
 }
 
 function TerminalBlock({ lessonId, block, state, unexpected, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; unexpected: string[]; refresh(state: State): void }) {
-  const [evidence, setEvidence] = useState("");
-  const [other, setOther] = useState("");
   const [observerAdvice, setObserverAdvice] = useState<string>();
   const [observerError, setObserverError] = useState<string>();
   const [observerStatus, setObserverStatus] = useState<string>();
@@ -261,7 +259,6 @@ function TerminalBlock({ lessonId, block, state, unexpected, refresh }: { lesson
           {observerAdvice && <aside className="advice" aria-live="polite"><b>Try this:</b> {observerAdvice}</aside>}
           {observerError && <aside className="advice warning" aria-live="polite">{observerError}</aside>}
         </>}
-        {!state?.completed && !state?.verified && !accepted && <div className="local-help"><label>I saw something different<textarea value={evidence} onChange={(event) => setEvidence(event.target.value)} /></label><button className="button secondary" onClick={() => post(block.id, { action: "unexpected", evidence }).then(refresh)}>Record it and keep trying</button><label>Something else<textarea value={other} onChange={(event) => setOther(event.target.value)} /></label><button className="button secondary" onClick={() => { setOther(""); return post(block.id, { action: "help", request: other }).then(refresh); }}>Ask locally</button></div>}
         {unexpected.map((item, index) => <p className="evidence" key={index}>Recorded different output: {item}</p>)}
       </div>
     </div>
