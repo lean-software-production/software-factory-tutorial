@@ -114,3 +114,39 @@ The full check emitted expected tutorial test INFO log lines while exercising se
 - Existing reflection composer tests were updated to use the accessible send control instead of the removed text label.
 - Backward-compatible `timeline-input fixed-composer` markup remains for existing layout tests, while the new `timeline-composer-dock fixed-composer` wrapper carries the dock behavior.
 - `git diff --check` passed with no whitespace errors.
+
+## Final review fix: viewport-right dock and stronger inner hook assertion
+
+### Findings addressed
+
+- Removed the centered-shell right gutter for wide desktop viewports by changing `.timeline-composer-dock.fixed-composer` to `right: 0`, while preserving the existing main-pane left-edge calculation: `left: max(265px, calc((100vw - 1480px) / 2 + 265px))`.
+- Preserved mobile behavior: the existing `@media (max-width: 840px)` override still sets `right: 0; left: 0;` and keeps the mobile inner composer unconstrained.
+- Strengthened the UI layout hook test so it independently asserts the inner composer form class with `class="timeline-input fixed-composer"` instead of matching the dock class substring via `timeline-composer`.
+
+### Tests
+
+Command:
+
+```sh
+cd /Users/matt/git/lean-software-production/software-factory-tutorial/.worktrees/workbook-composer-dock && npm run --workspace=tutorial-engine test -- test/workbook-ui.test.tsx
+```
+
+Output:
+
+```text
+Test Files  1 passed (1)
+Tests  32 passed (32)
+```
+
+Command:
+
+```sh
+cd /Users/matt/git/lean-software-production/software-factory-tutorial/.worktrees/workbook-composer-dock && npm run --workspace=tutorial-engine check
+```
+
+Output:
+
+```text
+Test Files  38 passed (38)
+Tests  292 passed (292)
+```

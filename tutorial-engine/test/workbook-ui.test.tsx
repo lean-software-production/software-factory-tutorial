@@ -218,7 +218,7 @@ describe("workbook lesson UI", () => {
     }));
 
     expect(markup).toContain('class="timeline-composer-dock fixed-composer"');
-    expect(markup).toContain('timeline-composer');
+    expect(markup).toContain('class="timeline-input fixed-composer"');
     expect(markup).toContain('class="round-send"');
     expect(markup).toContain('aria-label="Send message"');
   });
