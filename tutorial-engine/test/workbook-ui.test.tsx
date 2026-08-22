@@ -614,4 +614,107 @@ describe("workbook lesson UI", () => {
     expect(activeMarkup).toContain("Embedded terminal");
     expect(activeMarkup).toContain("Insert command");
   });
+
+  it("renders the active narrative timeline note with a manual Continue before the fixed composer", async () => {
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter()],
+      progress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nAuthored Orientation note." }]
+    } as any;
+    const continuedState = { ...state, progress: { ...progress, blocks: progress.blocks.map((block) => block.id === "orientation" ? { ...block, completed: true } : block) } };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? continuedState : state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("Authored Orientation note.");
+    expect(text.indexOf("Authored Orientation note.")).toBeLessThan(text.indexOf("Continue"));
+    expect(text.indexOf("Continue")).toBeLessThan(text.indexOf("Message the tutor"));
+
+    const continueButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
+    await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+
+    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
+    expect(eventCall).toBeTruthy();
+    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "orientation", action: "continue" });
+  });
+
+  it("posts a block hint from the sticky terminal/editor band and disables the hint button while pending", async () => {
+    let resolveHint: ((value: any) => void) | undefined;
+    const hintedState = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [editorBlock] } as any })],
+      progress: activeEditorProgress(),
+      adapter: {},
+      timeline: [{ type: "message", id: "hint", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "block_tutor", presentation: "hint", text: "Check the requested marker." }]
+    } as any;
+    const initialState = { ...hintedState, timeline: [] };
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (input === "/api/workbook/hints") return new Promise((resolve) => { resolveHint = resolve; });
+      return Promise.resolve({ ok: true, json: async () => init?.method === "POST" ? hintedState : initialState });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+    const hintButton = [...container.querySelectorAll("button")].filter((button) => button.textContent === "Get a hint");
+
+    expect(hintButton).toHaveLength(1);
+    act(() => { hintButton[0]!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+    expect(hintButton[0]!.disabled).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith("/api/workbook/hints", expect.objectContaining({ method: "POST" }));
+    const hintCall = fetchMock.mock.calls.find(([url]) => url === "/api/workbook/hints")!;
+    expect(JSON.parse((hintCall[1] as RequestInit).body as string)).toEqual({ blockId: editorBlock.id });
+
+    await act(async () => {
+      resolveHint!({ ok: true, json: async () => hintedState });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain("Check the requested marker.");
+  });
+
+  it("routes active reflection composer sends through the reflection event path without a sticky hint", async () => {
+    const reflectionProgress: Progress = {
+      ...progress,
+      activeBlockId: "reflect",
+      blocks: [{ id: "reflect", type: "reflection", ready: true, active: true, completed: false, verified: false, emerged: true }],
+      reflectionConversations: {}
+    };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [lesson.blocks[2]] } as any })],
+      progress: reflectionProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "authored", presentation: "course", text: "## Reflect\n\nWhat changed?" }]
+    } as any;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? state : state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.textContent).not.toContain("Get a hint");
+    expect(container.textContent).not.toContain("Your reflection");
+    expect(container.querySelector(".timeline-input.fixed-composer")).not.toBeNull();
+    const textarea = container.querySelector<HTMLTextAreaElement>(".timeline-input textarea")!;
+    textarea.value = "My reflection answer";
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    const sendButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Send")!;
+    await act(async () => { sendButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+
+    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
+    expect(eventCall).toBeTruthy();
+    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "reflect", action: "reflection-submit", response: "My reflection answer" });
+  });
 });
