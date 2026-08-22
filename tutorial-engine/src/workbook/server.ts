@@ -172,7 +172,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     if (!authoredMessageExists(lesson.id, LESSON_FRAME_BLOCK_ID)) await append({ type: "message", lessonId: lesson.id, blockId: LESSON_FRAME_BLOCK_ID, role: "assistant", source: "authored", presentation: "course", text: authoredLessonFrameText(lesson) });
   };
   if (records.length === 0) await append({ type: "session_started" });
-  await ensureAuthoredIntroduction();
+  if (!introductionCompleted(records)) await ensureAuthoredIntroduction();
 
   const activeAuthoredBlock = (source = records): { lesson: WorkbookLesson; progress: ReturnType<typeof project>; blockProgress: BlockProgress; block: WorkbookBlock } | undefined => {
     if (!introductionCompleted(source)) return undefined;
@@ -197,6 +197,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   };
   const mainContext = async (): Promise<MainTutorContext> => ({ records, activeContext: await activeBlockContext() });
   const isIntroductionTarget = (lessonId: string, blockId: string): boolean => lessonId === INTRODUCTION_LESSON_ID && blockId === INTRODUCTION_BLOCK_ID;
+  const mainContextForTarget = async (lessonId: string, blockId: string): Promise<MainTutorContext> => isIntroductionTarget(lessonId, blockId) ? { records, activeContext: undefined } : mainContext();
   const requireTutorText = (text: string, label: TutorFailure["operation"]): string => {
     const trimmed = text.trim();
     if (!trimmed) throw new Error(`Empty tutor response for ${label}.`);
@@ -351,6 +352,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     void finishReview(reviewing, active.block.tutor);
   };
 
+  if (introductionCompleted(records)) await ensureAuthoredActiveBlock();
+
   try { await mainTutor.restore(await mainContext()); await requeueActiveAttempt(); }
   catch (error) {
     restoringFailed = true;
@@ -429,7 +432,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
           if (!target) return sendJson(response, 409, { error: "This block is not active yet." });
           const learnerMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "user", source: "learner", presentation: "chat", text });
           try {
-            const reply = requireTutorText(await mainTutor.reply({ ...(await mainContext()), learnerMessage: learnerMessage as TimelineMessage }), "reply");
+            const reply = requireTutorText(await mainTutor.reply({ ...(await mainContextForTarget(target.lessonId, target.blockId)), learnerMessage: learnerMessage as TimelineMessage }), "reply");
             const tutorMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: reply, inReplyTo: learnerMessage.id });
             if (target.active) await refreshBlockBriefing(target.active, tutorMessage.id);
           } catch (error) {
@@ -463,7 +466,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
             if (!learnerMessage) return sendJson(response, 409, { error: "The original learner message is unavailable." });
             try {
               const active = activeAuthoredBlock();
-              const reply = requireTutorText(await mainTutor.reply({ ...(await mainContext()), learnerMessage }), "reply");
+              const reply = requireTutorText(await mainTutor.reply({ ...(await mainContextForTarget(failure.lessonId, failure.blockId)), learnerMessage }), "reply");
               const tutorMessage = await append({ type: "message", lessonId: failure.lessonId, blockId: failure.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: reply, inReplyTo: learnerMessage.id });
               if (active && active.lesson.id === failure.lessonId && active.block.id === failure.blockId) await refreshBlockBriefing(active, tutorMessage.id);
             } catch { await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE }); }

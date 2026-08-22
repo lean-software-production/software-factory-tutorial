@@ -312,6 +312,58 @@ describe("workbook browser API", () => {
     } finally { await secondServer.close(); }
   });
 
+  it("retries a failed intro reply without adopting the newly active block context after continue", async () => {
+    const dir = await fixture();
+    const tutor = new FakeMainTutor();
+    tutor.replyQueue.push(new Error("intro provider failed once"));
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: tutor, blockTutor: new FakeBlockTutor() });
+    try {
+      const failed = await postMessage(server.url, { blockId: "__introduction__", text: "Question before the first lesson." }).then((response) => response.json() as any);
+      const failure = failed.timeline.at(-1);
+      expect(failure).toMatchObject({ type: "tutor_failed", lessonId: "workbook:introduction", blockId: "__introduction__", operation: "reply" });
+
+      const opened = await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" }).then((response) => response.json() as any);
+      expect(opened.progress.activeBlockId).toBe("orientation");
+      expect((await fetch(`${server.url}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId: failure.failureId }) })).status).toBe(202);
+
+      expect(tutor.replies).toHaveLength(2);
+      expect(tutor.replies[0]).toMatchObject({ activeContext: undefined, learnerMessage: { lessonId: "workbook:introduction", blockId: "__introduction__" } });
+      expect(tutor.replies[1]).toMatchObject({ activeContext: undefined, learnerMessage: { lessonId: "workbook:introduction", blockId: "__introduction__" } });
+      const retriedTimeline = (await state(server.url)).timeline;
+      expect(retriedTimeline.at(-1)).toMatchObject({ type: "message", lessonId: "workbook:introduction", blockId: "__introduction__", source: "main_tutor", text: "Try the workspace-relative path." });
+    } finally { await server.close(); }
+  });
+
+  it("backfills legacy completed-introduction openings without adding a late introduction note", async () => {
+    const dir = await fixture();
+    await mkdir(resolve(dir, ".tutorial/.tmp/workbook"), { recursive: true });
+    await writeFile(tutorialStatePath(dir, "workbook", "events.jsonl"), [
+      JSON.stringify({ id: "legacy-session", sequence: 1, at: "2026-08-21T00:00:00.000Z", type: "session_started" }),
+      JSON.stringify({ id: "legacy-intro-complete", sequence: 2, at: "2026-08-21T00:00:01.000Z", type: "workbook_introduction_completed" }),
+      ""
+    ].join("\n"));
+
+    const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });
+    let authored: any[];
+    try {
+      const recovered = await state(firstServer.url);
+      authored = recovered.timeline.filter((record: any) => record.type === "message" && record.source === "authored");
+      expect(authored.map((record: any) => [record.lessonId, record.blockId])).toEqual([
+        ["workbook:part:loop", "__part__"],
+        ["001-first", "__lesson_frame__"],
+        ["001-first", "orientation"],
+      ]);
+      expect(JSON.stringify(recovered.timeline)).not.toContain("workbook:introduction");
+      expect(recovered.timeline.find((record: any) => record.type === "message" && record.blockId === "__introduction__")).toBeUndefined();
+    } finally { await firstServer.close(); }
+
+    const secondServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });
+    try {
+      const restoredAuthored = (await state(secondServer.url)).timeline.filter((record: any) => record.type === "message" && record.source === "authored");
+      expect(restoredAuthored).toEqual(authored!);
+    } finally { await secondServer.close(); }
+  });
+
   it("continues the introduction by recording part, lesson frame, and first block authored messages once", async () => {
     const dir = await fixture();
     const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });
@@ -479,7 +531,7 @@ describe("workbook browser API", () => {
     try {
       await introduceAndOpenEditor(server.url);
       expect((await postEditor(server.url, { blockId: "edit-answer", text: "draft that triggers a review failure" })).status).toBe(202);
-      const failedState = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "feedback", "review failure");
+      const failedState = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "feedback" && next.timeline.some((record: any) => record.type === "tutor_failed" && record.operation === "review"), "review failure");
       const privateFailure = (await privateTimeline(dir)).find((record): record is Extract<WorkbookTimelineRecord, { type: "tutor_failed" }> => record.type === "tutor_failed" && record.operation === "review");
       expect(privateFailure).toBeTruthy();
       expect(privateFailure!.requestId).toMatch(/[0-9a-f-]{36}/);
