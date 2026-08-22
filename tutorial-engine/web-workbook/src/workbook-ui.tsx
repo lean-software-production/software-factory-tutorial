@@ -18,7 +18,7 @@ export type ReflectionBlock = BlockBase & { type: "reflection" };
 export type LessonTransitionBlock = BlockBase & { type: "lesson-transition" };
 export type Block = NarrativeBlock | TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock | LessonTransitionBlock;
 export type Lesson = { id: string; title: string; dek: string; durationMinutes: number; outcomes: string[]; blocks: Block[] };
-export type Chapter = { id: string; title: string; part: string; partMarkdown: string; partNumber: number; lessonNumber: number; lesson?: Lesson };
+export type Chapter = { id: string; title: string; part?: string; partMarkdown?: string; partNumber?: number; lessonNumber: number; lesson?: Lesson };
 export type AttemptKind = "editor" | "terminal" | "reflection";
 export type EditorStatus = "editing" | "waiting" | "reviewing" | "feedback" | "unlocked";
 export type ReflectionTurn = { role: "learner" | "tutor"; text: string };
@@ -440,15 +440,18 @@ function WorkbookIntroduction({ state, refresh }: { state: State; refresh(state:
 }
 
 export function LessonRail({ title, chapters, progress, viewedLessonId, setViewedLesson }: { title: string; chapters: Chapter[]; progress: Progress; viewedLessonId: string; setViewedLesson(id: string): void }) {
-  const parts = [...new Set(chapters.map((chapter) => chapter.part))];
+  const renderChapter = (chapter: Chapter) => {
+    const complete = progress.completedLessons.includes(chapter.id);
+    const current = chapter.id === progress.activeLessonId;
+    if (!chapter.lesson) return <span key={chapter.id} className="lesson-row ahead unavailable" aria-disabled="true"><span>Lesson {chapter.lessonNumber}: {chapter.title}</span></span>;
+    return <details key={chapter.id} className="lesson-nav" open={viewedLessonId === chapter.id}><summary><a href={`#${lessonElementId(chapter.id)}`} className={`lesson-row ${complete ? "done" : current ? "current" : "ahead"}`} onClick={() => setViewedLesson(chapter.id)}>Lesson {chapter.lessonNumber}: {chapter.title}</a></summary>{viewedLessonId === chapter.id && <nav className="lesson-outline" aria-label={`${chapter.title} outline`}>{chapter.lesson.blocks.map((block) => <a href={`#${blockElementId(chapter.id, block.id)}`} key={block.id} aria-current={block.id === progress.activeBlockId ? "true" : undefined}>{block.title}</a>)}</nav>}</details>;
+  };
+  const parts = [...new Set(chapters.map((chapter) => chapter.part).filter((part): part is string => Boolean(part)))];
   return <aside className="rail" aria-label="Lesson navigation">
     <div className="brand"><span className="brand-mark" aria-hidden="true">↗</span> {title}</div>
-    <nav className="curriculum" aria-label="Workbook navigation">{parts.map((part) => <div key={part}><p className="part-name">{part}</p>{chapters.filter((chapter) => chapter.part === part).map((chapter) => {
-      const complete = progress.completedLessons.includes(chapter.id);
-      const current = chapter.id === progress.activeLessonId;
-      if (!chapter.lesson) return <span key={chapter.id} className="lesson-row ahead unavailable" aria-disabled="true"><span>Lesson {chapter.lessonNumber}: {chapter.title}</span></span>;
-      return <details key={chapter.id} className="lesson-nav" open={viewedLessonId === chapter.id}><summary><a href={`#${lessonElementId(chapter.id)}`} className={`lesson-row ${complete ? "done" : current ? "current" : "ahead"}`} onClick={() => setViewedLesson(chapter.id)}>Lesson {chapter.lessonNumber}: {chapter.title}</a></summary>{viewedLessonId === chapter.id && <nav className="lesson-outline" aria-label={`${chapter.title} outline`}>{chapter.lesson.blocks.map((block) => <a href={`#${blockElementId(chapter.id, block.id)}`} key={block.id} aria-current={block.id === progress.activeBlockId ? "true" : undefined}>{block.title}</a>)}</nav>}</details>;
-    })}</div>)}</nav>
+    <nav className="curriculum" aria-label="Workbook navigation">{parts.length === 0
+      ? chapters.map(renderChapter)
+      : parts.map((part) => <div key={part}><p className="part-name">{part}</p>{chapters.filter((chapter) => chapter.part === part).map(renderChapter)}</div>)}</nav>
   </aside>;
 }
 
@@ -462,6 +465,7 @@ export function LessonView({ chapter, progress, refresh, renderBlocks = true, ch
 }
 
 function PartChapter({ chapter }: { chapter: Chapter }) {
+  if (!chapter.part || !chapter.partMarkdown) return null;
   return <section id={`part-${chapter.id}`} className="part-chapter" aria-label={chapter.part}><div><p className="part-title">{chapter.part}</p><div className="part-copy"><Markdown>{chapter.partMarkdown}</Markdown></div></div></section>;
 }
 

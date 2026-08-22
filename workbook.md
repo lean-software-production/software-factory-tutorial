@@ -1,4 +1,22 @@
 ---
+parts:
+  - id: validation-loop
+    lessons:
+      - 001-run-an-agent-headlessly
+      - 002-build-a-doer
+      - 003-build-a-validator
+      - 004-feed-the-findings-back
+  - id: build-the-factory
+    lessons:
+      - 005-join-them-into-a-line
+      - 006-read-only-validator
+      - 007-compose-and-branch
+      - 008-take-the-pause-off
+      - 009-record-what-happened
+      - 010-watch-it-while-it-runs
+      - 011-ask-what-happened
+      - 012-talk-to-a-station
+      - 013-oversee-the-orchestrator
 ---
 
 # Software Factory Tutorial

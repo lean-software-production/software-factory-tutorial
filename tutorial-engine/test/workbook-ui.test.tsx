@@ -472,6 +472,25 @@ describe("workbook lesson UI", () => {
     expect(withoutCommand).not.toContain("Insert command");
   });
 
+  it("renders no part grouping in the rail when chapters have no part", () => {
+    const chapters: Chapter[] = [
+      { id: "001-first-lesson", title: "First", lessonNumber: 1, lesson: { ...lesson, id: "001-first-lesson", title: "First" } } as any,
+      { id: "002-second-lesson", title: "Second", lessonNumber: 2, lesson: { ...lesson, id: "002-second-lesson", title: "Second" } } as any,
+    ];
+
+    const markup = html(createElement(LessonRail, {
+      title: "Flat Workbook",
+      chapters,
+      progress: { ...progress, activeLessonId: "001-first-lesson" },
+      viewedLessonId: "001-first-lesson",
+      setViewedLesson: vi.fn(),
+    }));
+
+    expect(markup).toContain("Lesson 1: First");
+    expect(markup).toContain("Lesson 2: Second");
+    expect(markup).not.toContain("part-name");
+  });
+
   it("marks completed, current, visible, and unavailable lessons in the rail", () => {
     const chapters: Chapter[] = [
       { id: "part/lesson-one", title: "Lesson One", part: "Part One", partMarkdown: "", partNumber: 1, lessonNumber: 1, lesson },

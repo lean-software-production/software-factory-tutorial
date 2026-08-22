@@ -7,9 +7,12 @@ import {
   validatePartManifest,
   validateWorkbookLesson,
   validateWorkbookManifest,
+  WORKBOOK_ID_PATTERN,
   type WorkbookBlock,
   type WorkbookIdentity,
   type WorkbookLesson,
+  type WorkbookManifest,
+  type WorkbookPartManifest,
 } from "./contract.js";
 import {
   buildLessonCatalog,
@@ -21,9 +24,9 @@ import {
 export interface WorkbookChapter {
   id: string;
   title: string;
-  part: string;
-  partMarkdown: string;
-  partNumber: number;
+  part?: string;
+  partMarkdown?: string;
+  partNumber?: number;
   lessonNumber: number;
   lesson: WorkbookLesson;
 }
@@ -32,7 +35,7 @@ export interface LoadedWorkbook { workspace: string; identity: WorkbookIdentity;
 /** The workbook document and lesson directories are authored at the repository root. */
 const WORKBOOK_DOCUMENT = "workbook.md";
 const LESSONS_ROOT = "lessons";
-const PART_DOCUMENT = "part.md";
+const PARTS_ROOT = "parts";
 const LESSON_DOCUMENT = "lesson.md";
 const BLOCKS_DIR = "blocks";
 
@@ -99,24 +102,66 @@ async function readTitledDocument(path: string, level: 1 | 2): Promise<{ data: R
   return { data, title, body: rest };
 }
 
-interface PartDirectory { id: string; title: string; markdown: string; path: string; }
+interface LoadedPart { id: string; title: string; markdown: string; path: string; }
+interface FlatLessonDirectory { id: string; path: string; }
 
-async function partDirectories(workspace: string): Promise<PartDirectory[]> {
-  const root = resolve(workspace, LESSONS_ROOT);
-  const entries = await readdir(root, { withFileTypes: true });
-  const dirs = entries.filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-  return Promise.all(dirs.map(async (entry) => {
-    const path = resolve(root, entry.name);
-    const partPath = resolve(path, PART_DOCUMENT);
-    const { data, title, body } = await readTitledDocument(partPath, 1);
-    validatePartManifest(data, partPath);
-    return { id: entry.name, title, markdown: body, path };
-  }));
+function compareWorkbookIds(left: string, right: string): number {
+  return left.localeCompare(right, undefined, { numeric: true });
 }
 
-async function lessonDirectories(part: PartDirectory): Promise<string[]> {
-  const entries = await readdir(part.path, { withFileTypes: true });
-  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+async function directoryEntries(path: string) {
+  try { return await readdir(path, { withFileTypes: true }); }
+  catch (error: any) { if (error?.code === "ENOENT") return []; throw error; }
+}
+
+async function hasFile(path: string): Promise<boolean> {
+  try { await readFile(path); return true; }
+  catch (error: any) { if (error?.code === "ENOENT") return false; throw error; }
+}
+
+function assertWorkbookId(id: string, location: string): void {
+  if (!WORKBOOK_ID_PATTERN.test(id)) throw new Error(`${location}: malformed id "${id}"; use lowercase hyphenated ids.`);
+}
+
+async function flatLessonDirectories(workspace: string): Promise<FlatLessonDirectory[]> {
+  const root = resolve(workspace, LESSONS_ROOT);
+  const entries = await directoryEntries(root);
+  const directories: FlatLessonDirectory[] = [];
+  for (const entry of entries.filter((candidate) => candidate.isDirectory()).sort((a, b) => compareWorkbookIds(a.name, b.name))) {
+    const lessonDir = resolve(root, entry.name);
+    if (!(await hasFile(resolve(lessonDir, LESSON_DOCUMENT)))) continue;
+    assertWorkbookId(entry.name, resolve(root, entry.name));
+    directories.push({ id: entry.name, path: lessonDir });
+  }
+  return directories;
+}
+
+async function readPartDocument(workspace: string, partId: string): Promise<LoadedPart> {
+  assertWorkbookId(partId, resolve(workspace, PARTS_ROOT, `${partId}.md`));
+  const partPath = resolve(workspace, PARTS_ROOT, `${partId}.md`);
+  const { data, title, body } = await readTitledDocument(partPath, 1);
+  validatePartManifest(data, partPath);
+  return { id: partId, title, markdown: body, path: partPath };
+}
+
+function validateFlatParts(manifestParts: readonly WorkbookPartManifest[], lessonsOnDisk: readonly FlatLessonDirectory[], workbookPath: string): void {
+  const diskIds = new Set(lessonsOnDisk.map((lesson) => lesson.id));
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  const unknown = new Set<string>();
+  for (const part of manifestParts) {
+    for (const lessonId of part.lessons) {
+      if (seen.has(lessonId)) duplicates.add(lessonId);
+      seen.add(lessonId);
+      if (!diskIds.has(lessonId)) unknown.add(lessonId);
+    }
+  }
+  const omitted = [...diskIds].filter((lessonId) => !seen.has(lessonId)).sort(compareWorkbookIds);
+  const errors: string[] = [];
+  if (unknown.size) errors.push(`${workbookPath}: parts lists unknown lesson id(s): ${[...unknown].sort(compareWorkbookIds).join(", ")}`);
+  if (duplicates.size) errors.push(`${workbookPath}: parts duplicates lesson id(s): ${[...duplicates].sort(compareWorkbookIds).join(", ")}`);
+  if (omitted.length) errors.push(`${workbookPath}: parts omits lesson id(s) present on disk: ${omitted.join(", ")}`);
+  if (errors.length) throw new Error(errors.join("\n"));
 }
 
 /** A block id resolves to blocks/<id>.md by convention; the filename supplies its id. */
@@ -161,9 +206,43 @@ export async function loadWorkbookLesson(lessonDir: string, id: string): Promise
 }
 
 interface ChapterDraft extends Omit<WorkbookChapter, "lessonNumber"> {
-  partIndex: number;
+  partIndex?: number;
   lessonDir: string;
   lessonPath: string;
+}
+
+async function draftForLesson(id: string, lessonDir: string, part: LoadedPart | undefined, partIndex: number | undefined): Promise<ChapterDraft> {
+  const lesson = await loadWorkbookLesson(lessonDir, id);
+  return {
+    id,
+    title: lesson.title,
+    part: part?.title,
+    partMarkdown: part?.markdown,
+    partNumber: partIndex === undefined ? undefined : partIndex + 1,
+    lesson,
+    partIndex,
+    lessonDir,
+    lessonPath: resolve(lessonDir, LESSON_DOCUMENT),
+  };
+}
+
+async function flatChapterGroups(workspace: string, manifest: WorkbookManifest, workbookPath: string): Promise<{ parts: LoadedPart[]; groups: ChapterDraft[][] }> {
+  const lessons = await flatLessonDirectories(workspace);
+  if (!manifest.parts) {
+    return { parts: [], groups: lessons.length > 0 ? [await Promise.all(lessons.map((lesson) => draftForLesson(lesson.id, lesson.path, undefined, undefined)))] : [] };
+  }
+
+  validateFlatParts(manifest.parts, lessons, workbookPath);
+  const lessonById = new Map(lessons.map((lesson) => [lesson.id, lesson]));
+  const parts = await Promise.all(manifest.parts.map((part) => readPartDocument(workspace, part.id)));
+  const groups = await Promise.all(manifest.parts.map(async (part, partIndex) => {
+    const loadedPart = parts[partIndex]!;
+    return Promise.all(part.lessons.map((lessonId) => {
+      const lesson = lessonById.get(lessonId)!;
+      return draftForLesson(lesson.id, lesson.path, loadedPart, partIndex);
+    }));
+  }));
+  return { parts, groups };
 }
 
 /**
@@ -177,28 +256,9 @@ export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
   const workspace = await realpath(resolve(target));
   const workbookPath = resolve(workspace, WORKBOOK_DOCUMENT);
   const { data, title, body } = await readTitledDocument(workbookPath, 1);
-  validateWorkbookManifest(data, workbookPath);
+  const manifest = validateWorkbookManifest(data, workbookPath);
   const identity: WorkbookIdentity = { title };
-  const parts = await partDirectories(workspace);
-  const chapterGroups = await Promise.all(parts.map(async (part, partIndex) => {
-    const lessons = await lessonDirectories(part);
-    return Promise.all(lessons.map(async (directory): Promise<ChapterDraft> => {
-      const lessonDir = resolve(part.path, directory);
-      const id = `${part.id}/${directory}`;
-      const lesson = await loadWorkbookLesson(lessonDir, id);
-      return {
-        id,
-        title: lesson.title,
-        part: part.title,
-        partMarkdown: part.markdown,
-        partNumber: partIndex + 1,
-        lesson,
-        partIndex,
-        lessonDir,
-        lessonPath: resolve(lessonDir, LESSON_DOCUMENT),
-      };
-    }));
-  }));
+  const { parts, groups: chapterGroups } = await flatChapterGroups(workspace, manifest, workbookPath);
   // Lesson numbers are a single global sequence across parts, in directory order,
   // rather than resetting at each part boundary.
   const drafts = chapterGroups.flat().map((chapter, index) => ({ ...chapter, lessonNumber: index + 1 }));
@@ -223,7 +283,7 @@ export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
   const resolvedPartMarkdown = parts.map((part, index) => resolveLessonReferences(
     part.markdown,
     catalog,
-    { kind: "part", path: resolve(part.path, PART_DOCUMENT), firstLessonNumber: partFirstLessonNumbers[index]! },
+    { kind: "part", path: part.path, firstLessonNumber: partFirstLessonNumbers[index]! },
   ));
 
   const chapters: WorkbookChapter[] = drafts.map((chapter) => {
@@ -238,7 +298,7 @@ export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
       id: chapter.id,
       title: chapter.title,
       part: chapter.part,
-      partMarkdown: resolvedPartMarkdown[chapter.partIndex]!,
+      partMarkdown: chapter.partIndex === undefined ? undefined : resolvedPartMarkdown[chapter.partIndex]!,
       partNumber: chapter.partNumber,
       lessonNumber: chapter.lessonNumber,
       lesson,

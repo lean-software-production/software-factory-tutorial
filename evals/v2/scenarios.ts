@@ -25,7 +25,7 @@ export interface V2Scenario {
   gate: (trace: V2SessionTrace) => V2GateResult;
 }
 
-const lessonId = "01-evaluator/01-live-session";
+const lessonId = "001-live-session";
 export const exactCommand = "mkdir -p .tmp && printf 'command block complete\\n' > .tmp/evaluator-command.txt && cat .tmp/evaluator-command.txt";
 export const clueCommand = "mkdir -p .tmp && printf 'clue block complete\\n' > .tmp/evaluator-clue.txt && cat .tmp/evaluator-clue.txt";
 export const insufficientEditorDraft = "This is a vague draft.";
