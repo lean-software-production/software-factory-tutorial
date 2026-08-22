@@ -11,6 +11,7 @@ blocks:
   - what-is-left
   - checks
   - pressure-test
+  - capstone-closure
 ---
 
 # Oversee the orchestrator

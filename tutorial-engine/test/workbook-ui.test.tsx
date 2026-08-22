@@ -39,7 +39,13 @@ vi.mock("@codemirror/view", () => {
 
 vi.mock("@codemirror/commands", () => ({ defaultKeymap: [] }));
 
-import { AcceptanceConfetti, BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Chapter, type Progress } from "../web-workbook/src/workbook-ui.js";
+vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/workbook/lesson-links.js")>();
+  return { ...actual, lessonElementId: vi.fn(actual.lessonElementId) };
+});
+
+import { AcceptanceConfetti, App, BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Chapter, type Progress } from "../web-workbook/src/workbook-ui.js";
+import { lessonAnchorHref, lessonElementId } from "../src/workbook/lesson-links.js";
 
 const progress: Progress = {
   activeLessonId: "part/lesson-one",
@@ -132,20 +138,30 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function mount(element: ReturnType<typeof createElement>) {
+// Every test in this file renders a component into a fresh JSDOM document, so
+// only `window`, `document`, and the React act() environment flag are stubbed
+// here. Globals that only App() needs (a window scroll listener and a
+// scrollIntoView polyfill JSDOM does not implement) are stubbed by callers
+// that actually mount App(), via the optional stubExtraGlobals hook below.
+async function mount(element: ReturnType<typeof createElement>, stubExtraGlobals?: (win: JSDOM["window"]) => void) {
   dom = new JSDOM("<!doctype html><html><body><div id=\"root\"></div></body></html>", { url: "http://localhost/workbook" });
   vi.stubGlobal("window", dom.window as any);
   vi.stubGlobal("document", dom.window.document as any);
-  vi.stubGlobal("HTMLElement", dom.window.HTMLElement as any);
-  vi.stubGlobal("Event", dom.window.Event as any);
-  vi.stubGlobal("CustomEvent", dom.window.CustomEvent as any);
-  vi.stubGlobal("MutationObserver", dom.window.MutationObserver as any);
-  vi.stubGlobal("navigator", dom.window.navigator as any);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  stubExtraGlobals?.(dom.window);
   const container = dom.window.document.getElementById("root")!;
   mountedRoot = createRoot(container);
   await act(async () => { mountedRoot!.render(element); });
   return container;
+}
+
+// App() listens for window scroll events to highlight the viewed lesson and
+// calls scrollIntoView on mount; JSDOM implements neither, so only the test
+// that mounts the full App() shell stubs them, scoped to that one call.
+function stubAppShellGlobals(win: JSDOM["window"]) {
+  if (!win.HTMLElement.prototype.scrollIntoView) win.HTMLElement.prototype.scrollIntoView = () => {};
+  vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+  vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
 }
 
 describe("workbook lesson UI", () => {
@@ -408,8 +424,7 @@ describe("workbook lesson UI", () => {
   it("renders the Markdown manifest lesson header, fixed outcomes section, and ordered Markdown blocks", () => {
     const markup = html(createElement(LessonView, { chapter: chapter(), progress, refresh: vi.fn() }));
 
-    expect(markup).toContain('<header id="lesson-part-lesson-one"><h1>Markdown Lesson</h1><p class="dek">Dek paragraph.</p><div class="lesson-meta"><span class="chip duration">14 min</span></div></header>');
-    expect(markup).not.toContain('class="eyebrow"');
+    expect(markup).toContain('<header id="lesson-part-lesson-one"><p class="eyebrow">Lesson 1</p><h1>Markdown Lesson</h1><p class="dek">Dek paragraph.</p><div class="lesson-meta"><span class="chip duration">14 min</span></div></header>');
     expect(markup).toContain("What you will learn");
     expect(markup).toContain("Run the supplied command.");
     expect(markup.indexOf("Orientation")).toBeLessThan(markup.indexOf("Practice"));
@@ -473,6 +488,46 @@ describe("workbook lesson UI", () => {
     expect(markup).toContain("aria-disabled=\"true\"");
   });
 
+  it("labels the rail rows and lesson header with global lesson numbers across parts", () => {
+    const chapterOne = chapter({ id: "part-one/lesson-one", part: "Part One", partNumber: 1, lessonNumber: 1 });
+    const secondLesson = { ...lesson, id: "part-two/lesson-one", title: "Second Lesson" };
+    const chapterTwo = chapter({ id: secondLesson.id, part: "Part Two", partNumber: 2, lessonNumber: 2, title: secondLesson.title, lesson: secondLesson });
+    const chapters: Chapter[] = [chapterOne, chapterTwo];
+    const railProgress = { ...progress, activeLessonId: chapterOne.id };
+    const railMarkup = html(createElement(LessonRail, { title: "Workbook", chapters, progress: railProgress, viewedLessonId: chapterOne.id, setViewedLesson: vi.fn() }));
+
+    // Exact rail labels, not a bare "Lesson 1" substring: that would also
+    // match "Lesson 10: ...", silently accepting a wrong global number.
+    expect(railMarkup).toContain(">Lesson 1: Markdown Lesson</a>");
+    expect(railMarkup).toContain(">Lesson 2: Second Lesson</a>");
+    expect(railMarkup).not.toMatch(/Lesson 1\d/);
+
+    const lessonMarkup = html(createElement(LessonView, { chapter: chapterOne, progress: railProgress, refresh: vi.fn() }));
+    expect(lessonMarkup).toContain('<p class="eyebrow">Lesson 1</p>');
+    expect(lessonMarkup).not.toMatch(/<p class="eyebrow">Lesson 1\d/);
+  });
+
+  it("renders each part roadmap once even when a part has multiple lessons", async () => {
+    const partALessonOne = { ...lesson, id: "part-a/lesson-one", title: "Part A Lesson One" };
+    const partALessonTwo = { ...lesson, id: "part-a/lesson-two", title: "Part A Lesson Two" };
+    const partBLessonOne = { ...lesson, id: "part-b/lesson-one", title: "Part B Lesson One" };
+    const chapters: Chapter[] = [
+      { id: partALessonOne.id, title: partALessonOne.title, part: "Part A", partMarkdown: "Part A copy.", partNumber: 1, lessonNumber: 1, lesson: partALessonOne },
+      { id: partALessonTwo.id, title: partALessonTwo.title, part: "Part A", partMarkdown: "Part A copy.", partNumber: 1, lessonNumber: 2, lesson: partALessonTwo },
+      { id: partBLessonOne.id, title: partBLessonOne.title, part: "Part B", partMarkdown: "Part B copy.", partNumber: 2, lessonNumber: 3, lesson: partBLessonOne },
+    ];
+    const appProgress: Progress = { ...progress, activeLessonId: partALessonOne.id, completedLessons: [] };
+    const state = { workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: true, chapters, progress: appProgress, adapter: {} };
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+
+    expect(container.querySelectorAll(".part-chapter")).toHaveLength(2);
+    expect(container.textContent).toContain("Part A copy.");
+    expect(container.textContent).toContain("Part B copy.");
+  });
+
   it("scrolls to the active lesson's sanitized DOM id", () => {
     const scrollIntoView = vi.fn();
     const getElementById = vi.fn((id: string) => id === "lesson-part-two-lesson-two" ? { scrollIntoView } : null);
@@ -496,6 +551,18 @@ describe("workbook lesson UI", () => {
     expect(railMarkup).toContain('href="#lesson-part-two-lesson-two-block-repeat-block-"');
     expect(lessonMarkup).toContain('id="lesson-part-two-lesson-two-block-repeat-block-"');
     expect(railMarkup).not.toContain('href="#repeat block?"');
+  });
+
+  it("renders resolved lesson reference links and the lesson header using the shared lesson anchor helper", () => {
+    const targetId = "part/lesson-one";
+    const referencedBlock = { ...lesson.blocks[0], markdown: `See [Lesson 1: Markdown Lesson](${lessonAnchorHref(targetId)}) for background.` };
+    const referencedChapter = chapter({ lesson: { ...lesson, blocks: [referencedBlock] } });
+
+    const markup = html(createElement(LessonView, { chapter: referencedChapter, progress, refresh: vi.fn() }));
+
+    expect(markup).toContain('href="#lesson-part-lesson-one"');
+    expect(markup).toContain('<header id="lesson-part-lesson-one">');
+    expect(vi.mocked(lessonElementId)).toHaveBeenCalledWith(targetId);
   });
 
   it("does not let a completed lesson's duplicate narrative block continue the active lesson", () => {
