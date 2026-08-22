@@ -554,5 +554,5 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const address = server.address(); if (!address || typeof address === "string") throw new Error("Could not determine workbook server address.");
   const url = `http://${LOOPBACK_HOST}:${address.port}`;
   log.info(`Workbook tutor listening on ${url}. State: ${timeline.eventPath}${terminal ? " Embedded terminal enabled on loopback only." : ""}`);
-  return { url, port: address.port, host, close: async () => { closed = true; terminal?.dispose(); mainTutor.dispose(); wss?.close(); await Promise.allSettled([...reviewFinalizers]); await new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise())); } };
+  return { url, port: address.port, host, close: async () => { closed = true; terminal?.dispose(); mainTutor.dispose(); wss?.close(); await Promise.allSettled([...reviewFinalizers]); const closing = new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise())); server.closeAllConnections(); await closing; } };
 }
