@@ -208,8 +208,8 @@ describe("workbook lesson UI", () => {
     expect(textarea.value).toBe("Line one\n");
   });
 
-  it("exposes the docked composer and round send layout hooks", () => {
-    const markup = html(createElement(TimelineThread, {
+  it("keeps the docked composer visually compact while preserving accessible labels", async () => {
+    const container = await mount(createElement(TimelineThread, {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend: vi.fn(async () => undefined),
@@ -217,10 +217,17 @@ describe("workbook lesson UI", () => {
       records: []
     }));
 
-    expect(markup).toContain('class="timeline-composer-dock fixed-composer"');
-    expect(markup).toContain('class="timeline-input fixed-composer"');
-    expect(markup).toContain('class="round-send"');
-    expect(markup).toContain('aria-label="Send message"');
+    const dock = container.querySelector(".timeline-composer-dock.fixed-composer");
+    const form = container.querySelector("form.timeline-input.fixed-composer");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+
+    expect(dock).not.toBeNull();
+    expect(form).not.toBeNull();
+    expect(textarea.getAttribute("aria-label")).toBe("Message the tutor");
+    expect(textarea.classList.contains("timeline-composer-textarea")).toBe(true);
+    expect(container.querySelector("label")).toBeNull();
+    expect(container.textContent).not.toContain("Message the tutor");
+    expect(container.querySelector(".round-send")?.getAttribute("aria-label")).toBe("Send message");
   });
 
   it("renders an active editor-practice block without exposing private tutor text", () => {
@@ -693,9 +700,12 @@ describe("workbook lesson UI", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("Authored Orientation note.");
     expect(text.indexOf("Authored Orientation note.")).toBeLessThan(text.indexOf("Continue"));
-    expect(text.indexOf("Continue")).toBeLessThan(text.indexOf("Message the tutor"));
+    expect(text).not.toContain("Message the tutor");
 
     const continueButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
+    const composerDock = container.querySelector(".timeline-composer-dock.fixed-composer")!;
+    expect(continueButton.compareDocumentPosition(composerDock) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector("textarea[name='message']")?.getAttribute("aria-label")).toBe("Message the tutor");
     await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
     const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
