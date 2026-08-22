@@ -1,3 +1,4 @@
+import type { Attempt } from "./attempts.js";
 import type { WorkbookBlock } from "./contract.js";
 import type { BlockSummary, LessonSummary, WorkbookTimelineRecord } from "./timeline.js";
 
@@ -10,6 +11,19 @@ export type PiHistoryTurn = {
 export type PiHistoryProjection = {
   summary?: { sourceEventId: string; text: string; coveredThroughId: string };
   turns: PiHistoryTurn[];
+};
+
+export type ActiveBlockContext = {
+  lessonId: string;
+  blockId: string;
+  title: string;
+  markdown: string;
+  authorGuidance: string;
+  attempts: Attempt[];
+};
+
+export type MainTutorHistoryProjection = PiHistoryProjection & {
+  activeContext?: { name: "workbook-active-block"; text: string; sourceEventIds: string[] };
 };
 
 function isSummary(record: WorkbookTimelineRecord): record is BlockSummary | LessonSummary {
@@ -29,6 +43,20 @@ export function projectPiHistory(records: readonly WorkbookTimelineRecord[]): Pi
   return selected
     ? { summary: { sourceEventId: selected.record.id, text: selected.record.text, coveredThroughId: selected.record.coveredThroughId }, turns }
     : { turns };
+}
+
+export function projectMainTutorHistory(records: readonly WorkbookTimelineRecord[], activeContext?: ActiveBlockContext): MainTutorHistoryProjection {
+  const projection = projectPiHistory(records);
+  if (!activeContext) return projection;
+  const turnIds = new Set(projection.turns.map((turn) => turn.sourceEventId));
+  const sourceEventIds = [...records]
+    .sort((left, right) => left.sequence - right.sequence)
+    .filter((record) => record.type === "message" && record.lessonId === activeContext.lessonId && record.blockId === activeContext.blockId && turnIds.has(record.id))
+    .map((record) => record.id);
+  return {
+    ...projection,
+    activeContext: { name: "workbook-active-block", text: JSON.stringify(activeContext, null, 2), sourceEventIds }
+  };
 }
 
 /** The exact course text displayed at the top of a workbook block. */

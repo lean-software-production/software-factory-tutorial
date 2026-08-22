@@ -1,38 +1,75 @@
 import { rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { WorkbookBlockTutor } from "../../tutorial-engine/src/workbook/block-tutor.js";
+import type { ActiveBlockContext } from "../../tutorial-engine/src/workbook/pi-history.js";
+import type { WorkbookServerOptions } from "../../tutorial-engine/src/workbook/server.js";
 import type { TerminalPty } from "../../tutorial-engine/src/workbook/terminal.js";
-import type { TutorDecision, TutorReview, WorkbookTutor } from "../../tutorial-engine/src/workbook/tutor.js";
+import type { BlockTutorReadiness, TimelineMessage } from "../../tutorial-engine/src/workbook/timeline.js";
+import type { MainTutorContext, TutorDecision, TutorReview } from "../../tutorial-engine/src/workbook/tutor.js";
 import { createV2WorkbookDriver, V2WorkbookDriver } from "../v2/driver.js";
 import { clueCommand, exactCommand, satisfactoryEditorDraft } from "../v2/scenarios.js";
 import { createEmptyV2SessionTrace } from "../v2/session.js";
 import { createEvaluationWorkspace, type CreateEvaluationWorkspaceOptions } from "../v2/workspace.js";
 
-class DriverFakeTutor implements WorkbookTutor {
-  readonly reviews: TutorReview[] = [];
-  compactions = 0;
+type DriverMainTutorContract = Pick<NonNullable<WorkbookServerOptions["mainTutor"]>, "restore" | "reply" | "prepareBlockBriefing" | "review" | "summarizeBlock" | "summarizeLesson" | "dispose">;
+
+class DriverFakeMainTutor implements DriverMainTutorContract {
+  readonly reviews: Array<MainTutorContext & TutorReview & { readiness?: BlockTutorReadiness }> = [];
+  readonly restores: MainTutorContext[] = [];
+  readonly replies: Array<MainTutorContext & { learnerMessage: TimelineMessage }> = [];
+  readonly briefings: Array<MainTutorContext & { lessonId: string; blockId: string }> = [];
+  readonly blockSummaries: Array<MainTutorContext & { lessonId: string; blockId: string; coveredThroughId: string }> = [];
+  readonly lessonSummaries: Array<MainTutorContext & { lessonId: string; coveredThroughId: string }> = [];
   disposed = false;
 
-  async review(input: TutorReview): Promise<TutorDecision> {
+  async review(input: MainTutorContext & TutorReview & { readiness?: BlockTutorReadiness }): Promise<TutorDecision> {
     this.reviews.push(input);
     const { evidence } = input.attempt;
     if (evidence.kind === "editor") {
-      if (evidence.text.includes("editor-artifacts/evaluator-editor.txt") && evidence.text.includes("ready for promotion")) return { accepted: true, feedback: "Editor artifact accepted for promotion." };
-      return { accepted: false, feedback: "Name editor-artifacts/evaluator-editor.txt and explain the promotion intent." };
+      if (evidence.text.includes("editor-artifacts/evaluator-editor.txt") && evidence.text.includes("ready for promotion")) return { outcome: "accepted", message: "Editor artifact accepted for promotion." };
+      return { outcome: "feedback", message: "Name editor-artifacts/evaluator-editor.txt and explain the promotion intent." };
     }
     if (evidence.kind === "terminal") {
-      if (input.attempt.blockId === "exact-command" && evidence.transcript.includes("evaluator-command.txt") && evidence.transcript.includes("command block complete")) return { accepted: true, feedback: "verified exact-command" };
-      if (input.attempt.blockId === "clue-only" && evidence.transcript.includes("evaluator-clue.txt") && evidence.transcript.includes("clue block complete")) return { accepted: true, feedback: "verified clue-only" };
-      return { accepted: false, feedback: `Keep working on ${input.attempt.blockId}.` };
+      if (input.attempt.blockId === "exact-command" && evidence.transcript.includes("evaluator-command.txt") && evidence.transcript.includes("command block complete")) return { outcome: "accepted", message: "verified exact-command" };
+      if (input.attempt.blockId === "clue-only" && evidence.transcript.includes("evaluator-clue.txt") && evidence.transcript.includes("clue block complete")) return { outcome: "accepted", message: "verified clue-only" };
+      return { outcome: "feedback", message: `Keep working on ${input.attempt.blockId}.` };
     }
-    return { accepted: false, feedback: "Tutor reply that asks one public follow-up." };
+    return { outcome: "feedback", message: "Tutor reply that asks one public follow-up." };
   }
 
-  async restore(): Promise<void> {}
-  async reply(): Promise<string> { return "Tutor reply that asks one public follow-up."; }
-  async compactAfterBlock(): Promise<void> { this.compactions++; }
-  async summarizeBlock(): Promise<string> { return "Completed block summary."; }
-  async summarizeLesson(): Promise<string> { return "Completed lesson summary."; }
+  async restore(input: MainTutorContext): Promise<void> { this.restores.push(input); }
+  async reply(input: MainTutorContext & { learnerMessage: TimelineMessage }): Promise<string> {
+    this.replies.push(input);
+    return "Tutor reply that asks one public follow-up.";
+  }
+  async prepareBlockBriefing(input: MainTutorContext & { lessonId: string; blockId: string }): Promise<string> {
+    this.briefings.push(input);
+    return `Private briefing for ${input.blockId}.`;
+  }
+  async summarizeBlock(input: MainTutorContext & { lessonId: string; blockId: string; coveredThroughId: string }): Promise<string> {
+    this.blockSummaries.push(input);
+    return "Completed block summary.";
+  }
+  async summarizeLesson(input: MainTutorContext & { lessonId: string; coveredThroughId: string }): Promise<string> {
+    this.lessonSummaries.push(input);
+    return "Completed lesson summary.";
+  }
   dispose(): void { this.disposed = true; }
+}
+
+class DriverFakeBlockTutor implements WorkbookBlockTutor {
+  readonly hints: Array<{ context: ActiveBlockContext; briefing: string }> = [];
+  readonly assessments: Array<Parameters<WorkbookBlockTutor["assess"]>[0]> = [];
+
+  async hint(input: { context: ActiveBlockContext; briefing: string }): Promise<string> {
+    this.hints.push(input);
+    return "Compare the current evidence with the displayed block goal.";
+  }
+
+  async assess(input: Parameters<WorkbookBlockTutor["assess"]>[0]): Promise<Awaited<ReturnType<WorkbookBlockTutor["assess"]>>> {
+    this.assessments.push(input);
+    return { readiness: "likely_ready", text: "The attempt is ready for main-tutor judgment." };
+  }
 }
 
 class DriverFakePty implements TerminalPty {
@@ -71,11 +108,13 @@ async function startDriver(options: CreateEvaluationWorkspaceOptions = {}) {
   const workspace = await createEvaluationWorkspace(options);
   tempRoots.push(workspace.root);
   const pty = new DriverFakePty();
-  const workbookTutor = new DriverFakeTutor();
+  const workbookTutor = new DriverFakeMainTutor();
+  const blockTutor = new DriverFakeBlockTutor();
   const server = await workspace.startServer({
     terminalPtyFactory: () => pty,
     terminalDebounceMs: 1,
-    workbookTutor
+    mainTutor: workbookTutor as unknown as NonNullable<WorkbookServerOptions["mainTutor"]>,
+    blockTutor
   });
   const trace = createEmptyV2SessionTrace("driver-test");
   const driver = createV2WorkbookDriver({ serverUrl: server.url, trace });
@@ -134,7 +173,7 @@ describe("v2 workbook driver", () => {
       expect(workbookTutor.reviews).toHaveLength(1);
       expect(workbookTutor.reviews[0]).toMatchObject({ privateGuidance: expect.stringContaining("Private editor criterion"), attempt: { evidence: { kind: "editor", text: "This is a vague draft." } } });
       expect(JSON.stringify(trace)).not.toContain("Private editor criterion");
-      expect(JSON.stringify(trace)).toContain('"source":"tutor"');
+      expect(JSON.stringify(trace)).toContain('"source":"main_tutor"');
     } finally {
       await server.close();
     }

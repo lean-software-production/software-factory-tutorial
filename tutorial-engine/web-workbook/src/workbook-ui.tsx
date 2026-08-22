@@ -58,6 +58,12 @@ async function postTutorMessage(blockId: string, text: string): Promise<State> {
   return response.json();
 }
 
+export async function postBlockHint(blockId: string): Promise<State> {
+  const response = await fetch("/api/workbook/hints", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId }) });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
 async function retryTutorOperation(failureId: string): Promise<State> {
   const response = await fetch("/api/workbook/retry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId }) });
   if (!response.ok) throw new Error(await response.text());
@@ -176,22 +182,14 @@ function useContinueOnce(block: Block, state: BlockProgress | undefined, refresh
   return { active, pending, continueOnce };
 }
 
-function ContinueControls({ block, state, refresh }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void }) {
-  const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
+export function ContinueControls({ block, state, refresh }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void }) {
   const { active, pending, continueOnce } = useContinueOnce(block, state, refresh);
-
-  useEffect(() => {
-    if (!active || !sentinel || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(([entry]) => { if (entry?.isIntersecting) continueOnce(); }, { threshold: 1 });
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [active, sentinel, continueOnce]);
 
   if (state?.completed) return <p className="next-ready">The next step has appeared below.</p>;
   if (!active) return null;
   return <div className="continuation-controls">
     <button className="button primary" disabled={pending} onClick={continueOnce}>{pending ? "Continuing…" : "Continue"}</button>
-    <div ref={setSentinel} className="block-end-sentinel" data-completion-action="continue" aria-hidden="true" />
+    <div className="block-end-sentinel" data-completion-action="continue" aria-hidden="true" />
   </div>;
 }
 
@@ -385,20 +383,9 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
 function ReflectionBlock({ lessonId, block, state, turns, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; turns: ReflectionTurn[]; refresh(state: State): void }) {
   const accepted = state?.checkpoint?.status === "accepted";
   const visibleTurns = accepted ? state?.checkpoint?.evidence?.conversation ?? turns : turns;
-  const hasTutorReply = visibleTurns.some((turn) => turn.role === "tutor");
-  const [draft, setDraft] = useState("");
-  const [pending, setPending] = useState(false);
-  const submit = (action: "reflection-submit" | "reflection-follow-up") => {
-    setPending(true);
-    post(block.id, { action, response: draft }).then((next) => { setDraft(""); refresh(next); }).finally(() => setPending(false));
-  };
   return <section id={blockElementId(lessonId, block.id)} className={`work-block reflection ${state?.active ? "is-active" : ""}`}><p className="section-label">Reflection · discuss it</p><h2>{block.title}</h2><div className="question"><Markdown>{block.markdown}</Markdown></div>
     {visibleTurns.length > 0 && !accepted && <div className="reflection-thread" aria-live="polite">{visibleTurns.map((turn, index) => <div key={index} className={`reflection-turn ${turn.role}`}><b>{turn.role === "learner" ? "You" : "Tutor"}</b><p>{turn.text}</p></div>)}</div>}
-    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} /> : state?.completed ? <p className="next-ready">Reflection complete. The next step has appeared below.</p> : <>
-      <AttemptCheckpointStatus state={state} />
-      <label className="reflection-input">{hasTutorReply ? "Ask a clarifying question or add to your answer" : "Share your answer"}<textarea aria-label="Your reflection" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={pending} /></label>
-      <div className="action-row"><button className="button primary" disabled={pending || !draft.trim()} onClick={() => submit(hasTutorReply ? "reflection-follow-up" : "reflection-submit")}>{pending ? "Thinking…" : hasTutorReply ? "Send question" : "Discuss reflection"}</button></div>
-    </>}
+    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} /> : state?.completed ? <p className="next-ready">Reflection complete. The next step has appeared below.</p> : <AttemptCheckpointStatus state={state} />}
   </section>;
 }
 
@@ -532,15 +519,23 @@ export function App() {
   const viewedLesson = viewed ?? state.progress.activeLessonId;
   const activeChapter = emerged.find((chapter) => chapter.id === state.progress.activeLessonId);
   const activeBlock = activeChapter?.lesson.blocks.find((block) => block.id === state.progress.activeBlockId);
+  const activeBlockProgress = state.progress.blocks.find((block) => block.id === state.progress.activeBlockId);
   const hasTimeline = state.timeline !== undefined;
+  const sendTutorText = (text: string) => {
+    if (activeBlock?.type === "reflection") {
+      const turns = state.progress.reflectionConversations[activeBlock.id] ?? [];
+      return post(activeBlock.id, { action: turns.length > 0 ? "reflection-follow-up" : "reflection-submit", response: text }).then((next) => setState(next));
+    }
+    return postTutorMessage(state.progress.activeBlockId, text).then((next) => setState(next));
+  };
   return <div className="shell">
     <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} />
     <main><article className="page">
       <WorkbookIntroduction state={state} refresh={setState} />
       {hasTimeline && activeChapter ? <LessonView chapter={activeChapter} progress={state.progress} refresh={setState} renderBlocks={false}>
-        {activeBlock && <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} />}
-        <TimelineThread records={state.timeline} activeBlockId={state.progress.activeBlockId} onSend={(text) => postTutorMessage(state.progress.activeBlockId, text).then((next) => setState(next))} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />
+        {activeBlock && <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onHint={(blockId) => postBlockHint(blockId).then((next) => setState(next))} />}
+        <TimelineThread records={state.timeline} activeLessonId={state.progress.activeLessonId} activeBlockId={state.progress.activeBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} inputDisabled={activeBlock?.type === "reflection" && activeBlockProgress?.checkpoint?.status === "reviewing"} renderContinuation={(record) => activeBlock && activeBlockProgress && record.source === "authored" && record.lessonId === state.progress.activeLessonId && record.blockId === activeBlock.id && ["narrative", "lesson-transition"].includes(activeBlock.type) ? <ContinueControls block={activeBlock} state={activeBlockProgress} refresh={setState} /> : null} />
       </LessonView> : emerged.map((chapter, index) => <React.Fragment key={chapter.id}>{(index === 0 || chapter.part !== emerged[index - 1]!.part) && <PartChapter chapter={chapter} />}<LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}
     </article></main>
   </div>;

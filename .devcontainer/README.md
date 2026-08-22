@@ -44,25 +44,30 @@ no authentication and edits the working tree.
 
 ## Which models the container picks
 
-The tutorial runs two agents on separate models — see
-[Two models, on purpose](../README.md#two-models-on-purpose) — and the container
-supplies a default for each:
+The tutorial runs separate model choices — see
+[Models, on purpose](../README.md#models-on-purpose) — and the container supplies
+or reports defaults for the main tutor, fast block helper, and doer:
 
 | Agent | Model | Set by |
 | --- | --- | --- |
-| The web tutor | `opencode-go/deepseek-v4-flash` | `TUTOR_MODEL` in `devcontainer.json` |
+| The main web tutor | `opencode-go/deepseek-v4-flash` | `TUTOR_MODEL` in `devcontainer.json` |
+| The fast block helper | Pi's normal model choice unless overridden | `BLOCK_TUTOR_MODEL`, when you set it |
 | The `pi -p` doer | `opencode/big-pickle`, which is free | `seed-doer-model.mjs`, from `post-create.sh` |
 
-They are set two different ways because they live in two different places. The tutor
-reads an environment variable. The doer reads Pi's saved `/model` default, which lives
-in the state volume rather than this repository, so the container has to write it —
-which `seed-doer-model.mjs` does only when the volume has no choice saved yet. Pick a
-model with `/model` and it is yours; a rebuild will not overwrite it.
+They are set in different places because they serve different jobs. The main tutor
+reads `TUTOR_MODEL` from the container environment. The fast block helper normally
+leaves model choice to Pi, unless you export `BLOCK_TUTOR_MODEL`. The doer reads Pi's
+saved `/model` default, which lives in the state volume rather than this repository,
+so the container has to write it — which `seed-doer-model.mjs` does only when the
+volume has no choice saved yet. Pick a model with `/model` and it is yours; a rebuild
+will not overwrite it.
 
-Both values assume the OpenCode Zen provider this image is built around. Log in
-elsewhere and Pi falls back to its own pick — noted in the tutorial log for the tutor,
-and reported for both by `npm run setup`. `export TUTOR_MODEL=<provider>/<model>`
-overrides the tutor for one shell; `/model` changes the doer for good.
+The pinned defaults assume the OpenCode Zen provider this image is built around. Log
+in elsewhere and Pi falls back to its own pick — noted in the tutorial log for tutor
+models, and reported for all three roles by `npm run setup`. `export
+TUTOR_MODEL=<provider>/<model>` overrides the main tutor for one shell; `export
+BLOCK_TUTOR_MODEL=<provider>/<model>` overrides the fast block helper for one shell;
+`/model` changes the doer for good.
 
 ## Credentials survive a rebuild
 

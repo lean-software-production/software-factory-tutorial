@@ -498,3 +498,51 @@ For each defect found in Step 3, add its regression test, implement the smallest
 ```sh
 git commit -m "fix: preserve workbook continuation controls"
 ```
+
+## Task 3 round-2 fix report
+
+- Added regression coverage for exact private briefing and author-guidance leaks shorter than eight
+  characters.
+- Expanded block-tutor readiness acceptance-claim coverage to reject accepted, passing, reject,
+  rejected, fail, and failed wording.
+- Updated the stale devcontainer model-role comment so it describes the main tutor, fast block helper,
+  and doer roles separately.
+
+Focused verification:
+
+```sh
+npm run --workspace=tutorial-engine test -- test/workbook-block-tutor.test.ts
+node --test test/onboarding.test.mjs
+```
+
+## Task 4 review finding fix report
+
+- Added a server regression for review-failure paths proving raw private attempt IDs stay out of
+  public `/state` payloads and `/timeline` SSE snapshots.
+- Projected `tutor_failed` records through a public shape that omits private `requestId` and exposes
+  `failureId` for retry routing.
+- Updated the workbook timeline UI type and retry button to use `failureId` rather than the timeline
+  record ID.
+
+Focused verification:
+
+```sh
+npm run --workspace=tutorial-engine test -- test/workbook-server.test.ts
+npm run --workspace=tutorial-engine build:web:workbook
+```
+
+## Task 5 review finding fix report
+
+- Added an App regression with a completed prior lesson and an active later lesson that both use
+  `orientation`, proving Continue appears only under the active lesson's authored note and advances
+  from the current lesson.
+- Changed `TimelineThread` to require an active lesson ID as well as active block ID before rendering
+  continuation controls.
+- Kept App's continuation callback scoped to the active lesson ID and block ID so stale timeline
+  records cannot host the active Continue control.
+
+Focused verification:
+
+```sh
+npm run --workspace=tutorial-engine test -- test/workbook-ui.test.tsx test/timeline-thread.test.tsx test/workbook-conversation-layout.test.tsx test/conversation-layout.test.tsx
+```
