@@ -1,6 +1,6 @@
 /**
  * Canonical workbook lesson references let one authored document link to an
- * earlier lesson by its stable directory id — `[[lesson:<part-directory>/<lesson-directory>]]`
+ * earlier lesson by its stable flat directory id — `[[lesson:<flat-id>]]`
  * — rather than a hand-written title or anchor that can drift out of date.
  * `loadWorkbook()` resolves every token to standard Markdown only after it has
  * discovered and globally numbered every chapter; this module owns the DOM
@@ -53,8 +53,8 @@ export type ReferenceContext =
 
 const OPEN_TOKEN = "[[lesson:";
 const CLOSE_TOKEN = "]]";
-const CANONICAL_SYNTAX = "[[lesson:<part-directory>/<lesson-directory>]]";
-const CANONICAL_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const CANONICAL_SYNTAX = "[[lesson:<flat-id>]]";
+const CANONICAL_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function withSyntaxHint(message: string): string {
   return `${message} Use the canonical syntax ${CANONICAL_SYNTAX}.`;

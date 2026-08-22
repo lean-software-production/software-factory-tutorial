@@ -76,6 +76,40 @@ async function fixture() {
   return dir;
 }
 
+async function writeFlatLesson(root: string, id: string, title: string, dek: string) {
+  const lessonDir = resolve(root, "lessons", id);
+  await mkdir(resolve(lessonDir, "blocks"), { recursive: true });
+  await writeFile(resolve(lessonDir, "lesson.md"), [
+    "---", "durationMinutes: 5", "outcomes:", `  - ${title} outcome.`, "blocks:", "  - only", "---",
+    `# ${title}`, "", dek,
+  ].join("\n"));
+  await writeFile(resolve(lessonDir, "blocks/only.md"), ["---", "type: narrative", "---", "## Only Block", "", `${title} body.`].join("\n"));
+}
+
+async function flatFixture(workbookFrontMatter = "---\n---") {
+  const dir = await mkdtemp(resolve(tmpdir(), "workbook-flat-contract-")); dirs.push(dir);
+  await writeFile(resolve(dir, "workbook.md"), [workbookFrontMatter, "# Flat Fixture Workbook", "", "Flat fixture introduction."].join("\n"));
+  await writeFlatLesson(dir, "002-second-lesson", "Second Flat Lesson", "Second flat dek.");
+  await writeFlatLesson(dir, "001-first-lesson", "First Flat Lesson", "First flat dek.");
+  return dir;
+}
+
+function flatPartsManifest(partId = "part-one", lessons = ["001-first-lesson", "002-second-lesson"]) {
+  return [
+    "---",
+    "parts:",
+    `  - id: ${partId}`,
+    "    lessons:",
+    ...lessons.map((lesson) => `      - ${lesson}`),
+    "---",
+  ].join("\n");
+}
+
+async function writePartDocument(root: string, id: string, title = "Part One Title", body = "Part one copy.") {
+  await mkdir(resolve(root, "parts"), { recursive: true });
+  await writeFile(resolve(root, "parts", `${id}.md`), ["---", "---", `# ${title}`, "", body].join("\n"));
+}
+
 /** Rewrite the fixture's alpha lesson.md (lessonNumber 2), keeping everything but its dek. */
 function alphaLessonMd(dek: string) {
   return [
@@ -149,125 +183,169 @@ describe("workbook lesson contract", () => {
     expect((lesson.blocks[4] as any).tutor).toBeUndefined();
   });
 
-  it("derives the rail from ordered part and lesson directories", async () => {
+  it("does not fall back to legacy nested part directories when no flat lessons exist", async () => {
     const dir = await fixture();
     const loaded = await loadWorkbook(dir);
-    expect(loaded.identity.title).toBe("Fixture Workbook Identity");
-    expect(loaded.introduction).toBe("Fixture introduction prose.");
-    // Parts sort by directory name, so 01-beta-part precedes 02-alpha-part.
-    expect(loaded.chapters.map((chapter) => [chapter.id, chapter.part, chapter.title])).toEqual([
-      ["01-beta-part/01-beta-lesson", "First Part Title", "Beta Lesson Title"],
-      ["02-alpha-part/10-first-lesson", "Second Part Title", "Synthetic Lesson Title"],
+    expect(loaded.chapters).toEqual([]);
+  });
+
+  it("discovers flat lessons in numeric directory order and leaves part fields absent when workbook parts are absent", async () => {
+    const dir = await flatFixture();
+    const loaded = await loadWorkbook(dir);
+
+    expect(loaded.chapters.map((chapter) => [chapter.id, chapter.title, chapter.lessonNumber])).toEqual([
+      ["001-first-lesson", "First Flat Lesson", 1],
+      ["002-second-lesson", "Second Flat Lesson", 2],
     ]);
-    // Lesson numbers are a single global sequence across parts, in directory order.
-    expect(loaded.chapters.map((chapter) => chapter.lessonNumber)).toEqual([1, 2]);
-    const first = loaded.chapters.find((chapter) => chapter.id === "02-alpha-part/10-first-lesson");
-    expect(first?.lesson.title).toBe("Synthetic Lesson Title");
-    expect(first?.partMarkdown).toBe("Second part copy.");
+    expect(loaded.chapters.map((chapter) => ({ part: chapter.part, partMarkdown: chapter.partMarkdown, partNumber: chapter.partNumber }))).toEqual([
+      { part: undefined, partMarkdown: undefined, partNumber: undefined },
+      { part: undefined, partMarkdown: undefined, partNumber: undefined },
+    ]);
+  });
+
+  it("loads workbook-declared flat parts from parts/<id>.md and orders lessons by the manifest", async () => {
+    const dir = await flatFixture(flatPartsManifest("part-one", ["002-second-lesson", "001-first-lesson"]));
+    await writePartDocument(dir, "part-one", "Part One Title", "Part one copy.");
+
+    const loaded = await loadWorkbook(dir);
+
+    expect(loaded.chapters.map((chapter) => [chapter.id, chapter.part, chapter.partNumber, chapter.partMarkdown])).toEqual([
+      ["002-second-lesson", "Part One Title", 1, "Part one copy."],
+      ["001-first-lesson", "Part One Title", 1, "Part one copy."],
+    ]);
+  });
+
+  it("validates workbook-declared flat parts against lessons on disk", async () => {
+    const cases: Array<[string, string, string | undefined]> = [
+      ["unknown", flatPartsManifest("part-one", ["001-first-lesson", "999-missing-lesson", "002-second-lesson"]), undefined],
+      ["duplicate", flatPartsManifest("part-one", ["001-first-lesson", "001-first-lesson"]), undefined],
+      ["omitted", flatPartsManifest("part-one", ["001-first-lesson"]), undefined],
+      ["missing part", flatPartsManifest("part-one"), undefined],
+      ["malformed part", flatPartsManifest("Bad Part"), undefined],
+      ["malformed lesson", flatPartsManifest("part-one", ["001-first-lesson", "Bad Lesson"]), undefined],
+    ];
+
+    for (const [label, manifest] of cases) {
+      const dir = await flatFixture(manifest);
+      if (label !== "missing part" && label !== "malformed part") await writePartDocument(dir, "part-one");
+      const message = await messageFrom(loadWorkbook(dir));
+      expect(message, label).toMatch(new RegExp(label === "missing part" ? "missing" : label === "omitted" ? "omit" : label.split(" ")[0], "i"));
+    }
   });
 
   it("resolves a canonical lesson reference in a lesson dek and block to a standard Markdown link", async () => {
-    const dir = await fixture();
-    const token = "[[lesson:01-beta-part/01-beta-lesson]]";
-    await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), alphaLessonMd(token));
-    await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/blocks/intro.md"), introBlockMd(token));
+    const dir = await flatFixture();
+    const token = "[[lesson:001-first-lesson]]";
+    await writeFile(resolve(dir, "lessons/002-second-lesson/lesson.md"), betaLessonMd(token));
+    await writeFile(resolve(dir, "lessons/002-second-lesson/blocks/only.md"), introBlockMd(token));
 
     const workbook = await loadWorkbook(dir);
-    const chapter = workbook.chapters.find((c) => c.id === "02-alpha-part/10-first-lesson");
-    const expected = "[Lesson 1: Beta Lesson Title](#lesson-01-beta-part-01-beta-lesson)";
+    const chapter = workbook.chapters.find((c) => c.id === "002-second-lesson");
+    const expected = "[Lesson 1: First Flat Lesson](#lesson-001-first-lesson)";
     expect(chapter?.lesson.dek).toBe(expected);
     expect(chapter?.lesson.blocks[0]?.markdown).toBe(expected);
   });
 
   it("rejects an unknown lesson reference, naming its source file and the canonical syntax", async () => {
-    const dir = await fixture();
-    await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), alphaLessonMd("[[lesson:99-missing-part/01-nope]]"));
+    const dir = await flatFixture();
+    await writeFile(resolve(dir, "lessons/002-second-lesson/lesson.md"), betaLessonMd("[[lesson:999-missing-lesson]]"));
     const message = await messageFrom(loadWorkbook(dir));
     expect(message).toMatch(/unknown lesson reference/i);
-    expect(message).toContain("lessons/02-alpha-part/10-first-lesson/lesson.md");
-    expect(message).toContain("[[lesson:<part-directory>/<lesson-directory>]]");
+    expect(message).toContain("lessons/002-second-lesson/lesson.md");
+    expect(message).toContain("[[lesson:<flat-id>]]");
   });
 
   it("rejects an empty lesson reference, naming its source file and the canonical syntax", async () => {
-    const dir = await fixture();
-    await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), alphaLessonMd("[[lesson:]]"));
+    const dir = await flatFixture();
+    await writeFile(resolve(dir, "lessons/002-second-lesson/lesson.md"), betaLessonMd("[[lesson:]]"));
     const message = await messageFrom(loadWorkbook(dir));
     expect(message).toMatch(/empty lesson reference/i);
-    expect(message).toContain("lessons/02-alpha-part/10-first-lesson/lesson.md");
-    expect(message).toContain("[[lesson:<part-directory>/<lesson-directory>]]");
+    expect(message).toContain("lessons/002-second-lesson/lesson.md");
+    expect(message).toContain("[[lesson:<flat-id>]]");
   });
 
   it("rejects a malformed lesson reference, naming its source file and the canonical syntax", async () => {
-    const dir = await fixture();
-    await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), alphaLessonMd("[[lesson:Not Valid Id]]"));
+    const dir = await flatFixture();
+    await writeFile(resolve(dir, "lessons/002-second-lesson/lesson.md"), betaLessonMd("[[lesson:Not Valid Id]]"));
     const message = await messageFrom(loadWorkbook(dir));
     expect(message).toMatch(/malformed lesson reference/i);
-    expect(message).toContain("lessons/02-alpha-part/10-first-lesson/lesson.md");
-    expect(message).toContain("[[lesson:<part-directory>/<lesson-directory>]]");
+    expect(message).toContain("lessons/002-second-lesson/lesson.md");
+    expect(message).toContain("[[lesson:<flat-id>]]");
   });
 
   it("rejects an unterminated lesson reference, naming its source file and the canonical syntax", async () => {
-    const dir = await fixture();
-    await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), alphaLessonMd("[[lesson:01-beta-part/01-beta-lesson"));
+    const dir = await flatFixture();
+    await writeFile(resolve(dir, "lessons/002-second-lesson/lesson.md"), betaLessonMd("[[lesson:001-first-lesson"));
     const message = await messageFrom(loadWorkbook(dir));
     expect(message).toMatch(/unterminated lesson reference/i);
-    expect(message).toContain("lessons/02-alpha-part/10-first-lesson/lesson.md");
-    expect(message).toContain("[[lesson:<part-directory>/<lesson-directory>]]");
+    expect(message).toContain("lessons/002-second-lesson/lesson.md");
+    expect(message).toContain("[[lesson:<flat-id>]]");
   });
 
   it("rejects a lesson reference to its own lesson", async () => {
-    const dir = await fixture();
-    await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), alphaLessonMd("[[lesson:02-alpha-part/10-first-lesson]]"));
+    const dir = await flatFixture();
+    await writeFile(resolve(dir, "lessons/002-second-lesson/lesson.md"), betaLessonMd("[[lesson:002-second-lesson]]"));
     const message = await messageFrom(loadWorkbook(dir));
     expect(message).toMatch(/refers to its own lesson/i);
-    expect(message).toContain("lessons/02-alpha-part/10-first-lesson/lesson.md");
-    expect(message).toContain("[[lesson:<part-directory>/<lesson-directory>]]");
+    expect(message).toContain("lessons/002-second-lesson/lesson.md");
+    expect(message).toContain("[[lesson:<flat-id>]]");
   });
 
   it("rejects a lesson reference to a later (forward) lesson", async () => {
-    const dir = await fixture();
-    // Beta is lessonNumber 1; alpha is lessonNumber 2, so this is a forward reference.
-    await writeFile(resolve(dir, "lessons/01-beta-part/01-beta-lesson/lesson.md"), betaLessonMd("[[lesson:02-alpha-part/10-first-lesson]]"));
+    const dir = await flatFixture();
+    await writeFile(resolve(dir, "lessons/001-first-lesson/lesson.md"), betaLessonMd("[[lesson:002-second-lesson]]"));
     const message = await messageFrom(loadWorkbook(dir));
     expect(message).toMatch(/refers to a later lesson/i);
-    expect(message).toContain("lessons/01-beta-part/01-beta-lesson/lesson.md");
-    expect(message).toContain("[[lesson:<part-directory>/<lesson-directory>]]");
+    expect(message).toContain("lessons/001-first-lesson/lesson.md");
+    expect(message).toContain("[[lesson:<flat-id>]]");
   });
 
   it("rejects every lesson reference token in workbook.md", async () => {
-    const dir = await fixture();
+    const dir = await flatFixture();
     await writeFile(resolve(dir, "workbook.md"), [
       "---", "---", "# Fixture Workbook Identity", "",
-      "Fixture introduction referencing [[lesson:01-beta-part/01-beta-lesson]].",
+      "Fixture introduction referencing [[lesson:001-first-lesson]].",
     ].join("\n"));
     const message = await messageFrom(loadWorkbook(dir));
     expect(message).toMatch(/workbook\.md may not contain a lesson reference/i);
     expect(message).toContain("workbook.md");
-    expect(message).toContain("[[lesson:<part-directory>/<lesson-directory>]]");
+    expect(message).toContain("[[lesson:<flat-id>]]");
   });
 
   it("rejects a part's own first lesson but lets a later part resolve an earlier part's lesson", async () => {
-    const dir = await fixture();
-    // Part 1 (01-beta-part) has no earlier lesson, so referencing its own first (and only) lesson fails.
-    await writeFile(resolve(dir, "lessons/01-beta-part/part.md"), [
-      "---", "---", "# First Part Title", "",
-      "First part copy referencing [[lesson:01-beta-part/01-beta-lesson]].",
-    ].join("\n"));
+    const manifest = [
+      "---",
+      "parts:",
+      "  - id: first-part",
+      "    lessons:",
+      "      - 001-first-lesson",
+      "  - id: second-part",
+      "    lessons:",
+      "      - 002-second-lesson",
+      "---",
+    ].join("\n");
+    const dir = await flatFixture(manifest);
+    await writePartDocument(dir, "first-part", "First Part", "First part copy referencing [[lesson:001-first-lesson]].");
+    await writePartDocument(dir, "second-part", "Second Part", "Second part copy.");
     const rejectMessage = await messageFrom(loadWorkbook(dir));
     expect(rejectMessage).toMatch(/must name a lesson before this part's first lesson/i);
-    expect(rejectMessage).toContain("lessons/01-beta-part/part.md");
-    expect(rejectMessage).toContain("[[lesson:<part-directory>/<lesson-directory>]]");
+    expect(rejectMessage).toContain("parts/first-part.md");
+    expect(rejectMessage).toContain("[[lesson:<flat-id>]]");
 
-    // Reset part 1, then let part 2 (02-alpha-part) reference part 1's lesson, which is earlier.
-    await writeFile(resolve(dir, "lessons/01-beta-part/part.md"), "---\n---\n# First Part Title\n\nFirst part copy.\n");
-    await writeFile(resolve(dir, "lessons/02-alpha-part/part.md"), [
-      "---", "---", "# Second Part Title", "",
-      "Second part copy referencing [[lesson:01-beta-part/01-beta-lesson]].",
-    ].join("\n"));
+    await writePartDocument(dir, "first-part", "First Part", "First part copy.");
+    await writePartDocument(dir, "second-part", "Second Part", "Second part copy referencing [[lesson:001-first-lesson]].");
     const workbook = await loadWorkbook(dir);
-    const chapter = workbook.chapters.find((c) => c.id === "02-alpha-part/10-first-lesson");
+    const chapter = workbook.chapters.find((c) => c.id === "002-second-lesson");
     expect(chapter?.partMarkdown).toBe(
-      "Second part copy referencing [Lesson 1: Beta Lesson Title](#lesson-01-beta-part-01-beta-lesson).");
+      "Second part copy referencing [Lesson 1: First Flat Lesson](#lesson-001-first-lesson).");
+  });
+
+  it("rejects a malformed lesson reference in a flat part document, naming the parts file itself", async () => {
+    const dir = await flatFixture(flatPartsManifest());
+    await writePartDocument(dir, "part-one", "Part One Title", "[[lesson:]]");
+    const message = await messageFrom(loadWorkbook(dir));
+    expect(message).toMatch(/empty lesson reference/i);
+    expect(message).toContain(resolve(dir, "parts/part-one.md"));
   });
 
   it("keeps the real workbook free of unresolved [[lesson: reference tokens", async () => {
@@ -275,7 +353,7 @@ describe("workbook lesson contract", () => {
     expect(workbook.introduction).not.toContain("[[lesson:");
     const offenders = workbook.chapters.flatMap((chapter) => {
       const found: string[] = [];
-      if (chapter.partMarkdown.includes("[[lesson:")) found.push(`${chapter.id}/part.md`);
+      if (chapter.partMarkdown?.includes("[[lesson:")) found.push(`${chapter.id}/part.md`);
       if (chapter.lesson.dek.includes("[[lesson:")) found.push(`${chapter.id}/lesson.md`);
       for (const block of chapter.lesson.blocks) if (block.markdown.includes("[[lesson:")) found.push(`${chapter.id}/blocks/${block.id}`);
       return found;
@@ -284,8 +362,8 @@ describe("workbook lesson contract", () => {
   });
 
   it("loads the real migrated lesson 001 content unchanged", async () => {
-    const lessonDir = resolve(import.meta.dirname, "../../lessons/01-the-validation-loop/01-run-an-agent-headlessly");
-    const lesson = await loadWorkbookLesson(lessonDir, "01-the-validation-loop/01-run-an-agent-headlessly");
+    const lessonDir = resolve(import.meta.dirname, "../../lessons/001-run-an-agent-headlessly");
+    const lesson = await loadWorkbookLesson(lessonDir, "001-run-an-agent-headlessly");
     expect(lesson.title).toBe("Run an agent headlessly");
     expect(lesson.durationMinutes).toBe(10);
     expect(lesson.blocks.map((block) => block.id)).toEqual(["orientation", "run-supplied-command", "change-job", "reflection", "transition"]);
@@ -296,8 +374,8 @@ describe("workbook lesson contract", () => {
   });
 
   it("loads the real migrated lesson 002 editor-practice blocks", async () => {
-    const lessonDir = resolve(import.meta.dirname, "../../lessons/01-the-validation-loop/02-build-a-doer");
-    const lesson = await loadWorkbookLesson(lessonDir, "01-the-validation-loop/02-build-a-doer");
+    const lessonDir = resolve(import.meta.dirname, "../../lessons/002-build-a-doer");
+    const lesson = await loadWorkbookLesson(lessonDir, "002-build-a-doer");
     expect(lesson.blocks.map((block) => block.id)).toEqual([
       "key-concept",
       "write-doer-prompt",
@@ -326,19 +404,19 @@ describe("workbook lesson contract", () => {
     expect(workbook.identity.title).toBe("Software Factory Tutorial");
     expect(workbook.chapters).toHaveLength(13);
     expect(workbook.chapters.map((chapter) => chapter.id)).toEqual([
-      "01-the-validation-loop/01-run-an-agent-headlessly",
-      "01-the-validation-loop/02-build-a-doer",
-      "01-the-validation-loop/03-build-a-validator",
-      "01-the-validation-loop/04-feed-the-findings-back",
-      "02-build-the-factory/01-join-them-into-a-line",
-      "02-build-the-factory/02-read-only-validator",
-      "02-build-the-factory/03-compose-and-branch",
-      "02-build-the-factory/04-take-the-pause-off",
-      "02-build-the-factory/05-record-what-happened",
-      "02-build-the-factory/06-watch-it-while-it-runs",
-      "02-build-the-factory/07-ask-what-happened",
-      "02-build-the-factory/08-talk-to-a-station",
-      "02-build-the-factory/09-oversee-the-orchestrator",
+      "001-run-an-agent-headlessly",
+      "002-build-a-doer",
+      "003-build-a-validator",
+      "004-feed-the-findings-back",
+      "005-join-them-into-a-line",
+      "006-read-only-validator",
+      "007-compose-and-branch",
+      "008-take-the-pause-off",
+      "009-record-what-happened",
+      "010-watch-it-while-it-runs",
+      "011-ask-what-happened",
+      "012-talk-to-a-station",
+      "013-oversee-the-orchestrator",
     ]);
     expect(workbook.chapters.every((chapter) => chapter.lesson)).toBe(true);
   });
@@ -356,7 +434,7 @@ describe("workbook lesson contract", () => {
   it("begins lesson 005 with a Part 2 entry checkpoint", async () => {
     const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
     const lesson005 = workbook.chapters.find(
-      (chapter) => chapter.id === "02-build-the-factory/01-join-them-into-a-line");
+      (chapter) => chapter.id === "005-join-them-into-a-line");
     const first = lesson005?.lesson.blocks[0];
 
     expect(first?.id).toBe("part-2-entry-checkpoint");
@@ -366,7 +444,7 @@ describe("workbook lesson contract", () => {
   it("ends lesson 013 with a capstone closure", async () => {
     const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
     const lesson013 = workbook.chapters.find(
-      (chapter) => chapter.id === "02-build-the-factory/09-oversee-the-orchestrator");
+      (chapter) => chapter.id === "013-oversee-the-orchestrator");
     const blocks = lesson013?.lesson.blocks ?? [];
     const last = blocks[blocks.length - 1];
 
@@ -382,7 +460,7 @@ describe("workbook lesson contract", () => {
     // so a future edit cannot drift from it again.
     const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
     const lesson013 = workbook.chapters.find(
-      (chapter) => chapter.id === "02-build-the-factory/09-oversee-the-orchestrator");
+      (chapter) => chapter.id === "013-oversee-the-orchestrator");
     const keyConcept = lesson013?.lesson.blocks.find((block) => block.id === "key-concept");
 
     expect(keyConcept?.markdown.replace(/\s+/g, " ")).toContain(
@@ -559,11 +637,13 @@ describe("workbook lesson contract", () => {
     expect(() => validateBlockFrontMatter({ type: "narrative", command: "echo hi" }, "blocks/x.md")).toThrow(/unknown front matter field "command"/);
   });
 
-  it("requires workbook and part front matter to be an empty map, since no fields are defined yet", () => {
+  it("accepts workbook parts front matter and keeps part document front matter empty", () => {
     expect(validateWorkbookManifest({}, "workbook.md")).toEqual({});
+    expect(validateWorkbookManifest({ parts: [{ id: "part-one", lessons: ["001-first-lesson"] }] }, "workbook.md")).toEqual({ parts: [{ id: "part-one", lessons: ["001-first-lesson"] }] });
     expect(() => validateWorkbookManifest({ title: "X" }, "workbook.md")).toThrow(/unknown front matter field "title"/);
-    expect(validatePartManifest({}, "lessons/x/part.md")).toEqual({});
-    expect(() => validatePartManifest({ order: 1 }, "lessons/x/part.md")).toThrow(/unknown front matter field "order"/);
+    expect(() => validateWorkbookManifest({ parts: [{ id: "Bad Part", lessons: ["001-first-lesson"] }] }, "workbook.md")).toThrow(/malformed|lowercase-hyphenated/);
+    expect(validatePartManifest({}, "parts/x.md")).toEqual({});
+    expect(() => validatePartManifest({ order: 1 }, "parts/x.md")).toThrow(/unknown front matter field "order"/);
   });
 
   it("reports location-specific errors for a malformed assembled lesson", () => {

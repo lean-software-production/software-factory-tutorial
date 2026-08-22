@@ -32,8 +32,8 @@ export interface WorkbookLesson {
 /** Workbook identity is the resolved title of workbook.md's single H1. */
 export interface WorkbookIdentity { title: string; }
 
-/** No workbook-level structured field is defined yet, so front matter must be an empty map. */
-export interface WorkbookManifest {}
+export interface WorkbookPartManifest { id: string; lessons: string[]; }
+export interface WorkbookManifest { parts?: WorkbookPartManifest[]; }
 /** No part-level structured field is defined yet, so front matter must be an empty map. */
 export interface PartManifest {}
 
@@ -41,6 +41,7 @@ export interface LessonFrontMatter { durationMinutes: number; outcomes: string[]
 export interface BlockFrontMatter { type: WorkbookBlockType; path?: string; tutor?: string; }
 
 const BLOCK_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+export const WORKBOOK_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function isNonEmptyString(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -67,9 +68,45 @@ function validateEmptyManifest(data: unknown, location: string): Record<string, 
   return {};
 }
 
-/** Validate workbook.md's front matter. No structured field is defined yet; only an empty map is valid. */
+/** Validate workbook.md's front matter: optional ordered parts that assign flat lesson ids. */
 export function validateWorkbookManifest(data: unknown, location = "workbook.md"): WorkbookManifest {
-  return validateEmptyManifest(data, location);
+  const errors: string[] = [];
+  if (!isPlainObject(data)) fail(location, [`${location}: front matter must be a YAML mapping (use an empty --- / --- block if it has no fields).`]);
+  const record = data as Record<string, unknown>;
+  rejectUnknownFields(record, ["parts"], location, errors);
+
+  if (record.parts === undefined) {
+    if (errors.length) fail(location, errors);
+    return {};
+  }
+  if (!Array.isArray(record.parts) || record.parts.length === 0) {
+    errors.push(`${location}: parts must be a non-empty list when present`);
+  } else {
+    const partIds = new Set<string>();
+    record.parts.forEach((part, index) => {
+      const path = `${location}: parts[${index}]`;
+      if (!isPlainObject(part)) { errors.push(`${path} must be a mapping`); return; }
+      rejectUnknownFields(part, ["id", "lessons"], `${location}: parts[${index}]`, errors);
+      const id = part.id;
+      if (!isNonEmptyString(id) || !WORKBOOK_ID_PATTERN.test(id)) errors.push(`${path}.id is malformed; use a lowercase-hyphenated flat id`);
+      else if (partIds.has(id)) errors.push(`${path}.id duplicates part "${id}"`);
+      else partIds.add(id);
+      const lessons = part.lessons;
+      if (!Array.isArray(lessons) || lessons.length === 0) {
+        errors.push(`${path}.lessons must be a non-empty list of flat lesson ids`);
+      } else {
+        const local = new Set<string>();
+        for (const lesson of lessons) {
+          if (!isNonEmptyString(lesson) || !WORKBOOK_ID_PATTERN.test(lesson)) errors.push(`${path}.lessons contains malformed lesson id "${String(lesson)}"`);
+          else if (local.has(lesson)) errors.push(`${path}.lessons duplicates lesson "${lesson}"`);
+          else local.add(lesson);
+        }
+      }
+    });
+  }
+
+  if (errors.length) fail(location, errors);
+  return record as unknown as WorkbookManifest;
 }
 
 /** Validate a part.md's front matter. No structured field is defined yet; only an empty map is valid. */

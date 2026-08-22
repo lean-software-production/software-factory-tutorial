@@ -12,13 +12,24 @@ let dirs: string[] = [];
 
 async function fixture(options: { editorPath?: string } = {}) {
   const dir = await mkdtemp(resolve(tmpdir(), "workbook-server-")); dirs.push(dir);
-  const partDir = resolve(dir, "lessons/01-loop");
-  const first = resolve(partDir, "01-first");
-  const second = resolve(partDir, "02-second");
+  const first = resolve(dir, "lessons/001-first");
+  const second = resolve(dir, "lessons/002-second");
   await mkdir(resolve(first, "blocks"), { recursive: true });
   await mkdir(resolve(second, "blocks"), { recursive: true });
-  await writeFile(resolve(dir, "workbook.md"), ["---", "---", "# Fixture workbook", "", "Welcome to the fixture workbook."].join("\n"));
-  await writeFile(resolve(partDir, "part.md"), ["---", "---", "# Part 1 — Loop", "", "Part copy."].join("\n"));
+  await writeFile(resolve(dir, "workbook.md"), [
+    "---",
+    "parts:",
+    "  - id: loop",
+    "    lessons:",
+    "      - 001-first",
+    "      - 002-second",
+    "---",
+    "# Fixture workbook",
+    "",
+    "Welcome to the fixture workbook.",
+  ].join("\n"));
+  await mkdir(resolve(dir, "parts"), { recursive: true });
+  await writeFile(resolve(dir, "parts/loop.md"), ["---", "---", "# Part 1 — Loop", "", "Part copy."].join("\n"));
   await writeLesson(first, "First lesson", ["orientation", "edit-answer", "run-supplied-command", "change-job", "reflection", "transition"]);
   await writeBlock(first, "orientation", "narrative", "Orientation", "Start with the concept.");
   await writeBlock(first, "edit-answer", "editor-practice", "Edit", "Write the answer in the editor.", "Private editor rubric: mention the factory acceptance marker.", options.editorPath ?? "factory/answer.md");
@@ -196,7 +207,7 @@ describe("workbook browser API", () => {
     const dir = await fixture(); const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, workbookTutor: new FakeTutor() });
     try {
       const initial = await state(server.url);
-      expect(initial.chapters.map((chapter: any) => [chapter.id, chapter.lesson])).toEqual([["01-loop/01-first", undefined], ["01-loop/02-second", undefined]]);
+      expect(initial.chapters.map((chapter: any) => [chapter.id, chapter.lesson])).toEqual([["001-first", undefined], ["002-second", undefined]]);
       expect((await postEvent(server.url, { blockId: "orientation", action: "continue" })).status).toBe(409);
       await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
       expect((await postEditor(server.url, { blockId: "edit-answer", text: "too soon" })).status).toBe(409);
@@ -415,9 +426,9 @@ describe("workbook browser API", () => {
       await waitForWorkbookState(server.url, (next) => block(next, "reflection")?.checkpoint?.status === "accepted", "reflection accepted");
       await postEvent(server.url, { blockId: "reflection", action: "continue" });
       const second = await postEvent(server.url, { blockId: "transition", action: "continue" }).then((response) => response.json() as any);
-      expect(second.progress.activeLessonId).toBe("01-loop/02-second");
+      expect(second.progress.activeLessonId).toBe("002-second");
       expect(second.progress.activeBlockId).toBe("second-orientation");
-      expect(second.progress.completedLessons).toContain("01-loop/01-first");
+      expect(second.progress.completedLessons).toContain("001-first");
     } finally { await server.close(); }
   });
 
