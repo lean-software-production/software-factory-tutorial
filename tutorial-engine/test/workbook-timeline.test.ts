@@ -62,6 +62,23 @@ describe("WorkbookTimeline", () => {
     expect((await timeline.append({ type: "session_started" })).sequence).toBe(3);
   });
 
+  it("normalizes legacy tutor message sources to main tutor", async () => {
+    const directory = await workspace();
+    const timeline = new WorkbookTimeline(directory);
+    await mkdir(resolve(directory, ".tutorial/.tmp/workbook"), { recursive: true });
+    await writeFile(timeline.eventPath, `${JSON.stringify({
+      type: "message",
+      lessonId: "lesson",
+      blockId: "intro",
+      role: "assistant",
+      source: "tutor",
+      presentation: "chat",
+      text: "Legacy tutor reply"
+    })}\n`);
+
+    await expect(timeline.read()).resolves.toMatchObject([{ type: "message", source: "main_tutor" }]);
+  });
+
   it("persists block tutor support records in sequence order", async () => {
     const timeline = new WorkbookTimeline(await workspace());
 

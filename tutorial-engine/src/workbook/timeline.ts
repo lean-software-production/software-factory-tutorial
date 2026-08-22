@@ -101,7 +101,9 @@ function legacyRecord(value: unknown, line: number): WorkbookTimelineRecord {
   const id = typeof value.id === "string" ? value.id : `legacy:${line}`;
   const sequence = Number.isInteger(value.sequence) && (value.sequence as number) > 0 ? value.sequence as number : line;
   const at = typeof value.at === "string" ? value.at : new Date(0).toISOString();
-  return { ...value, id, sequence, at } as WorkbookTimelineRecord;
+  const record: Record<string, unknown> & TimelineMetadata = { ...value, id, sequence, at };
+  if (record.type === "message" && record.source === "tutor") return { ...record, source: "main_tutor" } as WorkbookTimelineRecord;
+  return record as WorkbookTimelineRecord;
 }
 
 /**
