@@ -91,6 +91,26 @@ describe("FastWorkbookBlockTutor", () => {
     await expect(tutor.hint({ context: activeContext(), briefing: "Private guidance." })).rejects.toThrow(/empty block tutor hint/i);
   });
 
+  it("rejects hints that quote private briefing or author guidance", async () => {
+    const workspace = await workspaceFixture();
+    const briefing = "Watch for the learner naming shell execution as removed.";
+    const context = activeContext();
+    const tutor = new FastWorkbookBlockTutor({ workspace, sessionFactory: async (request) => {
+      const session = new FakeSession(request);
+      session.response = `Tell the learner: ${briefing}`;
+      return session;
+    } });
+
+    await expect(tutor.hint({ context, briefing })).rejects.toThrow(/private/i);
+
+    const authorLeakTutor = new FastWorkbookBlockTutor({ workspace, sessionFactory: async (request) => {
+      const session = new FakeSession(request);
+      session.response = `Internal rubric says: ${context.authorGuidance}`;
+      return session;
+    } });
+    await expect(authorLeakTutor.hint({ context, briefing: "Private briefing." })).rejects.toThrow(/private/i);
+  });
+
   it("exposes only safe read-only workspace tools inside the workspace", async () => {
     const workspace = await workspaceFixture();
     const requests: WorkbookBlockTutorSessionFactoryRequest[] = [];
@@ -150,5 +170,32 @@ describe("FastWorkbookBlockTutor", () => {
     } });
 
     await expect(tutor.assess({ context: activeContext(), attempt: attempt("attempt-invalid") })).rejects.toThrow(/readiness/i);
+  });
+
+  it("rejects readiness output that claims the attempt is accepted or passed", async () => {
+    const workspace = await workspaceFixture();
+    const acceptedTutor = new FastWorkbookBlockTutor({ workspace, sessionFactory: async (request) => {
+      const session = new FakeSession(request);
+      session.response = async () => {
+        const readiness = request.customTools.find((tool: any) => tool.name === "report_attempt_readiness") as any;
+        await readiness.execute("ready-tool", { readiness: "likely_ready", rationale: "Accepted. This passed the block." }, undefined, undefined, undefined);
+        return "Likely ready.";
+      };
+      return session;
+    } });
+
+    await expect(acceptedTutor.assess({ context: activeContext(), attempt: attempt("attempt-accepted") })).rejects.toThrow(/acceptance/i);
+
+    const passedTutor = new FastWorkbookBlockTutor({ workspace, sessionFactory: async (request) => {
+      const session = new FakeSession(request);
+      session.response = async () => {
+        const readiness = request.customTools.find((tool: any) => tool.name === "report_attempt_readiness") as any;
+        await readiness.execute("ready-tool", { readiness: "still_working", rationale: "Names the capability but needs more detail." }, undefined, undefined, undefined);
+        return "This passed; send it on.";
+      };
+      return session;
+    } });
+
+    await expect(passedTutor.assess({ context: activeContext(), attempt: attempt("attempt-passed") })).rejects.toThrow(/acceptance/i);
   });
 });

@@ -54,7 +54,7 @@ Private material boundary: never quote or reveal private briefing text, author g
 
 Hint mode: give one concise next hint for the active block.
 
-Assessment mode: assess only the supplied attempt snapshot and active block context. Do not accept or reject the attempt. Report only whether the learner is likely ready for the main tutor's review or still working by calling report_attempt_readiness({ readiness, rationale }). The only readiness values are likely_ready and still_working.`;
+Assessment mode: assess only the supplied attempt snapshot and active block context. Do not accept or reject the attempt. Report only whether the learner is likely ready for the main tutor's review or still working by calling report_attempt_readiness({ readiness, rationale }). The only readiness values are likely_ready and still_working. The rationale must not say the attempt is accepted, rejected, passed, or failed.`;
 }
 
 function hintPrompt(input: { context: ActiveBlockContext; briefing: string }): string {
@@ -78,13 +78,46 @@ ${JSON.stringify(input.context, null, 2)}
 Untrusted attempt snapshot to assess:
 ${JSON.stringify(input.attempt, null, 2)}
 
-Call ${READINESS_TOOL_NAME} with readiness likely_ready when this attempt appears ready for the main tutor to review, or still_working when it needs more learner work. Return only a concise public rationale. Do not accept the attempt.`;
+Call ${READINESS_TOOL_NAME} with readiness likely_ready when this attempt appears ready for the main tutor to review, or still_working when it needs more learner work. Return only a concise public rationale. Do not accept the attempt, reject it, say it passed, or say it failed.`;
 }
 
 function trimmedRequired(text: string, label: string): string {
   const value = text.trim();
   if (!value) throw new Error(`Empty block tutor ${label}.`);
   return value.slice(0, 1_000);
+}
+
+function normalizedGuardText(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function privateFragments(text: string): string[] {
+  const fragments = new Set<string>();
+  const add = (fragment: string, minimumLength: number) => {
+    const normalized = normalizedGuardText(fragment);
+    if (normalized.length >= minimumLength) fragments.add(normalized);
+  };
+  add(text, 8);
+  for (const fragment of text.split(/\n+|[.!?]\s+/u)) add(fragment, 20);
+  return [...fragments];
+}
+
+function assertNoPrivateMaterial(text: string, privateTexts: string[]): void {
+  const normalized = normalizedGuardText(text);
+  for (const privateText of privateTexts) {
+    for (const fragment of privateFragments(privateText)) {
+      if (normalized.includes(fragment)) {
+        throw new Error("Block tutor hint included private briefing or author guidance.");
+      }
+    }
+  }
+}
+
+function assertNoReadinessAcceptanceClaims(text: string, label: string): void {
+  const normalized = normalizedGuardText(text);
+  if (/\baccept(?:ed|s|ing)?\b/u.test(normalized) || /\breject(?:ed|s|ing)?\b/u.test(normalized) || /\bpass(?:ed|es)?\b/u.test(normalized) || /\bfail(?:ed|s|ing)?\b/u.test(normalized)) {
+    throw new Error(`Block tutor ${label} included an acceptance claim.`);
+  }
 }
 
 async function collectAssistantText(session: AgentSession, prompt: string): Promise<string> {
@@ -172,7 +205,9 @@ export class FastWorkbookBlockTutor implements WorkbookBlockTutor {
   async hint(input: { context: ActiveBlockContext; briefing: string }): Promise<string> {
     const session = await this.#createSession(SAFE_TOOL_NAMES);
     try {
-      return trimmedRequired(await session.prompt(hintPrompt(input)), "hint");
+      const hint = trimmedRequired(await session.prompt(hintPrompt(input)), "hint");
+      assertNoPrivateMaterial(hint, [input.briefing, input.context.authorGuidance]);
+      return hint;
     } finally {
       session.dispose();
     }
@@ -192,6 +227,7 @@ export class FastWorkbookBlockTutor implements WorkbookBlockTutor {
         if (params.readiness !== "likely_ready" && params.readiness !== "still_working") throw new Error("Readiness must be likely_ready or still_working.");
         const rationale = typeof params.rationale === "string" ? params.rationale.trim().slice(0, 1_000) : "";
         if (!rationale) throw new Error("Readiness rationale is required.");
+        assertNoReadinessAcceptanceClaims(rationale, "readiness rationale");
         reported = { readiness: params.readiness, rationale };
         return { content: [{ type: "text", text: `Recorded readiness: ${params.readiness}` }], details: reported };
       }
@@ -201,6 +237,7 @@ export class FastWorkbookBlockTutor implements WorkbookBlockTutor {
     try {
       const response = (await session.prompt(assessPrompt(input))).trim().slice(0, 1_000);
       if (!reported) throw new Error("Block tutor did not report attempt readiness.");
+      if (response) assertNoReadinessAcceptanceClaims(response, "readiness text");
       return { readiness: reported.readiness, text: response || reported.rationale };
     } finally {
       session.dispose();

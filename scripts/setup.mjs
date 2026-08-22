@@ -8,12 +8,13 @@ export async function checkPiAuthentication(getAvailable) {
 }
 
 /**
- * The tutorial runs two agents on purpose, and they want opposite things.
+ * The tutorial runs three model roles on purpose, and they want different things.
  *
- * The tutor teaches, so it wants the largest model available; TUTOR_MODEL names
- * it. The doer the lessons drive with `pi -p` wants to be cheap and fast, and
- * its mistakes are teaching material, so it follows Pi's ordinary `/model`
- * default. Neither should silently become the other.
+ * The main tutor teaches, so it wants the largest model available; TUTOR_MODEL
+ * names it. The fast block helper may use a cheaper read-only model named by
+ * BLOCK_TUTOR_MODEL, or leave the choice to Pi. The doer the lessons drive with
+ * `pi -p` wants to be cheap and fast, and its mistakes are teaching material, so
+ * it follows Pi's ordinary `/model` default. None should silently become another.
  *
  * tutorial-engine/src/agent/pi-adapter.ts resolves the tutor model variables for
  * real; this mirrors it so `npm run setup` can report what the tutors will do.
