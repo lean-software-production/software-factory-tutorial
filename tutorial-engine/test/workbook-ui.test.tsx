@@ -39,7 +39,13 @@ vi.mock("@codemirror/view", () => {
 
 vi.mock("@codemirror/commands", () => ({ defaultKeymap: [] }));
 
+vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/workbook/lesson-links.js")>();
+  return { ...actual, lessonElementId: vi.fn(actual.lessonElementId) };
+});
+
 import { AcceptanceConfetti, App, BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Chapter, type Progress } from "../web-workbook/src/workbook-ui.js";
+import { lessonAnchorHref, lessonElementId } from "../src/workbook/lesson-links.js";
 
 const progress: Progress = {
   activeLessonId: "part/lesson-one",
@@ -545,6 +551,18 @@ describe("workbook lesson UI", () => {
     expect(railMarkup).toContain('href="#lesson-part-two-lesson-two-block-repeat-block-"');
     expect(lessonMarkup).toContain('id="lesson-part-two-lesson-two-block-repeat-block-"');
     expect(railMarkup).not.toContain('href="#repeat block?"');
+  });
+
+  it("renders resolved lesson reference links and the lesson header using the shared lesson anchor helper", () => {
+    const targetId = "part/lesson-one";
+    const referencedBlock = { ...lesson.blocks[0], markdown: `See [Lesson 1: Markdown Lesson](${lessonAnchorHref(targetId)}) for background.` };
+    const referencedChapter = chapter({ lesson: { ...lesson, blocks: [referencedBlock] } });
+
+    const markup = html(createElement(LessonView, { chapter: referencedChapter, progress, refresh: vi.fn() }));
+
+    expect(markup).toContain('href="#lesson-part-lesson-one"');
+    expect(markup).toContain('<header id="lesson-part-lesson-one">');
+    expect(vi.mocked(lessonElementId)).toHaveBeenCalledWith(targetId);
   });
 
   it("does not let a completed lesson's duplicate narrative block continue the active lesson", () => {

@@ -5,6 +5,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { Markdown } from "../../web/src/markdown";
+import { lessonElementId } from "../../src/workbook/lesson-links.js";
 
 export type WorkbookBlockType = "narrative" | "terminal-practice" | "editor-practice" | "reflection" | "lesson-transition";
 type BlockBase = { id: string; title: string; markdown: string; label?: string };
@@ -57,7 +58,6 @@ async function readWorkbookState(): Promise<State> {
 
 function progressFor(progress: Progress, id: string) { return progress.blocks.find((block) => block.id === id); }
 function domSafe(value: string) { return value.replace(/[^A-Za-z0-9_-]+/g, "-"); }
-function lessonElementId(lessonId: string) { return `lesson-${domSafe(lessonId)}`; }
 export function scrollActiveLessonIntoView(doc: Pick<Document, "getElementById">, activeLessonId: string) { doc.getElementById(lessonElementId(activeLessonId))?.scrollIntoView({ behavior: "smooth", block: "start" }); }
 function blockElementId(lessonId: string, blockId: string) { return `${lessonElementId(lessonId)}-block-${domSafe(blockId)}`; }
 function completedBlockState(block: Block): BlockProgress { return { id: block.id, type: block.type, ready: true, active: false, completed: true, verified: block.type === "terminal-practice", terminalHtml: block.type === "terminal-practice" ? "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" : undefined, editorStatus: block.type === "editor-practice" ? "unlocked" : undefined, emerged: true }; }
