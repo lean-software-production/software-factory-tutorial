@@ -92,6 +92,17 @@ npm run tutorial -- --port 4310 --host 0.0.0.0 --no-open
 The tutor has no authentication and edits the working tree, so only do that on a network you
 trust.
 
+## Check the workbook
+
+Before starting the tutor, check the authored workbook without opening a browser or starting a server:
+
+```sh
+npm run --workspace=tutorial-engine check:workbook
+```
+
+This uses the same loader as the tutor. It checks lesson and optional-part structure, manifests,
+blocks, and lesson references, then prints the workbook's lesson and part counts.
+
 Leave it running and open a second terminal at the repository root. Stay there: every command the lessons give you is written to run from the root, and the scripts you build take their paths relative to it. If you put `pi` on your `PATH` with the `export` above rather than installing it globally, repeat that export in this terminal too — from lesson 002 the scripts you write call `pi` themselves.
 
 The files you write by hand all live under `factory/`, which is where the tutor looks for your work. Edit them with your usual editor as the tutor instructs, then go back to the tutor for the next step or for feedback. Once you have created `factory/refactor-do.sh` in lesson 002, run it directly:
