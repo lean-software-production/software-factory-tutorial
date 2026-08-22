@@ -32,6 +32,7 @@
     "postinstall": "node scripts/fix-node-pty-helper.mjs",
     "prepublishOnly": "npm run build && npm run check",
     "dev:workbook": "npm run build:web:workbook && tsx src/workbook/cli.ts",
+    "check:workbook": "tsx src/workbook/check.ts",
     "build:web:workbook": "vite build --config vite.workbook.config.ts",
     "build:workbook-terminal": "docker build --tag lean-software-production/workbook-terminal:latest --file docker/workbook-terminal.Dockerfile ."
   },
