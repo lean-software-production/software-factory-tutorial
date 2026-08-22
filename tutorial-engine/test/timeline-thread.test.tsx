@@ -49,4 +49,27 @@ describe("TimelineThread", () => {
     expect(markup).not.toContain("Private briefing");
     expect(markup).not.toContain("Private readiness");
   });
+
+  it("renders assistant chat, hint, and review text as Markdown instead of literal syntax", () => {
+    const markup = renderToStaticMarkup(createElement(TimelineThread, {
+      activeLessonId: "lesson",
+      activeBlockId: "write",
+      onSend: noopSend,
+      onRetry: noopRetry,
+      records: [
+        { type: "message", id: "chat", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "main_tutor", presentation: "chat", text: "Run `git status` and **check** the diff." },
+        { type: "message", id: "hint", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "block_tutor", presentation: "hint", text: "Try *this* next." },
+        { type: "message", id: "review", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "main_tutor", presentation: "review", text: "Use `.tmp` for **scratch** files." },
+      ]
+    }));
+
+    expect(markup).not.toContain("**check**");
+    expect(markup).not.toContain("`git status`");
+    expect(markup).not.toContain("*this*");
+    expect(markup).not.toContain("**scratch**");
+    expect(markup).toContain("<strong>check</strong>");
+    expect(markup).toContain("<code>git status</code>");
+    expect(markup).toContain("<em>this</em>");
+    expect(markup).toContain("<strong>scratch</strong>");
+  });
 });

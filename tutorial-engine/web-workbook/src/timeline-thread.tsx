@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Markdown } from "../../web/src/markdown";
 
 type TimelineMessageRecord = { type: "message"; id: string; sequence: number; at: string; lessonId: string; blockId: string; role: "assistant" | "user"; source: "authored" | "learner" | "main_tutor" | "block_tutor" | "tutor"; presentation: "course" | "chat" | "hint" | "review"; text: string };
@@ -19,14 +19,25 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
 }) {
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
+  const [pendingEchoes, setPendingEchoes] = useState<{ id: string; text: string }[]>([]);
+  const nextEchoId = useRef(0);
+  const latestEntryRef = useRef<HTMLElement | null>(null);
+  const chatEntryCount = records.reduce((count, record) => count + ((record.type === "message" && record.presentation !== "course") || record.type === "tutor_failed" ? 1 : 0), 0) + pendingEchoes.length;
+  useEffect(() => {
+    if (chatEntryCount === 0) return;
+    (latestEntryRef.current as (HTMLElement & { scrollIntoView?(options?: ScrollIntoViewOptions): void }) | null)?.scrollIntoView?.({ behavior: "smooth", block: "end" });
+  }, [chatEntryCount]);
   const submitText = async (text: string) => {
     const trimmed = text.trim();
     if (inputDisabled || pending || !trimmed) return;
+    setDraft("");
     setPending(true);
+    const echoId = `local-echo-${nextEchoId.current++}`;
+    setPendingEchoes((echoes) => [...echoes, { id: echoId, text: trimmed }]);
     try {
       await onSend(trimmed);
-      setDraft("");
     } finally {
+      setPendingEchoes((echoes) => echoes.filter((echo) => echo.id !== echoId));
       setPending(false);
     }
   };
@@ -53,12 +64,13 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   };
   return <section className="timeline-thread has-fixed-composer" aria-label="Tutor conversation">
     {records.map((record) => {
-      if (record.type === "tutor_failed") return <aside key={record.id} className="timeline-message tutor failure" aria-live="polite"><b>Tutor unavailable</b><p>{record.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(record.failureId)}>Retry</button></aside>;
+      if (record.type === "tutor_failed") return <aside key={record.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message tutor failure" aria-live="polite"><b>Tutor unavailable</b><p>{record.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(record.failureId)}>Retry</button></aside>;
       if (record.type !== "message") return null;
       if (record.presentation === "course") return <React.Fragment key={record.id}><article className="timeline-message authored"><p className="section-label">Course note</p><Markdown>{record.text}</Markdown></article>{record.lessonId === activeLessonId && record.blockId === activeBlockId && renderContinuation?.(record)}</React.Fragment>;
       const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : record.presentation === "hint" ? " hint" : ""}`;
-      return <article key={record.id} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b><p>{record.text}</p></article>;
+      return <article key={record.id} ref={(el) => { latestEntryRef.current = el; }} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown>{record.text}</Markdown>}</article>;
     })}
+    {pendingEchoes.map((echo) => <article key={echo.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message learner"><b>You</b><p>{echo.text}</p></article>)}
     <div className="timeline-composer-dock fixed-composer">
       <form className="timeline-input fixed-composer" onSubmit={send}>
         <label>Message the tutor<textarea name="message" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} disabled={inputDisabled || pending} /></label>
