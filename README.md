@@ -49,28 +49,40 @@ export PATH="$PWD/node_modules/.bin:$PATH"
 
 `npm run setup` checks that Pi has an authenticated model for the web tutor. If it reports that Pi needs authentication, run `pi`, enter `/login`, and choose a provider. Pi keeps those credentials in its user-level configuration; this repository does not store them.
 
-It also names the two models the tutorial runs on.
+It also names the model choices the tutorial runs on.
 
-## Two models, on purpose
+## Models, on purpose
 
-The tutorial runs two agents, and they want opposite things.
+The tutorial runs three agent roles, and they want different things.
 
 | Agent | Wants | Chosen with |
 | --- | --- | --- |
-| The web tutor | To teach well, at whatever a good explanation costs you | `TUTOR_MODEL` |
+| The main web tutor | To teach well, at whatever a good explanation costs you | `TUTOR_MODEL` |
+| The fast block helper | Quick read-only hints and readiness checks | `BLOCK_TUTOR_MODEL` |
 | The doer you drive with `pi -p` | To be cheap and fast | `pi`, then `/model` |
 
 The doer's mistakes are not a problem to design away — catching them with independent
 validation is the skill this tutorial teaches, so a small quick model is the better
-raw material. Give the tutor whatever you would rather it used:
+raw material. Give the main tutor whatever you would rather it used:
 
 ```sh
 export TUTOR_MODEL=<provider>/<model>   # `pi --list-models` shows your options
 ```
 
-Leave `TUTOR_MODEL` unset and Pi picks the tutor's model for you. Name a model that
-does not exist or is not authenticated and the tutor falls back to Pi's pick rather
-than failing; `npm run setup` reports whichever happened.
+Leave `TUTOR_MODEL` unset and Pi picks the main tutor's model for you. Name a model
+that does not exist or is not authenticated and the tutor falls back to Pi's pick
+rather than failing; `npm run setup` reports whichever happened.
+
+The block helper is a short-lived read-only tutor used for fast hints and readiness
+signals. It normally follows Pi's ordinary model selection too. If you want it to use
+a smaller or faster authenticated model, set it separately:
+
+```sh
+export BLOCK_TUTOR_MODEL=<provider>/<model>
+```
+
+Leave `BLOCK_TUTOR_MODEL` unset and Pi chooses normally. Invalid or unauthenticated
+values fall back to that same Pi choice.
 
 ## Start the tutorial
 

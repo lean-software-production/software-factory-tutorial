@@ -35,27 +35,37 @@ const TOOL_NAMES = [
  * the authority for it.
  */
 export const TUTOR_MODEL_ENV = "TUTOR_MODEL";
+export const BLOCK_TUTOR_MODEL_ENV = "BLOCK_TUTOR_MODEL";
 
 /** `model` is left undefined when Pi should choose, which is its documented fallback. */
 export interface TutorModelChoice extends Partial<ScopedModel> {
   warning?: string;
 }
 
-/** Resolve the tutor's model, preferring a working tutorial over an exact match. */
-export function resolveTutorModel(modelRuntime: ModelRuntime, requested: string | undefined): TutorModelChoice {
+function resolveConfiguredTutorModel(modelRuntime: ModelRuntime, requested: string | undefined, envName: string): TutorModelChoice {
   const wanted = requested?.trim();
   if (!wanted) return {};
   const resolved = resolveCliModel({ cliModel: wanted, modelRuntime });
   if (!resolved.model) {
-    return { warning: `${TUTOR_MODEL_ENV}="${wanted}" did not match a model (${resolved.error ?? "no match"}); letting Pi choose.` };
+    return { warning: `${envName}="${wanted}" did not match a model (${resolved.error ?? "no match"}); letting Pi choose.` };
   }
   // resolveCliModel matches against every registered model so that a first-time
-  // --api-key run can name one before auth is stored. The tutor has no such
+  // --api-key run can name one before auth is stored. The tutors have no such
   // escape hatch, so an unauthenticated match would only fail at the first turn.
   if (!modelRuntime.hasConfiguredAuth(resolved.model.provider)) {
-    return { warning: `${TUTOR_MODEL_ENV}="${wanted}" matched ${resolved.model.provider}/${resolved.model.id}, which has no configured auth; letting Pi choose.` };
+    return { warning: `${envName}="${wanted}" matched ${resolved.model.provider}/${resolved.model.id}, which has no configured auth; letting Pi choose.` };
   }
   return { model: resolved.model, thinkingLevel: resolved.thinkingLevel, warning: resolved.warning };
+}
+
+/** Resolve the main tutor's model, preferring a working tutorial over an exact match. */
+export function resolveTutorModel(modelRuntime: ModelRuntime, requested: string | undefined): TutorModelChoice {
+  return resolveConfiguredTutorModel(modelRuntime, requested, TUTOR_MODEL_ENV);
+}
+
+/** Resolve the fast block tutor's model, falling back to Pi's ordinary default when unset or unusable. */
+export function resolveBlockTutorModel(modelRuntime: ModelRuntime, requested: string | undefined): TutorModelChoice {
+  return resolveConfiguredTutorModel(modelRuntime, requested, BLOCK_TUTOR_MODEL_ENV);
 }
 
 /** Log operational identifiers, but never tool content or learner chat text. */

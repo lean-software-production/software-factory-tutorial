@@ -44,13 +44,14 @@ no authentication and edits the working tree.
 
 ## Which models the container picks
 
-The tutorial runs two agents on separate models — see
-[Two models, on purpose](../README.md#two-models-on-purpose) — and the container
-supplies a default for each:
+The tutorial runs separate model choices — see
+[Models, on purpose](../README.md#models-on-purpose) — and the container supplies
+defaults for the main tutor and doer:
 
 | Agent | Model | Set by |
 | --- | --- | --- |
-| The web tutor | `opencode-go/deepseek-v4-flash` | `TUTOR_MODEL` in `devcontainer.json` |
+| The main web tutor | `opencode-go/deepseek-v4-flash` | `TUTOR_MODEL` in `devcontainer.json` |
+| The fast block helper | Pi's normal model choice unless overridden | `BLOCK_TUTOR_MODEL`, when you set it |
 | The `pi -p` doer | `opencode/big-pickle`, which is free | `seed-doer-model.mjs`, from `post-create.sh` |
 
 They are set two different ways because they live in two different places. The tutor

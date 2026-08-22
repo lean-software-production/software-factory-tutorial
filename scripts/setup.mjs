@@ -15,10 +15,11 @@ export async function checkPiAuthentication(getAvailable) {
  * its mistakes are teaching material, so it follows Pi's ordinary `/model`
  * default. Neither should silently become the other.
  *
- * tutorial-engine/src/agent/pi-adapter.ts resolves TUTOR_MODEL for real; this
- * mirrors it so `npm run setup` can report what the tutor will do.
+ * tutorial-engine/src/agent/pi-adapter.ts resolves the tutor model variables for
+ * real; this mirrors it so `npm run setup` can report what the tutors will do.
  */
 export const TUTOR_MODEL_ENV = "TUTOR_MODEL";
+export const BLOCK_TUTOR_MODEL_ENV = "BLOCK_TUTOR_MODEL";
 
 export function describeDoerModel({ defaultProvider, defaultModel, available }) {
   const choices = available.length;
@@ -28,7 +29,7 @@ export function describeDoerModel({ defaultProvider, defaultModel, available }) 
   return authenticated ? { pinned: true, model: saved } : { pinned: false, reason: "not-authenticated", saved, choices };
 }
 
-export function describeTutorModel({ requested, resolve }) {
+function describeExplicitModel({ requested, resolve }) {
   const wanted = requested?.trim();
   if (!wanted) return { pinned: false, reason: "no-default" };
   const resolved = resolve(wanted);
@@ -39,6 +40,14 @@ export function describeTutorModel({ requested, resolve }) {
   return { pinned: true, model: `${resolved.model.provider}/${resolved.model.id}` };
 }
 
+export function describeTutorModel(input) {
+  return describeExplicitModel(input);
+}
+
+export function describeBlockTutorModel(input) {
+  return describeExplicitModel(input);
+}
+
 function doerLine(description) {
   if (description.pinned) return description.model;
   if (description.reason === "not-authenticated") {
@@ -47,23 +56,25 @@ function doerLine(description) {
   return `Pi chooses from the ${description.choices} authenticated models, because no default is saved`;
 }
 
-function tutorLine(description) {
-  if (description.pinned) return `${description.model} (${TUTOR_MODEL_ENV})`;
+function tutorLine(description, envName) {
+  if (description.pinned) return `${description.model} (${envName})`;
   if (description.reason === "no-match") {
-    return `Pi chooses; ${TUTOR_MODEL_ENV}="${description.requested}" matches no model`;
+    return `Pi chooses; ${envName}="${description.requested}" matches no model`;
   }
   if (description.reason === "not-authenticated") {
-    return `Pi chooses; ${TUTOR_MODEL_ENV}="${description.requested}" matches ${description.saved}, which is not authenticated`;
+    return `Pi chooses; ${envName}="${description.requested}" matches ${description.saved}, which is not authenticated`;
   }
-  return `Pi chooses, because ${TUTOR_MODEL_ENV} is unset`;
+  return `Pi chooses, because ${envName} is unset`;
 }
 
-export function modelReport(tutor, doer) {
+export function modelReport(mainTutor, blockTutor, doer) {
   return [
-    `Tutor model: ${tutorLine(tutor)}`,
-    `Doer model:  ${doerLine(doer)}`,
+    `Main tutor model:  ${tutorLine(mainTutor, TUTOR_MODEL_ENV)}`,
+    `Block tutor model: ${tutorLine(blockTutor, BLOCK_TUTOR_MODEL_ENV)}`,
+    `Doer model:        ${doerLine(doer)}`,
     "",
-    `Give the tutor a capable model by exporting ${TUTOR_MODEL_ENV}=<provider>/<model>; 'pi --list-models' lists what you can name.`,
+    `Give the main tutor a capable model by exporting ${TUTOR_MODEL_ENV}=<provider>/<model>; 'pi --list-models' lists what you can name.`,
+    `Optionally give the fast block helper a cheaper model with ${BLOCK_TUTOR_MODEL_ENV}=<provider>/<model>; leave it unset and Pi chooses normally.`,
     "Choose the doer's model with 'pi', then '/model'. A small, fast one is the point: the lessons teach you to catch its mistakes."
   ];
 }
@@ -79,14 +90,13 @@ async function main() {
   }
   stdout.write("Pi is authenticated and ready for the tutorial.\n");
   const settings = SettingsManager.create(process.cwd()).getGlobalSettings();
+  const resolveConfigured = (cliModel) => {
+    const { model } = resolveCliModel({ cliModel, modelRuntime: runtime });
+    return { model, authenticated: model ? runtime.hasConfiguredAuth(model.provider) : false };
+  };
   const report = modelReport(
-    describeTutorModel({
-      requested: process.env[TUTOR_MODEL_ENV],
-      resolve: (cliModel) => {
-        const { model } = resolveCliModel({ cliModel, modelRuntime: runtime });
-        return { model, authenticated: model ? runtime.hasConfiguredAuth(model.provider) : false };
-      }
-    }),
+    describeTutorModel({ requested: process.env[TUTOR_MODEL_ENV], resolve: resolveConfigured }),
+    describeBlockTutorModel({ requested: process.env[BLOCK_TUTOR_MODEL_ENV], resolve: resolveConfigured }),
     describeDoerModel({
       defaultProvider: settings.defaultProvider,
       defaultModel: settings.defaultModel,
