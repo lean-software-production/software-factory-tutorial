@@ -497,7 +497,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
           const lesson = activeLesson(loaded, records); const block = lesson.blocks.find((candidate) => candidate.id === body.blockId);
           if (!block) return sendJson(response, 400, { error: "Unknown blockId." });
           const current = project(records, lesson); const progress = current.blocks.find((candidate) => candidate.id === block.id);
-          if (body.action !== "help" && (!progress?.active || !progress.ready)) return sendJson(response, 409, { error: "This block is not active yet." });
+          if (!progress?.active || !progress.ready) return sendJson(response, 409, { error: "This block is not active yet." });
           if ((body.action === "reflection-submit" || body.action === "reflection-follow-up") && block.type === "reflection") {
             const responseText = typeof body.response === "string" ? body.response : "";
             const priorConversation = current.reflectionConversations[block.id] ?? [];
@@ -517,8 +517,6 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
             if (!currentAttempt || currentAttempt.status !== "accepted" || !progress?.checkpoint) return sendJson(response, 409, { error: "This block has not been accepted yet." });
             event = { type: "block_continued", lessonId: lesson.id, blockId: block.id };
           }
-          if (body.action === "unexpected" && block.type === "terminal-practice" && typeof body.evidence === "string") event = { type: "unexpected_output_submitted", lessonId: lesson.id, blockId: block.id, evidence: body.evidence };
-          if (body.action === "help" && typeof body.request === "string") event = { type: "help_requested", lessonId: lesson.id, blockId: block.id, request: body.request };
           if (!event) return sendJson(response, 400, { error: "Invalid workbook action for this block." });
           const written = await append(event);
           if (written.type === "block_continued") await summarizeDeparture(block, written.id);

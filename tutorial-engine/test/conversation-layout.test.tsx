@@ -17,7 +17,6 @@ const progress: Progress = {
   activeBlockId: terminalBlock.id,
   completedLessons: [],
   blocks: [{ id: terminalBlock.id, type: terminalBlock.type, ready: true, active: true, completed: false, verified: false, emerged: true }],
-  unexpected: {},
   reflections: {},
   reflectionConversations: {}
 };

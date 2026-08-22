@@ -89,18 +89,6 @@ describe("workbook event projection", () => {
     expect(staleAcceptance.blocks.find((block) => block.id === "first-practice")).toMatchObject({ completed: false, checkpoint: undefined });
   });
 
-  it("keeps unexpected output as evidence without completing the active block", () => {
-    const events = [
-      nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }),
-      nowEvent({ type: "editor_practice_unlocked", lessonId: LESSON_ID, blockId: "edit-answer", revisionId: 2, path: "factory/answer.md" }),
-      nowEvent({ type: "unexpected_output_submitted", lessonId: LESSON_ID, blockId: "first-practice", evidence: "command not found" }),
-    ];
-    const state = project(events, lesson);
-    expect(state.activeBlockId).toBe("first-practice");
-    expect(state.blocks.find((block) => block.id === "first-practice")?.completed).toBe(false);
-    expect(state.unexpected["first-practice"]).toEqual(["command not found"]);
-  });
-
   it("holds verified terminal practice at its checkpoint until the learner completes it", () => {
     const started = [
       nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }),
@@ -163,7 +151,7 @@ describe("workbook event projection", () => {
     const dir = await workspace(); const store = new WorkbookEventStore(dir);
     await store.append(nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }));
     await store.append(nowEvent({ type: "editor_practice_unlocked", lessonId: LESSON_ID, blockId: "edit-answer", revisionId: 2, path: "factory/answer.md" }));
-    await store.writeProjection({ activeLessonId: LESSON_ID, activeBlockId: "wrong", completedLessons: [], blocks: [], unexpected: {}, reflections: {}, reflectionConversations: {} });
+    await store.writeProjection({ activeLessonId: LESSON_ID, activeBlockId: "wrong", completedLessons: [], blocks: [], reflections: {}, reflectionConversations: {} });
     const replayed = project(await store.read(), lesson);
     expect(replayed.activeBlockId).toBe("first-practice");
     expect(replayed.blocks.find((block) => block.id === "edit-answer")).toMatchObject({ completed: true, editorStatus: "unlocked", revision: 2 });
@@ -183,5 +171,16 @@ describe("workbook event projection", () => {
       { type: "file_change_observed", at: new Date().toISOString(), lessonId: LESSON_ID, blockId: "first-practice" } as any,
     ];
     expect(project(events, lesson).activeBlockId).toBe("first-practice");
+  });
+
+  it("reads and projects pre-existing help_requested and unexpected_output_submitted JSONL records without throwing or exposing unexpected progress", async () => {
+    const dir = await workspace(); const store = new WorkbookEventStore(dir);
+    await store.append(nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" }));
+    await store.append({ type: "unexpected_output_submitted", at: new Date().toISOString(), lessonId: LESSON_ID, blockId: "first-practice", evidence: "legacy evidence" } as any);
+    await store.append({ type: "help_requested", at: new Date().toISOString(), lessonId: LESSON_ID, blockId: "first-practice", request: "legacy help request" } as any);
+    const events = await store.read();
+    const state = project(events, lesson);
+    expect(state.activeBlockId).toBe("edit-answer");
+    expect(state).not.toHaveProperty("unexpected");
   });
 });

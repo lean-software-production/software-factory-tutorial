@@ -25,7 +25,6 @@ const progress: Progress = {
   activeBlockId: editorBlock.id,
   completedLessons: [],
   blocks: [{ id: editorBlock.id, type: editorBlock.type, ready: true, active: true, completed: false, verified: false, emerged: true, editorStatus: "editing" }],
-  unexpected: {},
   reflections: {},
   reflectionConversations: {}
 };

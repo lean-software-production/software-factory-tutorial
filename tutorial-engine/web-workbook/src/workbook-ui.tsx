@@ -30,7 +30,7 @@ export type PublicCheckpoint = {
   evidence?: { kind: AttemptKind; text?: string; terminalHtml?: string; conversation?: ReflectionTurn[] };
 };
 export type BlockProgress = { id: string; type?: string; ready: boolean; active: boolean; completed: boolean; verified: boolean; checkpoint?: PublicCheckpoint; feedback?: string; terminalHtml?: string; emerged: boolean; revision?: number; draftText?: string; editorStatus?: EditorStatus };
-export type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]> };
+export type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]> };
 type Identity = { title: string };
 export type State = { workbook: Identity; introduction: string; introductionComplete: boolean; chapters: Chapter[]; progress: Progress; adapter: { note?: string; modelBackedHelp?: boolean }; timeline?: readonly PublicTimelineRecord[] };
 
@@ -238,7 +238,7 @@ function NarrativeBlock({ lessonId, block, state, refresh }: { lessonId: string;
   </section>;
 }
 
-function TerminalBlock({ lessonId, block, state, unexpected, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; unexpected: string[]; refresh(state: State): void }) {
+function TerminalBlock({ lessonId, block, state, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void }) {
   const [observerAdvice, setObserverAdvice] = useState<string>();
   const [observerError, setObserverError] = useState<string>();
   const [observerStatus, setObserverStatus] = useState<string>();
@@ -259,7 +259,6 @@ function TerminalBlock({ lessonId, block, state, unexpected, refresh }: { lesson
           {observerAdvice && <aside className="advice" aria-live="polite"><b>Try this:</b> {observerAdvice}</aside>}
           {observerError && <aside className="advice warning" aria-live="polite">{observerError}</aside>}
         </>}
-        {unexpected.map((item, index) => <p className="evidence" key={index}>Recorded different output: {item}</p>)}
       </div>
     </div>
   </section>;
@@ -399,7 +398,7 @@ export function BlockView({ lessonId, block, progress, refresh }: { lessonId?: s
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
   if (block.type === "narrative") return <NarrativeBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
-  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} unexpected={activeLessonValue(progress, resolvedLessonId, progress.unexpected[block.id], [])} refresh={refresh} />;
+  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
   if (block.type === "editor-practice") return <EditorPracticeBlockView lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
   if (block.type === "reflection") return <ReflectionBlock lessonId={resolvedLessonId} block={block} state={state} turns={activeLessonValue(progress, resolvedLessonId, progress.reflectionConversations[block.id], [])} refresh={refresh} />;
   return <TransitionBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;

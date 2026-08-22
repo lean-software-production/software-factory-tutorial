@@ -14,13 +14,11 @@ export type WorkflowPayload =
   | { type: "attempt_accepted"; lessonId: string; blockId: string; attemptId: string; version: number; kind: AttemptKind; summary: string }
   | { type: "block_completed"; lessonId: string; blockId: string }
   | { type: "block_continued"; lessonId: string; blockId: string }
-  | { type: "unexpected_output_submitted"; lessonId: string; blockId: string; evidence: string }
   | { type: "reflection_submitted"; lessonId: string; blockId: string; response: string }
   | { type: "reflection_follow_up_submitted"; lessonId: string; blockId: string; response: string }
   | { type: "reflection_reply_recorded"; lessonId: string; blockId: string; response: string }
   | { type: "reflection_completed"; lessonId: string; blockId: string }
   | { type: "editor_practice_unlocked"; lessonId: string; blockId: string; revisionId: number; path: string }
-  | { type: "help_requested"; lessonId: string; blockId: string; request: string }
   | { type: "lesson_transitioned"; lessonId: string; blockId: string };
 
 export type WorkbookWorkflowEvent = WorkflowPayload & TimelineMetadata;

@@ -13,18 +13,16 @@ export type WorkbookEvent =
   | { type: "attempt_accepted"; at: string; lessonId: string; blockId: string; attemptId: string; version: number; kind: AttemptKind; summary: string }
   | { type: "block_completed"; at: string; lessonId: string; blockId: string }
   | { type: "block_continued"; at: string; lessonId: string; blockId: string }
-  | { type: "unexpected_output_submitted"; at: string; lessonId: string; blockId: string; evidence: string }
   | { type: "reflection_submitted"; at: string; lessonId: string; blockId: string; response: string }
   | { type: "reflection_follow_up_submitted"; at: string; lessonId: string; blockId: string; response: string }
   | { type: "reflection_reply_recorded"; at: string; lessonId: string; blockId: string; response: string }
   | { type: "reflection_completed"; at: string; lessonId: string; blockId: string }
   | { type: "editor_practice_unlocked"; at: string; lessonId: string; blockId: string; revisionId: number; path: string }
-  | { type: "help_requested"; at: string; lessonId: string; blockId: string; request: string }
   | { type: "lesson_transitioned"; at: string; lessonId: string; blockId: string };
 
 export interface BlockProgress { id: string; type: string; emerged: boolean; ready: boolean; active: boolean; completed: boolean; verified: boolean; checkpoint?: { status: "accepted"; summary: string; kind: AttemptKind }; feedback?: string; terminalHtml?: string; revision?: number; editorStatus?: "editing" | "reviewing" | "feedback" | "unlocked"; }
 export type ReflectionTurn = { role: "learner" | "tutor"; text: string };
-export interface WorkbookProjection { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]>; }
+export interface WorkbookProjection { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]>; }
 
 
 type ProjectedRecord = WorkbookEvent | WorkbookTimelineRecord;
@@ -38,7 +36,6 @@ export function introductionCompleted(events: readonly ProjectedRecord[]): boole
 }
 
 export function project(events: readonly ProjectedRecord[], lesson: WorkbookLesson): WorkbookProjection {
-  const unexpected: Record<string, string[]> = {};
   const reflections: Record<string, string> = {};
   const reflectionConversations: Record<string, ReflectionTurn[]> = {};
   const verified = new Map<string, { summary: string; terminalHtml: string }>();
@@ -55,7 +52,6 @@ export function project(events: readonly ProjectedRecord[], lesson: WorkbookLess
     if (!isWorkflowEvent(record)) continue;
     const event = record;
     if (!("lessonId" in event) || event.lessonId !== lesson.id) continue;
-    if (event.type === "unexpected_output_submitted") (unexpected[event.blockId] ??= []).push(event.evidence);
     if (event.type === "reflection_submitted") { reflections[event.blockId] = event.response; (reflectionConversations[event.blockId] ??= []).push({ role: "learner", text: event.response }); }
     if (event.type === "reflection_follow_up_submitted") (reflectionConversations[event.blockId] ??= []).push({ role: "learner", text: event.response });
     if (event.type === "reflection_reply_recorded") (reflectionConversations[event.blockId] ??= []).push({ role: "tutor", text: event.response });
@@ -98,7 +94,7 @@ export function project(events: readonly ProjectedRecord[], lesson: WorkbookLess
     };
   });
   const lessonComplete = lesson.blocks.length > 0 && lesson.blocks.every((block) => completed.has(block.id));
-  return { activeLessonId: lesson.id, activeBlockId: active.id, completedLessons: lessonComplete ? [lesson.id] : [], blocks, unexpected, reflections, reflectionConversations };
+  return { activeLessonId: lesson.id, activeBlockId: active.id, completedLessons: lessonComplete ? [lesson.id] : [], blocks, reflections, reflectionConversations };
 }
 
 export class WorkbookEventStore {

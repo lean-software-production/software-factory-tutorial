@@ -58,7 +58,6 @@ const progress: Progress = {
     { id: "reflect", type: "reflection", ready: false, active: false, completed: false, verified: false, emerged: false },
     { id: "transition", type: "lesson-transition", ready: false, active: false, completed: false, verified: false, emerged: false },
   ],
-  unexpected: {},
   reflections: {},
   reflectionConversations: {},
 };

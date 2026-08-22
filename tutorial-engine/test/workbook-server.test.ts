@@ -349,6 +349,28 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("rejects legacy unexpected-output and help event actions on an active terminal block and appends no record", async () => {
+    const dir = await fixture();
+    const mainTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor, blockTutor: new FakeBlockTutor() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, mainTutor);
+      const activeState = await state(server.url);
+      expect(block(activeState, "run-supplied-command")?.active).toBe(true);
+      const before = await privateTimeline(dir);
+
+      const unexpectedResponse = await postEvent(server.url, { blockId: "run-supplied-command", action: "unexpected", evidence: "command not found" });
+      expect(unexpectedResponse.status).toBe(400);
+
+      const helpResponse = await postEvent(server.url, { blockId: "run-supplied-command", action: "help", request: "I'm stuck" });
+      expect(helpResponse.status).toBe(400);
+
+      const after = await privateTimeline(dir);
+      expect(after).toEqual(before);
+    } finally { await server.close(); }
+  });
+
   it("keeps an incomplete attempt quietly working without a visible review message when the main tutor says working", async () => {
     const dir = await fixture();
     const mainTutor = new FakeMainTutor({ outcome: "working" });
