@@ -703,6 +703,56 @@ describe("workbook lesson UI", () => {
     expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "orientation", action: "continue" });
   });
 
+  it("shows the part card before the active lesson header in timeline mode", async () => {
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter()],
+      progress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nAuthored Orientation note." }]
+    } as any;
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    const partCard = container.querySelector(".part-chapter")!;
+    const lessonHeader = container.querySelector("article.chapter header")!;
+    expect(container.querySelectorAll(".part-chapter")).toHaveLength(1);
+    expect(partCard.textContent).toContain("Part One");
+    expect(partCard.textContent).toContain("Part copy.");
+    // Bit 4 (DOCUMENT_POSITION_FOLLOWING) means lessonHeader comes after partCard.
+    expect(partCard.compareDocumentPosition(lessonHeader) & 4).toBeTruthy();
+  });
+
+  it("does not repeat the part card for a later lesson in the same part in timeline mode", async () => {
+    const secondLesson = { ...lesson, id: "part/lesson-two", title: "Second Lesson" };
+    const secondProgress: Progress = { ...progress, activeLessonId: secondLesson.id, completedLessons: [lesson.id] };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [
+        chapter(),
+        chapter({ id: secondLesson.id, lessonNumber: 2, title: secondLesson.title, lesson: secondLesson }),
+      ],
+      progress: secondProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: secondLesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nSecond lesson note." }]
+    } as any;
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.querySelectorAll(".part-chapter")).toHaveLength(0);
+    expect(container.textContent).not.toContain("Part copy.");
+  });
+
   it("places timeline Continue only after the active lesson note when a completed lesson reused the block id", async () => {
     const priorLesson = { ...lesson, id: "part/lesson-one", title: "Completed Lesson" };
     const activeLesson = { ...lesson, id: "part/lesson-two", title: "Active Duplicate Lesson" };
