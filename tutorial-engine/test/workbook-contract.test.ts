@@ -351,6 +351,14 @@ describe("workbook lesson contract", () => {
       "Second part copy referencing [Lesson 1: First Flat Lesson](#lesson-001-first-lesson).");
   });
 
+  it("rejects a malformed lesson reference in a legacy nested part.md, naming the part.md file itself", async () => {
+    const dir = await fixture();
+    await writeFile(resolve(dir, "lessons/01-beta-part/part.md"), "---\n---\n# First Part Title\n\n[[lesson:]]\n");
+    const message = await messageFrom(loadWorkbook(dir));
+    expect(message).toMatch(/empty lesson reference/i);
+    expect(message).toContain(resolve(dir, "lessons/01-beta-part/part.md"));
+  });
+
   it("keeps the real workbook free of unresolved [[lesson: reference tokens", async () => {
     const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
     expect(workbook.introduction).not.toContain("[[lesson:");

@@ -105,7 +105,8 @@ async function readTitledDocument(path: string, level: 1 | 2): Promise<{ data: R
 
 interface LoadedPart { id: string; title: string; markdown: string; path: string; }
 interface FlatLessonDirectory { id: string; path: string; }
-interface LegacyPartDirectory extends LoadedPart { path: string; }
+/** A legacy part's `path` is its part.md file, matching LoadedPart's convention; `dir` is its containing directory, used to discover its lessons. */
+interface LegacyPartDirectory extends LoadedPart { dir: string; }
 
 function compareWorkbookIds(left: string, right: string): number {
   return left.localeCompare(right, undefined, { numeric: true });
@@ -171,16 +172,16 @@ async function legacyPartDirectories(workspace: string): Promise<LegacyPartDirec
   const entries = await directoryEntries(root);
   const dirs = entries.filter((entry) => entry.isDirectory()).sort((a, b) => compareWorkbookIds(a.name, b.name));
   return Promise.all(dirs.map(async (entry) => {
-    const path = resolve(root, entry.name);
-    const partPath = resolve(path, PART_DOCUMENT);
+    const dir = resolve(root, entry.name);
+    const partPath = resolve(dir, PART_DOCUMENT);
     const { data, title, body } = await readTitledDocument(partPath, 1);
     validatePartManifest(data, partPath);
-    return { id: entry.name, title, markdown: body, path };
+    return { id: entry.name, title, markdown: body, path: partPath, dir };
   }));
 }
 
 async function legacyLessonDirectories(part: LegacyPartDirectory): Promise<string[]> {
-  const entries = await directoryEntries(part.path);
+  const entries = await directoryEntries(part.dir);
   return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort(compareWorkbookIds);
 }
 
@@ -253,7 +254,7 @@ async function flatChapterGroups(workspace: string, manifest: WorkbookManifest, 
     const legacyParts = await legacyPartDirectories(workspace);
     const legacyGroups = await Promise.all(legacyParts.map(async (part, partIndex) => {
       const directories = await legacyLessonDirectories(part);
-      return Promise.all(directories.map((directory) => draftForLesson(`${part.id}/${directory}`, resolve(part.path, directory), part, partIndex)));
+      return Promise.all(directories.map((directory) => draftForLesson(`${part.id}/${directory}`, resolve(part.dir, directory), part, partIndex)));
     }));
     return { parts: legacyParts, groups: legacyGroups };
   }
