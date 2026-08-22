@@ -43,7 +43,6 @@ The v2 live evaluator does not support the legacy `--lesson` or `--calibrate` sc
 Use `--scenario <id>` to run exactly one scenario. Current scenario IDs are:
 
 - `v2-exact-command-success`: unlocks editor practice, then runs the visible exact-command terminal practice.
-- `v2-unexpected-output`: unlocks editor practice, then submits unexpected-output evidence without completing the block.
 - `v2-editor-feedback-locked`: submits an insufficient editor draft and expects public feedback without unlocking.
 - `v2-editor-unlocked`: submits a satisfactory editor draft and expects the promoted artifact.
 - `v2-clue-only-task`: unlocks editor practice, then completes the clue-only terminal practice with learner-chosen shell syntax.

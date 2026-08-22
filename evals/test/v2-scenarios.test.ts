@@ -107,7 +107,6 @@ describe("v2 live evaluator scenarios", () => {
   it("declares the live v2 scenarios and selects them from evals/run.ts", () => {
     expect(v2Scenarios.map((scenario) => scenario.id)).toEqual([
       "v2-exact-command-success",
-      "v2-unexpected-output",
       "v2-editor-feedback-locked",
       "v2-editor-unlocked",
       "v2-clue-only-task",
@@ -128,19 +127,6 @@ describe("v2 live evaluator scenarios", () => {
     const failed = deterministicV2Gate(findV2Scenario(wrong.scenarioId), wrong);
     expect(failed.assertions.find((assertion) => assertion.name === "exact command input")?.passed).toBe(false);
   });
-
-  it("gates unexpected output on learner-submitted evidence without requiring terminal completion", () => {
-    const trace = editorUnlockedTrace("v2-unexpected-output");
-    trace.events.push(event({ type: "unexpected_output_submitted", lessonId, blockId: "exact-command", evidence: "The command printed 'not what I expected'." }));
-    trace.publicStates.push({ label: "unexpected-output", state: { progress: { unexpected: { "exact-command": ["The command printed 'not what I expected'."] } } } });
-
-    allGateAssertionsPass(trace);
-
-    const missing = editorUnlockedTrace("v2-unexpected-output");
-    const failed = deterministicV2Gate(findV2Scenario(missing.scenarioId), missing);
-    expect(failed.assertions.find((assertion) => assertion.name === "unexpected output evidence")?.passed).toBe(false);
-  });
-
 
   it("gates incomplete editor drafts on public feedback without unlocking", () => {
     const trace = editorFeedbackTrace();

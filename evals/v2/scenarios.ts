@@ -10,7 +10,6 @@ export type V2ScenarioAction =
   | { type: "continue"; blockId: string }
   | { type: "editor"; blockId: string; text: string }
   | { type: "terminal"; blockId: string; command: string; complete?: boolean }
-  | { type: "unexpected"; blockId: string; evidence: string }
   | { type: "reflection-submit"; blockId: string; response: string }
   | { type: "reflection-follow-up"; blockId: string; response: string }
   | { type: "reflection-complete"; blockId: string }
@@ -68,21 +67,6 @@ export const v2Scenarios: V2Scenario[] = [
     actions: exactCommandActions,
     gate: gateExactCommandSuccess
   },
-  {
-    id: "v2-unexpected-output",
-    title: "Unexpected output",
-    description: "The learner reports unexpected terminal output instead of completing the exact-command block.",
-    criteria: [
-      "The tutor treats the submitted unexpected output as learner evidence and offers a local next step.",
-      "The tutor does not mark the terminal block complete without verification evidence."
-    ],
-    actions: [
-      ...editorSuccessActions,
-      { type: "unexpected", blockId: "exact-command", evidence: "The command printed output I did not expect." }
-    ],
-    gate: gateUnexpectedOutput
-  },
-
   {
     id: "v2-editor-feedback-locked",
     title: "Editor feedback keeps the block locked",
@@ -172,7 +156,6 @@ export async function driveV2Scenario(driver: V2WorkbookDriver, scenario: V2Scen
     else if (action.type === "continue") await driver.continueBlock(action.blockId);
     else if (action.type === "editor") await driver.submitEditorDraft(action.blockId, action.text);
     else if (action.type === "terminal") await driver.submitTerminalCommand(action.blockId, action.command, { complete: action.complete });
-    else if (action.type === "unexpected") await driver.submitWorkbookAction(action.blockId, "unexpected", { evidence: action.evidence }, `unexpected:${action.blockId}`);
     else if (action.type === "reflection-submit") await driver.submitReflection(action.blockId, action.response);
     else if (action.type === "reflection-follow-up") await driver.submitReflectionFollowUp(action.blockId, action.response);
     else if (action.type === "reflection-complete") await driver.completeReflection(action.blockId);
@@ -192,27 +175,6 @@ function gateExactCommandSuccess(trace: V2SessionTrace): V2GateResult {
     artifactEquals(".tmp/evaluator-command.txt", "command block complete\n", trace)
   ]);
 }
-
-function gateUnexpectedOutput(trace: V2SessionTrace): V2GateResult {
-  const unexpectedEvent = trace.events.find((event): event is Extract<V2SessionTrace["events"][number], { type: "unexpected_output_submitted" }> => event.type === "unexpected_output_submitted" && event.blockId === "exact-command");
-  const exactCompleted = trace.events.some((event) => event.type === "block_completed" && event.blockId === "exact-command");
-  return collectAssertions([
-    publicStateClean(trace),
-    editorUnlocked(trace),
-    artifactEquals("editor-artifacts/evaluator-editor.txt", satisfactoryEditorDraft, trace),
-    {
-      name: "unexpected output evidence",
-      passed: Boolean(unexpectedEvent?.evidence.trim()),
-      detail: unexpectedEvent?.evidence ?? "No unexpected output evidence was recorded."
-    },
-    {
-      name: "unexpected output not completed",
-      passed: !exactCompleted,
-      detail: exactCompleted ? "The exact-command block was completed despite unexpected output." : "The exact-command block remains incomplete."
-    }
-  ]);
-}
-
 
 function gateEditorFeedbackLocked(trace: V2SessionTrace): V2GateResult {
   return collectAssertions([

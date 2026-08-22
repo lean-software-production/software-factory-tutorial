@@ -17,7 +17,7 @@ type PublicState = {
   introduction: string;
   introductionComplete: boolean;
   chapters: Array<{ id: string; title: string; part: string; partMarkdown: string; partNumber: number; lessonNumber: number; lesson?: unknown }>;
-  progress: { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: unknown[]; unexpected: Record<string, string[]>; reflections: Record<string, string>; reflectionConversations: Record<string, unknown[]> };
+  progress: { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: unknown[]; reflections: Record<string, string>; reflectionConversations: Record<string, unknown[]> };
   adapter: { modelBackedHelp: boolean; note: string };
 };
 
@@ -51,7 +51,6 @@ function state(stage: "intro" | "lesson" | "practice"): PublicState {
           { id: "practice", type: "terminal-practice", ready: true, active: true, completed: false, verified: false, emerged: true },
         ]
         : [{ id: "orientation", type: "narrative", ready: true, active: true, completed: false, verified: false, emerged: true }],
-      unexpected: {},
       reflections: {},
       reflectionConversations: {},
     },
