@@ -704,8 +704,12 @@ describe("workbook browser API", () => {
       await introduceAndOpenEditor(server.url);
       expect((await postMessage(server.url, { blockId: "edit-answer", text: "Which path?" })).status).toBe(202);
       const timeline = (await state(server.url)).timeline;
-      expect(timeline.at(-1)).toMatchObject({ type: "tutor_failed", operation: "reply" });
+      const failed = timeline.at(-1);
+      expect(failed).toMatchObject({ type: "tutor_failed", operation: "reply" });
       expect(JSON.stringify(timeline)).not.toContain("provider secret failure");
+      expect(failed.publicMessage).toBe("The tutor is temporarily unavailable. Please retry.");
+      const publicTimelineFailure = timeline.find((record: any) => record.type === "tutor_failed" && record.operation === "reply");
+      expect(publicTimelineFailure).not.toHaveProperty("requestId");
     } finally { await server.close(); }
   });
 
