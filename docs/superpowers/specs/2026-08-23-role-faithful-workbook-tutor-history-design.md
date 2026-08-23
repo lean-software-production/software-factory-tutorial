@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed for review — 2026-08-23
+Approved for planning — 2026-08-23
 
 ## Purpose
 
