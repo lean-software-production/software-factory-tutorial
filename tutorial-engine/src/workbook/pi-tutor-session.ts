@@ -80,7 +80,7 @@ export function createResilientTutorSession<Event>(
         } catch (error) {
           const reason = errorReason(error);
           log.error(`${label} prompt failed (attempt ${attempt}/${attempts}; ${session.state.model.provider}/${session.state.model.id}): ${reason}`);
-          if (attempt === attempts) throw error;
+          if (attempt === attempts) throw error instanceof Error ? error : new Error(reason);
           await wait(attempt * 250);
         }
       }

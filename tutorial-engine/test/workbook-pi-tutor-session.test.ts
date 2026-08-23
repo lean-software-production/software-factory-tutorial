@@ -6,6 +6,7 @@ import {
 } from "../src/workbook/pi-tutor-session.js";
 
 type AssistantTerminal = Extract<PiTutorSessionEvent, { type: "message_end" }>;
+type FakeOutcome = AssistantTerminal | { rejection: unknown };
 
 function assistantError(errorMessage: string): AssistantTerminal {
   return {
@@ -21,7 +22,7 @@ function assistantText(text: string): AssistantTerminal {
   };
 }
 
-function fakeSession(events: AssistantTerminal[]): PiTutorSession & { prompts: string[] } {
+function fakeSession(events: FakeOutcome[]): PiTutorSession & { prompts: string[] } {
   const listeners = new Set<(event: PiTutorSessionEvent) => void>();
   const prompts: string[] = [];
   return {
@@ -33,9 +34,10 @@ function fakeSession(events: AssistantTerminal[]): PiTutorSession & { prompts: s
     },
     async prompt(prompt) {
       prompts.push(prompt);
-      const event = events.shift();
-      if (!event) throw new Error("No terminal event configured.");
-      listeners.forEach((listener) => listener(event));
+      const outcome = events.shift();
+      if (!outcome) throw new Error("No terminal event configured.");
+      if ("rejection" in outcome) throw outcome.rejection;
+      listeners.forEach((listener) => listener(outcome));
     },
     dispose() {}
   };
@@ -71,6 +73,15 @@ test("rejects with the terminal error after the third failed attempt", async () 
 
   await expect(createResilientTutorSession(session, logs.log, "Workbook tutor", { wait: async () => {} }).prompt("message"))
     .rejects.toThrow("fetch failed");
+  expect(session.prompts).toHaveLength(3);
+});
+
+test("retries rejected provider prompts and preserves their reason after exhausting attempts", async () => {
+  const session = fakeSession([{ rejection: "transport down" }, { rejection: "transport down" }, { rejection: "transport down" }]);
+  const logs = logger();
+
+  await expect(createResilientTutorSession(session, logs.log, "Workbook tutor", { wait: async () => {} }).prompt("message"))
+    .rejects.toMatchObject({ message: "transport down" });
   expect(session.prompts).toHaveLength(3);
 });
 
