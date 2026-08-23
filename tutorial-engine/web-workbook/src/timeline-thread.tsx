@@ -68,9 +68,10 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     {records.map((record) => {
       if (record.type === "tutor_failed") return <aside key={record.id} className="timeline-message tutor failure" aria-live="polite"><b>Tutor unavailable</b><p>{record.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(record.failureId)}>Retry</button></aside>;
       if (record.type !== "message") return null;
-      if (record.presentation === "course") return <React.Fragment key={record.id}><article className="timeline-message authored"><p className="section-label">Course note</p><Markdown>{record.text}</Markdown></article>{record.lessonId === activeLessonId && record.blockId === activeBlockId && renderContinuation?.(record)}</React.Fragment>;
+      const continuation = record.lessonId === activeLessonId && record.blockId === activeBlockId ? renderContinuation?.(record) : null;
+      if (record.presentation === "course") return <React.Fragment key={record.id}><article className="timeline-message authored"><p className="section-label">Course note</p><Markdown>{record.text}</Markdown></article>{continuation}</React.Fragment>;
       const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : record.presentation === "hint" ? " hint" : ""}`;
-      return <article key={record.id} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b><p>{record.text}</p></article>;
+      return <React.Fragment key={record.id}><article className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b><p>{record.text}</p></article>{continuation}</React.Fragment>;
     })}
     <div className="timeline-composer-dock fixed-composer">
       <form className="timeline-input fixed-composer" onSubmit={send}>

@@ -45,6 +45,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 });
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
+import { ActivityBand } from "../web-workbook/src/activity-band.js";
 import { AcceptanceConfetti, App, BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Chapter, type Progress } from "../web-workbook/src/workbook-ui.js";
 import { lessonAnchorHref, lessonElementId } from "../src/workbook/lesson-links.js";
 
@@ -354,6 +355,45 @@ describe("workbook lesson UI", () => {
     expect(reflectionMarkup).toContain("Tutor note");
     expect(reflectionMarkup).toContain("Continue");
     expect(reflectionMarkup).not.toContain("Your reflection");
+  });
+
+  it("renders terminal activity chrome without duplicating the authored title or markdown", () => {
+    const terminalBlock = lesson.blocks[1];
+    const markup = html(createElement(ActivityBand, {
+      lessonId: lesson.id,
+      activeBlock: terminalBlock,
+      progress: activeBlockProgress(terminalBlock),
+      refresh: vi.fn(),
+      onHint: vi.fn(async () => undefined)
+    }));
+
+    expect(markup).toContain("current-activity-band");
+    expect(markup).toContain("data-activity-type=\"terminal-practice\"");
+    expect(markup).toContain("Embedded terminal");
+    expect(markup).toContain("Insert command");
+    expect(markup).toContain("Get a hint");
+    expect(markup).not.toContain("Practice");
+    expect(markup).not.toContain("Run this:");
+    expect(markup).not.toContain("echo hi");
+  });
+
+  it("renders editor activity chrome without duplicating the authored title or markdown", () => {
+    const markup = html(createElement(ActivityBand, {
+      lessonId: lesson.id,
+      activeBlock: editorBlock,
+      progress: activeEditorProgress(),
+      refresh: vi.fn(),
+      onHint: vi.fn(async () => undefined)
+    }));
+
+    expect(markup).toContain("current-activity-band");
+    expect(markup).toContain("data-activity-type=\"editor-practice\"");
+    expect(markup).toContain("factory/answer.md");
+    expect(markup).toContain("editor-surface");
+    expect(markup).toContain("role=\"status\"");
+    expect(markup).toContain("Get a hint");
+    expect(markup).not.toContain("Edit the answer");
+    expect(markup).not.toContain("Update the answer file");
   });
 
   it("does not show checkpoint Continue for nonaccepted evaluated blocks", () => {
@@ -955,6 +995,47 @@ describe("workbook lesson UI", () => {
     const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
     expect(eventCall).toBeTruthy();
     expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "reflect", action: "reflection-submit", response: "My reflection answer" });
+  });
+
+  it("renders accepted reflection continuation in the timeline and advances through the block event path", async () => {
+    const reflectionProgress: Progress = {
+      ...progress,
+      activeBlockId: "reflect",
+      blocks: [{ id: "reflect", type: "reflection", ready: true, active: true, completed: false, verified: false, emerged: true, checkpoint: { status: "accepted", successMessage: "Reflection accepted.", evidence: { kind: "reflection", conversation: [{ role: "learner", text: "First answer" }, { role: "tutor", text: "Accepted." }] } } } as any],
+      reflectionConversations: { reflect: [{ role: "learner", text: "First answer" }] }
+    };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [lesson.blocks[2]] } as any })],
+      progress: reflectionProgress,
+      adapter: {},
+      timeline: [
+        { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "authored", presentation: "course", text: "## Reflect\n\nWhat changed?" },
+        { type: "message", id: "learner", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "reflect", role: "user", source: "learner", presentation: "chat", text: "First answer" },
+        { type: "message", id: "review", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "main_tutor", presentation: "review", text: "Accepted." }
+      ]
+    } as any;
+    const nextState = { ...state, progress: { ...reflectionProgress, activeBlockId: "transition" } };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? nextState : state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.textContent).toContain("Accepted.");
+    expect(container.querySelector(".current-activity-band")).toBeNull();
+    const continueButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Continue");
+    expect(continueButton).toBeTruthy();
+    expect(container.querySelector<HTMLTextAreaElement>(".timeline-input textarea")!.disabled).toBe(true);
+
+    await act(async () => { continueButton!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+
+    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
+    expect(eventCall).toBeTruthy();
+    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "reflect", action: "continue" });
+    expect(fetchMock.mock.calls.find(([url]) => url === "/api/workbook/messages")).toBeUndefined();
   });
 
   it("disables reflection follow-up while the current attempt is reviewing", async () => {

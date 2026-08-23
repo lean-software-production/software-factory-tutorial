@@ -107,7 +107,34 @@ function publicTimelineRecord(record: WorkbookTimelineRecord): PublicTimelineRec
   const { requestId: _privateRequestId, ...publicFailure } = record;
   return { ...publicFailure, failureId: record.id };
 }
-function publicTimeline(records: readonly WorkbookTimelineRecord[]): PublicTimelineRecord[] { return records.flatMap((record) => { const publicRecord = publicTimelineRecord(record); return publicRecord ? [publicRecord] : []; }); }
+function authoredCourseOrder(loaded: LoadedWorkbook, record: PublicTimelineRecord): number | undefined {
+  if (record.type !== "message" || record.source !== "authored" || record.presentation !== "course") return undefined;
+  if (record.lessonId === INTRODUCTION_LESSON_ID && record.blockId === INTRODUCTION_BLOCK_ID) return 0;
+  const partIndex = loaded.chapters.findIndex((chapter) => chapter.partId && partLessonId(chapter.partId) === record.lessonId);
+  if (partIndex >= 0 && record.blockId === PART_BLOCK_ID) return 1_000 + partIndex * 1_000;
+  const lessonIndex = loaded.chapters.findIndex((chapter) => chapter.lesson?.id === record.lessonId);
+  if (lessonIndex < 0) return undefined;
+  if (record.blockId === LESSON_FRAME_BLOCK_ID) return 1_000 + lessonIndex * 1_000 + 100;
+  const blockIndex = loaded.chapters[lessonIndex]?.lesson?.blocks.findIndex((block) => block.id === record.blockId) ?? -1;
+  return blockIndex >= 0 ? 1_000 + lessonIndex * 1_000 + 200 + blockIndex : undefined;
+}
+function publicTimeline(loaded: LoadedWorkbook, records: readonly WorkbookTimelineRecord[]): PublicTimelineRecord[] {
+  const projected = records.flatMap((record) => { const publicRecord = publicTimelineRecord(record); return publicRecord ? [publicRecord] : []; });
+  const course = projected.map((record) => ({ record, order: authoredCourseOrder(loaded, record) })).filter((entry): entry is { record: PublicTimelineRecord; order: number } => entry.order !== undefined).sort((a, b) => a.order - b.order || a.record.sequence - b.record.sequence);
+  const emitted = new Set<string>();
+  const output: PublicTimelineRecord[] = [];
+  const emit = (record: PublicTimelineRecord) => {
+    if (emitted.has(record.id)) return;
+    emitted.add(record.id);
+    output.push(record);
+  };
+  for (const record of projected) {
+    const order = authoredCourseOrder(loaded, record);
+    if (order !== undefined) for (const entry of course) if (!emitted.has(entry.record.id) && entry.order < order) emit(entry.record);
+    emit(record);
+  }
+  return output;
+}
 
 async function publicState(loaded: LoadedWorkbook, records: WorkbookTimelineRecord[], attempts: AttemptStore) {
   const lesson = activeLesson(loaded, records);
@@ -134,7 +161,7 @@ async function publicState(loaded: LoadedWorkbook, records: WorkbookTimelineReco
     if (chapter.lesson.id === lesson.id) return { ...chapter, lesson: publicLesson(chapter.lesson, chapter.lesson.blocks.filter((block) => emerged.has(block.id))) };
     return { ...chapter, lesson: undefined };
   });
-  return { workbook: loaded.identity, introduction: loaded.introduction, introductionComplete, chapters, progress, timeline: publicTimeline(records), adapter: { modelBackedHelp: true, note: "Free-text help is block-scoped." } };
+  return { workbook: loaded.identity, introduction: loaded.introduction, introductionComplete, chapters, progress, timeline: publicTimeline(loaded, records), adapter: { modelBackedHelp: true, note: "Free-text help is block-scoped." } };
 }
 
 export async function startWorkbookServer(options: WorkbookServerOptions): Promise<StartedWorkbookServer> {
@@ -403,7 +430,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (request.method === "GET" && isRoute(url.pathname, "timeline")) {
       response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
-      response.write(`event: timeline\ndata: ${JSON.stringify(publicTimeline(records))}\n\n`);
+      response.write(`event: timeline\ndata: ${JSON.stringify(publicTimeline(loaded, records))}\n\n`);
       const unsubscribe = timeline.subscribe((record) => {
         const publicRecord = publicTimelineRecord(record);
         if (publicRecord) response.write(`event: record\ndata: ${JSON.stringify(publicRecord)}\n\n`);
