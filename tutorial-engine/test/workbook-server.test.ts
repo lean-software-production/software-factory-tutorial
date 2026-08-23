@@ -736,6 +736,16 @@ describe("workbook browser API", () => {
       const continued = await postEvent(server.url, { blockId: "edit-answer", action: "continue" }).then((response) => response.json() as any);
       expect(continued.progress.activeBlockId).toBe("run-supplied-command");
       await waitForWorkbookState(server.url, () => tutor.blockSummaries.some((summary) => summary.blockId === "edit-answer"), "queued block summary");
+      const privateRecords = await privateTimeline(dir);
+      const publicState = await state(server.url);
+      expect(privateRecords).toContainEqual(expect.objectContaining({
+        type: "block_summarized", lessonId: "001-first", blockId: "edit-answer"
+      }));
+      expect(publicState.timeline).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "message", source: "authored", blockId: "edit-answer" }),
+        expect.objectContaining({ type: "message", source: "main_tutor" })
+      ]));
+      expect(publicState.timeline.some((record: any) => record.type === "block_summarized")).toBe(false);
       expect(JSON.stringify(continued)).not.toContain("attemptId");
       expect(JSON.stringify(continued)).not.toContain("privateGuidance");
     } finally { await server.close(); }
@@ -979,6 +989,17 @@ describe("workbook browser API", () => {
       expect(second.progress.activeLessonId).toBe("002-second");
       expect(second.progress.activeBlockId).toBe("second-orientation");
       expect(second.progress.completedLessons).toContain("001-first");
+      const privateRecords = await privateTimeline(dir);
+      const publicState = await state(server.url);
+      expect(privateRecords).toContainEqual(expect.objectContaining({
+        type: "lesson_summarized", lessonId: "001-first"
+      }));
+      expect(publicState.timeline).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "message", source: "authored", blockId: "edit-answer" }),
+        expect.objectContaining({ type: "message", source: "main_tutor" })
+      ]));
+      expect(publicState.timeline.some((record: any) => record.type === "lesson_summarized")).toBe(false);
+      expect(JSON.stringify(publicState.timeline)).not.toContain("Summary of 001-first.");
     } finally { await server.close(); }
   });
 

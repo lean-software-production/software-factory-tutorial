@@ -154,6 +154,54 @@ describe("MainWorkbookTutor", () => {
     expect(sessions[1].activeContext?.text).toContain('"id": "a-2"');
   });
 
+  it("recreates the disposable session when restored summaries replace completed turns", async () => {
+    const sessions: FakeSession[] = [];
+    const requests: WorkbookTutorSessionFactoryRequest[] = [];
+    const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", sessionFactory: async (request) => {
+      requests.push(request);
+      const session = new FakeSession(request);
+      session.promptResponses.push("Continue with the active block.");
+      sessions.push(session);
+      return session;
+    } });
+    const completedRecords: WorkbookTimelineRecord[] = [
+      message("authored-1", 1, "authored", "assistant", "## Edit\n\nWrite the answer."),
+      message("learner-1", 2, "learner", "user", "I wrote the answer."),
+      message("main-1", 3, "main_tutor", "assistant", "That satisfies the block."),
+    ];
+    const summarizedRecords: WorkbookTimelineRecord[] = [
+      ...completedRecords,
+      { id: "summary-1", sequence: 4, at: "2026-08-21T00:00:04.000Z", type: "block_summarized", lessonId: "lesson", blockId: "block", text: "The learner completed the edit block.", coveredThroughId: "main-1" },
+    ];
+
+    await expect(tutor.reply({ records: completedRecords, learnerMessage: message("learner-2", 4, "learner", "user", "What next?") })).resolves.toBe("Continue with the active block.");
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].history.summaries).toEqual([]);
+    expect(requests[0].history.turns.map((turn) => turn.sourceEventId)).toEqual(["authored-1", "learner-1", "main-1"]);
+
+    await tutor.restore({ records: summarizedRecords });
+
+    expect(sessions[0].disposed).toBe(true);
+    expect(requests).toHaveLength(1);
+
+    await expect(tutor.reply({ records: summarizedRecords, learnerMessage: message("learner-3", 5, "learner", "user", "Can we continue?") })).resolves.toBe("Continue with the active block.");
+
+    expect(requests).toHaveLength(2);
+    expect(requests[1].history.summaries).toEqual([
+      {
+        sourceEventId: "summary-1",
+        scope: "block",
+        lessonId: "lesson",
+        blockId: "block",
+        text: "The learner completed the edit block.",
+        coveredThroughId: "main-1",
+        timestamp: Date.parse("2026-08-21T00:00:04.000Z"),
+      }
+    ]);
+    expect(requests[1].history.turns).toEqual([]);
+  });
+
   it("includes author-guidance nondisclosure protection in ordinary reply instructions", async () => {
     const sessions: FakeSession[] = [];
     const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", sessionFactory: async (request) => {

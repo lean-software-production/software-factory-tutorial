@@ -415,8 +415,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     return "ok";
   };
 
-  const summarizeDeparture = async (leaving: WorkbookBlock, workflowId: string): Promise<void> => {
-    const lesson = activeLesson(loaded, records);
+  const summarizeDeparture = async (lesson: WorkbookLesson, leaving: WorkbookBlock, workflowId: string): Promise<void> => {
     try { await append({ type: "block_summarized", lessonId: lesson.id, blockId: leaving.id, text: requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: lesson.id, blockId: leaving.id, coveredThroughId: workflowId }), "block_summary"), coveredThroughId: workflowId }); }
     catch { await appendFailure({ lessonId: lesson.id, blockId: leaving.id, requestId: workflowId, operation: "block_summary", publicMessage: TUTOR_UNAVAILABLE }); }
     if (!project(records, lesson).completedLessons.includes(lesson.id)) { await ensureAuthoredActiveBlock(); return; }
@@ -564,7 +563,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
           }
           if (!event) return sendJson(response, 400, { error: "Invalid workbook action for this block." });
           const written = await append(event);
-          if (written.type === "block_continued") await summarizeDeparture(block, written.id);
+          if (written.type === "block_continued") await summarizeDeparture(lesson, block, written.id);
           sendJson(response, 202, await currentPublicState());
         });
       } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." }); }
