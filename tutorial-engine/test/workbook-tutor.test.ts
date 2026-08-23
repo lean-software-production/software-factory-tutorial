@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 const piSessions = vi.hoisted(() => [] as any[]);
-const createAgentSession = vi.hoisted(() => vi.fn(async () => ({ session: piSessions.shift() })));
+const createAgentSession = vi.hoisted(() => vi.fn(async () => {
+  const session = piSessions.shift();
+  session.agent ??= { state: { messages: [] } };
+  return { session };
+}));
 
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
@@ -9,7 +13,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
     ...actual,
     DefaultResourceLoader: class { async reload() {} },
     ModelRuntime: { create: vi.fn(async () => ({})) },
-    SessionManager: { inMemory: vi.fn(() => ({ appendCustomMessageEntry() {}, appendMessage() {} })) },
+    SessionManager: { inMemory: vi.fn(() => ({ appendCustomMessageEntry() {}, appendMessage() {}, buildSessionContext: () => ({ messages: [] }) })) },
     SettingsManager: { inMemory: vi.fn((settings) => settings) },
     createAgentSession,
     getAgentDir: vi.fn(() => "/tmp/pi-agent")

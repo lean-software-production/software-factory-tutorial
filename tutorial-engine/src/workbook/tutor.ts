@@ -169,7 +169,7 @@ function piMessageForTurn(turn: MainTutorHistoryProjection["turns"][number], mod
     return { role: "user", content: [{ type: "text", text: turn.text }], timestamp: turn.timestamp };
   }
   if (!model) {
-    throw new Error("Cannot reconstruct workbook tutor assistant history without a resolved tutor model. Set TUTOR_MODEL to a configured Pi model.");
+    throw new Error("Cannot reconstruct workbook tutor assistant history because Pi did not select a model.");
   }
   return {
     role: "assistant",
@@ -204,24 +204,6 @@ async function createPiWorkbookTutorSession(workspace: string, request: Workbook
   const choice = resolveTutorModel(modelRuntime, process.env[TUTOR_MODEL_ENV]);
   if (choice.warning) log.info(choice.warning);
   const sessionManager = SessionManager.inMemory(workspace);
-  for (const summary of request.history.summaries) {
-    sessionManager.appendCustomMessageEntry(summaryCustomType(summary), summaryContextText(summary), false, {
-      sourceEventId: summary.sourceEventId,
-      scope: summary.scope,
-      lessonId: summary.lessonId,
-      blockId: summary.blockId,
-      coveredThroughId: summary.coveredThroughId,
-      timestamp: summary.timestamp
-    });
-  }
-  for (const turn of request.history.turns) {
-    sessionManager.appendMessage(piMessageForTurn(turn, choice.model));
-  }
-  if (request.history.activeContext) {
-    sessionManager.appendCustomMessageEntry(request.history.activeContext.name, request.history.activeContext.text, false, {
-      sourceEventIds: request.history.activeContext.sourceEventIds
-    });
-  }
   const { session } = await createAgentSession({
     cwd: workspace,
     resourceLoader: loader,
@@ -233,6 +215,26 @@ async function createPiWorkbookTutorSession(workspace: string, request: Workbook
     sessionManager,
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } })
   });
+  const selectedModel = session.state.model ?? choice.model;
+  for (const summary of request.history.summaries) {
+    sessionManager.appendCustomMessageEntry(summaryCustomType(summary), summaryContextText(summary), false, {
+      sourceEventId: summary.sourceEventId,
+      scope: summary.scope,
+      lessonId: summary.lessonId,
+      blockId: summary.blockId,
+      coveredThroughId: summary.coveredThroughId,
+      timestamp: summary.timestamp
+    });
+  }
+  for (const turn of request.history.turns) {
+    sessionManager.appendMessage(piMessageForTurn(turn, selectedModel));
+  }
+  if (request.history.activeContext) {
+    sessionManager.appendCustomMessageEntry(request.history.activeContext.name, request.history.activeContext.text, false, {
+      sourceEventIds: request.history.activeContext.sourceEventIds
+    });
+  }
+  session.agent.state.messages = sessionManager.buildSessionContext().messages;
   const resilient = createResilientTutorSession(session, log, "Workbook tutor");
   return {
     ...resilient,
