@@ -20,7 +20,8 @@ describe("TimelineThread", () => {
       ]
     }));
 
-    expect(markup).toContain('class="timeline-message authored"');
+    expect(markup).toContain('class="timeline-authored-content"');
+    expect(markup).not.toContain('class="timeline-message authored"');
     expect(markup).toContain('class="timeline-message learner"');
     expect(markup).toContain('class="timeline-message tutor review"');
     expect(markup.indexOf("Course note")).toBeLessThan(markup.indexOf("Which directory?"));

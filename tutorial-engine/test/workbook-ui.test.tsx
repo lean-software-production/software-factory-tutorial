@@ -339,6 +339,34 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector(".timeline-message.learner")).toBeNull();
   });
 
+  it("renders authored timeline entries as plain page content while dynamic messages stay carded", async () => {
+    const container = await mount(createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend: vi.fn(async () => undefined),
+      onRetry: vi.fn(async () => undefined),
+      records: [
+        { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nAuthored page prose." },
+        { type: "message", id: "learner", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "user", source: "learner", presentation: "chat", text: "Learner reply." },
+        { type: "message", id: "tutor", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "main_tutor", presentation: "chat", text: "Tutor reply." },
+        { type: "message", id: "hint", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "block_tutor", presentation: "hint", text: "Hint reply." },
+        { type: "message", id: "review", sequence: 5, at: "2026-08-21T00:00:04.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "main_tutor", presentation: "review", text: "Review reply." },
+      ] as any
+    }));
+
+    const authored = container.querySelector(".timeline-authored-content");
+    expect(authored).not.toBeNull();
+    expect(authored?.textContent).toContain("Authored page prose.");
+    expect(authored?.classList.contains("timeline-message")).toBe(false);
+    expect(authored?.classList.contains("authored")).toBe(false);
+    expect(authored?.textContent).not.toContain("Course note");
+    expect(container.querySelector(".timeline-message.authored")).toBeNull();
+    expect(container.querySelector(".timeline-message.learner")?.textContent).toContain("Learner reply.");
+    expect(container.querySelector(".timeline-message.tutor:not(.hint):not(.review)")?.textContent).toContain("Tutor reply.");
+    expect(container.querySelector(".timeline-message.tutor.hint")?.textContent).toContain("Hint reply.");
+    expect(container.querySelector(".timeline-message.tutor.review")?.textContent).toContain("Review reply.");
+  });
+
   it("scrolls the newest conversation entry into view but not for course-only records", async () => {
     const scrollIntoView = vi.fn();
     const baseRecords = [

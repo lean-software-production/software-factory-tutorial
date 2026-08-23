@@ -83,7 +83,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
       if (record.type === "tutor_failed") return <aside key={record.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message tutor failure" aria-live="polite"><b>Tutor unavailable</b><p>{record.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(record.failureId)}>Retry</button></aside>;
       if (record.type !== "message") return null;
       const continuation = record.lessonId === activeLessonId && record.blockId === activeBlockId ? renderContinuation?.(record) : null;
-      if (record.presentation === "course") return <React.Fragment key={record.id}><article className="timeline-message authored"><p className="section-label">Course note</p><Markdown>{record.text}</Markdown></article>{continuation}</React.Fragment>;
+      if (record.presentation === "course" && record.source === "authored") return <React.Fragment key={record.id}><article className="timeline-authored-content"><Markdown>{record.text}</Markdown></article>{continuation}</React.Fragment>;
       const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : record.presentation === "hint" ? " hint" : ""}`;
       return <React.Fragment key={record.id}><article ref={(el) => { latestEntryRef.current = el; }} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown>{record.text}</Markdown>}</article>{continuation}</React.Fragment>;
     })}

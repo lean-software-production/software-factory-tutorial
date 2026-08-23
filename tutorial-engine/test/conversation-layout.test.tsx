@@ -38,7 +38,7 @@ describe("workbook conversation layout", () => {
     expect(markup.indexOf("current-activity-band")).toBeLessThan(markup.indexOf("timeline-thread"));
   });
 
-  it("keeps authored and tutor messages left while learner messages use the learner alignment class", () => {
+  it("keeps authored content plain while tutor and learner messages use chat alignment classes", () => {
     const markup = renderToStaticMarkup(createElement(TimelineThread, {
       activeLessonId: "part/lesson",
       activeBlockId: terminalBlock.id,
@@ -51,7 +51,8 @@ describe("workbook conversation layout", () => {
       ]
     }));
 
-    expect(markup).toContain('class="timeline-message authored"');
+    expect(markup).toContain('class="timeline-authored-content"');
+    expect(markup).not.toContain('class="timeline-message authored"');
     expect(markup).toContain('class="timeline-message tutor"');
     expect(markup).toContain('class="timeline-message learner"');
   });
