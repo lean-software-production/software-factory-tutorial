@@ -142,17 +142,21 @@ function requiredText(text: string, label: string): string {
 
 async function createPiWorkbookTutorSession(workspace: string, request: WorkbookTutorSessionFactoryRequest, log: TutorialLogger): Promise<WorkbookTutorSession> {
   const sessionManager = SessionManager.inMemory(workspace);
-  if (request.history.summary) {
-    sessionManager.appendCustomMessageEntry("workbook-context-summary", request.history.summary.text, false, {
-      sourceEventId: request.history.summary.sourceEventId,
-      coveredThroughId: request.history.summary.coveredThroughId
+  for (const summary of request.history.summaries) {
+    sessionManager.appendCustomMessageEntry("workbook-context-summary", summary.text, false, {
+      sourceEventId: summary.sourceEventId,
+      scope: summary.scope,
+      lessonId: summary.lessonId,
+      blockId: summary.blockId,
+      coveredThroughId: summary.coveredThroughId,
+      timestamp: summary.timestamp
     });
   }
   for (const turn of request.history.turns) {
     sessionManager.appendMessage({
       role: turn.role,
       content: [{ type: "text", text: turn.text }],
-      timestamp: Date.now()
+      timestamp: turn.timestamp
     } as never);
   }
   if (request.history.activeContext) {
@@ -212,7 +216,7 @@ export class MainWorkbookTutor {
   readonly #log: TutorialLogger;
   readonly #sessionFactory: WorkbookTutorSessionFactory;
   #session?: WorkbookTutorSession;
-  #history: MainTutorHistoryProjection = { turns: [] };
+  #history: MainTutorHistoryProjection = { summaries: [], turns: [] };
   #historySignature = historySignature(this.#history);
   #activeAttemptId: string | undefined;
   #acceptedAttemptId: string | undefined;
@@ -357,7 +361,10 @@ function normalizeContext(input: MainTutorContext | LegacyRestoreInput | TutorRe
 
 function historySignature(history: MainTutorHistoryProjection): string {
   return JSON.stringify({
-    summary: history.summary ? { sourceEventId: history.summary.sourceEventId, coveredThroughId: history.summary.coveredThroughId } : undefined,
+    summaries: history.summaries.map((summary) => ({
+      sourceEventId: summary.sourceEventId,
+      coveredThroughId: summary.coveredThroughId
+    })),
     turnIds: history.turns.map((turn) => turn.sourceEventId),
     active: history.activeContext
       ? {

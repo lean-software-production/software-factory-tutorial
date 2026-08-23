@@ -1,15 +1,26 @@
 import type { Attempt } from "./attempts.js";
 import type { WorkbookBlock, WorkbookLesson } from "./contract.js";
-import type { BlockSummary, LessonSummary, WorkbookTimelineRecord } from "./timeline.js";
+import type { BlockSummary, LessonSummary, TimelineMessage, WorkbookTimelineRecord } from "./timeline.js";
+
+export type PiHistorySummary = {
+  sourceEventId: string;
+  scope: "lesson" | "block";
+  lessonId: string;
+  blockId?: string;
+  text: string;
+  coveredThroughId: string;
+  timestamp: number;
+};
 
 export type PiHistoryTurn = {
   sourceEventId: string;
   role: "assistant" | "user";
   text: string;
+  timestamp: number;
 };
 
 export type PiHistoryProjection = {
-  summary?: { sourceEventId: string; text: string; coveredThroughId: string };
+  summaries: PiHistorySummary[];
   turns: PiHistoryTurn[];
 };
 
@@ -33,23 +44,62 @@ export type MainTutorHistoryProjection = PiHistoryProjection & {
   activeContext?: { name: "workbook-active-block"; text: string; sourceEventIds: string[] };
 };
 
-function isSummary(record: WorkbookTimelineRecord): record is BlockSummary | LessonSummary {
-  return record.type === "block_summarized" || record.type === "lesson_summarized";
+function timestampFor(record: WorkbookTimelineRecord): number {
+  const timestamp = Date.parse(record.at);
+  if (Number.isNaN(timestamp)) throw new Error(`Invalid workbook history timestamp for event ${record.id}: ${record.at}`);
+  return timestamp;
 }
 
-/** Select the newest teaching-boundary summary and the exact conversation after its boundary. */
+function summaryEventSequence(summary: PiHistorySummary, recordsById: ReadonlyMap<string, WorkbookTimelineRecord>): number {
+  return recordsById.get(summary.sourceEventId)?.sequence ?? 0;
+}
+
+function mapSummary(record: BlockSummary | LessonSummary): PiHistorySummary {
+  const base = {
+    sourceEventId: record.id,
+    lessonId: record.lessonId,
+    text: record.text,
+    coveredThroughId: record.coveredThroughId,
+    timestamp: timestampFor(record)
+  };
+  return record.type === "lesson_summarized"
+    ? { ...base, scope: "lesson" }
+    : { ...base, scope: "block", blockId: record.blockId };
+}
+
+function mapTurn(record: TimelineMessage): PiHistoryTurn {
+  return { sourceEventId: record.id, role: record.role, text: record.text, timestamp: timestampFor(record) };
+}
+
+/** Select the hierarchical teaching-boundary summaries and the exact conversation after their boundary. */
 export function projectPiHistory(records: readonly WorkbookTimelineRecord[]): PiHistoryProjection {
   const ordered = [...records].sort((left, right) => left.sequence - right.sequence);
+  const recordsById = new Map(ordered.map((record) => [record.id, record]));
   const sequenceForId = new Map(ordered.map((record) => [record.id, record.sequence]));
-  const summaries = ordered.filter(isSummary).map((record) => ({ record, coveredSequence: sequenceForId.get(record.coveredThroughId) ?? -1 }));
-  const selected = summaries.sort((left, right) => left.coveredSequence - right.coveredSequence || left.record.sequence - right.record.sequence).at(-1);
-  const boundary = selected?.coveredSequence ?? 0;
+  const lessonSummaries = new Map<string, LessonSummary>();
+  const blockSummaries = new Map<string, BlockSummary>();
+
+  for (const record of ordered) {
+    if (record.type === "lesson_summarized") lessonSummaries.set(record.lessonId, record);
+    if (record.type === "block_summarized") blockSummaries.set(`${record.lessonId}\u0000${record.blockId}`, record);
+  }
+
+  const selectedLessonSummaries = [...lessonSummaries.values()];
+  const selectedBlockSummaries = [...blockSummaries.values()].filter((blockSummary) => {
+    const lessonSummary = lessonSummaries.get(blockSummary.lessonId);
+    return !lessonSummary || blockSummary.sequence > lessonSummary.sequence;
+  });
+
+  const summaries = [...selectedLessonSummaries, ...selectedBlockSummaries]
+    .sort((left, right) => left.sequence - right.sequence)
+    .map(mapSummary);
+  const boundary = summaries.reduce((maximum, summary) => Math.max(maximum, sequenceForId.get(summary.coveredThroughId) ?? -1), 0);
   const turns = ordered
-    .filter((record): record is Extract<WorkbookTimelineRecord, { type: "message" }> => record.type === "message" && record.sequence > boundary)
-    .map((record) => ({ sourceEventId: record.id, role: record.role, text: record.text }));
-  return selected
-    ? { summary: { sourceEventId: selected.record.id, text: selected.record.text, coveredThroughId: selected.record.coveredThroughId }, turns }
-    : { turns };
+    .filter((record): record is TimelineMessage => record.type === "message" && record.sequence > boundary)
+    .map(mapTurn);
+
+  summaries.sort((left, right) => summaryEventSequence(left, recordsById) - summaryEventSequence(right, recordsById));
+  return { summaries, turns };
 }
 
 export function projectMainTutorHistory(records: readonly WorkbookTimelineRecord[], activeContext?: ActiveBlockContext): MainTutorHistoryProjection {

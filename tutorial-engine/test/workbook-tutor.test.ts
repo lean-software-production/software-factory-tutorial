@@ -132,10 +132,10 @@ describe("MainWorkbookTutor", () => {
 
     expect(requests).toHaveLength(1);
     expect(requests[0].history.turns).toEqual([
-      { sourceEventId: "authored-1", role: "assistant", text: "## Course note\n\nUse `.tmp`." },
-      { sourceEventId: "learner-1", role: "user", text: "Which path?" },
-      { sourceEventId: "main-1", role: "assistant", text: "Use the workspace-relative `.tmp/evidence.txt`." },
-      { sourceEventId: "block-1", role: "assistant", text: "Your terminal output is close." },
+      { sourceEventId: "authored-1", role: "assistant", text: "## Course note\n\nUse `.tmp`.", timestamp: Date.parse("2026-08-21T00:00:01.000Z") },
+      { sourceEventId: "learner-1", role: "user", text: "Which path?", timestamp: Date.parse("2026-08-21T00:00:02.000Z") },
+      { sourceEventId: "main-1", role: "assistant", text: "Use the workspace-relative `.tmp/evidence.txt`.", timestamp: Date.parse("2026-08-21T00:00:03.000Z") },
+      { sourceEventId: "block-1", role: "assistant", text: "Your terminal output is close.", timestamp: Date.parse("2026-08-21T00:00:04.000Z") },
     ]);
     expect(sessions[0].activeContext?.name).toBe("workbook-active-block");
     expect(sessions[0].activeContext?.text).toContain('"transcript": "npm test\\nPASS"');
