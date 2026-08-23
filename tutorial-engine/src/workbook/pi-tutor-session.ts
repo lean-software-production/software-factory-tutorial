@@ -51,6 +51,10 @@ function errorReason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function redactPromptFromLog(reason: string, prompt: string): string {
+  return prompt ? reason.replaceAll(prompt, "[redacted learner prompt]") : reason;
+}
+
 async function promptOnce<Event>(session: PiTutorSession<Event>, prompt: string): Promise<string> {
   let result: { text: string; errorMessage?: string } | undefined;
   const unsubscribe = session.subscribe((event) => { result = terminalResult(event) ?? result; });
@@ -79,7 +83,8 @@ export function createResilientTutorSession<Event>(
           return await promptOnce(session, prompt);
         } catch (error) {
           const reason = errorReason(error);
-          log.error(`${label} prompt failed (attempt ${attempt}/${attempts}; ${session.state.model.provider}/${session.state.model.id}): ${reason}`);
+          const logReason = redactPromptFromLog(reason, prompt);
+          log.error(`${label} prompt failed (attempt ${attempt}/${attempts}; ${session.state.model.provider}/${session.state.model.id}): ${logReason}`);
           if (attempt === attempts) throw error instanceof Error ? error : new Error(reason);
           await wait(attempt * 250);
         }

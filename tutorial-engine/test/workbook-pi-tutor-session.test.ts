@@ -76,13 +76,20 @@ test("rejects with the terminal error after the third failed attempt", async () 
   expect(session.prompts).toHaveLength(3);
 });
 
-test("retries rejected provider prompts and preserves their reason after exhausting attempts", async () => {
-  const session = fakeSession([{ rejection: "transport down" }, { rejection: "transport down" }, { rejection: "transport down" }]);
+test("redacts a learner prompt echoed by rejected provider errors from logs but preserves it in the final error", async () => {
+  const privatePrompt = "private learner prompt: My salary is $123,456";
+  const providerReason = `transport down while sending: ${privatePrompt}`;
+  const session = fakeSession([
+    { rejection: providerReason },
+    { rejection: providerReason },
+    { rejection: providerReason }
+  ]);
   const logs = logger();
 
-  await expect(createResilientTutorSession(session, logs.log, "Workbook tutor", { wait: async () => {} }).prompt("message"))
-    .rejects.toMatchObject({ message: "transport down" });
+  await expect(createResilientTutorSession(session, logs.log, "Workbook tutor", { wait: async () => {} }).prompt(privatePrompt))
+    .rejects.toMatchObject({ message: providerReason });
   expect(session.prompts).toHaveLength(3);
+  expect(logs.errors.join("\n")).not.toContain(privatePrompt);
 });
 
 test("retries an empty assistant terminal message and identifies it in the log", async () => {
