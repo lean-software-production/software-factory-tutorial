@@ -222,6 +222,104 @@ describe("workbook lesson UI", () => {
     expect(markup).toContain('aria-label="Send message"');
   });
 
+  it("shows the learner's message immediately while the tutor reply is still pending", async () => {
+    let resolveSend!: () => void;
+    const onSend = vi.fn(() => new Promise<void>((resolve) => { resolveSend = resolve; }));
+    const container = await mount(createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend,
+      onRetry: vi.fn(async () => undefined),
+      records: []
+    }));
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+
+    textarea.value = "What should I try next?";
+    textarea.focus();
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    await act(async () => { textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+
+    expect(onSend).toHaveBeenCalledWith("What should I try next?");
+    expect(textarea.value).toBe("");
+    const learnerBubble = container.querySelector(".timeline-message.learner");
+    expect(learnerBubble).not.toBeNull();
+    expect(learnerBubble!.textContent).toContain("What should I try next?");
+
+    await act(async () => { resolveSend(); await Promise.resolve(); });
+
+    expect(container.querySelector(".timeline-message.learner")).toBeNull();
+  });
+
+  it("restores the draft if onSend rejects, but still removes the pending echo", async () => {
+    let rejectSend!: (error: Error) => void;
+    const onSend = vi.fn(() => new Promise<void>((_resolve, reject) => { rejectSend = reject; }));
+    const container = await mount(createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend,
+      onRetry: vi.fn(async () => undefined),
+      records: []
+    }));
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+
+    textarea.value = "What should I try next?";
+    textarea.focus();
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    await act(async () => { textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+
+    expect(onSend).toHaveBeenCalledWith("What should I try next?");
+    expect(textarea.value).toBe("");
+    expect(container.querySelector(".timeline-message.learner")).not.toBeNull();
+
+    const onUnhandledRejection = (error: unknown) => { void error; };
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      await act(async () => {
+        rejectSend(new Error("send failed"));
+        await Promise.resolve().then(() => Promise.resolve());
+      });
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+
+    expect(textarea.value).toBe("What should I try next?");
+    expect(container.querySelector(".timeline-message.learner")).toBeNull();
+  });
+
+  it("scrolls the newest conversation entry into view but not for course-only records", async () => {
+    const scrollIntoView = vi.fn();
+    const baseRecords = [
+      { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "Course note" }
+    ] as const;
+    const container = await mount(createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend: vi.fn(async () => undefined),
+      onRetry: vi.fn(async () => undefined),
+      records: baseRecords as any
+    }), (win) => { win.HTMLElement.prototype.scrollIntoView = scrollIntoView; });
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    await act(async () => {
+      mountedRoot!.render(createElement(TimelineThread, {
+        activeLessonId: "part/lesson-one",
+        activeBlockId: "orientation",
+        onSend: vi.fn(async () => undefined),
+        onRetry: vi.fn(async () => undefined),
+        records: [
+          ...baseRecords,
+          { type: "message", id: "reply", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "main_tutor", presentation: "chat", text: "Tutor reply" }
+        ] as any
+      }));
+    });
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    const tutorBubble = container.querySelector(".timeline-message.tutor");
+    expect(scrollIntoView.mock.instances[0]).toBe(tutorBubble);
+    expect(scrollIntoView.mock.instances[0]).not.toBe(container.querySelector(".timeline-composer-dock"));
+  });
+
   it("renders an active editor-practice block without exposing private tutor text", () => {
     const markup = html(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress(), refresh: vi.fn() }));
 
