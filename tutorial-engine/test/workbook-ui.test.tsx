@@ -45,6 +45,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 });
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
+import { ActivityBand } from "../web-workbook/src/activity-band.js";
 import { AcceptanceConfetti, App, BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Chapter, type Progress } from "../web-workbook/src/workbook-ui.js";
 import { lessonAnchorHref, lessonElementId } from "../src/workbook/lesson-links.js";
 
@@ -207,8 +208,8 @@ describe("workbook lesson UI", () => {
     expect(textarea.value).toBe("Line one\n");
   });
 
-  it("exposes the docked composer and round send layout hooks", () => {
-    const markup = html(createElement(TimelineThread, {
+  it("keeps the docked composer visually compact while preserving accessible labels", async () => {
+    const container = await mount(createElement(TimelineThread, {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend: vi.fn(async () => undefined),
@@ -216,10 +217,62 @@ describe("workbook lesson UI", () => {
       records: []
     }));
 
-    expect(markup).toContain('class="timeline-composer-dock fixed-composer"');
-    expect(markup).toContain('class="timeline-input fixed-composer"');
-    expect(markup).toContain('class="round-send"');
-    expect(markup).toContain('aria-label="Send message"');
+    const dock = container.querySelector(".timeline-composer-dock.fixed-composer");
+    const form = container.querySelector("form.timeline-input.fixed-composer");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+
+    expect(dock).not.toBeNull();
+    expect(form).not.toBeNull();
+    expect(textarea.getAttribute("aria-label")).toBe("Message the tutor");
+    expect(textarea.classList.contains("timeline-composer-textarea")).toBe(true);
+    expect(textarea.rows).toBe(1);
+    expect(container.querySelector("label")).toBeNull();
+    expect(container.textContent).not.toContain("Message the tutor");
+    expect(container.querySelector(".round-send")?.getAttribute("aria-label")).toBe("Send message");
+  });
+
+  it("auto-sizes the docked composer from one line as draft content grows", async () => {
+    const container = await mount(createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend: vi.fn(async () => undefined),
+      onRetry: vi.fn(async () => undefined),
+      records: []
+    }));
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+    let scrollHeight = 42;
+    Object.defineProperty(textarea, "scrollHeight", { configurable: true, get: () => scrollHeight });
+
+    textarea.value = "Line one";
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+
+    expect(textarea.style.height).toBe("42px");
+    expect(textarea.style.overflowY).toBe("hidden");
+
+    scrollHeight = 94;
+    textarea.value = "Line one\nLine two\nLine three";
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+
+    expect(textarea.style.height).toBe("94px");
+    expect(textarea.style.overflowY).toBe("hidden");
+  });
+
+  it("caps docked composer growth and enables vertical scrolling without field-sizing support", async () => {
+    const container = await mount(createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend: vi.fn(async () => undefined),
+      onRetry: vi.fn(async () => undefined),
+      records: []
+    }));
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+    Object.defineProperty(textarea, "scrollHeight", { configurable: true, get: () => 240 });
+
+    textarea.value = "Line one\nLine two\nLine three\nLine four\nLine five\nLine six";
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+
+    expect(textarea.style.height).toBe("160px");
+    expect(textarea.style.overflowY).toBe("auto");
   });
 
   it("shows the learner's message immediately while the tutor reply is still pending", async () => {
@@ -399,6 +452,45 @@ describe("workbook lesson UI", () => {
     expect(reflectionMarkup).toContain("Tutor note");
     expect(reflectionMarkup).toContain("Continue");
     expect(reflectionMarkup).not.toContain("Your reflection");
+  });
+
+  it("renders terminal activity chrome without duplicating the authored title or markdown", () => {
+    const terminalBlock = lesson.blocks[1];
+    const markup = html(createElement(ActivityBand, {
+      lessonId: lesson.id,
+      activeBlock: terminalBlock,
+      progress: activeBlockProgress(terminalBlock),
+      refresh: vi.fn(),
+      onHint: vi.fn(async () => undefined)
+    }));
+
+    expect(markup).toContain("current-activity-band");
+    expect(markup).toContain("data-activity-type=\"terminal-practice\"");
+    expect(markup).toContain("Embedded terminal");
+    expect(markup).toContain("Insert command");
+    expect(markup).toContain("Get a hint");
+    expect(markup).not.toContain("Practice");
+    expect(markup).not.toContain("Run this:");
+    expect(markup).not.toContain("echo hi");
+  });
+
+  it("renders editor activity chrome without duplicating the authored title or markdown", () => {
+    const markup = html(createElement(ActivityBand, {
+      lessonId: lesson.id,
+      activeBlock: editorBlock,
+      progress: activeEditorProgress(),
+      refresh: vi.fn(),
+      onHint: vi.fn(async () => undefined)
+    }));
+
+    expect(markup).toContain("current-activity-band");
+    expect(markup).toContain("data-activity-type=\"editor-practice\"");
+    expect(markup).toContain("factory/answer.md");
+    expect(markup).toContain("editor-surface");
+    expect(markup).toContain("role=\"status\"");
+    expect(markup).toContain("Get a hint");
+    expect(markup).not.toContain("Edit the answer");
+    expect(markup).not.toContain("Update the answer file");
   });
 
   it("does not show checkpoint Continue for nonaccepted evaluated blocks", () => {
@@ -770,6 +862,75 @@ describe("workbook lesson UI", () => {
     expect(activeMarkup).toContain("Insert command");
   });
 
+  it("renders the unopened introduction through the timeline with a composer and durable intro target", async () => {
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro should not render as a standalone section.",
+      introductionComplete: false,
+      chapters: [chapter({ lesson: undefined } as any)],
+      progress,
+      adapter: {},
+      timeline: [{ type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook:introduction", blockId: "__introduction__", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nTimeline intro copy." }]
+    } as any;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.querySelector(".workbook-intro")).toBeNull();
+    expect(container.querySelector(".current-activity-band")).toBeNull();
+    expect(container.textContent).toContain("Timeline intro copy.");
+    expect(container.textContent).not.toContain("Intro should not render as a standalone section.");
+    expect(container.querySelector("textarea[name='message']")?.getAttribute("aria-label")).toBe("Message the tutor");
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+    textarea.value = "Can I ask first?";
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    const sendButton = container.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!;
+    await act(async () => { sendButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+    const messageCall = fetchMock.mock.calls.find(([url]) => url === "/api/workbook/messages");
+    expect(messageCall).toBeTruthy();
+    expect(JSON.parse((messageCall![1] as RequestInit).body as string)).toEqual({ blockId: "__introduction__", text: "Can I ask first?" });
+
+    const continueButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Ready to continue")!;
+    await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+    expect(fetchMock.mock.calls.some(([url, init]) => url === "api/workbook/introduction" && (init as RequestInit | undefined)?.method === "POST")).toBe(true);
+  });
+
+  it("renders conversational intro, part, lesson frame, and block content only in the timeline", async () => {
+    const conversationalLesson = { ...lesson, dek: "TIMELINE_ONLY_DEK", outcomes: ["TIMELINE_ONLY_OUTCOME"], blocks: [{ ...lesson.blocks[0], markdown: "Block body duplicated only if document blocks render." }] };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "TIMELINE_ONLY_INTRO",
+      introductionComplete: true,
+      chapters: [chapter({ partMarkdown: "TIMELINE_ONLY_PART_COPY", lesson: conversationalLesson })],
+      progress,
+      adapter: {},
+      timeline: [
+        { type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook:introduction", blockId: "__introduction__", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nTIMELINE_ONLY_INTRO" },
+        { type: "message", id: "part", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "workbook:part:part-one", blockId: "__part__", role: "assistant", source: "authored", presentation: "course", text: "# Part One\n\nTIMELINE_ONLY_PART_COPY" },
+        { type: "message", id: "frame", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: lesson.id, blockId: "__lesson_frame__", role: "assistant", source: "authored", presentation: "course", text: "# Markdown Lesson\n\nTIMELINE_ONLY_DEK\n\n## What you will learn\n\n- TIMELINE_ONLY_OUTCOME" },
+        { type: "message", id: "block", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: lesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nBlock body duplicated only if document blocks render." },
+      ]
+    } as any;
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    const text = container.textContent ?? "";
+    expect(container.querySelector(".workbook-intro")).toBeNull();
+    expect(container.querySelector(".part-chapter")).toBeNull();
+    expect(container.querySelector(".opening")).toBeNull();
+    expect(text.match(/TIMELINE_ONLY_INTRO/g)).toHaveLength(1);
+    expect(text.match(/TIMELINE_ONLY_PART_COPY/g)).toHaveLength(1);
+    expect(text.match(/TIMELINE_ONLY_DEK/g)).toHaveLength(1);
+    expect(text.match(/TIMELINE_ONLY_OUTCOME/g)).toHaveLength(1);
+    expect(text.match(/Block body duplicated only if document blocks render\./g)).toHaveLength(1);
+  });
+
   it("renders the active narrative timeline note with a manual Continue before the fixed composer", async () => {
     const state = {
       workbook: { title: "Workbook" },
@@ -790,9 +951,12 @@ describe("workbook lesson UI", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("Authored Orientation note.");
     expect(text.indexOf("Authored Orientation note.")).toBeLessThan(text.indexOf("Continue"));
-    expect(text.indexOf("Continue")).toBeLessThan(text.indexOf("Message the tutor"));
+    expect(text).not.toContain("Message the tutor");
 
     const continueButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
+    const composerDock = container.querySelector(".timeline-composer-dock.fixed-composer")!;
+    expect(continueButton.compareDocumentPosition(composerDock) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector("textarea[name='message']")?.getAttribute("aria-label")).toBe("Message the tutor");
     await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
     const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
@@ -800,7 +964,7 @@ describe("workbook lesson UI", () => {
     expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "orientation", action: "continue" });
   });
 
-  it("shows the part card before the active lesson header in timeline mode", async () => {
+  it("keeps navigation but omits standalone part and lesson framing in timeline mode", async () => {
     const state = {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
@@ -816,13 +980,12 @@ describe("workbook lesson UI", () => {
     const container = await mount(createElement(App), stubAppShellGlobals);
     await act(async () => { await Promise.resolve(); });
 
-    const partCard = container.querySelector(".part-chapter")!;
-    const lessonHeader = container.querySelector("article.chapter header")!;
-    expect(container.querySelectorAll(".part-chapter")).toHaveLength(1);
-    expect(partCard.textContent).toContain("Part One");
-    expect(partCard.textContent).toContain("Part copy.");
-    // Bit 4 (DOCUMENT_POSITION_FOLLOWING) means lessonHeader comes after partCard.
-    expect(partCard.compareDocumentPosition(lessonHeader) & 4).toBeTruthy();
+    expect(container.querySelector(".part-chapter")).toBeNull();
+    expect(container.querySelector("article.chapter header")).toBeNull();
+    expect(container.querySelector(".rail")?.textContent).toContain("Part One");
+    expect(container.querySelector(".rail")?.textContent).toContain("Lesson 1: Markdown Lesson");
+    expect(container.textContent).toContain("Authored Orientation note.");
+    expect(container.textContent).not.toContain("Part copy.");
   });
 
   it("does not repeat the part card for a later lesson in the same part in timeline mode", async () => {
@@ -978,6 +1141,47 @@ describe("workbook lesson UI", () => {
     const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
     expect(eventCall).toBeTruthy();
     expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "reflect", action: "reflection-submit", response: "My reflection answer" });
+  });
+
+  it("renders accepted reflection continuation in the timeline and advances through the block event path", async () => {
+    const reflectionProgress: Progress = {
+      ...progress,
+      activeBlockId: "reflect",
+      blocks: [{ id: "reflect", type: "reflection", ready: true, active: true, completed: false, verified: false, emerged: true, checkpoint: { status: "accepted", successMessage: "Reflection accepted.", evidence: { kind: "reflection", conversation: [{ role: "learner", text: "First answer" }, { role: "tutor", text: "Accepted." }] } } } as any],
+      reflectionConversations: { reflect: [{ role: "learner", text: "First answer" }] }
+    };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [lesson.blocks[2]] } as any })],
+      progress: reflectionProgress,
+      adapter: {},
+      timeline: [
+        { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "authored", presentation: "course", text: "## Reflect\n\nWhat changed?" },
+        { type: "message", id: "learner", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "reflect", role: "user", source: "learner", presentation: "chat", text: "First answer" },
+        { type: "message", id: "review", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "main_tutor", presentation: "review", text: "Accepted." }
+      ]
+    } as any;
+    const nextState = { ...state, progress: { ...reflectionProgress, activeBlockId: "transition" } };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? nextState : state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.textContent).toContain("Accepted.");
+    expect(container.querySelector(".current-activity-band")).toBeNull();
+    const continueButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Continue");
+    expect(continueButton).toBeTruthy();
+    expect(container.querySelector<HTMLTextAreaElement>(".timeline-input textarea")!.disabled).toBe(true);
+
+    await act(async () => { continueButton!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+
+    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
+    expect(eventCall).toBeTruthy();
+    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "reflect", action: "continue" });
+    expect(fetchMock.mock.calls.find(([url]) => url === "/api/workbook/messages")).toBeUndefined();
   });
 
   it("disables reflection follow-up while the current attempt is reviewing", async () => {

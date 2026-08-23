@@ -26,8 +26,8 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onHint 
     }
   };
 
-  return <section className="current-activity-band" data-activity-type={activeBlock.type} aria-label={`Current activity: ${activeBlock.title}`}>
+  return <section className="current-activity-band" data-activity-type={activeBlock.type} aria-label="Current practice activity">
     {onHint && <div className="activity-assist"><button className="button secondary get-hint" disabled={hintPending} onClick={() => void requestHint()}>Get a hint</button></div>}
-    <BlockView lessonId={lessonId} block={activeBlock} progress={progress} refresh={refresh} />
+    <BlockView lessonId={lessonId} block={activeBlock} progress={progress} refresh={refresh} showAuthoredContent={false} />
   </section>;
 }

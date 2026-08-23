@@ -24,6 +24,7 @@ import {
 export interface WorkbookChapter {
   id: string;
   title: string;
+  partId?: string;
   part?: string;
   partMarkdown?: string;
   partNumber?: number;
@@ -216,6 +217,7 @@ async function draftForLesson(id: string, lessonDir: string, part: LoadedPart | 
   return {
     id,
     title: lesson.title,
+    partId: part?.id,
     part: part?.title,
     partMarkdown: part?.markdown,
     partNumber: partIndex === undefined ? undefined : partIndex + 1,
@@ -297,6 +299,7 @@ export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
     return {
       id: chapter.id,
       title: chapter.title,
+      partId: chapter.partId,
       part: chapter.part,
       partMarkdown: chapter.partIndex === undefined ? undefined : resolvedPartMarkdown[chapter.partIndex]!,
       partNumber: chapter.partNumber,

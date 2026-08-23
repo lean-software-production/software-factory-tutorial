@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Markdown } from "../../web/src/markdown";
 
 type TimelineMessageRecord = { type: "message"; id: string; sequence: number; at: string; lessonId: string; blockId: string; role: "assistant" | "user"; source: "authored" | "learner" | "main_tutor" | "block_tutor" | "tutor"; presentation: "course" | "chat" | "hint" | "review"; text: string };
@@ -7,6 +7,15 @@ export type PublicTimelineRecord =
   | { type: "tutor_failed"; id: string; sequence: number; at: string; lessonId: string; blockId: string; failureId: string; operation: string; publicMessage: string };
 type InternalTimelineRecord = { type: "block_tutor_briefed" | "block_tutor_readiness" | "block_summarized" | "lesson_summarized"; id: string; sequence: number; at: string; lessonId?: string; blockId?: string; text?: string };
 type TimelineThreadRecord = PublicTimelineRecord | InternalTimelineRecord;
+
+const composerMaxHeightPx = 160;
+
+function resizeComposerTextarea(textarea: HTMLTextAreaElement) {
+  textarea.style.height = "auto";
+  const nextHeight = Math.min(textarea.scrollHeight, composerMaxHeightPx);
+  textarea.style.height = `${nextHeight}px`;
+  textarea.style.overflowY = textarea.scrollHeight > composerMaxHeightPx ? "auto" : "hidden";
+}
 
 export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, renderContinuation, inputDisabled = false }: {
   records: readonly TimelineThreadRecord[];
@@ -22,11 +31,15 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   const [pendingEchoes, setPendingEchoes] = useState<{ id: string; text: string }[]>([]);
   const nextEchoId = useRef(0);
   const latestEntryRef = useRef<HTMLElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const chatEntryCount = records.reduce((count, record) => count + ((record.type === "message" && record.presentation !== "course") || record.type === "tutor_failed" ? 1 : 0), 0) + pendingEchoes.length;
   useEffect(() => {
     if (chatEntryCount === 0) return;
     (latestEntryRef.current as (HTMLElement & { scrollIntoView?(options?: ScrollIntoViewOptions): void }) | null)?.scrollIntoView?.({ behavior: "smooth", block: "end" });
   }, [chatEntryCount]);
+  useLayoutEffect(() => {
+    if (textareaRef.current) resizeComposerTextarea(textareaRef.current);
+  }, [draft]);
   const submitText = async (text: string) => {
     const trimmed = text.trim();
     if (inputDisabled || pending || !trimmed) return;
@@ -69,14 +82,15 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     {records.map((record) => {
       if (record.type === "tutor_failed") return <aside key={record.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message tutor failure" aria-live="polite"><b>Tutor unavailable</b><p>{record.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(record.failureId)}>Retry</button></aside>;
       if (record.type !== "message") return null;
-      if (record.presentation === "course") return <React.Fragment key={record.id}><article className="timeline-message authored"><p className="section-label">Course note</p><Markdown>{record.text}</Markdown></article>{record.lessonId === activeLessonId && record.blockId === activeBlockId && renderContinuation?.(record)}</React.Fragment>;
+      const continuation = record.lessonId === activeLessonId && record.blockId === activeBlockId ? renderContinuation?.(record) : null;
+      if (record.presentation === "course") return <React.Fragment key={record.id}><article className="timeline-message authored"><p className="section-label">Course note</p><Markdown>{record.text}</Markdown></article>{continuation}</React.Fragment>;
       const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : record.presentation === "hint" ? " hint" : ""}`;
-      return <article key={record.id} ref={(el) => { latestEntryRef.current = el; }} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown>{record.text}</Markdown>}</article>;
+      return <React.Fragment key={record.id}><article ref={(el) => { latestEntryRef.current = el; }} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown>{record.text}</Markdown>}</article>{continuation}</React.Fragment>;
     })}
     {pendingEchoes.map((echo) => <article key={echo.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message learner"><b>You</b><p>{echo.text}</p></article>)}
     <div className="timeline-composer-dock fixed-composer">
       <form className="timeline-input fixed-composer" onSubmit={send}>
-        <label>Message the tutor<textarea name="message" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} disabled={inputDisabled || pending} /></label>
+        <textarea ref={textareaRef} className="timeline-composer-textarea" name="message" rows={1} aria-label="Message the tutor" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} disabled={inputDisabled || pending} />
         <button className="round-send" aria-label="Send message" title="Send message" disabled={inputDisabled || pending || !draft.trim()}>{pending ? "…" : "↑"}</button>
       </form>
     </div>

@@ -1,5 +1,5 @@
 import type { Attempt } from "./attempts.js";
-import type { WorkbookBlock } from "./contract.js";
+import type { WorkbookBlock, WorkbookLesson } from "./contract.js";
 import type { BlockSummary, LessonSummary, WorkbookTimelineRecord } from "./timeline.js";
 
 export type PiHistoryTurn = {
@@ -12,6 +12,13 @@ export type PiHistoryProjection = {
   summary?: { sourceEventId: string; text: string; coveredThroughId: string };
   turns: PiHistoryTurn[];
 };
+
+export const INTRODUCTION_LESSON_ID = "workbook:introduction";
+export const INTRODUCTION_BLOCK_ID = "__introduction__";
+export const PART_BLOCK_ID = "__part__";
+export const LESSON_FRAME_BLOCK_ID = "__lesson_frame__";
+
+export function partLessonId(partId: string): string { return `workbook:part:${partId}`; }
 
 export type ActiveBlockContext = {
   lessonId: string;
@@ -60,6 +67,19 @@ export function projectMainTutorHistory(records: readonly WorkbookTimelineRecord
 }
 
 /** The exact course text displayed at the top of a workbook block. */
+export function authoredIntroductionText(workbook: { title: string }, introduction: string): string {
+  return `# ${workbook.title}\n\n${introduction}`;
+}
+
+export function authoredPartText(part: { title: string; markdown?: string }): string {
+  const body = part.markdown?.trim();
+  return body ? `# ${part.title}\n\n${body}` : `# ${part.title}`;
+}
+
+export function authoredLessonFrameText(lesson: Pick<WorkbookLesson, "title" | "dek" | "outcomes">): string {
+  return [`# ${lesson.title}`, lesson.dek, "## What you will learn", lesson.outcomes.map((outcome) => `- ${outcome}`).join("\n")].join("\n\n");
+}
+
 export function authoredBlockText(block: Pick<WorkbookBlock, "title" | "markdown">): string {
   return `## ${block.title}\n\n${block.markdown}`;
 }
