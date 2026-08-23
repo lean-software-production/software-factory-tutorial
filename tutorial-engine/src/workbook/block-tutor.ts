@@ -6,8 +6,6 @@ import {
   createAgentSession,
   defineTool,
   getAgentDir,
-  type AgentSession,
-  type AgentSessionEvent,
   type ToolDefinition
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -16,6 +14,7 @@ import { createWorkspaceTools, WorkspaceBoundary } from "../agent/workspace-boun
 import { createTutorialLogger, type TutorialLogger } from "../runtime-log.js";
 import type { Attempt } from "./attempts.js";
 import type { ActiveBlockContext } from "./pi-history.js";
+import { createResilientTutorSession } from "./pi-tutor-session.js";
 
 export interface WorkbookBlockTutor {
   hint(input: { context: ActiveBlockContext; briefing: string }): Promise<string>;
@@ -120,21 +119,6 @@ function assertNoReadinessAcceptanceClaims(text: string, label: string): void {
   }
 }
 
-async function collectAssistantText(session: AgentSession, prompt: string): Promise<string> {
-  let finalText = "";
-  const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-    if (event.type !== "message_end" || event.message.role !== "assistant") return;
-    const message = event.message as { content?: Array<{ type: string; text?: string }> };
-    finalText = message.content?.filter((item) => item.type === "text").map((item) => item.text ?? "").join("") ?? "";
-  });
-  try {
-    await session.prompt(prompt);
-    return finalText;
-  } finally {
-    unsubscribe();
-  }
-}
-
 function safeWorkspaceTools(workspace: string, boundary: WorkspaceBoundary, log: TutorialLogger): ToolDefinition[] {
   const audit = (event: { tool: string; paths: string[]; mutation: boolean; outcome: string; message?: string }) => {
     log.info(`Block tutor tool audit: ${event.tool} ${event.outcome} (${event.paths.join(", ") || "."}; mutation=${event.mutation}).`);
@@ -174,13 +158,7 @@ async function createPiWorkbookBlockTutorSession(workspace: string, request: Wor
     sessionManager: SessionManager.inMemory(workspace),
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } })
   });
-  return {
-    async prompt(prompt: string): Promise<string> {
-      log.info(`Submitting workbook block tutor prompt (${prompt.length} characters).`);
-      return collectAssistantText(session, prompt);
-    },
-    dispose(): void { session.dispose(); }
-  };
+  return createResilientTutorSession(session, log, "Workbook block tutor");
 }
 
 export interface FastWorkbookBlockTutorOptions {
