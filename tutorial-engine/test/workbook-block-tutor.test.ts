@@ -1,7 +1,23 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const piSessions = vi.hoisted(() => [] as any[]);
+const createAgentSession = vi.hoisted(() => vi.fn(async () => ({ session: piSessions.shift() })));
+
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+  return {
+    ...actual,
+    DefaultResourceLoader: class { async reload() {} },
+    ModelRuntime: { create: vi.fn(async () => ({})) },
+    SessionManager: { inMemory: vi.fn(() => ({})) },
+    SettingsManager: { inMemory: vi.fn((settings) => settings) },
+    createAgentSession,
+    getAgentDir: vi.fn(() => "/tmp/pi-agent")
+  };
+});
 import type { Attempt } from "../src/workbook/attempts.js";
 import type { ActiveBlockContext } from "../src/workbook/pi-history.js";
 import { FastWorkbookBlockTutor, type WorkbookBlockTutorSession, type WorkbookBlockTutorSessionFactoryRequest } from "../src/workbook/block-tutor.js";
@@ -56,6 +72,34 @@ async function workspaceFixture() {
 }
 
 describe("FastWorkbookBlockTutor", () => {
+  it("retries a terminal provider error through the default Pi session before returning a hint", async () => {
+    const workspace = await workspaceFixture();
+    vi.useFakeTimers();
+    const listeners = new Set<(event: any) => void>();
+    let firstPrompt!: () => void;
+    const prompted = new Promise<void>((resolve) => { firstPrompt = resolve; });
+    const outcomes = [
+      { type: "message_end", message: { role: "assistant", content: [], errorMessage: "transport failed" } },
+      { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Name the removed shell capability." }] } }
+    ];
+    piSessions.push({
+      state: { model: { provider: "test", id: "block" } },
+      subscribe(listener: (event: any) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+      async prompt() { firstPrompt(); listeners.forEach((listener) => listener(outcomes.shift())); },
+      dispose() {}
+    });
+    const tutor = new FastWorkbookBlockTutor({ workspace, log: { info() {}, error() {} } });
+
+    try {
+      const hint = tutor.hint({ context: activeContext(), briefing: "Private guidance." });
+      await prompted;
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(hint).resolves.toBe("Name the removed shell capability.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("creates a fresh read-only block session for each hint with private briefing and active evidence", async () => {
     const workspace = await workspaceFixture();
     const sessions: FakeSession[] = [];

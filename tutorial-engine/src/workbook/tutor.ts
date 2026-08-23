@@ -6,8 +6,6 @@ import {
   createAgentSession,
   defineTool,
   getAgentDir,
-  type AgentSession,
-  type AgentSessionEvent,
   type ToolDefinition
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -15,6 +13,7 @@ import { TUTOR_MODEL_ENV, resolveTutorModel } from "../agent/pi-adapter.js";
 import { createTutorialLogger, type TutorialLogger } from "../runtime-log.js";
 import type { Attempt } from "./attempts.js";
 import { projectMainTutorHistory, type ActiveBlockContext, type MainTutorHistoryProjection } from "./pi-history.js";
+import { createResilientTutorSession } from "./pi-tutor-session.js";
 import type { BlockTutorReadiness, TimelineMessage, WorkbookTimelineRecord } from "./timeline.js";
 
 export type TutorReview = { attempt: Attempt; privateGuidance: string };
@@ -141,21 +140,6 @@ function requiredText(text: string, label: string): string {
   return message;
 }
 
-async function collectAssistantText(session: AgentSession, prompt: string): Promise<string> {
-  let finalText = "";
-  const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-    if (event.type !== "message_end" || event.message.role !== "assistant") return;
-    const message = event.message as { content?: Array<{ type: string; text?: string }> };
-    finalText = message.content?.filter((item) => item.type === "text").map((item) => item.text ?? "").join("") ?? "";
-  });
-  try {
-    await session.prompt(prompt);
-    return finalText;
-  } finally {
-    unsubscribe();
-  }
-}
-
 async function createPiWorkbookTutorSession(workspace: string, request: WorkbookTutorSessionFactoryRequest, log: TutorialLogger): Promise<WorkbookTutorSession> {
   const sessionManager = SessionManager.inMemory(workspace);
   if (request.history.summary) {
@@ -206,17 +190,14 @@ async function createPiWorkbookTutorSession(workspace: string, request: Workbook
     sessionManager,
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } })
   });
+  const resilient = createResilientTutorSession(session, log, "Workbook tutor");
   return {
-    async prompt(prompt: string): Promise<string> {
-      log.info(`Submitting workbook tutor prompt (${prompt.length} characters).`);
-      return collectAssistantText(session, prompt);
-    },
+    ...resilient,
     async compact(instruction: string): Promise<{ summary: string }> {
       log.info("Compacting workbook tutor context after accepted checkpoint continuation.");
       const result = await session.compact(instruction);
       return { summary: result.summary };
-    },
-    dispose(): void { session.dispose(); }
+    }
   };
 }
 

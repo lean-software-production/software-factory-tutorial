@@ -1,4 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const piSessions = vi.hoisted(() => [] as any[]);
+const createAgentSession = vi.hoisted(() => vi.fn(async () => ({ session: piSessions.shift() })));
+
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+  return {
+    ...actual,
+    DefaultResourceLoader: class { async reload() {} },
+    ModelRuntime: { create: vi.fn(async () => ({})) },
+    SessionManager: { inMemory: vi.fn(() => ({ appendCustomMessageEntry() {}, appendMessage() {} })) },
+    SettingsManager: { inMemory: vi.fn((settings) => settings) },
+    createAgentSession,
+    getAgentDir: vi.fn(() => "/tmp/pi-agent")
+  };
+});
 import type { Attempt } from "../src/workbook/attempts.js";
 import type { ActiveBlockContext } from "../src/workbook/pi-history.js";
 import { MainWorkbookTutor, type WorkbookTutorSession, type WorkbookTutorSessionFactoryRequest } from "../src/workbook/tutor.js";
@@ -67,6 +83,31 @@ function logger() {
 }
 
 describe("MainWorkbookTutor", () => {
+  it("retries a terminal provider error through the default Pi session before replying", async () => {
+    vi.useFakeTimers();
+    const listeners = new Set<(event: any) => void>();
+    const outcomes = [
+      { type: "message_end", message: { role: "assistant", content: [], errorMessage: "transport failed" } },
+      { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Recovered main reply." }] } }
+    ];
+    piSessions.push({
+      state: { model: { provider: "test", id: "main" } },
+      subscribe(listener: (event: any) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+      async prompt() { listeners.forEach((listener) => listener(outcomes.shift())); },
+      async compact() { return { summary: "Summary." }; },
+      dispose() {}
+    });
+    const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", log: logger().log });
+
+    try {
+      const reply = tutor.reply({ records: [], activeContext: activeContext(), learnerMessage: message("learner-1", 1, "learner", "user", "Help") });
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(reply).resolves.toBe("Recovered main reply.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rebuilds replies from projected authored, learner, main, and block turns plus fresh active evidence", async () => {
     const sessions: FakeSession[] = [];
     const requests: WorkbookTutorSessionFactoryRequest[] = [];
