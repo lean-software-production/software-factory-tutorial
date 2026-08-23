@@ -27,4 +27,4 @@ Update the index below whenever you create a record or change its status.
 | [0003](0003-use-one-long-running-workbook-tutor-session.md) | superseded | Use one long-running workbook tutor session |
 | [0004](0004-use-the-workbook-event-log-as-canonical-tutor-history.md) | superseded | Use the workbook event log as canonical tutor history |
 | [0005](0005-use-a-main-tutor-with-on-demand-block-tutors.md) | accepted | Use a main tutor with on-demand block tutors |
-| [0006](0006-project-workbook-tutor-history-by-role-and-compaction-scope.md) | proposed | Project workbook tutor history by role and compaction scope |
+| [0006](0006-project-workbook-tutor-history-by-role-and-compaction-scope.md) | accepted | Project workbook tutor history by role and compaction scope |
