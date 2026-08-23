@@ -9,7 +9,7 @@ import {
   type ToolDefinition
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { TUTOR_MODEL_ENV, resolveTutorModel } from "../agent/pi-adapter.js";
+import { TUTOR_MODEL_ENV, resolveTutorModel, type TutorModelChoice } from "../agent/pi-adapter.js";
 import { createTutorialLogger, type TutorialLogger } from "../runtime-log.js";
 import type { Attempt } from "./attempts.js";
 import { projectMainTutorHistory, type ActiveBlockContext, type MainTutorHistoryProjection } from "./pi-history.js";
@@ -58,6 +58,10 @@ const FALLBACK_ACCEPTED = "Accepted — this attempt satisfies the block.";
 type LegacyRestoreInput = readonly WorkbookTimelineRecord[];
 type LegacyReplyInput = { lessonId: string; blockId: string; learnerMessage: TimelineMessage };
 type LegacyReviewDecision = { accepted: boolean; feedback: string };
+type PiSessionMessage = Parameters<ReturnType<typeof SessionManager.inMemory>["appendMessage"]>[0];
+type PiUserMessage = Extract<PiSessionMessage, { role: "user" }>;
+type PiAssistantMessage = Extract<PiSessionMessage, { role: "assistant" }>;
+type ResolvedTutorModel = NonNullable<TutorModelChoice["model"]>;
 
 // Kept only as the pre-Task-4 server-facing shape; Task 4 will switch callers to MainWorkbookTutor.
 export interface WorkbookTutor {
@@ -140,30 +144,46 @@ function requiredText(text: string, label: string): string {
   return message;
 }
 
+function zeroUsage(): PiAssistantMessage["usage"] {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+  };
+}
+
+function summaryCustomType(summary: MainTutorHistoryProjection["summaries"][number]): string {
+  return summary.scope === "block" ? "workbook-context-block-summary" : "workbook-context-lesson-summary";
+}
+
+function summaryContextText(summary: MainTutorHistoryProjection["summaries"][number]): string {
+  const scope = summary.scope === "block" ? `lesson/block ${summary.lessonId}/${summary.blockId}` : `lesson ${summary.lessonId}`;
+  return `Completed ${summary.scope} summary for ${scope}:\n${summary.text}`;
+}
+
+function piMessageForTurn(turn: MainTutorHistoryProjection["turns"][number], model: ResolvedTutorModel | undefined): PiUserMessage | PiAssistantMessage {
+  if (turn.role === "user") {
+    return { role: "user", content: [{ type: "text", text: turn.text }], timestamp: turn.timestamp };
+  }
+  if (!model) {
+    throw new Error("Cannot reconstruct workbook tutor assistant history without a resolved tutor model. Set TUTOR_MODEL to a configured Pi model.");
+  }
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: turn.text }],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: zeroUsage(),
+    stopReason: "stop",
+    timestamp: turn.timestamp
+  };
+}
+
 async function createPiWorkbookTutorSession(workspace: string, request: WorkbookTutorSessionFactoryRequest, log: TutorialLogger): Promise<WorkbookTutorSession> {
-  const sessionManager = SessionManager.inMemory(workspace);
-  for (const summary of request.history.summaries) {
-    sessionManager.appendCustomMessageEntry("workbook-context-summary", summary.text, false, {
-      sourceEventId: summary.sourceEventId,
-      scope: summary.scope,
-      lessonId: summary.lessonId,
-      blockId: summary.blockId,
-      coveredThroughId: summary.coveredThroughId,
-      timestamp: summary.timestamp
-    });
-  }
-  for (const turn of request.history.turns) {
-    sessionManager.appendMessage({
-      role: turn.role,
-      content: [{ type: "text", text: turn.text }],
-      timestamp: turn.timestamp
-    } as never);
-  }
-  if (request.history.activeContext) {
-    sessionManager.appendCustomMessageEntry(request.history.activeContext.name, request.history.activeContext.text, false, {
-      sourceEventIds: request.history.activeContext.sourceEventIds
-    });
-  }
   const loader = new DefaultResourceLoader({
     cwd: workspace,
     agentDir: getAgentDir(),
@@ -183,6 +203,25 @@ async function createPiWorkbookTutorSession(workspace: string, request: Workbook
   const modelRuntime = await ModelRuntime.create();
   const choice = resolveTutorModel(modelRuntime, process.env[TUTOR_MODEL_ENV]);
   if (choice.warning) log.info(choice.warning);
+  const sessionManager = SessionManager.inMemory(workspace);
+  for (const summary of request.history.summaries) {
+    sessionManager.appendCustomMessageEntry(summaryCustomType(summary), summaryContextText(summary), false, {
+      sourceEventId: summary.sourceEventId,
+      scope: summary.scope,
+      lessonId: summary.lessonId,
+      blockId: summary.blockId,
+      coveredThroughId: summary.coveredThroughId,
+      timestamp: summary.timestamp
+    });
+  }
+  for (const turn of request.history.turns) {
+    sessionManager.appendMessage(piMessageForTurn(turn, choice.model));
+  }
+  if (request.history.activeContext) {
+    sessionManager.appendCustomMessageEntry(request.history.activeContext.name, request.history.activeContext.text, false, {
+      sourceEventIds: request.history.activeContext.sourceEventIds
+    });
+  }
   const { session } = await createAgentSession({
     cwd: workspace,
     resourceLoader: loader,
