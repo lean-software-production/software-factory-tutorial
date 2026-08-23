@@ -14,7 +14,7 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onHint 
 }) {
   const [hintPending, setHintPending] = useState(false);
   const activeProgress = progress.blocks.find((block) => block.id === activeBlock.id);
-  if (!activeProgress?.active || !["terminal-practice", "editor-practice"].includes(activeBlock.type)) return null;
+  if (!activeProgress?.active || activeProgress.checkpoint?.status === "accepted" || !["terminal-practice", "editor-practice"].includes(activeBlock.type)) return null;
 
   const requestHint = async () => {
     if (!onHint || hintPending) return;

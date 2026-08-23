@@ -1107,6 +1107,43 @@ describe("workbook lesson UI", () => {
     expect(container.textContent).toContain("Check the requested marker.");
   });
 
+  it.each([
+    ["terminal", lesson.blocks[1], activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "accepted", successMessage: "Terminal accepted.", evidence: { kind: "terminal", terminalHtml: "<pre class=\"frozen-terminal-output\">terminal transcript</pre>" } } } as any), "Terminal accepted."],
+    ["editor", editorBlock, activeEditorProgress({ editorStatus: undefined, checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted answer text" } } } as any), "Editor accepted."]
+  ])("renders only the timeline continuation for accepted %s practice in timeline mode", async (_kind, block, acceptedProgress, acceptedText) => {
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [block] } as any })],
+      progress: acceptedProgress,
+      adapter: {},
+      timeline: [
+        { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: block.id, role: "assistant", source: "authored", presentation: "course", text: `## ${block.title}\n\nDo the work.` },
+        { type: "message", id: "review", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: block.id, role: "assistant", source: "main_tutor", presentation: "review", text: acceptedText }
+      ]
+    } as any;
+    const nextState = { ...state, progress: { ...acceptedProgress, activeBlockId: "transition" } };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? nextState : state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.textContent).toContain(acceptedText);
+    expect(container.querySelector(".current-activity-band")).toBeNull();
+    expect(container.textContent).not.toContain("Get a hint");
+    const continueButtons = [...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue");
+    expect(continueButtons).toHaveLength(1);
+    expect(container.querySelectorAll(".continuation-controls")).toHaveLength(1);
+
+    await act(async () => { continueButtons[0]!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+
+    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
+    expect(eventCall).toBeTruthy();
+    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: block.id, action: "continue" });
+  });
+
   it("routes active reflection composer sends through the reflection event path without a sticky hint", async () => {
     const reflectionProgress: Progress = {
       ...progress,
