@@ -13,6 +13,7 @@ export interface V2WorkbookDriverOptions {
   fetch?: FetchLike;
   WebSocket?: WebSocketConstructor;
   terminalTimeoutMs?: number;
+  terminalReviewTimeoutMs?: number;
   editorReviewTimeoutMs?: number;
 }
 
@@ -33,6 +34,7 @@ export class V2WorkbookDriver {
   readonly #fetch: FetchLike;
   readonly #WebSocket: WebSocketConstructor;
   readonly #terminalTimeoutMs: number;
+  readonly #terminalReviewTimeoutMs: number;
   readonly #editorReviewTimeoutMs: number;
   readonly #editorRevisions = new Map<string, number>();
 
@@ -42,6 +44,7 @@ export class V2WorkbookDriver {
     this.#fetch = options.fetch ?? fetch;
     this.#WebSocket = options.WebSocket ?? WebSocket;
     this.#terminalTimeoutMs = options.terminalTimeoutMs ?? 5_000;
+    this.#terminalReviewTimeoutMs = options.terminalReviewTimeoutMs ?? 120_000;
     this.#editorReviewTimeoutMs = options.editorReviewTimeoutMs ?? 120_000;
   }
 
@@ -112,7 +115,7 @@ export class V2WorkbookDriver {
     const authoredBlockId = blockId;
     blockId = await this.#canonicalBlockId(blockId);
     const input = /[\r\n]$/.test(command) ? command : `${command}\r`;
-    const acceptedState = await this.#submitTerminalInput(blockId, input, options.label ?? `terminal:${authoredBlockId}`, options.timeoutMs);
+    const acceptedState = await this.#submitTerminalInput(blockId, input, options.label ?? `terminal:${authoredBlockId}`, options.timeoutMs ?? this.#terminalReviewTimeoutMs);
     if (options.complete === false) return acceptedState;
     return this.completeTerminalBlock(blockId);
   }
@@ -206,29 +209,38 @@ export class V2WorkbookDriver {
       const state = await this.readState(`${label}:reviewed:${++attempt}`);
       const block = state.progress?.blocks?.find((candidate: any) => candidate?.id === blockId);
       if (block?.checkpoint?.status === "accepted") return state;
+      if (block?.checkpoint?.status === "feedback") {
+        const feedback = typeof block.checkpoint.feedback === "string" && block.checkpoint.feedback.trim().length > 0 ? `: ${block.checkpoint.feedback}` : ".";
+        throw new Error(`Terminal attempt for ${blockId} received tutor feedback${feedback}`);
+      }
     }
     throw new Error(`Timed out waiting for accepted terminal attempt for ${blockId}.`);
   }
 
-  async #submitTerminalInput(blockId: string, input: string, label: string, timeoutMs = this.#terminalTimeoutMs): Promise<WorkbookApiState> {
+  async #submitTerminalInput(blockId: string, input: string, label: string, reviewTimeoutMs: number): Promise<WorkbookApiState> {
     const ws = new this.#WebSocket(`${this.serverUrl.replace(/^http/, "ws")}/api/workbook/terminal`, { headers: { Origin: this.serverUrl } });
     let settled = false;
     let reviewStarted = false;
     let acceptedWaitStarted = false;
     try {
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`Timed out connecting to workbook terminal for ${blockId}.`)), timeoutMs);
+        const timer = setTimeout(() => reject(new Error(`Timed out connecting to workbook terminal for ${blockId}.`)), this.#terminalTimeoutMs);
         ws.once("open", () => { clearTimeout(timer); resolve(); });
         ws.once("error", (error) => { clearTimeout(timer); reject(error); });
       });
 
       recordTerminalTranscript(this.trace, { blockId, direction: "input", text: input });
       return await new Promise<WorkbookApiState>((resolve, reject) => {
-        const timer = setTimeout(() => finish(new Error(`Timed out waiting for accepted terminal checkpoint for ${blockId}.`)), timeoutMs);
+        let submissionTimer: NodeJS.Timeout | undefined = setTimeout(() => finish(new Error(`Timed out waiting for terminal attempt submission for ${blockId}.`)), reviewTimeoutMs);
+        const clearSubmissionTimer = () => {
+          if (!submissionTimer) return;
+          clearTimeout(submissionTimer);
+          submissionTimer = undefined;
+        };
         const finish = (result: Error | WorkbookApiState) => {
           if (settled) return;
           settled = true;
-          clearTimeout(timer);
+          clearSubmissionTimer();
           if (result instanceof Error) reject(result); else resolve(result);
         };
         ws.on("message", (data) => {
@@ -256,7 +268,8 @@ export class V2WorkbookDriver {
             if (!acceptedWaitStarted && status === "submitted") {
               reviewStarted = true;
               acceptedWaitStarted = true;
-              void this.#waitForAcceptedCheckpoint(blockId, label, timeoutMs).then(finish, (error) => finish(error instanceof Error ? error : new Error(String(error))));
+              clearSubmissionTimer();
+              void this.#waitForAcceptedCheckpoint(blockId, label, reviewTimeoutMs).then(finish, (error) => finish(error instanceof Error ? error : new Error(String(error))));
             }
           }
         });

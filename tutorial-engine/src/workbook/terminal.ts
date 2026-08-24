@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -31,7 +31,8 @@ const PI_PREFLIGHT = [
   "const runtime = await ModelRuntime.create();",
   "if ((await runtime.getAvailable()).length === 0) process.exit(1);"
 ].join(" ");
-const DEFAULT_WRITABLE_WORKSPACE_PATHS = ["factory", "calculator", ".tutorial/.tmp", ".git"] as const;
+const DEFAULT_WRITABLE_WORKSPACE_PATHS = ["factory", "calculator", ".tmp", ".tutorial/.tmp", ".git"] as const;
+const DEFAULT_WRITABLE_SCRATCH_DIRECTORIES = [".tmp", ".tutorial/.tmp"] as const;
 export type TerminalPtyFactory = (options: TerminalPtyOptions) => TerminalPty;
 export interface DockerRunArgumentsOptions { workspace: string; name: string; apiKey: string; writableWorkspacePaths?: readonly string[]; }
 
@@ -88,6 +89,7 @@ export function assertDockerTerminalReady(workspace = process.cwd()): void {
   if (available.error || available.status !== 0) throw new Error("Docker must be running before starting the workbook terminal.");
   const image = spawnSync("docker", ["image", "inspect", WORKBOOK_TERMINAL_IMAGE], { stdio: "ignore" });
   if (image.error || image.status !== 0) throw new Error(`Docker image ${WORKBOOK_TERMINAL_IMAGE} is missing. Run npm run --workspace=tutorial-engine build:workbook-terminal.`);
+  prepareDefaultWritableWorkspaceDirectories(workspace);
   const name = `workbook-terminal-preflight-${randomUUID()}`;
   try {
     const args = dockerRunArguments({ workspace, name, apiKey });
@@ -102,6 +104,10 @@ export function assertDockerTerminalReady(workspace = process.cwd()): void {
 
 function bindMount(src: string, dst: string, readonly = false): string {
   return `type=bind,src=${src},dst=${dst}${readonly ? ",readonly" : ""}`;
+}
+
+function prepareDefaultWritableWorkspaceDirectories(workspace: string): void {
+  for (const child of DEFAULT_WRITABLE_SCRATCH_DIRECTORIES) mkdirSync(resolve(workspace, child), { recursive: true });
 }
 
 function workspaceChildForMount(workspace: string, child: string): string | undefined {
@@ -132,6 +138,7 @@ export function dockerExecArguments(name: string): string[] {
 /** Starts a hardened, per-practice container; browser bytes can only reach docker exec. */
 export function createDockerPty(options: TerminalPtyOptions): TerminalPty {
   const workspace = resolve(options.cwd);
+  prepareDefaultWritableWorkspaceDirectories(workspace);
   const name = `workbook-terminal-${randomUUID()}`;
   const args = dockerRunArguments({ workspace, name, apiKey: requireOpenCodeApiKey() });
   args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
@@ -146,8 +153,8 @@ export function createDockerPty(options: TerminalPtyOptions): TerminalPty {
 
 /**
  * Owns one shell in a hardened workbook container. The host workspace is mounted
- * read-only except for explicit learner-work roots such as factory/ and
- * calculator/. Terminal bytes are transient until a paused transcript is
+ * read-only except for explicit learner-work roots such as factory/, calculator/,
+ * and scratch .tmp/ directories. Terminal bytes are transient until a paused transcript is
  * submitted as immutable attempt evidence.
  */
 export class WorkbookTerminalManager {

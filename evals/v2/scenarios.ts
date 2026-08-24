@@ -36,7 +36,8 @@ const commonStart: V2ScenarioAction[] = [
 ];
 const editorSuccessActions: V2ScenarioAction[] = [
   ...commonStart,
-  { type: "editor", blockId: "editor-practice", text: satisfactoryEditorDraft }
+  { type: "editor", blockId: "editor-practice", text: satisfactoryEditorDraft },
+  { type: "continue", blockId: "editor-practice" }
 ];
 const exactCommandActions: V2ScenarioAction[] = [
   ...editorSuccessActions,
@@ -268,15 +269,21 @@ function editorStillActive(trace: V2SessionTrace): V2GateAssertion {
 }
 
 function editorNotUnlocked(trace: V2SessionTrace): V2GateAssertion {
-  const unlocked = trace.events.some((event) => event.type === "editor_practice_unlocked" && event.blockId === "editor-practice");
+  const unlocked = trace.events.some((event) => (event.type === "editor_practice_unlocked" || (event.type === "attempt_accepted" && event.kind === "editor")) && matchBlockId(event.blockId, "editor-practice"));
   return { name: "editor not unlocked", passed: !unlocked, detail: unlocked ? "Editor-practice unlocked after insufficient feedback." : "No unlock event was recorded." };
 }
 
 function editorUnlocked(trace: V2SessionTrace): V2GateAssertion {
-  const event = trace.events.find((candidate): candidate is Extract<V2SessionTrace["events"][number], { type: "editor_practice_unlocked" }> => candidate.type === "editor_practice_unlocked" && matchBlockId(candidate.blockId, "editor-practice"));
+  const legacyUnlock = trace.events.find((candidate): candidate is Extract<V2SessionTrace["events"][number], { type: "editor_practice_unlocked" }> => candidate.type === "editor_practice_unlocked" && matchBlockId(candidate.blockId, "editor-practice"));
+  const acceptedAttempt = trace.events.find((candidate) => candidate.type === "attempt_accepted" && candidate.kind === "editor" && matchBlockId(candidate.blockId, "editor-practice"));
   const completed = trace.publicStates.some((state) => stateContainsCompletedBlock(state.state, "editor-practice"));
-  const passed = event?.revisionId === 1 && event.path === "editor-artifacts/evaluator-editor.txt" && completed;
-  return { name: "editor unlocked", passed, detail: event ? `revision=${event.revisionId}, path=${event.path}, completed=${completed}` : "No editor unlock event was recorded." };
+  const recordedUnlockedRevision = trace.editors.some((entry) => matchBlockId(entry.blockId, "editor-practice") && entry.revision === 1 && entry.status === "unlocked");
+  const promotedArtifact = trace.artifacts.some((item) => item.path === "editor-artifacts/evaluator-editor.txt");
+  const legacyPassed = legacyUnlock?.revisionId === 1 && legacyUnlock.path === "editor-artifacts/evaluator-editor.txt";
+  const attemptPassed = Boolean(acceptedAttempt && recordedUnlockedRevision && promotedArtifact);
+  const passed = completed && (legacyPassed || attemptPassed);
+  const detail = legacyUnlock ? `revision=${legacyUnlock.revisionId}, path=${legacyUnlock.path}, completed=${completed}` : `accepted=${Boolean(acceptedAttempt)}, revision=${recordedUnlockedRevision}, artifact=${promotedArtifact}, completed=${completed}`;
+  return { name: "editor unlocked", passed, detail };
 }
 
 function publicStateClean(trace: V2SessionTrace): V2GateAssertion {
@@ -286,29 +293,47 @@ function publicStateClean(trace: V2SessionTrace): V2GateAssertion {
 }
 
 function exactCommandInput(trace: V2SessionTrace): V2GateAssertion {
-  const input = trace.terminalTranscript.find((entry) => entry.blockId === "exact-command" && entry.direction === "input")?.text.trim();
+  const input = trace.terminalTranscript.find((entry) => matchBlockId(entry.blockId, "exact-command") && entry.direction === "input")?.text.trim();
   return { name: "exact command input", passed: input === exactCommand, detail: input ? `input=${input}` : "No exact-command input was recorded." };
 }
 
 function learnerChoseClueCommand(trace: V2SessionTrace): V2GateAssertion {
-  const input = trace.terminalTranscript.find((entry) => entry.blockId === "clue-only" && entry.direction === "input")?.text.trim() ?? "";
+  const input = trace.terminalTranscript.find((entry) => matchBlockId(entry.blockId, "clue-only") && entry.direction === "input")?.text.trim() ?? "";
   const passed = input.length > 0 && input !== exactCommand && /evaluator-clue\.txt/.test(input);
   return { name: "clue-only learner command", passed, detail: input || "No clue-only input was recorded." };
 }
 
 function clueOnlyPublicPrompt(trace: V2SessionTrace): V2GateAssertion {
-  const prompt = trace.publicStates.map((state) => JSON.stringify(state.state)).find((text) => text.includes("clue-only")) ?? "";
+  const prompt = trace.publicStates.map((state) => publicBlockMarkdown(state.state, "clue-only")).find((text) => text.length > 0) ?? "";
   const passed = prompt.includes("evaluator-clue.txt") && !/```sh\s+command|This is private tutor guidance|Do not reveal an exact command/i.test(prompt);
   return { name: "clue-only public prompt", passed, detail: passed ? "Public clue-only prompt has clues and no insertable command." : "Public clue-only prompt is missing clues or exposes an insertable/private command." };
 }
 
+function publicBlockMarkdown(value: unknown, blockId: string): string {
+  if (!value || typeof value !== "object") return "";
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = publicBlockMarkdown(item, blockId);
+      if (found) return found;
+    }
+    return "";
+  }
+  const object = value as Record<string, unknown>;
+  if (matchBlockId(object.id, blockId) && typeof object.markdown === "string") return object.markdown;
+  for (const item of Object.values(object)) {
+    const found = publicBlockMarkdown(item, blockId);
+    if (found) return found;
+  }
+  return "";
+}
+
 function terminalOutput(blockId: string, expected: string, trace: V2SessionTrace): V2GateAssertion {
-  const output = trace.terminalTranscript.filter((entry) => entry.blockId === blockId && entry.direction === "output").map((entry) => entry.text).join("\n");
+  const output = trace.terminalTranscript.filter((entry) => matchBlockId(entry.blockId, blockId) && entry.direction === "output").map((entry) => entry.text).join("\n");
   return { name: `${blockId} terminal output`, passed: output.includes(expected), detail: output || `No ${blockId} terminal output was recorded.` };
 }
 
 function observedAndCompleted(blockId: string, trace: V2SessionTrace): V2GateAssertion {
-  const verified = trace.events.some((event) => event.type === "observation_verified" && matchBlockId(event.blockId, blockId));
+  const verified = trace.events.some((event) => (event.type === "observation_verified" || (event.type === "attempt_accepted" && event.kind === "terminal")) && matchBlockId(event.blockId, blockId));
   const completed = trace.events.some((event) => event.type === "block_completed" && matchBlockId(event.blockId, blockId));
   return { name: `${blockId} verified completion`, passed: verified && completed, detail: `verified=${verified}, completed=${completed}` };
 }

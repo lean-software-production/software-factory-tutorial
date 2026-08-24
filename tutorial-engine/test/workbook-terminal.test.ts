@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -60,6 +60,7 @@ describe("WorkbookTerminalManager", () => {
     tempDirs.push(workspace);
     await mkdir(resolve(workspace, "factory/refactor/.tmp"), { recursive: true });
     await mkdir(resolve(workspace, "calculator"));
+    await mkdir(resolve(workspace, ".tmp"));
     await mkdir(resolve(workspace, ".tutorial/.tmp"), { recursive: true });
     await mkdir(resolve(workspace, ".git"));
 
@@ -74,6 +75,7 @@ describe("WorkbookTerminalManager", () => {
     expect(mounts).toContain(`type=bind,src=${workspace},dst=/workspace,readonly`);
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, "factory")},dst=/workspace/factory`);
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, "calculator")},dst=/workspace/calculator`);
+    expect(mounts).toContain(`type=bind,src=${resolve(workspace, ".tmp")},dst=/workspace/.tmp`);
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, ".tutorial/.tmp")},dst=/workspace/.tutorial/.tmp`);
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, ".git")},dst=/workspace/.git`);
     expect(mounts).not.toContain(expect.stringContaining("auth.json"));
@@ -90,9 +92,10 @@ describe("WorkbookTerminalManager", () => {
     }
   });
 
-  it("preflights Pi authentication in the same isolated container it will run", async () => {
+  it("prepares root .tmp as writable learner scratch before Docker preflight", async () => {
     const directory = await mkdtemp(join(tmpdir(), "workbook-fake-docker-"));
-    tempDirs.push(directory);
+    const workspace = await mkdtemp(join(tmpdir(), "workbook-terminal-workspace-"));
+    tempDirs.push(directory, workspace);
     const capture = join(directory, "docker-args");
     const docker = join(directory, "docker");
     await writeFile(docker, "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\"\nprintf '%s\\n' --- >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\"\n");
@@ -104,7 +107,35 @@ describe("WorkbookTerminalManager", () => {
     process.env.OPENCODE_API_KEY = "test-opencode-key";
     process.env.WORKBOOK_TERMINAL_DOCKER_ARGS = capture;
     try {
-      assertDockerTerminalReady("/workspace");
+      assertDockerTerminalReady(workspace);
+      expect((await stat(resolve(workspace, ".tmp"))).isDirectory()).toBe(true);
+      expect((await stat(resolve(workspace, ".tutorial/.tmp"))).isDirectory()).toBe(true);
+      const args = await readFile(capture, "utf8");
+      expect(args).toContain(`type=bind,src=${resolve(workspace, ".tmp")},dst=/workspace/.tmp`);
+      expect(args).toContain(`type=bind,src=${resolve(workspace, ".tutorial/.tmp")},dst=/workspace/.tutorial/.tmp`);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+      if (previousKey === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = previousKey;
+      if (previousCapture === undefined) delete process.env.WORKBOOK_TERMINAL_DOCKER_ARGS; else process.env.WORKBOOK_TERMINAL_DOCKER_ARGS = previousCapture;
+    }
+  });
+
+  it("preflights Pi authentication in the same isolated container it will run", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "workbook-fake-docker-"));
+    const workspace = await mkdtemp(join(tmpdir(), "workbook-terminal-workspace-"));
+    tempDirs.push(directory, workspace);
+    const capture = join(directory, "docker-args");
+    const docker = join(directory, "docker");
+    await writeFile(docker, "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\"\nprintf '%s\\n' --- >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\"\n");
+    await chmod(docker, 0o755);
+    const previousPath = process.env.PATH;
+    const previousKey = process.env.OPENCODE_API_KEY;
+    const previousCapture = process.env.WORKBOOK_TERMINAL_DOCKER_ARGS;
+    process.env.PATH = `${directory}:${previousPath}`;
+    process.env.OPENCODE_API_KEY = "test-opencode-key";
+    process.env.WORKBOOK_TERMINAL_DOCKER_ARGS = capture;
+    try {
+      assertDockerTerminalReady(workspace);
       const args = await readFile(capture, "utf8");
       expect(args).toMatch(/run\n-d\n--rm\n--name\nworkbook-terminal-preflight-/);
       expect(args).toContain("exec\nworkbook-terminal-preflight-");
@@ -119,7 +150,8 @@ describe("WorkbookTerminalManager", () => {
 
   it("refuses startup when Pi cannot authenticate inside the terminal container", async () => {
     const directory = await mkdtemp(join(tmpdir(), "workbook-fake-docker-"));
-    tempDirs.push(directory);
+    const workspace = await mkdtemp(join(tmpdir(), "workbook-terminal-workspace-"));
+    tempDirs.push(directory, workspace);
     const docker = join(directory, "docker");
     await writeFile(docker, "#!/bin/sh\nif [ \"$1\" = exec ]; then exit 1; fi\n");
     await chmod(docker, 0o755);
@@ -128,7 +160,7 @@ describe("WorkbookTerminalManager", () => {
     process.env.PATH = `${directory}:${previousPath}`;
     process.env.OPENCODE_API_KEY = "test-opencode-key";
     try {
-      expect(() => assertDockerTerminalReady("/workspace")).toThrow(/could not authenticate pi/i);
+      expect(() => assertDockerTerminalReady(workspace)).toThrow(/could not authenticate pi/i);
     } finally {
       if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
       if (previousKey === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = previousKey;

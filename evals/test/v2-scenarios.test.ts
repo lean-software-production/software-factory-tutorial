@@ -117,6 +117,17 @@ describe("v2 live evaluator scenarios", () => {
     expect(selectV2Scenarios(["--all"]).map((scenario) => scenario.id)).toEqual(v2Scenarios.map((scenario) => scenario.id));
   });
 
+  it("continues the accepted editor block before submitting terminal commands", () => {
+    const actions = findV2Scenario("v2-exact-command-success").actions;
+    const editorIndex = actions.findIndex((action) => action.type === "editor" && action.blockId === "editor-practice");
+    const editorContinueIndex = actions.findIndex((action, index) => index > editorIndex && action.type === "continue" && action.blockId === "editor-practice");
+    const terminalIndex = actions.findIndex((action) => action.type === "terminal" && action.blockId === "exact-command");
+
+    expect(editorIndex).toBeGreaterThan(-1);
+    expect(editorContinueIndex).toBeGreaterThan(editorIndex);
+    expect(terminalIndex).toBeGreaterThan(editorContinueIndex);
+  });
+
   it("gates exact command success on the recorded command, output, verification, completion, and artifact", () => {
     const trace = exactCommandTrace();
     const gate = allGateAssertionsPass(trace);
@@ -126,6 +137,17 @@ describe("v2 live evaluator scenarios", () => {
     wrong.terminalTranscript[0] = { blockId: "exact-command", direction: "input", text: "cat .tmp/evaluator-command.txt\r" };
     const failed = deterministicV2Gate(findV2Scenario(wrong.scenarioId), wrong);
     expect(failed.assertions.find((assertion) => assertion.name === "exact command input")?.passed).toBe(false);
+  });
+
+  it("accepts canonical live attempt-accepted events in the exact command gate", () => {
+    const trace = exactCommandTrace();
+    trace.events = trace.events.filter((entry) => entry.type !== "editor_practice_unlocked" && entry.type !== "observation_verified");
+    trace.events.unshift(event({ type: "attempt_accepted", lessonId, blockId: "lesson--001-live-session--editor-practice", attemptId: "editor-attempt", version: 1, kind: "editor", summary: "Editor accepted." }));
+    trace.events.unshift(event({ type: "attempt_accepted", lessonId, blockId: "lesson--001-live-session--exact-command", attemptId: "terminal-attempt", version: 1, kind: "terminal", summary: "Terminal accepted." }));
+    trace.editors.push({ blockId: "lesson--001-live-session--editor-practice", revision: 1, status: "unlocked" });
+    trace.terminalTranscript = trace.terminalTranscript.map((entry) => ({ ...entry, blockId: entry.blockId === "exact-command" ? "lesson--001-live-session--exact-command" : entry.blockId }));
+
+    allGateAssertionsPass(trace);
   });
 
   it("gates incomplete editor drafts on public feedback without unlocking", () => {

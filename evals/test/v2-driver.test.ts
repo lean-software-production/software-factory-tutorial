@@ -89,6 +89,62 @@ class DriverFakePty implements TerminalPty {
   emitExit(exitCode: number): void { this.exitCallbacks.forEach((callback) => callback({ exitCode })); }
 }
 
+class DriverFakeWebSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 3;
+  readonly CONNECTING = DriverFakeWebSocket.CONNECTING;
+  readonly OPEN = DriverFakeWebSocket.OPEN;
+  readonly CLOSED = DriverFakeWebSocket.CLOSED;
+  readyState = DriverFakeWebSocket.CONNECTING;
+  sent: unknown[] = [];
+  private handlers = new Map<string, Array<(...args: any[]) => void>>();
+
+  constructor() {
+    queueMicrotask(() => {
+      this.readyState = DriverFakeWebSocket.OPEN;
+      this.emit("open");
+    });
+  }
+
+  once(event: string, callback: (...args: any[]) => void): void {
+    const wrapper = (...args: any[]) => {
+      this.off(event, wrapper);
+      callback(...args);
+    };
+    this.on(event, wrapper);
+  }
+
+  on(event: string, callback: (...args: any[]) => void): void {
+    const handlers = this.handlers.get(event) ?? [];
+    handlers.push(callback);
+    this.handlers.set(event, handlers);
+  }
+
+  off(event: string, callback: (...args: any[]) => void): void {
+    this.handlers.set(event, (this.handlers.get(event) ?? []).filter((handler) => handler !== callback));
+  }
+
+  send(data: string): void {
+    this.sent.push(JSON.parse(data));
+    queueMicrotask(() => {
+      this.emit("message", Buffer.from(JSON.stringify({ type: "output", data: "command block complete\r\n" })));
+    });
+    setTimeout(() => {
+      this.emit("message", Buffer.from(JSON.stringify({ type: "attempt-status", blockId: "lesson--001-live-session--exact-command", status: "submitted" })));
+    }, 50);
+  }
+
+  close(): void {
+    this.readyState = DriverFakeWebSocket.CLOSED;
+    this.emit("close");
+  }
+
+  private emit(event: string, ...args: any[]): void {
+    for (const handler of [...this.handlers.get(event) ?? []]) handler(...args);
+  }
+}
+
 const tempRoots: string[] = [];
 let originalOpenCodeApiKey: string | undefined;
 
@@ -201,6 +257,34 @@ describe("v2 workbook driver", () => {
     expect(stateReads).toBe(3);
     expect(reviewed.progress.blocks[0]).toMatchObject({ editorStatus: "feedback", feedback: "Review finished after the terminal timeout." });
     expect(trace.editors.at(-1)).toEqual({ blockId: "editor-practice", revision: 1, status: "feedback", feedback: "Review finished after the terminal timeout." });
+  });
+
+  it("uses a dedicated terminal review timeout for terminal submission and review", async () => {
+    const trace = createEmptyV2SessionTrace("terminal-review-timeout-test");
+    let stateReads = 0;
+    const reviewingState = { progress: { blocks: [{ id: "lesson--001-live-session--exact-command", checkpoint: { status: "reviewing" } }] } };
+    const acceptedState = { progress: { blocks: [{ id: "lesson--001-live-session--exact-command", checkpoint: { status: "accepted", successMessage: "Review accepted after the terminal I/O timeout." } }] } };
+    const driver = new V2WorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      terminalTimeoutMs: 30,
+      terminalReviewTimeoutMs: 200,
+      WebSocket: DriverFakeWebSocket as any,
+      fetch: async () => {
+        stateReads += 1;
+        return new Response(JSON.stringify(stateReads >= 3 ? acceptedState : reviewingState), { status: 200 });
+      }
+    });
+
+    const reviewed = await driver.submitTerminalCommand("lesson--001-live-session--exact-command", "echo command block complete", { complete: false });
+
+    expect(stateReads).toBe(3);
+    expect(reviewed.progress.blocks[0]).toMatchObject({ checkpoint: { status: "accepted", successMessage: "Review accepted after the terminal I/O timeout." } });
+    expect(trace.terminalTranscript).toEqual(expect.arrayContaining([
+      { blockId: "lesson--001-live-session--exact-command", direction: "input", text: "echo command block complete\r" },
+      { blockId: "lesson--001-live-session--exact-command", direction: "output", text: "command block complete\r\n" },
+      { blockId: "lesson--001-live-session--exact-command", direction: "observer", text: "status:submitted" }
+    ]));
   });
 
   it("submits reflections and records the public learner/tutor conversation", async () => {
