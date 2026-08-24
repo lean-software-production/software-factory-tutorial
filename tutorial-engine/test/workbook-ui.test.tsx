@@ -544,8 +544,8 @@ describe("workbook lesson UI", () => {
 
     expect(markup).toContain("current-activity-band");
     expect(markup).toContain("data-activity-type=\"terminal-practice\"");
-    expect(markup).toContain('class="terminal-connection-status connected"');
-    expect(markup).toContain('aria-label="Terminal connected"');
+    expect(markup).toContain('class="terminal-connection-status"');
+    expect(markup).toContain('aria-label="Terminal disconnected"');
     expect(markup).not.toContain("Terminal practice");
     expect(markup).not.toContain("Run this in the embedded terminal");
     expect(markup).not.toContain("Observed by the tutor");
@@ -1180,8 +1180,16 @@ describe("workbook lesson UI", () => {
     const container = await mount(createElement(App), (win) => { stubAppShellGlobals(win); vi.stubGlobal("location", win.location); });
     await act(async () => { await Promise.resolve(); });
     const socket = FakeWebSocket.instances[0]!;
+    const connectionStatus = container.querySelector(".terminal-connection-status")!;
+    expect(connectionStatus.classList.contains("connected")).toBe(false);
+    expect(connectionStatus.getAttribute("aria-label")).toBe("Terminal disconnected");
+    expect(container.querySelector(".timeline-do-it")).toBeNull();
+
     await act(async () => { socket.readyState = FakeWebSocket.OPEN; socket.emit("open"); });
 
+    expect(connectionStatus.classList.contains("connected")).toBe(true);
+    expect(connectionStatus.getAttribute("aria-label")).toBe("Terminal connected");
+    expect(container.textContent).not.toContain("Terminal connected in an isolated workbook container.");
     const action = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Do it for me")!;
     expect(action).toBeTruthy();
     await act(async () => { action.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
@@ -1194,6 +1202,52 @@ describe("workbook lesson UI", () => {
 
     await act(async () => { socket.readyState = FakeWebSocket.CLOSED; socket.emit("close"); });
     expect(container.querySelector(".timeline-do-it")).toBeNull();
+  });
+
+  it("replaces persisted terminal feedback with observer status, advice, and errors", async () => {
+    class FakeWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.CONNECTING;
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      constructor(_url: string) { FakeWebSocket.instances.push(this); }
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      send() {}
+      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
+      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalProgress = activeBlockProgress(lesson.blocks[1], {
+      checkpoint: { status: "feedback", feedback: "Persisted checkpoint feedback." }
+    } as any);
+    const container = await mount(createElement(BlockView, {
+      block: lesson.blocks[1], progress: terminalProgress, refresh: vi.fn()
+    }), (win) => {
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
+    });
+    const socket = FakeWebSocket.instances[0]!;
+
+    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
+    expect(container.textContent).toContain("Tutor feedback: Persisted checkpoint feedback.");
+
+    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "observer-status", blockId: "practice", status: "running" }) }); });
+    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
+    expect(container.textContent).toContain("Running — waiting for terminal output…");
+    expect(container.textContent).not.toContain("Persisted checkpoint feedback.");
+
+    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "advice", blockId: "practice", message: "Observer advice." }) }); });
+    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
+    expect(container.textContent).toContain("Observer advice.");
+    expect(container.textContent).not.toContain("Running — waiting for terminal output…");
+
+    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "observer-error", blockId: "practice", message: "Terminal observer error." }) }); });
+    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
+    expect(container.textContent).toContain("Terminal observer error.");
+    expect(container.textContent).not.toContain("Observer advice.");
   });
 
   it.each([

@@ -101,7 +101,7 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
   const terminal = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
   const socket = useRef<WebSocket | null>(null);
-  const [connected, setConnected] = useState(true);
+  const [connected, setConnected] = useState(false);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
 
   useEffect(() => {
@@ -122,7 +122,7 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: nextTerminal.cols, rows: nextTerminal.rows }));
     };
     const dataDisposable = nextTerminal.onData((data) => { if (!verified && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data })); });
-    ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); onStatus("Terminal connected in an isolated workbook container."); sendResize(); });
+    ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); sendResize(); });
     ws.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
       if (message.type === "output") nextTerminal.write(message.data);
