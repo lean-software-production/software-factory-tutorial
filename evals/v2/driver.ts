@@ -159,7 +159,17 @@ export class V2WorkbookDriver {
     if (!Array.isArray(blocks)) return false;
     const block = blocks.find((candidate: any) => candidate?.id === blockId);
     const status = block?.checkpoint?.status;
-    return status === "feedback" || status === "accepted";
+    if (status === "accepted") return this.#reflectionHasTutorReplyAfterLatestLearner(blockId, state);
+    if (status === "feedback") return this.#reflectionHasTutorReplyAfterLatestLearner(blockId, state);
+    return false;
+  }
+
+  #reflectionHasTutorReplyAfterLatestLearner(blockId: string, state: WorkbookApiState): boolean {
+    const turns = state.progress?.reflectionConversations?.[blockId];
+    if (!Array.isArray(turns)) return false;
+    const latestLearner = turns.map((turn: any) => turn?.role).lastIndexOf("learner");
+    if (latestLearner < 0) return false;
+    return turns.slice(latestLearner + 1).some((turn: any) => turn?.role === "tutor" && typeof turn.text === "string" && turn.text.trim().length > 0);
   }
 
   async #waitForReflectionReview(blockId: string, label: string, timeoutMs: number): Promise<WorkbookApiState> {

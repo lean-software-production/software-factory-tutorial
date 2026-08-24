@@ -114,6 +114,11 @@ Use the active block context and recent history already in the session. Include 
 }
 
 function reviewPrompt(input: TutorReview & { readiness?: BlockTutorReadiness }): string {
+  const incompleteInstruction = input.attempt.evidence.kind === "terminal"
+    ? "If it is visibly incomplete, call mark_attempt_still_working() with no arguments and produce no public text."
+    : input.attempt.evidence.kind === "reflection"
+      ? "If this reflection is incomplete, do not call mark_attempt_still_working(); return one concise learner-visible follow-up question or feedback turn."
+      : "If this editor draft is incomplete, do not call mark_attempt_still_working(); return concise learner-visible feedback.";
   return `WORKBOOK ATTEMPT REVIEW
 
 Trusted private guidance:
@@ -127,7 +132,7 @@ ${JSON.stringify({
   evidence: input.attempt.evidence
 }, null, 2)}
 
-Review only this snapshot. If it satisfies the private guidance, call accept_current_attempt() with no arguments and include a concise success message for the learner. If it is visibly incomplete, call mark_attempt_still_working() with no arguments and produce no public text. Otherwise do not call either tool; return concise material feedback.`;
+Review only this snapshot. If it satisfies the private guidance, call accept_current_attempt() with no arguments and include a concise success message for the learner. ${incompleteInstruction} Otherwise do not call either tool; return concise material feedback.`;
 }
 
 function compactionInstruction(): string {
@@ -315,7 +320,11 @@ export class MainWorkbookTutor {
       this.#workingAttemptId = undefined;
       try {
         const text = await session.prompt(reviewPrompt(input));
-        if (this.#workingAttemptId === input.attempt.id) return { outcome: "working" };
+        if (this.#workingAttemptId === input.attempt.id) {
+          if (input.attempt.evidence.kind === "reflection") return { outcome: "feedback", message: "Please add the missing distinction in learner-visible terms." };
+          if (input.attempt.evidence.kind === "editor") return { outcome: "feedback", message: "Please add the missing editor details before continuing." };
+          return { outcome: "working" };
+        }
         if (this.#acceptedAttemptId === input.attempt.id) return { outcome: "accepted", message: acceptedText(text) };
         return { outcome: "feedback", message: publicText(text) };
       } finally {

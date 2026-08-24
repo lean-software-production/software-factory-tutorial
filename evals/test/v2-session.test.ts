@@ -36,6 +36,16 @@ describe("v2 session workspace", () => {
 });
 
 describe("v2 public session trace", () => {
+  it("deduplicates repeated public state polls while preserving changed states", () => {
+    const trace = createEmptyV2SessionTrace("dedupe");
+
+    recordPublicState(trace, "poll:1", { progress: { activeBlockId: "reflection" } });
+    recordPublicState(trace, "poll:2", { progress: { activeBlockId: "reflection" } });
+    recordPublicState(trace, "poll:3", { progress: { activeBlockId: "transition" } });
+
+    expect(trace.publicStates.map((entry) => entry.label)).toEqual(["poll:1", "poll:3"]);
+  });
+
   it("records only public workbook state and rejects private tutor fields", async () => {
     const trace = createEmptyV2SessionTrace("public-state");
     const workspace = await createEvaluationWorkspace();

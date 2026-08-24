@@ -363,7 +363,9 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     }
   };
   const appendReviewMessage = async (attempt: Attempt, text: string): Promise<TimelineMessage> => {
-    return await append({ type: "message", lessonId: attempt.lessonId, blockId: attempt.blockId, role: "assistant", source: "main_tutor", presentation: "review", text }) as TimelineMessage;
+    const message = await append({ type: "message", lessonId: attempt.lessonId, blockId: attempt.blockId, role: "assistant", source: "main_tutor", presentation: "review", text }) as TimelineMessage;
+    if (attempt.evidence.kind === "reflection") await append({ type: "reflection_reply_recorded", lessonId: attempt.lessonId, blockId: attempt.blockId, response: text });
+    return message;
   };
   const appendAcceptedCheckpoint = async (accepted: Attempt): Promise<void> => {
     await append({ type: "attempt_accepted", lessonId: accepted.lessonId, blockId: accepted.blockId, attemptId: accepted.id, version: accepted.version, kind: accepted.evidence.kind, summary: accepted.successMessage ?? "Nice work — this attempt is accepted." });
@@ -703,8 +705,10 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
             const currentAttempt = await attempts.current(active.lessonId, active.id).catch(() => undefined);
             if (!first && currentAttempt?.status === "reviewing") return sendJson(response, 409, { error: "Wait for the tutor to finish reviewing before sending a follow-up." });
             const learnerTurns = await submitReflectionAttempt({ lessonId: active.lessonId, blockId: active.id, privateGuidance: block.tutor, response: responseText, conversation: priorConversation, submitAttempt: async () => undefined });
-            await append({ type: "message", lessonId: active.lessonId, blockId: active.id, role: "user", source: "learner", presentation: "chat", text: learnerTurns.at(-1)!.text });
-            await createAttempt({ lessonId: active.lessonId, blockId: active.id, privateGuidance: block.tutor, evidence: { kind: "reflection", response: learnerTurns.at(-1)!.text, conversation: priorConversation } });
+            const learnerText = learnerTurns.at(-1)!.text;
+            await append({ type: "message", lessonId: active.lessonId, blockId: active.id, role: "user", source: "learner", presentation: "chat", text: learnerText });
+            await append({ type: first ? "reflection_submitted" : "reflection_follow_up_submitted", lessonId: active.lessonId, blockId: active.id, response: learnerText });
+            await createAttempt({ lessonId: active.lessonId, blockId: active.id, privateGuidance: block.tutor, evidence: { kind: "reflection", response: learnerText, conversation: priorConversation } });
             return sendJson(response, 202, await currentPublicState());
           }
           if (body.action !== "continue") return sendJson(response, 400, { error: "Invalid workbook action for this block." });

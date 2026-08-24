@@ -13,7 +13,10 @@ export function createEmptyV2SessionTrace(scenarioId: string): V2SessionTrace {
 
 export function recordPublicState(trace: V2SessionTrace, label: string, state: unknown): V2RecordedPublicState {
   assertNoPrivateTutorState(state);
-  const recorded = { label, state: structuredClone(state) as PublicWorkbookState };
+  const cloned = structuredClone(state) as PublicWorkbookState;
+  const previous = trace.publicStates.at(-1);
+  if (previous && JSON.stringify(previous.state) === JSON.stringify(cloned)) return previous;
+  const recorded = { label, state: cloned };
   trace.publicStates.push(recorded);
   return recorded;
 }

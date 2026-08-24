@@ -204,7 +204,7 @@ describe("v2 workbook driver", () => {
       const continued = await driver.continueBlock("orientation");
       expect(continued.progress.activeBlockId).toBe("lesson--001-live-session--editor-practice");
       expect(continued.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["lesson--001-live-session--orientation", "lesson--001-live-session--editor-practice"]);
-      expect(trace.publicStates.map((state) => state.label)).toEqual(["initial", "introduction", "introduction:structural:part--evaluator", "introduction:structural:lesson--001-live-session", "resolve:orientation", "continue:orientation"]);
+      expect(trace.publicStates.map((state) => state.label)).toEqual(["initial", "introduction", "introduction:structural:part--evaluator", "introduction:structural:lesson--001-live-session", "continue:orientation"]);
       expect(JSON.stringify(trace)).not.toContain('"tutor"');
     } finally {
       await server.close();
@@ -259,6 +259,43 @@ describe("v2 workbook driver", () => {
     expect(trace.editors.at(-1)).toEqual({ blockId: "editor-practice", revision: 1, status: "feedback", feedback: "Review finished after the terminal timeout." });
   });
 
+  it("waits for a learner-visible reflection tutor reply instead of treating status-only feedback as usable", async () => {
+    const trace = createEmptyV2SessionTrace("reflection-status-only-test");
+    let stateReads = 0;
+    const blockId = "lesson--001-live-session--reflection";
+    const learnerOnly = {
+      progress: {
+        blocks: [{ id: blockId, checkpoint: { status: "feedback", feedback: "Review is temporarily unavailable." } }],
+        reflectionConversations: { [blockId]: [{ role: "learner", text: "My reflection" }] }
+      }
+    };
+    const withTutor = {
+      progress: {
+        blocks: [{ id: blockId, checkpoint: { status: "feedback", feedback: "Please add one public/private distinction." } }],
+        reflectionConversations: { [blockId]: [{ role: "learner", text: "My reflection" }, { role: "tutor", text: "Please add one public/private distinction." }] }
+      }
+    };
+    const driver = new V2WorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      editorReviewTimeoutMs: 200,
+      fetch: async (_input, init) => {
+        if (init?.method === "POST") return new Response(JSON.stringify(learnerOnly), { status: 202 });
+        stateReads += 1;
+        return new Response(JSON.stringify(stateReads >= 2 ? withTutor : learnerOnly), { status: 200 });
+      }
+    });
+
+    const reviewed = await driver.submitReflection(blockId, "My reflection");
+
+    expect(stateReads).toBe(2);
+    expect(reviewed.progress.reflectionConversations[blockId]).toHaveLength(2);
+    expect(trace.reflections).toEqual([
+      { blockId, role: "learner", text: "My reflection" },
+      { blockId, role: "tutor", text: "Please add one public/private distinction." }
+    ]);
+  });
+
   it("uses a dedicated terminal review timeout for terminal submission and review", async () => {
     const trace = createEmptyV2SessionTrace("terminal-review-timeout-test");
     let stateReads = 0;
@@ -299,6 +336,11 @@ describe("v2 workbook driver", () => {
         { blockId: "lesson--001-live-session--reflection", role: "learner", text: "The exact block gave a command; the clue block required me to choose one." },
         { blockId: "lesson--001-live-session--reflection", role: "tutor", text: "Tutor reply that asks one public follow-up." }
       ]);
+      trace.events = await import("../v2/session.js").then(({ readWorkbookEvents }) => readWorkbookEvents(tempRoots[0]!));
+      expect(trace.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "reflection_submitted", blockId: "lesson--001-live-session--reflection" }),
+        expect.objectContaining({ type: "reflection_reply_recorded", blockId: "lesson--001-live-session--reflection" })
+      ]));
       expect(workbookTutor.reviews.filter((review) => review.attempt.blockId.endsWith("--reflection"))).toHaveLength(1);
       expect(JSON.stringify(trace)).not.toContain("Follow up until the learner");
       expect(JSON.stringify(trace)).not.toContain('"tutor":');

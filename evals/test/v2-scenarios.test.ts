@@ -203,10 +203,10 @@ describe("v2 live evaluator scenarios", () => {
     const trace = clueOnlyTrace();
     trace.scenarioId = "v2-reflection-follow-up";
     trace.reflections.push(
-      { blockId: "reflection", role: "learner", text: "The exact command block gave me the command; the clue block made me choose one." },
-      { blockId: "reflection", role: "tutor", text: "What made the clue-only block different?" },
-      { blockId: "reflection", role: "learner", text: "The clue-only block showed the goal but not an exact shell line." },
-      { blockId: "reflection", role: "tutor", text: "Yes: it used public clues, not private tutor guidance." }
+      { blockId: "lesson--001-live-session--reflection", role: "learner", text: "The exact command block gave me the command; the clue block made me choose one." },
+      { blockId: "lesson--001-live-session--reflection", role: "tutor", text: "What made the clue-only block different?" },
+      { blockId: "lesson--001-live-session--reflection", role: "learner", text: "The clue-only block showed the goal but not an exact shell line." },
+      { blockId: "lesson--001-live-session--reflection", role: "tutor", text: "Yes: it used public clues, not private tutor guidance." }
     );
     trace.events.push(
       event({ type: "reflection_submitted", lessonId, blockId: "reflection", response: trace.reflections[0]!.text }),

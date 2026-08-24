@@ -64,8 +64,7 @@ async function promptOnce<Event>(session: PiTutorSession<Event>, prompt: string)
     unsubscribe();
   }
   if (result?.errorMessage) throw new Error(result.errorMessage);
-  if (result?.text.trim()) return result.text;
-  throw new Error("assistant returned no text");
+  return result?.text ?? "";
 }
 
 /** Retries only terminal provider failures, without logging learner prompt content. */

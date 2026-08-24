@@ -92,11 +92,12 @@ test("redacts a learner prompt echoed by rejected provider errors from logs but 
   expect(logs.errors.join("\n")).not.toContain(privatePrompt);
 });
 
-test("retries an empty assistant terminal message and identifies it in the log", async () => {
-  const session = fakeSession([assistantText("   "), assistantText("Useful reply")]);
+test("returns an empty assistant terminal message so tool-only review turns can be interpreted by callers", async () => {
+  const session = fakeSession([assistantText("   ")]);
   const logs = logger();
 
   await expect(createResilientTutorSession(session, logs.log, "Workbook tutor", { wait: async () => {} }).prompt("message"))
-    .resolves.toBe("Useful reply");
-  expect(logs.errors[0]).toContain("assistant returned no text");
+    .resolves.toBe("   ");
+  expect(session.prompts).toHaveLength(1);
+  expect(logs.errors).toEqual([]);
 });

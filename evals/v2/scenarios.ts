@@ -48,7 +48,7 @@ const clueOnlyActions: V2ScenarioAction[] = [
   { type: "terminal", blockId: "clue-only", command: clueCommand }
 ];
 const reflectionResponse = "The exact-command block gave me a shell command. The clue-only block gave me the goal and made me choose the command.";
-const reflectionFollowUp = "The clue-only prompt was public guidance, but the hidden tutor instructions stayed out of the workbook state.";
+const reflectionFollowUp = "The clue-only prompt was public guidance, but the hidden tutor instructions stayed out of the workbook state. The evaluator should record only learner-visible state because hidden guidance was not something the learner could act on; visible state keeps judging grounded in observable prompts and actions.";
 const reflectionActions: V2ScenarioAction[] = [
   ...clueOnlyActions,
   { type: "reflection-submit", blockId: "reflection", response: reflectionResponse },
@@ -126,6 +126,7 @@ export const v2Scenarios: V2Scenario[] = [
     actions: [
       ...clueOnlyActions,
       { type: "reflection-submit", blockId: "reflection", response: reflectionResponse },
+      { type: "reflection-follow-up", blockId: "reflection", response: reflectionFollowUp },
       { type: "reflection-complete", blockId: "reflection" },
       { type: "transition", blockId: "transition" }
     ],
@@ -208,7 +209,7 @@ function gateClueOnlyTask(trace: V2SessionTrace): V2GateResult {
 }
 
 function gateReflectionFollowUp(trace: V2SessionTrace): V2GateResult {
-  const turns = trace.reflections.filter((entry) => entry.blockId === "reflection");
+  const turns = trace.reflections.filter((entry) => matchBlockId(entry.blockId, "reflection"));
   const roles = turns.map((entry) => entry.role).join(",");
   const followUpEvent = trace.events.some((event) => event.type === "reflection_follow_up_submitted" && matchBlockId(event.blockId, "reflection"));
   const completed = trace.events.some((event) => (event.type === "reflection_completed" || event.type === "block_completed") && matchBlockId(event.blockId, "reflection"));

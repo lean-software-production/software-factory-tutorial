@@ -277,7 +277,19 @@ describe("MainWorkbookTutor", () => {
       await (requests[0].customTools[1] as any).execute("tool-call", {});
       return "";
     });
-    await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-3"), privateGuidance: "Accept only complete answers." })).resolves.toEqual({ outcome: "working" });
+    await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-3", "terminal"), privateGuidance: "Accept only complete terminal evidence." })).resolves.toEqual({ outcome: "working" });
+
+    sessions[0].promptResponses.push(async () => {
+      await (requests[0].customTools[1] as any).execute("tool-call", {});
+      return "";
+    });
+    await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-4"), privateGuidance: "Private editor criterion." })).resolves.toEqual({ outcome: "feedback", message: "Please add the missing editor details before continuing." });
+
+    sessions[0].promptResponses.push(async () => {
+      await (requests[0].customTools[1] as any).execute("tool-call", {});
+      return "";
+    });
+    await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-5", "reflection"), privateGuidance: "Follow up until the learner distinguishes public from private guidance." })).resolves.toEqual({ outcome: "feedback", message: "Please add the missing distinction in learner-visible terms." });
   });
 
   it("rejects empty material review feedback instead of inventing generic feedback", async () => {
@@ -298,7 +310,19 @@ describe("MainWorkbookTutor", () => {
       await (requests[0].customTools.find((tool: any) => tool.name === "mark_attempt_still_working") as any).execute("tool-call", {});
       return "   ";
     });
-    await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-1"), privateGuidance: "Accept only complete answers." })).resolves.toEqual({ outcome: "working" });
+    await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-1", "terminal"), privateGuidance: "Accept only complete terminal evidence." })).resolves.toEqual({ outcome: "working" });
+
+    session.promptResponses.push(async () => {
+      await (requests[0].customTools.find((tool: any) => tool.name === "mark_attempt_still_working") as any).execute("tool-call", {});
+      return "   ";
+    });
+    await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-editor"), privateGuidance: "Private editor criterion." })).resolves.toEqual({ outcome: "feedback", message: "Please add the missing editor details before continuing." });
+
+    session.promptResponses.push(async () => {
+      await (requests[0].customTools.find((tool: any) => tool.name === "mark_attempt_still_working") as any).execute("tool-call", {});
+      return "   ";
+    });
+    await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-reflection", "reflection"), privateGuidance: "Follow up until the learner distinguishes public from private guidance." })).resolves.toEqual({ outcome: "feedback", message: "Please add the missing distinction in learner-visible terms." });
 
     session.promptResponses.push("   ");
     await expect(tutor.reply({ records: [], activeContext: activeContext(), learnerMessage: message("learner-1", 1, "learner", "user", "Hello?") })).rejects.toThrow(/empty tutor response/i);
