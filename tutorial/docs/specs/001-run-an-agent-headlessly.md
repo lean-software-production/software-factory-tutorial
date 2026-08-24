@@ -31,7 +31,7 @@ every agent in this tutorial, and each boundary is a deliberate choice.
 
 The learner creates no files in this lesson. Teach it in this order:
 
-1. **Run the command.** From the tutorial root, run the command above and read what comes back.
+1. **Run the command.** From the session workspace, run the command above and read what comes back.
    The answer is unremarkable; the mechanics are the lesson.
 2. **Change the job.** Have the learner replace the sentence on standard input with a question of
    their own and run it again. The harness did not change; only the job did. Ask them what would

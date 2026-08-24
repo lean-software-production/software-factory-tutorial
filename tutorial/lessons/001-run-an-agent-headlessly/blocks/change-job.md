@@ -13,7 +13,7 @@ tutor: |-
 
 ## Change only the job to be done
 
-Run this command from the tutorial root:
+Run this command from the session workspace:
 
 ```sh command
 echo "What files make up this calculator, and what does each one appear to do?" \

@@ -37,7 +37,7 @@ The two lines around the Pi call are the harness — deterministic code wrapping
 
 ## Alternatives: choose another doer
 
-Pi is the default doer, but the boundary is not tied to Pi. Claude Code and Codex can also act as the doer when configured for non-interactive use. Read the same prompt, run the chosen CLI from `calculator/`, and give it only the access you intend. From the tutorial root, for example:
+Pi is the default doer, but the boundary is not tied to Pi. Claude Code and Codex can also act as the doer when configured for non-interactive use. Read the same prompt, run the chosen CLI from `calculator/`, and give it only the access you intend. From the session workspace, for example:
 
 ```sh
 prompt=$(<factory/refactor.md)
@@ -49,7 +49,7 @@ These commands illustrate the shape of the substitution, not a shared security m
 
 ## Checks
 
-From the tutorial root, make the script executable and run it:
+From the session workspace, make the script executable and run it:
 
 ```sh
 chmod +x factory/refactor-do.sh

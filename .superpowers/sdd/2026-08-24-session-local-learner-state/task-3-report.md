@@ -165,3 +165,21 @@ Passed.
 Reviewed the final diff for Task 3 scope. One issue found and fixed during self-review: `tutorial/README.md` still told learners to `cd tutorial` and export `../node_modules/.bin`; it now points them at the printed session workspace and uses the correct relative path back to root `node_modules/.bin`.
 
 No remaining concerns found in the Task 3 diff.
+
+## Important review findings fix
+
+Addressed the Task 3 important review findings in this follow-up commit:
+
+- Updated `.devcontainer/README.md` so the devcontainer flow no longer tells learners to `cd tutorial` for factory/calculator work; it now tells them to use the printed private session workspace.
+- Updated `tutorial-engine/README.md` to document the workbook entry point as `npm run dev:workbook -- ../tutorial` and clarified that the root `npm run tutorial` command is the convenience launcher for the same workbook entry point.
+- Reworded current learner lesson blocks and canonical lesson specs under `tutorial/` so command-location prose says `session workspace` instead of `tutorial root`, including the reviewer-cited lesson 001 and lesson 002 blocks.
+
+Follow-up validation:
+
+```sh
+npm run --workspace=tutorial-engine check:workbook
+npm run test:onboarding
+git diff --check
+```
+
+Result: all passed. `check:workbook` reported `Software Factory Tutorial: 13 lesson(s), 2 part(s).`; onboarding reported 18 passing tests.

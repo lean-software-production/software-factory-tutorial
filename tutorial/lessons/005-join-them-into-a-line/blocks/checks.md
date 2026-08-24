@@ -10,7 +10,7 @@ tutor: |-
 
 ## Checks
 
-From the tutorial root, make the new script executable and run it:
+From the session workspace, make the new script executable and run it:
 
 ```sh
 chmod +x factory/refactor/run.sh

@@ -183,7 +183,7 @@ Three things, none of which needed a lesson of its own:
 
 ## Checks
 
-From the tutorial root:
+From the session workspace:
 
 ```sh
 ./factory/refactor/run.sh

@@ -4,7 +4,7 @@ The codebase is a "natural language calculator" written in Typescript. Fortunate
 
 The calculator evaluates a deliberately small spoken-expression language. The starter code is correct but cramped: parsing, arithmetic, formatting, and command-line handling sit too close together.
 
-You can try the calculator from the tutorial root. Install its dependencies and build it once, then use its local npm entrypoint:
+You can try the calculator from the session workspace. Install its dependencies and build it once, then use its local npm entrypoint:
 
 ```sh
 npm install --prefix calculator

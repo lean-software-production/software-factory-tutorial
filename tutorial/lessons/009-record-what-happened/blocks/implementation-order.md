@@ -70,7 +70,7 @@ Work in this order. Complete each small step before moving to the next one:
    another program's output, which it has been pretending not to be since the `grep` in lesson 007.
 
 4. **Ask the record what the last run cost.** This is the point of the lesson, so do it immediately
-   rather than at the end. From the tutorial root:
+   rather than at the end. From the session workspace:
 
    ```sh
    jq -r 'select(.type=="tool_execution_start") | .toolName' \

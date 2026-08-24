@@ -10,7 +10,7 @@ tutor: |-
 
 ## Checks
 
-From the tutorial root, make the new script executable and run a doer turn followed by a
+From the session workspace, make the new script executable and run a doer turn followed by a
 validation turn:
 
 ```sh

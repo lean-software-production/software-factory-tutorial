@@ -10,7 +10,7 @@ tutor: |-
 
 ## Checks
 
-From the tutorial root, run a fresh line and then inspect what it left behind:
+From the session workspace, run a fresh line and then inspect what it left behind:
 
 ```sh
 ./factory/refactor/run.sh

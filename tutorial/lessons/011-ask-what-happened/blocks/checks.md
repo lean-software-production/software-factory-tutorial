@@ -10,7 +10,7 @@ tutor: |-
 
 ## Checks
 
-From the tutorial root, after a run has finished:
+From the session workspace, after a run has finished:
 
 ```sh
 ./factory/ask.sh refactor "What did each iteration change, in one line each?"

@@ -11,12 +11,13 @@ under `../tutorial/.tutorial/<session-id>/workspace/`:
 ```sh
 cd tutorial-engine
 npm install
-npm run dev -- ../tutorial
+npm run dev:workbook -- ../tutorial
 ```
 
-From the repository root, `npm run tutorial` is the convenience launcher for the same target. A
-plain launch creates a fresh session and prints its ID and workspace path. Reopen a specific
-session with `npm run tutorial -- --session <id>`; legacy `.tutorial/.tmp` state is not resumed.
+From the repository root, `npm run tutorial` is the convenience launcher for the same workbook
+entry point. A plain launch creates a fresh session and prints its ID and workspace path. Reopen a
+specific session with `npm run tutorial -- --session <id>`; legacy `.tutorial/.tmp` state is not
+resumed.
 
 Add `--no-open` to suppress browser launch, or `--port 4310` to choose a port. The server binds only to `127.0.0.1`. Pi credentials remain in the server process; the browser has no filesystem or provider-credential access.
 

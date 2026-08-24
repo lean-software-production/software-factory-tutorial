@@ -30,8 +30,9 @@ npm run setup
 npm run tutorial -- --port 4310
 ```
 
-The launcher targets `tutorial/`. When the lessons ask for shell commands, open a second terminal
-and `cd tutorial`; `factory/` and `calculator/` are siblings there.
+The launcher targets the authored `tutorial/` template, then prints a private session workspace path.
+When the lessons ask for shell commands, open a second terminal and `cd` to that printed workspace;
+`factory/` and `calculator/` are siblings there.
 
 If the host already exports `OPENCODE_API_KEY`, skip the `pi` step — see
 [Bringing a key from the host](#bringing-a-key-from-the-host) below.
