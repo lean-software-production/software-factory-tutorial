@@ -425,7 +425,7 @@ export class MainWorkbookTutor {
 
 function normalizeContext(input: MainTutorContext | LegacyRestoreInput | TutorReview | LegacyReplyInput | { lessonId: string; blockId?: string; coveredThroughId: string }): MainTutorContext {
   if (Array.isArray(input)) return { records: input };
-  if ("records" in input) return { records: input.records, activeContext: input.activeContext };
+  if ("records" in input) return { records: input.records, activeContext: input.activeContext, completionTool: input.completionTool };
   return { records: [] };
 }
 

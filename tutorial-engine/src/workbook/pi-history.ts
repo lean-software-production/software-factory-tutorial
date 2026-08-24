@@ -72,6 +72,10 @@ function mapTurn(record: TimelineMessage): PiHistoryTurn {
   return { sourceEventId: record.id, role: record.role, text: record.text, timestamp: timestampFor(record), blockInView: record.blockInView };
 }
 
+function isStructuralBlockMessage(record: TimelineMessage): boolean {
+  return record.blockId === "workbook--introduction" || record.blockId.startsWith("part--") || /^lesson--[^-]+(?:-[^-]+)*$/.test(record.blockId);
+}
+
 /** Select the hierarchical teaching-boundary summaries and the exact conversation after their boundary. */
 export function projectPiHistory(records: readonly WorkbookTimelineRecord[]): PiHistoryProjection {
   const ordered = [...records].sort((left, right) => left.sequence - right.sequence);
@@ -96,7 +100,7 @@ export function projectPiHistory(records: readonly WorkbookTimelineRecord[]): Pi
     .map(mapSummary);
   const boundary = summaries.reduce((maximum, summary) => Math.max(maximum, sequenceForId.get(summary.coveredThroughId) ?? -1), 0);
   const turns = ordered
-    .filter((record): record is TimelineMessage => record.type === "message" && record.sequence > boundary)
+    .filter((record): record is TimelineMessage => record.type === "message" && (record.sequence > boundary || isStructuralBlockMessage(record)))
     .map(mapTurn);
 
   summaries.sort((left, right) => summaryEventSequence(left, recordsById) - summaryEventSequence(right, recordsById));

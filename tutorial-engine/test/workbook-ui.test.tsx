@@ -948,7 +948,7 @@ describe("workbook lesson UI", () => {
       chapters: [chapter({ lesson: undefined } as any)],
       progress,
       adapter: {},
-      timeline: [{ type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook:introduction", blockId: "__introduction__", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nTimeline intro copy." }]
+      timeline: [{ type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nTimeline intro copy." }]
     } as any;
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => state }));
     vi.stubGlobal("fetch", fetchMock);
@@ -969,11 +969,11 @@ describe("workbook lesson UI", () => {
     await act(async () => { sendButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
     const messageCall = fetchMock.mock.calls.find(([url]) => url === "/api/workbook/messages");
     expect(messageCall).toBeTruthy();
-    expect(JSON.parse((messageCall![1] as RequestInit).body as string)).toEqual({ blockId: "__introduction__", text: "Can I ask first?" });
+    expect(JSON.parse((messageCall![1] as RequestInit).body as string)).toEqual({ blockId: "workbook--introduction", text: "Can I ask first?" });
 
     const continueButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Ready to continue")!;
     await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
-    expect(fetchMock.mock.calls.some(([url, init]) => url === "api/workbook/introduction" && (init as RequestInit | undefined)?.method === "POST")).toBe(true);
+    expect(fetchMock.mock.calls.some(([url, init]) => url === "api/workbook/complete-block" && (init as RequestInit | undefined)?.method === "POST")).toBe(true);
   });
 
   it("renders conversational intro, part, lesson frame, and block content only in the timeline", async () => {
@@ -986,7 +986,7 @@ describe("workbook lesson UI", () => {
       progress,
       adapter: {},
       timeline: [
-        { type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook:introduction", blockId: "__introduction__", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nTIMELINE_ONLY_INTRO" },
+        { type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nTIMELINE_ONLY_INTRO" },
         { type: "message", id: "part", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "workbook:part:part-one", blockId: "__part__", role: "assistant", source: "authored", presentation: "course", text: "# Part One\n\nTIMELINE_ONLY_PART_COPY" },
         { type: "message", id: "frame", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: lesson.id, blockId: "__lesson_frame__", role: "assistant", source: "authored", presentation: "course", text: "# Markdown Lesson\n\nTIMELINE_ONLY_DEK\n\n## What you will learn\n\n- TIMELINE_ONLY_OUTCOME" },
         { type: "message", id: "block", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: lesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nBlock body duplicated only if document blocks render." },
@@ -1037,9 +1037,9 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector("textarea[name='message']")?.getAttribute("aria-label")).toBe("Message the tutor");
     await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
-    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
+    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/complete-block");
     expect(eventCall).toBeTruthy();
-    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "orientation", action: "continue" });
+    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "orientation" });
   });
 
   it("keeps navigation but omits standalone part and lesson framing in timeline mode", async () => {
@@ -1142,9 +1142,9 @@ describe("workbook lesson UI", () => {
     const continueButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
     await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
-    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
+    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/complete-block");
     expect(eventCall).toBeTruthy();
-    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "orientation", action: "continue" });
+    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "orientation" });
     expect(container.textContent).toContain("Next");
   });
 
@@ -1282,9 +1282,9 @@ describe("workbook lesson UI", () => {
 
     await act(async () => { continueButtons[0]!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
-    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
+    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/complete-block");
     expect(eventCall).toBeTruthy();
-    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: block.id, action: "continue" });
+    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: block.id });
   });
 
   it("routes active reflection composer sends through the reflection event path without a sticky hint", async () => {
@@ -1358,9 +1358,9 @@ describe("workbook lesson UI", () => {
 
     await act(async () => { continueButton!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
-    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
+    const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/complete-block");
     expect(eventCall).toBeTruthy();
-    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "reflect", action: "continue" });
+    expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "reflect" });
     expect(fetchMock.mock.calls.find(([url]) => url === "/api/workbook/messages")).toBeUndefined();
   });
 

@@ -30,8 +30,8 @@ class DriverFakeMainTutor implements DriverMainTutorContract {
       return { outcome: "feedback", message: "Name editor-artifacts/evaluator-editor.txt and explain the promotion intent." };
     }
     if (evidence.kind === "terminal") {
-      if (input.attempt.blockId === "exact-command" && evidence.transcript.includes("evaluator-command.txt") && evidence.transcript.includes("command block complete")) return { outcome: "accepted", message: "verified exact-command" };
-      if (input.attempt.blockId === "clue-only" && evidence.transcript.includes("evaluator-clue.txt") && evidence.transcript.includes("clue block complete")) return { outcome: "accepted", message: "verified clue-only" };
+      if (input.attempt.blockId.endsWith("--exact-command") && evidence.transcript.includes("evaluator-command.txt") && evidence.transcript.includes("command block complete")) return { outcome: "accepted", message: "verified exact-command" };
+      if (input.attempt.blockId.endsWith("--clue-only") && evidence.transcript.includes("evaluator-clue.txt") && evidence.transcript.includes("clue block complete")) return { outcome: "accepted", message: "verified clue-only" };
       return { outcome: "feedback", message: `Keep working on ${input.attempt.blockId}.` };
     }
     return { outcome: "feedback", message: "Tutor reply that asks one public follow-up." };
@@ -142,13 +142,13 @@ describe("v2 workbook driver", () => {
       expect(initial.introductionComplete).toBe(false);
 
       const introduced = await driver.completeIntroduction();
-      expect(introduced.progress.activeBlockId).toBe("orientation");
-      expect(introduced.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["orientation"]);
+      expect(introduced.progress.activeBlockId).toBe("lesson--001-live-session--orientation");
+      expect(introduced.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["lesson--001-live-session--orientation"]);
 
       const continued = await driver.continueBlock("orientation");
-      expect(continued.progress.activeBlockId).toBe("editor-practice");
-      expect(continued.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["orientation", "editor-practice"]);
-      expect(trace.publicStates.map((state) => state.label)).toEqual(["initial", "introduction", "continue:orientation"]);
+      expect(continued.progress.activeBlockId).toBe("lesson--001-live-session--editor-practice");
+      expect(continued.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["lesson--001-live-session--orientation", "lesson--001-live-session--editor-practice"]);
+      expect(trace.publicStates.map((state) => state.label)).toEqual(["initial", "introduction", "introduction:structural:part--evaluator", "introduction:structural:lesson--001-live-session", "resolve:orientation", "continue:orientation"]);
       expect(JSON.stringify(trace)).not.toContain('"tutor"');
     } finally {
       await server.close();
@@ -164,11 +164,11 @@ describe("v2 workbook driver", () => {
 
       const reviewed = await driver.submitEditorDraft("editor-practice", "This is a vague draft.");
 
-      const editorBlock = reviewed.progress.blocks.find((block: any) => block.id === "editor-practice");
+      const editorBlock = reviewed.progress.blocks.find((block: any) => block.id.endsWith("--editor-practice"));
       expect(editorBlock).toMatchObject({ active: true, completed: false, editorStatus: "feedback", revision: 1, checkpoint: { status: "feedback", feedback: expect.stringContaining("editor-artifacts/evaluator-editor.txt") } });
       expect(trace.editors).toEqual([
-        { blockId: "editor-practice", revision: 1, status: "reviewing" },
-        { blockId: "editor-practice", revision: 1, status: "feedback", feedback: "Name editor-artifacts/evaluator-editor.txt and explain the promotion intent." }
+        { blockId: "lesson--001-live-session--editor-practice", revision: 1, status: "reviewing" },
+        { blockId: "lesson--001-live-session--editor-practice", revision: 1, status: "feedback", feedback: "Name editor-artifacts/evaluator-editor.txt and explain the promotion intent." }
       ]);
       expect(workbookTutor.reviews).toHaveLength(1);
       expect(workbookTutor.reviews[0]).toMatchObject({ privateGuidance: expect.stringContaining("Private editor criterion"), attempt: { evidence: { kind: "editor", text: "This is a vague draft." } } });
@@ -210,12 +210,12 @@ describe("v2 workbook driver", () => {
 
       const discussed = await driver.submitReflection("reflection", "The exact block gave a command; the clue block required me to choose one.");
 
-      expect(discussed.progress.activeBlockId).toBe("reflection");
+      expect(discussed.progress.activeBlockId).toBe("lesson--001-live-session--reflection");
       expect(trace.reflections).toEqual([
-        { blockId: "reflection", role: "learner", text: "The exact block gave a command; the clue block required me to choose one." },
-        { blockId: "reflection", role: "tutor", text: "Tutor reply that asks one public follow-up." }
+        { blockId: "lesson--001-live-session--reflection", role: "learner", text: "The exact block gave a command; the clue block required me to choose one." },
+        { blockId: "lesson--001-live-session--reflection", role: "tutor", text: "Tutor reply that asks one public follow-up." }
       ]);
-      expect(workbookTutor.reviews.filter((review) => review.attempt.blockId === "reflection")).toHaveLength(1);
+      expect(workbookTutor.reviews.filter((review) => review.attempt.blockId.endsWith("--reflection"))).toHaveLength(1);
       expect(JSON.stringify(trace)).not.toContain("Follow up until the learner");
       expect(JSON.stringify(trace)).not.toContain('"tutor":');
     } finally {
@@ -230,16 +230,16 @@ describe("v2 workbook driver", () => {
 
       const completed = await driver.submitTerminalCommand("exact-command", exactCommand);
 
-      expect(completed.progress.activeBlockId).toBe("clue-only");
+      expect(completed.progress.activeBlockId).toBe("lesson--001-live-session--clue-only");
       expect(pty.writes).toEqual([`${exactCommand}\r`]);
-      expect(workbookTutor.reviews.filter((review) => review.attempt.blockId === "exact-command")).toHaveLength(1);
+      expect(workbookTutor.reviews.filter((review) => review.attempt.blockId.endsWith("--exact-command"))).toHaveLength(1);
       expect(trace.terminalTranscript).toEqual(expect.arrayContaining([
-        expect.objectContaining({ blockId: "exact-command", direction: "input", text: `${exactCommand}\r` }),
-        expect.objectContaining({ blockId: "exact-command", direction: "output", text: expect.stringContaining("ran:mkdir") }),
-        expect.objectContaining({ blockId: "exact-command", direction: "observer", text: expect.stringContaining("status:submitted") })
+        expect.objectContaining({ blockId: "lesson--001-live-session--exact-command", direction: "input", text: `${exactCommand}\r` }),
+        expect.objectContaining({ blockId: "lesson--001-live-session--exact-command", direction: "output", text: expect.stringContaining("ran:mkdir") }),
+        expect.objectContaining({ blockId: "lesson--001-live-session--exact-command", direction: "observer", text: expect.stringContaining("status:submitted") })
       ]));
       expect(trace.publicStates.map((state) => state.label)).toContain("terminal:exact-command:reviewed:1");
-      expect(trace.publicStates.map((state) => state.label)).toContain("terminal:exact-command:complete");
+      expect(trace.publicStates.map((state) => state.label)).toContain("terminal:lesson--001-live-session--exact-command:complete");
       expect(JSON.stringify(trace)).not.toContain("This is private tutor guidance");
     } finally {
       await server.close();

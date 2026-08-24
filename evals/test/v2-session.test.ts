@@ -40,14 +40,18 @@ describe("v2 public session trace", () => {
     const trace = createEmptyV2SessionTrace("public-state");
     const workspace = await createEvaluationWorkspace();
     tempRoots.push(workspace.root);
-    const server = await workspace.startServer({ embeddedTerminal: false });
+    const fakeTutor = { restore: async () => undefined, reply: async () => "Tutor reply.", prepareBlockBriefing: async () => "Briefing.", review: async () => ({ outcome: "working" as const }), summarizeBlock: async () => "Block summary.", summarizeLesson: async () => "Lesson summary.", dispose() {} };
+    const server = await workspace.startServer({ embeddedTerminal: false, mainTutor: fakeTutor as any, blockTutor: { hint: async () => "Hint.", assess: async () => ({ readiness: "still_working" as const, text: "Still working." }) } });
     try {
-      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
-      const state = await fetch(`${server.url}/api/workbook/events`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ blockId: "orientation", action: "continue" })
-      }).then((response) => response.json() as any);
+      let state = await fetch(`${server.url}/api/workbook/state`).then((response) => response.json() as any);
+      while (state.progress.activeBlockId !== "lesson--001-live-session--editor-practice") {
+        const result = await fetch(`${server.url}/api/workbook/complete-block`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ blockId: state.progress.activeBlockId })
+        }).then((response) => response.json() as any);
+        state = result.state;
+      }
 
       recordPublicState(trace, "exact-command-visible", state);
       trace.events = await readWorkbookEvents(workspace.root);
@@ -58,7 +62,7 @@ describe("v2 public session trace", () => {
         terminalTranscript: [],
         reflections: [],
         editors: [],
-        events: expect.arrayContaining([expect.objectContaining({ type: "session_started" }), expect.objectContaining({ type: "workbook_introduction_completed" }), expect.objectContaining({ type: "block_continued" })]),
+        events: expect.arrayContaining([expect.objectContaining({ type: "session_started" }), expect.objectContaining({ type: "block_completed", blockId: "workbook--introduction" }), expect.objectContaining({ type: "block_completed", blockId: "lesson--001-live-session--orientation" })]),
         artifacts: []
       });
       const serialized = JSON.stringify(trace);

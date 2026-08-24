@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Markdown } from "../../web/src/markdown";
 
-type TimelineMessageRecord = { type: "message"; id: string; sequence: number; at: string; lessonId: string; blockId: string; role: "assistant" | "user"; source: "authored" | "learner" | "main_tutor" | "block_tutor" | "tutor"; presentation: "course" | "chat" | "hint" | "review"; text: string };
+type TimelineMessageRecord = { type: "message"; id: string; sequence: number; at: string; lessonId: string; blockId: string; role: "assistant" | "user"; source: "authored" | "learner" | "main_tutor" | "block_tutor" | "tutor"; presentation: "course" | "chat" | "hint" | "review"; text: string; blockInView?: string };
 export type PublicTimelineRecord =
   | TimelineMessageRecord
   | { type: "tutor_failed"; id: string; sequence: number; at: string; lessonId: string; blockId: string; failureId: string; operation: string; publicMessage: string };
@@ -17,7 +17,7 @@ function resizeComposerTextarea(textarea: HTMLTextAreaElement) {
   textarea.style.overflowY = textarea.scrollHeight > composerMaxHeightPx ? "auto" : "hidden";
 }
 
-export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, inputDisabled = false }: {
+export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, activeSurface, completionPanel, inputDisabled = false }: {
   records: readonly TimelineThreadRecord[];
   activeLessonId: string;
   activeBlockId: string;
@@ -25,6 +25,8 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   onRetry(failureId: string): Promise<void>;
   onDoItForMe?(): void;
   renderContinuation?(record: TimelineMessageRecord): React.ReactNode;
+  activeSurface?: React.ReactNode;
+  completionPanel?: React.ReactNode;
   inputDisabled?: boolean;
 }) {
   const [draft, setDraft] = useState("");
@@ -82,22 +84,52 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     }
     void submitText(draft || event.currentTarget.value);
   };
-  return <section className="timeline-thread has-fixed-composer" aria-label="Tutor conversation">
-    {records.map((record) => {
-      if (record.type === "tutor_failed") return <aside key={record.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message tutor failure" aria-live="polite"><b>Tutor unavailable</b><p>{record.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(record.failureId)}>Retry</button></aside>;
-      if (record.type !== "message") return null;
-      const continuation = record.lessonId === activeLessonId && record.blockId === activeBlockId ? renderContinuation?.(record) : null;
-      if (record.presentation === "course" && record.source === "authored") {
-        const transitionClass = record.lessonId.startsWith("workbook:part:") && record.blockId === "__part__"
+  const renderConversationRecord = (record: TimelineThreadRecord) => {
+    if (record.type === "tutor_failed") return <aside key={record.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message tutor failure" aria-live="polite"><b>Tutor unavailable</b><p>{record.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(record.failureId)}>Retry</button></aside>;
+    if (record.type !== "message") return null;
+    const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : record.presentation === "hint" ? " hint" : ""}`;
+    return <article key={record.id} ref={(el) => { latestEntryRef.current = el; }} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown>{record.text}</Markdown>}</article>;
+  };
+  const pendingEchoNodes = pendingEchoes.map((echo) => <article key={echo.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message learner"><b>You</b><p>{echo.text}</p></article>);
+  const renderedRecords = (() => {
+    const nodes: React.ReactNode[] = [];
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index];
+      if (record?.type === "message" && record.presentation === "course" && record.source === "authored") {
+        const following: TimelineThreadRecord[] = [];
+        let nextIndex = index + 1;
+        while (nextIndex < records.length) {
+          const next = records[nextIndex]!;
+          if (next.type === "message" && next.presentation === "course" && next.source === "authored") break;
+          if (("lessonId" in next ? next.lessonId : undefined) === record.lessonId && ("blockId" in next ? next.blockId : undefined) === record.blockId) following.push(next);
+          nextIndex += 1;
+        }
+        const active = record.lessonId === activeLessonId && record.blockId === activeBlockId;
+        const transitionClass = record.blockId.startsWith("part--") || record.lessonId.startsWith("workbook:part:") && record.blockId === "__part__"
           ? " timeline-part-transition"
-          : record.blockId === "__lesson_frame__" ? " timeline-lesson-transition" : "";
+          : /^lesson--[^-]+(?:-[^-]+)*$/.test(record.blockId) || record.blockId === "__lesson_frame__" ? " timeline-lesson-transition" : "";
         const canInsertCommand = Boolean(onDoItForMe && record.id === activeAuthoredRecordId);
-        return <React.Fragment key={record.id}><section id={record.blockId} className={`work-block${record.blockId === activeBlockId ? " is-active" : ""}`} tabIndex={-1}><article className={`timeline-authored-content${transitionClass}`}><Markdown>{record.text}</Markdown></article>{canInsertCommand && <button className="button primary timeline-do-it" onClick={() => { onDoItForMe?.(); setCommandInserted(true); }}>{commandInserted ? "Inserted — press Enter" : "Do it for me"}</button>}{continuation}</section></React.Fragment>;
+        const lastMessage = ([...following].reverse().find((candidate): candidate is TimelineMessageRecord => candidate.type === "message") ?? record);
+        nodes.push(<section key={record.id} id={record.blockId} className={`work-block active-block-region${active ? " is-active" : ""}`} tabIndex={-1} data-active-block={active ? "true" : undefined}>
+          <article className={`timeline-authored-content${transitionClass}`}><Markdown>{record.text}</Markdown></article>
+          {active && activeSurface}
+          {canInsertCommand && <button className="button primary timeline-do-it" onClick={() => { onDoItForMe?.(); setCommandInserted(true); }}>{commandInserted ? "Inserted — press Enter" : "Do it for me"}</button>}
+          {following.map(renderConversationRecord)}
+          {active && pendingEchoNodes}
+          {active ? renderContinuation?.(lastMessage) : null}
+        </section>);
+        index = nextIndex - 1;
+        continue;
       }
-      const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : record.presentation === "hint" ? " hint" : ""}`;
-      return <React.Fragment key={record.id}><article ref={(el) => { latestEntryRef.current = el; }} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown>{record.text}</Markdown>}</article>{continuation}</React.Fragment>;
-    })}
-    {pendingEchoes.map((echo) => <article key={echo.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message learner"><b>You</b><p>{echo.text}</p></article>)}
+      const hasPriorCourse = records.slice(0, index).some((candidate) => candidate.type === "message" && candidate.presentation === "course" && candidate.source === "authored" && "lessonId" in record && candidate.lessonId === record.lessonId && candidate.blockId === record.blockId);
+      if (!hasPriorCourse) nodes.push(renderConversationRecord(record));
+    }
+    if (!nodes.some((node: any) => node?.props?.["data-active-block"] === "true")) nodes.push(...pendingEchoNodes);
+    return nodes;
+  })();
+  return <section className="timeline-thread has-fixed-composer" aria-label="Tutor conversation">
+    {renderedRecords}
+    {completionPanel}
     <div className="timeline-composer-dock fixed-composer">
       <form className="timeline-input fixed-composer" onSubmit={send}>
         <textarea ref={textareaRef} className="timeline-composer-textarea" name="message" rows={1} aria-label="Message the tutor" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} disabled={inputDisabled || pending} />
