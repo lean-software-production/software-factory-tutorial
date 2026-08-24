@@ -103,9 +103,9 @@ describe("MainWorkbookTutor", () => {
     });
     const previousTutorModel = process.env.TUTOR_MODEL;
     delete process.env.TUTOR_MODEL;
-    const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", log: logger().log });
 
     try {
+      const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", log: logger().log });
       const reply = tutor.reply({ records: [], activeContext: activeContext(), learnerMessage: message("learner-1", 1, "learner", "user", "Help") });
       await vi.advanceTimersByTimeAsync(250);
       await expect(reply).resolves.toBe("Recovered main reply.");
