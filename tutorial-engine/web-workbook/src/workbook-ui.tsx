@@ -255,13 +255,6 @@ export function ContinuationPageBreak() {
   return <div className="continuation-controls flow-break-only"><div className="continuation-page-break" aria-hidden="true" /></div>;
 }
 
-export function ContinueAction({ block, state, refresh, label }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void; label?: string }) {
-  const { active, pending, continueOnce } = useContinueOnce(block, state, refresh);
-  if (!active) return null;
-  const buttonLabel = label ?? (block.id === "workbook--introduction" ? "Ready to continue" : "Continue");
-  return <button className="button primary contextual-continue-action" disabled={pending} onClick={() => continueOnce("push")}>{pending ? "Continuing…" : buttonLabel}</button>;
-}
-
 export function ContinueControls({ block, state, refresh, label, preserveCompletedBreak = false }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void; label?: string; preserveCompletedBreak?: boolean }) {
   const { active, pending, continueOnce } = useContinueOnce(block, state, refresh);
 
@@ -731,12 +724,13 @@ export function App() {
   previousReadyRunwayIds.current = currentReadyRunwayIds;
   const stableRunwayIds = [...new Set([...currentReadyRunwayIds, ...preservedRunwayIds.current])];
   const activeContinueBlock: Block = activeBlock ?? { id: effectiveActiveBlockId, type: "narrative", title: state.currentBlock?.title ?? state.workbook.title, markdown: "" };
-  const activeContextualContinuation = activeContinuationEligible && effectiveActiveBlockProgress ? <ContinueAction block={activeContinueBlock} state={effectiveActiveBlockProgress} refresh={setState} label={continueLabelFor(state, effectiveActiveBlockId)} /> : undefined;
   const renderTimelineContinuation = (record: PublicTimelineRecord) => {
     if (record.type !== "message") return null;
     const blockProgress = state.progress.blocks.find((block) => block.id === record.blockId);
     const recordIsActive = record.blockId === effectiveActiveBlockId && (record.lessonId === effectiveActiveLessonId || effectiveActiveBlockId.includes("--"));
-    if (recordIsActive && activeContinuationEligible) return <ContinuationPageBreak />;
+    if (recordIsActive && activeContinuationEligible && effectiveActiveBlockProgress) {
+      return <ContinueControls block={activeContinueBlock} state={effectiveActiveBlockProgress} refresh={setState} label={continueLabelFor(state, effectiveActiveBlockId)} />;
+    }
     if (!recordIsActive && blockProgress?.completed) return <ContinuationPageBreak />;
     return null;
   };
@@ -746,7 +740,7 @@ export function App() {
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
       {hasTimeline ? <>
-        <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion} inputDisabled={reflectionComposerDisabled} renderContinuation={renderTimelineContinuation} contextualContinuation={activeContextualContinuation} readyBlockIds={stableRunwayIds} activeSurface={activeChapter && activeBlock ? <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
+        <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion} inputDisabled={reflectionComposerDisabled} renderContinuation={renderTimelineContinuation} readyBlockIds={stableRunwayIds} activeSurface={activeChapter && activeBlock ? <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
       </> : <>
         <WorkbookIntroduction state={state} refresh={setState} />
         {emerged.map((chapter, index) => <React.Fragment key={chapter.id}>{(index === 0 || chapter.part !== emerged[index - 1]!.part) && <PartChapter chapter={chapter} />}<LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}

@@ -45,12 +45,12 @@ not yet part of the navigable workbook history.
 
 The ready successor, not an invisible end sentinel, is the scroll continuation target.
 
-The current block's region ends with its chat followed by a page-break. The explicit destination-labelled
-Continue control is contextual near the fixed composer dock, outside the document flow, so tutor-chat
-length does not move it and the control does not reserve or remove layout space. The ready successor is
-rendered after the page-break, with an unobtrusive scroll runway after it so even a short
-bottom-of-document successor can genuinely cross the fixed line through ordinary scrolling. When the
-ready successor crosses the fixed reading line, the browser requests:
+The current block's region ends with its chat, then the explicit destination-labelled Continue control,
+then a page-break. The Continue control is a normal canvas action in document flow: tutor-chat length
+moves it naturally, and it sits immediately before the page-break that separates the current block from
+its ready successor. The ready successor is rendered after the page-break, with an unobtrusive scroll
+runway after it so even a short bottom-of-document successor can genuinely cross the fixed line through
+ordinary scrolling. When the ready successor crosses the fixed reading line, the browser requests:
 
 ```ts
 completeBlock(currentBlockId)

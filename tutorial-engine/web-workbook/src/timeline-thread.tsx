@@ -17,7 +17,7 @@ function resizeComposerTextarea(textarea: HTMLTextAreaElement) {
   textarea.style.overflowY = textarea.scrollHeight > composerMaxHeightPx ? "auto" : "hidden";
 }
 
-export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, contextualContinuation, activeSurface, completionPanel, readyBlockIds = [], inputDisabled = false }: {
+export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, activeSurface, completionPanel, readyBlockIds = [], inputDisabled = false }: {
   records: readonly TimelineThreadRecord[];
   activeLessonId: string;
   activeBlockId: string;
@@ -25,7 +25,6 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   onRetry(failureId: string): Promise<void>;
   onDoItForMe?(): void;
   renderContinuation?(record: TimelineMessageRecord): React.ReactNode;
-  contextualContinuation?: React.ReactNode;
   activeSurface?: React.ReactNode;
   completionPanel?: React.ReactNode;
   readyBlockIds?: readonly string[];
@@ -138,7 +137,6 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     {renderedRecords}
     {completionPanel}
     <div className="timeline-composer-dock fixed-composer">
-      {contextualContinuation ? <div className="composer-contextual-continuation">{contextualContinuation}</div> : null}
       <form className="timeline-input fixed-composer" onSubmit={send}>
         <textarea ref={textareaRef} className="timeline-composer-textarea" name="message" rows={1} aria-label="Message the tutor" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} disabled={inputDisabled || pending} />
         <button className="round-send" aria-label="Send message" title="Send message" disabled={inputDisabled || pending || !draft.trim()}>{pending ? "…" : "↑"}</button>

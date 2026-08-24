@@ -78,17 +78,22 @@ async function main(): Promise<void> {
   catch { throw new Error("Browser smoke is optional. Install its prerequisite with `npm install --no-save -D playwright`, then `npx playwright install chromium`."); }
 
   let current: "intro" | "lesson" | "practice" = "intro";
-  let resolveEvent!: (body: unknown) => void;
-  const eventRequest = new Promise<unknown>((resolveEventRequest) => { resolveEvent = resolveEventRequest; });
+  let resolveContinuation!: (body: unknown) => void;
+  const continuationRequest = new Promise<unknown>((resolveContinuationRequest) => { resolveContinuation = resolveContinuationRequest; });
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (request.method === "GET" && url.pathname === "/api/workbook/state") return sendJson(response, state(current));
     if (request.method === "POST" && url.pathname === "/api/workbook/introduction") { current = "lesson"; return sendJson(response, state(current)); }
-    if (request.method === "POST" && url.pathname === "/api/workbook/events") {
-      const body = await readJson(request);
-      resolveEvent(body);
-      current = "practice";
-      return sendJson(response, state(current));
+    if (request.method === "POST" && url.pathname === "/api/workbook/complete-block") {
+      const body = await readJson(request) as { blockId?: string };
+      if (body.blockId === "workbook--introduction") { current = "lesson"; return sendJson(response, state(current)); }
+      if (body.blockId === "orientation") {
+        resolveContinuation(body);
+        current = "practice";
+        return sendJson(response, state(current));
+      }
+      response.writeHead(400).end(`Unexpected complete-block request: ${JSON.stringify(body)}`);
+      return;
     }
     if (url.pathname.startsWith("/api/")) { response.writeHead(404).end(); return; }
     const candidate = resolve(webRoot, `.${url.pathname === "/" ? "/index.html" : url.pathname}`);
@@ -112,9 +117,9 @@ async function main(): Promise<void> {
     await page.getByRole("button", { name: "Continue" }).click({ force: true });
     await page.getByRole("heading", { name: "Practice" }).waitFor();
     await page.locator('[aria-label="Terminal disconnected"]').waitFor();
-    const body = await Promise.race([eventRequest, new Promise((_, reject) => setTimeout(() => reject(new Error("Browser did not post the workbook event request.")), 10_000))]);
-    if (JSON.stringify(body) !== JSON.stringify({ blockId: "orientation", action: "continue" })) throw new Error(`Unexpected workbook event request: ${JSON.stringify(body)}`);
-    console.log("Browser smoke passed: rendered the v2 workbook UI and observed /api/workbook/events.");
+    const body = await Promise.race([continuationRequest, new Promise((_, reject) => setTimeout(() => reject(new Error("Browser did not post the workbook continuation request.")), 10_000))]);
+    if (JSON.stringify(body) !== JSON.stringify({ blockId: "orientation" })) throw new Error(`Unexpected workbook continuation request: ${JSON.stringify(body)}`);
+    console.log("Browser smoke passed: rendered the v2 workbook UI and observed /api/workbook/complete-block.");
   } finally {
     await browser.close();
     await new Promise<void>((resolveServer, reject) => server.close((error) => error ? reject(error) : resolveServer()));

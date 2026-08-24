@@ -213,7 +213,8 @@ function scrollPromotionFixture() {
     ],
     timeline: [
       { type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nIntro copy." },
-      { type: "message", id: "part", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part--validation-loop", blockId: "part--validation-loop", role: "assistant", source: "authored", presentation: "course", text: "# Part One\n\nPart copy." },
+      { type: "message", id: "intro-tutor", sequence: 2, at: "2026-08-21T00:00:00.500Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "main_tutor", presentation: "chat", text: "Tutor chat before continuing." },
+      { type: "message", id: "part", sequence: 3, at: "2026-08-21T00:00:01.000Z", lessonId: "part--validation-loop", blockId: "part--validation-loop", role: "assistant", source: "authored", presentation: "course", text: "# Part One\n\nPart copy." },
     ],
   } as any;
   const completedState = {
@@ -1176,10 +1177,17 @@ describe("workbook lesson UI", () => {
     });
     await act(async () => { await Promise.resolve(); });
 
-    expect(container.querySelector("#workbook--introduction .continuation-page-break")).toBeTruthy();
+    const introSection = container.querySelector<HTMLElement>("#workbook--introduction")!;
+    const continueButton = introSection.querySelector<HTMLButtonElement>(".continuation-controls > button")!;
+    const pageBreak = introSection.querySelector<HTMLElement>(".continuation-page-break")!;
+    const tutorChat = introSection.querySelector<HTMLElement>(".timeline-message.tutor")!;
+    expect(pageBreak).toBeTruthy();
     expect(container.querySelector("#part--validation-loop .ready-successor-scroll-runway")).toBeTruthy();
-    expect(container.querySelector("#workbook--introduction button")).toBeNull();
-    expect(container.querySelector(".composer-contextual-continuation button")?.textContent).toBe("Continue to Part One");
+    expect(continueButton.textContent).toBe("Continue to Part One");
+    expect(tutorChat.textContent).toContain("Tutor chat before continuing.");
+    expect(tutorChat.compareDocumentPosition(continueButton) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(continueButton.nextElementSibling).toBe(pageBreak);
+    expect(container.querySelector(".composer-contextual-continuation button")).toBeNull();
 
     const readyElement = container.querySelector<HTMLElement>("#part--validation-loop")!;
     readyElement.getBoundingClientRect = () => ({ top: 100, bottom: 300, left: 0, right: 800, width: 800, height: 200, x: 0, y: 100, toJSON: () => ({}) });
@@ -1198,7 +1206,7 @@ describe("workbook lesson UI", () => {
     expect(scrollBy).not.toHaveBeenCalled();
   });
 
-  it("keeps explicit Continue in the fixed composer context and uses the normal navigation path", async () => {
+  it("keeps explicit Continue in the document canvas after tutor chat and uses the normal navigation path", async () => {
     const { initialState, completedState } = scrollPromotionFixture();
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? { outcome: "completed", state: completedState, navigationTarget: "part--validation-loop" } : initialState }));
     const scrollIntoView = vi.fn();
@@ -1214,9 +1222,14 @@ describe("workbook lesson UI", () => {
     await act(async () => { await Promise.resolve(); });
     scrollIntoView.mockClear();
 
-    const continueButton = container.querySelector<HTMLButtonElement>(".composer-contextual-continuation button")!;
+    const introSection = container.querySelector<HTMLElement>("#workbook--introduction")!;
+    const continueButton = introSection.querySelector<HTMLButtonElement>(".continuation-controls > button")!;
+    const pageBreak = introSection.querySelector<HTMLElement>(".continuation-page-break")!;
+    const tutorChat = introSection.querySelector<HTMLElement>(".timeline-message.tutor")!;
     expect(continueButton.textContent).toBe("Continue to Part One");
-    expect(container.querySelector("#workbook--introduction button")).toBeNull();
+    expect(tutorChat.compareDocumentPosition(continueButton) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(continueButton.nextElementSibling).toBe(pageBreak);
+    expect(container.querySelector(".composer-contextual-continuation button")).toBeNull();
 
     await act(async () => {
       continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
@@ -1228,7 +1241,7 @@ describe("workbook lesson UI", () => {
     expect(completionCalls).toHaveLength(1);
     expect(JSON.parse((completionCalls[0]![1] as RequestInit).body as string)).toEqual({ blockId: "workbook--introduction" });
     expect(scrollIntoView).toHaveBeenCalled();
-    expect(container.querySelector(".composer-contextual-continuation button")).toBeNull();
+    expect(container.querySelector("#workbook--introduction button")).toBeNull();
   });
 
   it("completes a ready successor that first enters below the reading line and later crosses on scroll", async () => {
@@ -1476,7 +1489,7 @@ describe("workbook lesson UI", () => {
     expect(text.match(/Block body duplicated only if document blocks render\./g)).toHaveLength(1);
   });
 
-  it("renders the active narrative timeline note with a manual Continue in the fixed composer context", async () => {
+  it("renders the active narrative timeline note with a manual Continue in the canvas", async () => {
     const state = {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
@@ -1484,7 +1497,10 @@ describe("workbook lesson UI", () => {
       chapters: [chapter()],
       progress,
       adapter: {},
-      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nAuthored Orientation note." }]
+      timeline: [
+        { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nAuthored Orientation note." },
+        { type: "message", id: "tutor-chat", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "orientation", role: "assistant", source: "main_tutor", presentation: "chat", text: "Tutor chat before the learner continues." },
+      ]
     } as any;
     const continuedState = { ...state, progress: { ...progress, blocks: progress.blocks.map((block) => block.id === "orientation" ? { ...block, completed: true } : block) } };
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? continuedState : state }));
@@ -1498,11 +1514,16 @@ describe("workbook lesson UI", () => {
     expect(text.indexOf("Authored Orientation note.")).toBeLessThan(text.indexOf("Continue"));
     expect(text).not.toContain("Message the tutor");
 
-    const continueButton = container.querySelector<HTMLButtonElement>(".composer-contextual-continuation button")!;
+    const orientation = container.querySelector<HTMLElement>("#orientation")!;
+    const continueButton = orientation.querySelector<HTMLButtonElement>(".continuation-controls > button")!;
     const composerDock = container.querySelector(".timeline-composer-dock.fixed-composer")!;
-    expect(composerDock.contains(continueButton)).toBe(true);
-    expect(container.querySelector("#orientation button")).toBeNull();
-    expect(container.querySelector("#orientation .continuation-page-break")).toBeTruthy();
+    const tutorChat = orientation.querySelector<HTMLElement>(".timeline-message.tutor")!;
+    const pageBreak = orientation.querySelector<HTMLElement>(".continuation-page-break")!;
+    expect(composerDock.contains(continueButton)).toBe(false);
+    expect(tutorChat.textContent).toContain("Tutor chat before the learner continues.");
+    expect(tutorChat.compareDocumentPosition(continueButton) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(continueButton.nextElementSibling).toBe(pageBreak);
+    expect(container.querySelector(".composer-contextual-continuation button")).toBeNull();
     expect(container.querySelector("textarea[name='message']")?.getAttribute("aria-label")).toBe("Message the tutor");
     await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
