@@ -181,6 +181,58 @@ function stubAppShellGlobals(win: JSDOM["window"]) {
   vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
 }
 
+function scrollPromotionFixture() {
+  const initialState = {
+    workbook: { title: "Workbook" },
+    introduction: "Intro.",
+    introductionComplete: false,
+    chapters: [{ id: "001-first", title: "First", part: "Part One", partId: "validation-loop", partMarkdown: "Part copy.", lessonNumber: 1 }],
+    progress: {
+      activeLessonId: "001-first",
+      activeBlockId: "workbook--introduction",
+      activeAnchorId: "workbook--introduction",
+      completedLessons: [],
+      completedBlocks: [],
+      workAcceptedBlocks: ["workbook--introduction"],
+      readyBlocks: ["part--validation-loop"],
+      blocks: [
+        { id: "workbook--introduction", type: "workbook-introduction", ready: false, active: true, completed: false, verified: false, emerged: true, workAccepted: true },
+        { id: "part--validation-loop", type: "part-preamble", ready: true, active: false, completed: false, verified: false, emerged: true },
+      ],
+      reflections: {},
+      reflectionConversations: {},
+      canComplete: { blockId: "workbook--introduction", eligible: true },
+    },
+    adapter: {},
+    revealedBlockIds: ["workbook--introduction"],
+    renderedBlockIds: ["workbook--introduction", "part--validation-loop"],
+    readyBlockIds: ["part--validation-loop"],
+    orderedBlocks: [
+      { id: "workbook--introduction", anchorId: "workbook--introduction", title: "Workbook", origin: "structural", kind: "workbook-introduction", lessonId: "workbook--introduction" },
+      { id: "part--validation-loop", anchorId: "part--validation-loop", title: "Part One", origin: "structural", kind: "part-preamble", lessonId: "part--validation-loop" },
+    ],
+    timeline: [
+      { type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nIntro copy." },
+      { type: "message", id: "part", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part--validation-loop", blockId: "part--validation-loop", role: "assistant", source: "authored", presentation: "course", text: "# Part One\n\nPart copy." },
+    ],
+  } as any;
+  const completedState = {
+    ...initialState,
+    introductionComplete: true,
+    progress: {
+      ...initialState.progress,
+      activeBlockId: "part--validation-loop",
+      activeAnchorId: "part--validation-loop",
+      completedBlocks: ["workbook--introduction"],
+      readyBlocks: [],
+      blocks: initialState.progress.blocks.map((block: any) => block.id === "workbook--introduction" ? { ...block, active: false, completed: true } : { ...block, active: true, ready: false, workAccepted: true }),
+    },
+    revealedBlockIds: ["workbook--introduction", "part--validation-loop"],
+    readyBlockIds: [],
+  } as any;
+  return { initialState, completedState };
+}
+
 describe("workbook lesson UI", () => {
   it("submits the typed tutor message with Enter", async () => {
     const onSend = vi.fn(async () => undefined);
@@ -1110,6 +1162,75 @@ describe("workbook lesson UI", () => {
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
+  it("preserves continuation break and ready runway across passive scroll promotion without scroll compensation", async () => {
+    const { initialState, completedState } = scrollPromotionFixture();
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? { outcome: "completed", state: completedState, navigationTarget: "part--validation-loop" } : initialState }));
+    const scrollBy = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("IntersectionObserver", class { observe = vi.fn(); disconnect = vi.fn(); } as any);
+
+    const container = await mount(createElement(App), (win) => {
+      stubAppShellGlobals(win);
+      vi.stubGlobal("history", { pushState: vi.fn(), replaceState: vi.fn() });
+      win.scrollBy = scrollBy as any;
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.querySelector("#workbook--introduction .continuation-page-break")).toBeTruthy();
+    expect(container.querySelector("#part--validation-loop .ready-successor-scroll-runway")).toBeTruthy();
+    expect(container.querySelector("#workbook--introduction button")).toBeNull();
+    expect(container.querySelector(".composer-contextual-continuation button")?.textContent).toBe("Continue to Part One");
+
+    const readyElement = container.querySelector<HTMLElement>("#part--validation-loop")!;
+    readyElement.getBoundingClientRect = () => ({ top: 100, bottom: 300, left: 0, right: 800, width: 800, height: 200, x: 0, y: 100, toJSON: () => ({}) });
+
+    await act(async () => {
+      window.dispatchEvent(new window.Event("scroll"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock.mock.calls.filter(([url, init]) => url === "api/workbook/complete-block" && (init as RequestInit | undefined)?.method === "POST")).toHaveLength(1);
+    expect(container.querySelector("#workbook--introduction .continuation-page-break")).toBeTruthy();
+    expect(container.querySelector("#workbook--introduction button")).toBeNull();
+    expect(container.querySelector("#part--validation-loop .ready-successor-scroll-runway")).toBeTruthy();
+    expect(container.querySelector(".composer-contextual-continuation button")).toBeNull();
+    expect(scrollBy).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit Continue in the fixed composer context and uses the normal navigation path", async () => {
+    const { initialState, completedState } = scrollPromotionFixture();
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? { outcome: "completed", state: completedState, navigationTarget: "part--validation-loop" } : initialState }));
+    const scrollIntoView = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("IntersectionObserver", class { observe = vi.fn(); disconnect = vi.fn(); } as any);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
+
+    const container = await mount(createElement(App), (win) => {
+      stubAppShellGlobals(win);
+      win.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+      vi.stubGlobal("history", { pushState: vi.fn(), replaceState: vi.fn() });
+    });
+    await act(async () => { await Promise.resolve(); });
+    scrollIntoView.mockClear();
+
+    const continueButton = container.querySelector<HTMLButtonElement>(".composer-contextual-continuation button")!;
+    expect(continueButton.textContent).toBe("Continue to Part One");
+    expect(container.querySelector("#workbook--introduction button")).toBeNull();
+
+    await act(async () => {
+      continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const completionCalls = fetchMock.mock.calls.filter(([url, init]) => url === "api/workbook/complete-block" && (init as RequestInit | undefined)?.method === "POST");
+    expect(completionCalls).toHaveLength(1);
+    expect(JSON.parse((completionCalls[0]![1] as RequestInit).body as string)).toEqual({ blockId: "workbook--introduction" });
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(container.querySelector(".composer-contextual-continuation button")).toBeNull();
+  });
+
   it("completes a ready successor that first enters below the reading line and later crosses on scroll", async () => {
     let observerCallback: ((entries: any[]) => void) | undefined;
     class FakeIntersectionObserver {
@@ -1355,7 +1476,7 @@ describe("workbook lesson UI", () => {
     expect(text.match(/Block body duplicated only if document blocks render\./g)).toHaveLength(1);
   });
 
-  it("renders the active narrative timeline note with a manual Continue before the fixed composer", async () => {
+  it("renders the active narrative timeline note with a manual Continue in the fixed composer context", async () => {
     const state = {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
@@ -1377,9 +1498,11 @@ describe("workbook lesson UI", () => {
     expect(text.indexOf("Authored Orientation note.")).toBeLessThan(text.indexOf("Continue"));
     expect(text).not.toContain("Message the tutor");
 
-    const continueButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Continue")!;
+    const continueButton = container.querySelector<HTMLButtonElement>(".composer-contextual-continuation button")!;
     const composerDock = container.querySelector(".timeline-composer-dock.fixed-composer")!;
-    expect(continueButton.compareDocumentPosition(composerDock) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(composerDock.contains(continueButton)).toBe(true);
+    expect(container.querySelector("#orientation button")).toBeNull();
+    expect(container.querySelector("#orientation .continuation-page-break")).toBeTruthy();
     expect(container.querySelector("textarea[name='message']")?.getAttribute("aria-label")).toBe("Message the tutor");
     await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 

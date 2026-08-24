@@ -45,18 +45,22 @@ not yet part of the navigable workbook history.
 
 The ready successor, not an invisible end sentinel, is the scroll continuation target.
 
-The current block's region ends with its chat and any explicit Continue control, followed by a
-page-break. The ready successor is rendered after that break, with an unobtrusive scroll runway after it
-so even a short bottom-of-document successor can genuinely cross the fixed line through ordinary
-scrolling. When the ready successor crosses the fixed reading line, the browser requests:
+The current block's region ends with its chat followed by a page-break. The explicit destination-labelled
+Continue control is contextual near the fixed composer dock, outside the document flow, so tutor-chat
+length does not move it and the control does not reserve or remove layout space. The ready successor is
+rendered after the page-break, with an unobtrusive scroll runway after it so even a short
+bottom-of-document successor can genuinely cross the fixed line through ordinary scrolling. When the
+ready successor crosses the fixed reading line, the browser requests:
 
 ```ts
 completeBlock(currentBlockId)
 ```
 
 The server records `block_completed` for the current block and promotes the ready successor to active.
-The browser updates the fragment for this scroll completion with `replaceState` only. It does not add a
-history entry and does not run a fragment-navigation scroll after the state update.
+The browser preserves the predecessor's page-break and the promoted successor's runway in normal flow,
+so promotion does not collapse geometry around the reading line. The browser updates the fragment for
+this scroll completion with `replaceState` only. It does not add a history entry and does not run a
+fragment-navigation scroll after the state update.
 
 An explicit Continue control and the tutor's completion tool use the same server operation. They promote
 the ready successor and navigate to its already-rendered anchor with `pushState`.
@@ -81,7 +85,8 @@ Add deterministic coverage for:
 1. immediate `workAccepted` on a no-work active block and ready successor rendering;
 2. accepted evidence producing `workAccepted` and exactly one ready successor;
 3. crossing the ready successor's reading line completing only its predecessor and activating it,
-   including the below-line-then-scroll browser sequence and no viewport jump;
+   including the below-line-then-scroll browser sequence, preserved page-break/runway geometry, and no
+   viewport jump;
 4. a short bottom successor having enough scroll runway to cross the line without a fallback;
 5. button and tutor completion promoting that same ready successor with destination-specific labels;
 6. the current lesson rail outline showing all blocks while disabling ready and future entries;

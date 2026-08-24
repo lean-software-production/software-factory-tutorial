@@ -251,10 +251,21 @@ function useContinueOnce(block: Block, state: BlockProgress | undefined, refresh
   return { active, pending, continueOnce };
 }
 
-export function ContinueControls({ block, state, refresh, label }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void; label?: string }) {
+export function ContinuationPageBreak() {
+  return <div className="continuation-controls flow-break-only"><div className="continuation-page-break" aria-hidden="true" /></div>;
+}
+
+export function ContinueAction({ block, state, refresh, label }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void; label?: string }) {
+  const { active, pending, continueOnce } = useContinueOnce(block, state, refresh);
+  if (!active) return null;
+  const buttonLabel = label ?? (block.id === "workbook--introduction" ? "Ready to continue" : "Continue");
+  return <button className="button primary contextual-continue-action" disabled={pending} onClick={() => continueOnce("push")}>{pending ? "Continuing…" : buttonLabel}</button>;
+}
+
+export function ContinueControls({ block, state, refresh, label, preserveCompletedBreak = false }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void; label?: string; preserveCompletedBreak?: boolean }) {
   const { active, pending, continueOnce } = useContinueOnce(block, state, refresh);
 
-  if (state?.completed) return <p className="next-ready">The next step has appeared below.</p>;
+  if (state?.completed) return preserveCompletedBreak ? <ContinuationPageBreak /> : <p className="next-ready">The next step has appeared below.</p>;
   if (!active) return null;
   const buttonLabel = label ?? (block.id === "workbook--introduction" ? "Ready to continue" : "Continue");
   return <div className="continuation-controls">
@@ -618,6 +629,8 @@ export function App() {
   const [terminalInsertion, setTerminalInsertion] = useState<(() => void) | undefined>();
   const [blockedLink, setBlockedLink] = useState(false);
   const scrollCompletionPending = useRef(false);
+  const previousReadyRunwayIds = useRef<Set<string>>(new Set());
+  const preservedRunwayIds = useRef<Set<string>>(new Set());
   const registerTerminalInsertion = useCallback((insertCommand: (() => void) | undefined) => {
     setTerminalInsertion(() => insertCommand);
   }, []);
@@ -629,8 +642,11 @@ export function App() {
     const revealed = new Set(state.revealedBlockIds ?? state.progress.blocks.filter((block) => block.emerged).map((block) => block.id));
     const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback: FrameRequestCallback) => setTimeout(callback, 0) as unknown as number;
     if (!fragment) { raf(() => navigateToAnchor(state.progress.activeAnchorId ?? state.progress.activeBlockId, "replace")); return; }
-    if (passiveAnchorScrollIsSuppressed(fragment)) { passiveAnchorScrollSuppression = undefined; return; }
-    if (revealed.has(fragment) || fragment === "workbook--complete" && state.progress.workbookComplete) { raf(() => navigateToAnchor(fragment, "none")); return; }
+    if (revealed.has(fragment) || fragment === "workbook--complete" && state.progress.workbookComplete) {
+      if (passiveAnchorScrollIsSuppressed(fragment)) { passiveAnchorScrollSuppression = undefined; return; }
+      raf(() => navigateToAnchor(fragment, "none"));
+      return;
+    }
     setBlockedLink(true);
   }, [state?.workbook.title, state?.progress.activeAnchorId, state?.progress.workbookComplete]);
   useEffect(() => { setTerminalInsertion(undefined); }, [state?.progress.activeLessonId, state?.progress.activeBlockId]);
@@ -690,6 +706,9 @@ export function App() {
   const activeChapter = emerged.find((chapter) => chapter.id === state.progress.activeLessonId);
   const activeBlock = activeChapter?.lesson.blocks.find((block) => block.id === state.progress.activeBlockId);
   const activeBlockProgress = state.progress.blocks.find((block) => block.id === state.progress.activeBlockId);
+  const effectiveActiveLessonId = state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeLessonId : INTRODUCTION_LESSON_ID;
+  const effectiveActiveBlockId = state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID;
+  const effectiveActiveBlockProgress = state.progress.blocks.find((block) => block.id === effectiveActiveBlockId) ?? (!state.introductionComplete ? { id: INTRODUCTION_BLOCK_ID, type: "workbook-introduction", ready: true, active: true, completed: false, verified: false, emerged: true } as BlockProgress : activeBlockProgress);
   const hasTimeline = state.timeline !== undefined;
   const blockInView = () => canonicalBlockInView(state);
   const sendTutorText = (text: string) => {
@@ -703,22 +722,22 @@ export function App() {
       if (next.progress.activeBlockId !== before || next.progress.workbookComplete && !state.progress.workbookComplete) requestAnimationFrame(() => navigateToAnchor(next.progress.activeAnchorId ?? next.progress.activeBlockId, "push"));
     });
   };
-  const activeTargetRecords = state.timeline?.filter((record) => record.type === "message" && record.lessonId === state.progress.activeLessonId && record.blockId === state.progress.activeBlockId) ?? [];
-  const latestActiveTargetRecordId = activeTargetRecords.at(-1)?.id;
-  const activeBlockAccepted = activeBlockProgress?.checkpoint?.status === "accepted";
+  const activeContinuationEligible = !state.introductionComplete ? true : state.progress.canComplete ? state.progress.canComplete.blockId === effectiveActiveBlockId && state.progress.canComplete.eligible : Boolean(effectiveActiveBlockProgress?.active && effectiveActiveBlockProgress.ready && !effectiveActiveBlockProgress.completed && (activeBlock?.type === "narrative" || activeBlock?.type === "lesson-transition" || effectiveActiveBlockProgress.checkpoint?.status === "accepted"));
   const reflectionComposerDisabled = Boolean(state.introductionComplete && activeBlock?.type === "reflection" && ["reviewing", "accepted"].includes(activeBlockProgress?.checkpoint?.status ?? ""));
+  const currentReadyRunwayIds = new Set(state.readyBlockIds ?? state.progress.readyBlocks ?? []);
+  for (const id of previousReadyRunwayIds.current) if (!currentReadyRunwayIds.has(id) && state.progress.activeBlockId === id && !state.progress.workbookComplete) preservedRunwayIds.current.add(id);
+  if (currentReadyRunwayIds.size > 0) preservedRunwayIds.current.delete(state.progress.activeBlockId);
+  for (const id of [...preservedRunwayIds.current]) if (state.progress.completedBlocks?.includes(id) || state.progress.workbookComplete) preservedRunwayIds.current.delete(id);
+  previousReadyRunwayIds.current = currentReadyRunwayIds;
+  const stableRunwayIds = [...new Set([...currentReadyRunwayIds, ...preservedRunwayIds.current])];
+  const activeContinueBlock: Block = activeBlock ?? { id: effectiveActiveBlockId, type: "narrative", title: state.currentBlock?.title ?? state.workbook.title, markdown: "" };
+  const activeContextualContinuation = activeContinuationEligible && effectiveActiveBlockProgress ? <ContinueAction block={activeContinueBlock} state={effectiveActiveBlockProgress} refresh={setState} label={continueLabelFor(state, effectiveActiveBlockId)} /> : undefined;
   const renderTimelineContinuation = (record: PublicTimelineRecord) => {
     if (record.type !== "message") return null;
-    if (record.source === "authored" && !state.introductionComplete && record.lessonId === INTRODUCTION_LESSON_ID && record.blockId === INTRODUCTION_BLOCK_ID) return <IntroductionContinue refresh={setState} label={continueLabelFor(state, INTRODUCTION_BLOCK_ID)} />;
-    if (record.blockId !== state.progress.activeBlockId) return null;
-    const eligible = state.progress.canComplete ? state.progress.canComplete.eligible : Boolean(activeBlockProgress?.active && activeBlockProgress.ready && !activeBlockProgress.completed && (activeBlock?.type === "narrative" || activeBlock?.type === "lesson-transition" || activeBlockProgress.checkpoint?.status === "accepted"));
-    if (!eligible) return null;
-    const blockForContinue: Block = activeBlock ?? { id: record.blockId, type: "narrative", title: state.currentBlock?.title ?? state.workbook.title, markdown: "" };
-    const progressForContinue = activeBlockProgress ?? state.progress.blocks.find((block) => block.id === record.blockId);
-    if (!progressForContinue) return null;
-    const continueLabel = continueLabelFor(state, record.blockId);
-    if (activeBlockAccepted) return record.id === latestActiveTargetRecordId ? <ContinueControls block={blockForContinue} state={progressForContinue} refresh={setState} label={continueLabel} /> : null;
-    if (record.source === "authored") return <ContinueControls block={blockForContinue} state={progressForContinue} refresh={setState} label={continueLabel} />;
+    const blockProgress = state.progress.blocks.find((block) => block.id === record.blockId);
+    const recordIsActive = record.blockId === effectiveActiveBlockId && (record.lessonId === effectiveActiveLessonId || effectiveActiveBlockId.includes("--"));
+    if (recordIsActive && activeContinuationEligible) return <ContinuationPageBreak />;
+    if (!recordIsActive && blockProgress?.completed) return <ContinuationPageBreak />;
     return null;
   };
   return <div className="shell">
@@ -727,7 +746,7 @@ export function App() {
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
       {hasTimeline ? <>
-        <TimelineThread records={state.timeline} activeLessonId={state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeLessonId : INTRODUCTION_LESSON_ID} activeBlockId={state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion} inputDisabled={reflectionComposerDisabled} renderContinuation={renderTimelineContinuation} readyBlockIds={state.readyBlockIds ?? state.progress.readyBlocks ?? []} activeSurface={activeChapter && activeBlock ? <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
+        <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion} inputDisabled={reflectionComposerDisabled} renderContinuation={renderTimelineContinuation} contextualContinuation={activeContextualContinuation} readyBlockIds={stableRunwayIds} activeSurface={activeChapter && activeBlock ? <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
       </> : <>
         <WorkbookIntroduction state={state} refresh={setState} />
         {emerged.map((chapter, index) => <React.Fragment key={chapter.id}>{(index === 0 || chapter.part !== emerged[index - 1]!.part) && <PartChapter chapter={chapter} />}<LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}
