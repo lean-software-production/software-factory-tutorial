@@ -117,12 +117,14 @@ function stateForBlock(progress: Progress, lessonId: string, block: Block): Bloc
 function activeLessonValue<T>(progress: Progress, lessonId: string, value: T | undefined, fallback: T): T { return lessonId === progress.activeLessonId ? value ?? fallback : fallback; }
 function commandForInsertion(command = "") { return command.replace(/\\\r?\n\s*/g, " "); }
 
+const READING_LINE_TOP_PX = 120;
+
 function canonicalBlockInView(state: State): string | undefined {
   const revealed = state.revealedBlockIds ?? state.progress.blocks.filter((block) => block.emerged).map((block) => block.id);
   const candidates = revealed.flatMap((id) => {
     const element = typeof document !== "undefined" ? document.getElementById(id) : null;
     return element ? [{ id, top: element.getBoundingClientRect().top }] : [];
-  }).filter((candidate) => candidate.top <= 120);
+  }).filter((candidate) => candidate.top <= READING_LINE_TOP_PX);
   return candidates.at(-1)?.id ?? state.progress.activeBlockId;
 }
 
@@ -600,18 +602,28 @@ export function App() {
     const element = document.getElementById(readyId);
     if (!element) return;
     scrollCompletionPending.current = false;
-    const observer = new IntersectionObserver(([entry]) => {
-      const top = entry?.boundingClientRect?.top ?? element.getBoundingClientRect().top;
-      if (!entry?.isIntersecting || top > 120 || scrollCompletionPending.current) return;
+    const completeIfCrossedReadingLine = (top = element.getBoundingClientRect().top) => {
+      if (top > READING_LINE_TOP_PX || scrollCompletionPending.current) return;
       scrollCompletionPending.current = true;
       completeBlockRequest(activeId).then((result) => setState(stateFromCompletion(result))).catch((error) => {
         scrollCompletionPending.current = false;
         console.error(error);
         readWorkbookState().then((next) => { if (next.progress.completedBlocks?.includes(activeId)) setState(next); }).catch(() => undefined);
       });
+    };
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry?.isIntersecting) return;
+      completeIfCrossedReadingLine(entry.boundingClientRect?.top ?? element.getBoundingClientRect().top);
     }, { threshold: 0 });
+    const checkReadySuccessorPosition = () => completeIfCrossedReadingLine();
     observer.observe(element);
-    return () => observer.disconnect();
+    addEventListener("scroll", checkReadySuccessorPosition, { passive: true });
+    addEventListener("resize", checkReadySuccessorPosition);
+    return () => {
+      observer.disconnect();
+      removeEventListener("scroll", checkReadySuccessorPosition);
+      removeEventListener("resize", checkReadySuccessorPosition);
+    };
   }, [state?.progress.activeBlockId, state?.progress.workbookComplete, state?.readyBlockIds?.join("|"), state?.progress.readyBlocks?.join("|")]);
   useEffect(() => {
     if (!state) return;
