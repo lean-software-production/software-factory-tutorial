@@ -311,10 +311,16 @@ describe("workbook lesson UI", () => {
     const learnerBubble = container.querySelector(".timeline-message.learner");
     expect(learnerBubble).not.toBeNull();
     expect(learnerBubble!.textContent).toContain("What should I try next?");
+    const thinking = container.querySelector<HTMLElement>(".timeline-message.tutor.thinking");
+    expect(thinking).not.toBeNull();
+    expect(thinking?.getAttribute("role")).toBe("status");
+    expect(thinking?.getAttribute("aria-label")).toBe("Tutor is thinking");
+    expect(thinking?.querySelectorAll(".tutor-thinking-dot")).toHaveLength(3);
 
     await act(async () => { resolveSend(); await Promise.resolve(); });
 
     expect(container.querySelector(".timeline-message.learner")).toBeNull();
+    expect(container.querySelector(".timeline-message.tutor.thinking")).toBeNull();
   });
 
   it("restores the draft if onSend rejects, but still removes the pending echo", async () => {

@@ -91,6 +91,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     return <article key={record.id} ref={(el) => { latestEntryRef.current = el; }} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown>{record.text}</Markdown>}</article>;
   };
   const pendingEchoNodes = pendingEchoes.map((echo) => <article key={echo.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message learner"><b>You</b><p>{echo.text}</p></article>);
+  const pendingThinkingNode = pendingEchoes.length > 0 ? <aside ref={(el) => { latestEntryRef.current = el; }} className="timeline-message tutor thinking" role="status" aria-live="polite" aria-label="Tutor is thinking"><b>Tutor</b><span className="tutor-thinking-dots" aria-hidden="true"><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /></span><span className="tutor-thinking-label">Thinking</span></aside> : null;
   const renderedRecords = (() => {
     const nodes: React.ReactNode[] = [];
     for (let index = 0; index < records.length; index += 1) {
@@ -116,6 +117,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
           {canInsertCommand && <button className="button primary timeline-do-it" onClick={() => { onDoItForMe?.(); setCommandInserted(true); }}>{commandInserted ? "Inserted — press Enter" : "Do it for me"}</button>}
           {following.map(renderConversationRecord)}
           {active && pendingEchoNodes}
+          {active && pendingThinkingNode}
           {active ? renderContinuation?.(lastMessage) : null}
         </section>);
         index = nextIndex - 1;
@@ -124,7 +126,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
       const hasPriorCourse = records.slice(0, index).some((candidate) => candidate.type === "message" && candidate.presentation === "course" && candidate.source === "authored" && "lessonId" in record && candidate.lessonId === record.lessonId && candidate.blockId === record.blockId);
       if (!hasPriorCourse) nodes.push(renderConversationRecord(record));
     }
-    if (!nodes.some((node: any) => node?.props?.["data-active-block"] === "true")) nodes.push(...pendingEchoNodes);
+    if (!nodes.some((node: any) => node?.props?.["data-active-block"] === "true")) nodes.push(...pendingEchoNodes, pendingThinkingNode);
     return nodes;
   })();
   return <section className="timeline-thread has-fixed-composer" aria-label="Tutor conversation">
