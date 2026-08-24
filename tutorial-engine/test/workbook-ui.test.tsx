@@ -1024,6 +1024,85 @@ describe("workbook lesson UI", () => {
     expect(pushState).not.toHaveBeenCalled();
   });
 
+  it("replaces the URL without adding history when scrolling promotes a ready successor", async () => {
+    vi.useFakeTimers();
+    const initialState = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: false,
+      chapters: [{ id: "001-first", title: "First", part: "Part One", partId: "validation-loop", partMarkdown: "Part copy.", lessonNumber: 1 }],
+      progress: {
+        activeLessonId: "001-first",
+        activeBlockId: "workbook--introduction",
+        activeAnchorId: "workbook--introduction",
+        completedLessons: [],
+        completedBlocks: [],
+        workAcceptedBlocks: ["workbook--introduction"],
+        readyBlocks: ["part--validation-loop"],
+        blocks: [
+          { id: "workbook--introduction", type: "workbook-introduction", ready: false, active: true, completed: false, verified: false, emerged: true, workAccepted: true },
+          { id: "part--validation-loop", type: "part-preamble", ready: true, active: false, completed: false, verified: false, emerged: true },
+        ],
+        reflections: {},
+        reflectionConversations: {},
+        canComplete: { blockId: "workbook--introduction", eligible: true },
+      },
+      adapter: {},
+      revealedBlockIds: ["workbook--introduction"],
+      renderedBlockIds: ["workbook--introduction", "part--validation-loop"],
+      readyBlockIds: ["part--validation-loop"],
+      timeline: [
+        { type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nIntro copy." },
+        { type: "message", id: "part", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part--validation-loop", blockId: "part--validation-loop", role: "assistant", source: "authored", presentation: "course", text: "# Part One\n\nPart copy." },
+      ],
+    } as any;
+    const completedState = {
+      ...initialState,
+      introductionComplete: true,
+      progress: {
+        ...initialState.progress,
+        activeBlockId: "part--validation-loop",
+        activeAnchorId: "part--validation-loop",
+        completedBlocks: ["workbook--introduction"],
+        readyBlocks: [],
+        blocks: initialState.progress.blocks.map((block: any) => block.id === "workbook--introduction" ? { ...block, active: false, completed: true } : { ...block, active: true, ready: false, workAccepted: true }),
+      },
+      revealedBlockIds: ["workbook--introduction", "part--validation-loop"],
+      readyBlockIds: [],
+    } as any;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? { outcome: "completed", state: completedState, navigationTarget: "part--validation-loop" } : initialState }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("IntersectionObserver", class { observe = vi.fn(); disconnect = vi.fn(); } as any);
+
+    const container = await mount(createElement(App), (win) => {
+      stubAppShellGlobals(win);
+      win.history.replaceState(null, "", "#workbook--introduction");
+      const replaceState = vi.spyOn(win.history, "replaceState");
+      const pushState = vi.spyOn(win.history, "pushState");
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("history", win.history);
+      replaceState.mockClear();
+      pushState.mockClear();
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    const introElement = container.querySelector<HTMLElement>("#workbook--introduction")!;
+    introElement.getBoundingClientRect = () => ({ top: 0, bottom: 200, left: 0, right: 800, width: 800, height: 200, x: 0, y: 0, toJSON: () => ({}) });
+    const readyElement = container.querySelector<HTMLElement>("#part--validation-loop")!;
+    readyElement.getBoundingClientRect = () => ({ top: 100, bottom: 300, left: 0, right: 800, width: 800, height: 200, x: 0, y: 100, toJSON: () => ({}) });
+
+    await act(async () => {
+      window.dispatchEvent(new window.Event("scroll"));
+      await Promise.resolve();
+      await Promise.resolve();
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(history.replaceState).toHaveBeenCalledWith(null, "", "#part--validation-loop");
+    expect(location.hash).toBe("#part--validation-loop");
+    expect(history.pushState).not.toHaveBeenCalled();
+  });
+
   it("completes a ready successor that first enters below the reading line and later crosses on scroll", async () => {
     let observerCallback: ((entries: any[]) => void) | undefined;
     class FakeIntersectionObserver {

@@ -91,6 +91,11 @@ function progressFor(progress: Progress, id: string) { return progress.blocks.fi
 function domSafe(value: string) { return value.replace(/[^A-Za-z0-9_-]+/g, "-"); }
 export function scrollActiveLessonIntoView(doc: Pick<Document, "getElementById">, activeLessonId: string) { doc.getElementById(lessonElementId(activeLessonId))?.scrollIntoView({ behavior: "smooth", block: "start" }); }
 let suppressPassiveHistoryUntil = 0;
+function replaceUrlAnchor(anchorId: string) {
+  suppressPassiveHistoryUntil = Date.now() + 450;
+  if (typeof history !== "undefined") history.replaceState(null, "", `#${anchorId}`);
+}
+
 export function navigateToAnchor(anchorId: string, mode: "push" | "replace" | "none" = "push") {
   if (typeof document === "undefined") return false;
   const element = document.getElementById(anchorId);
@@ -605,7 +610,11 @@ export function App() {
     const completeIfCrossedReadingLine = (top = element.getBoundingClientRect().top) => {
       if (top > READING_LINE_TOP_PX || scrollCompletionPending.current) return;
       scrollCompletionPending.current = true;
-      completeBlockRequest(activeId).then((result) => setState(stateFromCompletion(result))).catch((error) => {
+      completeBlockRequest(activeId).then((result) => {
+        setState(stateFromCompletion(result));
+        const target = navigationTargetFrom(result);
+        if (target) replaceUrlAnchor(target);
+      }).catch((error) => {
         scrollCompletionPending.current = false;
         console.error(error);
         readWorkbookState().then((next) => { if (next.progress.completedBlocks?.includes(activeId)) setState(next); }).catch(() => undefined);
