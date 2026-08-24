@@ -42,6 +42,22 @@ describe("the Part 2 seed", () => {
     expect(await readdir(join(workspace, "factory"))).toEqual(["refactor-do.sh"]);
     expect((await stat(join(workspace, "factory/refactor-do.sh"))).mode & 0o111).toBeGreaterThan(0);
   });
+
+  it("reads Part 2 seed files from authored content and writes only the learner workspace", async () => {
+    const contentRoot = await mkdtemp(join(tmpdir(), "seed-content-"));
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "seed-workspace-"));
+    await mkdir(join(contentRoot, PART_TWO_SEED), { recursive: true });
+    await mkdir(join(contentRoot, "factory"));
+    await writeFile(join(contentRoot, "factory/refactor-do.sh"), "authored factory stays put\n", "utf8");
+    await writeFile(join(contentRoot, PART_TWO_SEED, "refactor-do.sh"), "#!/bin/sh\n", { mode: 0o755 });
+    await writeFile(join(contentRoot, PART_TWO_SEED, "README.md"), "not for the learner\n", "utf8");
+
+    const seeded = await seedPartTwo({ contentRoot, workspaceRoot });
+
+    expect(seeded).toEqual(["refactor-do.sh"]);
+    expect(await readFile(join(contentRoot, "factory/refactor-do.sh"), "utf8")).toBe("authored factory stays put\n");
+    expect(await readdir(join(workspaceRoot, "factory"))).toEqual(["refactor-do.sh"]);
+  });
 });
 
 const ledger = [

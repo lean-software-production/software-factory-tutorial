@@ -14,9 +14,13 @@ export const PART_TWO_SEED = "docs/seeds/part-2";
  * The seed's own README is documentation for whoever maintains the curriculum,
  * not something the learner should find in their factory, so it stays behind.
  */
-export async function seedPartTwo(workspace: string): Promise<string[]> {
-  const from = resolve(workspace, PART_TWO_SEED);
-  const factory = resolve(workspace, "factory");
+export interface SeedPartTwoRoots { contentRoot: string; workspaceRoot: string; }
+
+export async function seedPartTwo(workspace: string | SeedPartTwoRoots): Promise<string[]> {
+  const contentRoot = typeof workspace === "string" ? workspace : workspace.contentRoot;
+  const workspaceRoot = typeof workspace === "string" ? workspace : workspace.workspaceRoot;
+  const from = resolve(contentRoot, PART_TWO_SEED);
+  const factory = resolve(workspaceRoot, "factory");
 
   // Copied with its shape intact: the quality baseline belongs in .tmp/, where
   // lesson 005 expects to find it and where a run would have written it.

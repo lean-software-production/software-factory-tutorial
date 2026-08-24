@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { WebSocket } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { tutorialStatePath } from "../src/tutorial-state.js";
+import { tutorialSessionStatePath, tutorialStatePath } from "../src/tutorial-state.js";
+import { SessionWorkspaceManager } from "../src/session-workspace.js";
 import { startWorkbookServer } from "../src/workbook/server.js";
 import type { TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
 import type { Attempt } from "../src/workbook/attempts.js";
@@ -47,6 +48,16 @@ async function fixture(options: { editorPath?: string } = {}) {
   await writeBlock(second, "second-finish", "lesson-transition", "Second finish", "Second lesson done.");
   await mkdir(resolve(dir, "web")); await writeFile(resolve(dir, "web/index.html"), "<!doctype html><div id=\"root\"></div>");
   return dir;
+}
+
+async function sessionFixture() {
+  const dir = await fixture();
+  await mkdir(resolve(dir, "calculator/src"), { recursive: true });
+  await writeFile(resolve(dir, "calculator/package.json"), "{\"type\":\"module\"}\n", "utf8");
+  await mkdir(resolve(dir, "factory"), { recursive: true });
+  await writeFile(resolve(dir, "factory/answer.md"), "authored answer\n", "utf8");
+  const session = await (await SessionWorkspaceManager.create(dir)).createSession({ id: "runtime-split" });
+  return { dir, session };
 }
 
 async function writeLesson(lessonDir: string, title: string, blocks: string[]) {
@@ -264,6 +275,45 @@ afterEach(async () => {
 });
 
 describe("workbook browser API", () => {
+  it("keeps authored content read-only while editor attempts and workbook state use the session roots", async () => {
+    const { dir, session } = await sessionFixture();
+    const tutor = new FakeMainTutor();
+    tutor.queue.push({ outcome: "accepted", message: "Editor accepted." });
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: tutor, blockTutor: new FakeBlockTutor() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await postEditor(server.url, { blockId: "edit-answer", text: "learner answer with factory acceptance marker" });
+      await waitForWorkbookState(server.url, (value) => block(value, "edit-answer")?.checkpoint?.status === "accepted", "accepted session-root editor attempt");
+
+      await expect(readFile(resolve(dir, "factory/answer.md"), "utf8")).resolves.toBe("authored answer\n");
+      await expect(readFile(resolve(session.workspaceRoot, "factory/answer.md"), "utf8")).resolves.toBe("learner answer with factory acceptance marker");
+      await expect(readFile(tutorialSessionStatePath(session.sessionRoot, "workbook/events.jsonl"), "utf8")).resolves.toContain("session_started");
+      await expect(readFile(tutorialSessionStatePath(session.sessionRoot, "workbook/attempts/by-id", tutor.reviews[0].attempt.id + ".json"), "utf8")).resolves.toContain(tutor.reviews[0].attempt.id);
+      await expect(access(tutorialStatePath(dir, "workbook", "events.jsonl"))).rejects.toThrow();
+    } finally { await server.close(); }
+  });
+
+  it("starts embedded terminals in the learner workspace with session-local Git", async () => {
+    const { dir, session } = await sessionFixture();
+    const pty = new ServerFakePty();
+    let terminalOptions: any;
+    const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: (options) => { terminalOptions = options; return pty; }, terminalDebounceMs: 1, mainTutor: tutor, blockTutor: new FakeBlockTutor() });
+    try {
+      await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" });
+      await postEvent(server.url, { blockId: "orientation", action: "continue" });
+      await postEditor(server.url, { blockId: "edit-answer", text: "draft" });
+      await waitForWorkbookState(server.url, (value) => block(value, "edit-answer")?.checkpoint?.status === "accepted", "accepted editor before terminal");
+      await postEvent(server.url, { blockId: "edit-answer", action: "continue" });
+      const ws = await connect(server.url);
+      await waitMs(20);
+      ws.close();
+      expect(terminalOptions.cwd).toBe(resolve(session.workspaceRoot));
+      await expect(access(resolve(session.workspaceRoot, ".git"))).resolves.toBeUndefined();
+      await expect(access(resolve(dir, ".git"))).rejects.toThrow();
+    } finally { await server.close(); }
+  });
+
   it("opens the introduction as durable tutor conversation before any real block is active", async () => {
     const dir = await fixture();
     const firstTutor = new FakeMainTutor();

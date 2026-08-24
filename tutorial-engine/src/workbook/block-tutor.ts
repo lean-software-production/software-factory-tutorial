@@ -8,9 +8,11 @@ import {
   getAgentDir,
   type ToolDefinition
 } from "@earendil-works/pi-coding-agent";
+import { access, readFile, readdir, stat } from "node:fs/promises";
+import { isAbsolute, relative, sep } from "node:path";
 import { Type } from "typebox";
 import { BLOCK_TUTOR_MODEL_ENV, resolveBlockTutorModel } from "../agent/pi-adapter.js";
-import { createWorkspaceTools, WorkspaceBoundary } from "../agent/workspace-boundary.js";
+import { createWorkspaceTools, WorkspaceBoundary, type WorkspaceToolBoundary } from "../agent/workspace-boundary.js";
 import { createTutorialLogger, type TutorialLogger } from "../runtime-log.js";
 import type { Attempt } from "./attempts.js";
 import type { ActiveBlockContext } from "./pi-history.js";
@@ -119,12 +121,52 @@ function assertNoReadinessAcceptanceClaims(text: string, label: string): void {
   }
 }
 
-function safeWorkspaceTools(workspace: string, boundary: WorkspaceBoundary, log: TutorialLogger): ToolDefinition[] {
+function inside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function firstSegment(path: string): string {
+  return path.replaceAll("\\", "/").split("/").find(Boolean) ?? ".";
+}
+
+async function overlayPath(contentBoundary: WorkspaceBoundary, learnerBoundary: WorkspaceBoundary, path: string): Promise<{ absolute: string; relative: string }> {
+  if (isAbsolute(path)) {
+    if (inside(learnerBoundary.root, path)) return learnerBoundary.resolve(relative(learnerBoundary.root, path));
+    if (inside(contentBoundary.root, path)) {
+      const contentRelative = relative(contentBoundary.root, path) || ".";
+      return firstSegment(contentRelative) === "factory" || firstSegment(contentRelative) === "calculator"
+        ? learnerBoundary.resolve(contentRelative)
+        : contentBoundary.resolve(contentRelative);
+    }
+    throw new Error("Path is outside the tutorial workspace.");
+  }
+
+  return firstSegment(path) === "factory" || firstSegment(path) === "calculator"
+    ? learnerBoundary.resolve(path)
+    : contentBoundary.resolve(path);
+}
+
+function safeWorkspaceTools(contentRoot: string, learnerBoundary: WorkspaceBoundary, contentBoundary: WorkspaceBoundary, log: TutorialLogger): ToolDefinition[] {
   const audit = (event: { tool: string; paths: string[]; mutation: boolean; outcome: string; message?: string }) => {
     log.info(`Block tutor tool audit: ${event.tool} ${event.outcome} (${event.paths.join(", ") || "."}; mutation=${event.mutation}).`);
   };
+  const readOnlyMutation = async (): Promise<never> => { throw new Error("Block tutor tools are read-only."); };
+  const readBoundary: WorkspaceToolBoundary = {
+    root: contentBoundary.root,
+    async readFile(path: string) { return readFile((await overlayPath(contentBoundary, learnerBoundary, path)).absolute); },
+    async access(path: string) { await access((await overlayPath(contentBoundary, learnerBoundary, path)).absolute); },
+    async writeFile() { return readOnlyMutation(); },
+    async mkdir() { return readOnlyMutation(); },
+    async move() { return readOnlyMutation(); },
+    async isDirectory(path: string) { return (await stat((await overlayPath(contentBoundary, learnerBoundary, path)).absolute)).isDirectory(); },
+    async stat(path: string) { return stat((await overlayPath(contentBoundary, learnerBoundary, path)).absolute); },
+    async readdir(path: string) { return readdir((await overlayPath(contentBoundary, learnerBoundary, path)).absolute); },
+    async exists(path: string) { try { await access((await overlayPath(contentBoundary, learnerBoundary, path)).absolute); return true; } catch { return false; } },
+    async resolve(path: string) { return overlayPath(contentBoundary, learnerBoundary, path); }
+  };
   const safeNames = new Set(SAFE_TOOL_NAMES);
-  return createWorkspaceTools(workspace, boundary, audit).filter((tool) => safeNames.has(tool.name));
+  return createWorkspaceTools(contentRoot, readBoundary, audit).filter((tool) => safeNames.has(tool.name));
 }
 
 async function createPiWorkbookBlockTutorSession(workspace: string, request: WorkbookBlockTutorSessionFactoryRequest, log: TutorialLogger): Promise<WorkbookBlockTutorSession> {
@@ -163,6 +205,7 @@ async function createPiWorkbookBlockTutorSession(workspace: string, request: Wor
 
 export interface FastWorkbookBlockTutorOptions {
   workspace: string;
+  contentRoot?: string;
   log?: TutorialLogger;
   sessionFactory?: WorkbookBlockTutorSessionFactory;
 }
@@ -172,12 +215,14 @@ export class FastWorkbookBlockTutor implements WorkbookBlockTutor {
   readonly #log: TutorialLogger;
   readonly #sessionFactory: WorkbookBlockTutorSessionFactory;
   readonly #boundary: Promise<WorkspaceBoundary>;
+  readonly #contentBoundary: Promise<WorkspaceBoundary>;
 
   constructor(options: FastWorkbookBlockTutorOptions) {
     this.#log = options.log ?? createTutorialLogger();
     this.#boundary = WorkspaceBoundary.create(options.workspace);
+    this.#contentBoundary = WorkspaceBoundary.create(options.contentRoot ?? options.workspace);
     this.workspace = options.workspace;
-    this.#sessionFactory = options.sessionFactory ?? (async (request) => createPiWorkbookBlockTutorSession((await this.#boundary).root, request, this.#log));
+    this.#sessionFactory = options.sessionFactory ?? (async (request) => createPiWorkbookBlockTutorSession((await this.#contentBoundary).root, request, this.#log));
   }
 
   async hint(input: { context: ActiveBlockContext; briefing: string }): Promise<string> {
@@ -224,10 +269,11 @@ export class FastWorkbookBlockTutor implements WorkbookBlockTutor {
 
   async #createSession(tools: string[], extraTools: ToolDefinition[] = []): Promise<WorkbookBlockTutorSession> {
     const boundary = await this.#boundary;
-    const workspace = boundary.root;
+    const contentBoundary = await this.#contentBoundary;
+    const workspace = contentBoundary.root;
     const request = {
       systemPrompt: systemPrompt(),
-      customTools: [...safeWorkspaceTools(workspace, boundary, this.#log), ...extraTools],
+      customTools: [...safeWorkspaceTools(workspace, boundary, contentBoundary, this.#log), ...extraTools],
       tools
     };
     return this.#sessionFactory(request);

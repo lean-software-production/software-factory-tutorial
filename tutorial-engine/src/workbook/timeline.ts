@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { tutorialStatePath } from "../tutorial-state.js";
+import { tutorialSessionStatePath, tutorialStatePath } from "../tutorial-state.js";
 import type { AttemptKind } from "./attempts.js";
 
 export type TimelineMetadata = { id: string; sequence: number; at: string };
@@ -108,13 +108,18 @@ function legacyRecord(value: unknown, line: number): WorkbookTimelineRecord {
  * The workbook's durable session record. A successful append is written before listeners can expose it
  * to the browser or use it to rebuild tutor context.
  */
+export interface WorkbookTimelineRoots { stateRoot: string; }
+
 export class WorkbookTimeline {
   readonly eventPath: string;
   #tail: Promise<unknown> = Promise.resolve();
   #listeners = new Set<(record: WorkbookTimelineRecord) => void>();
 
-  constructor(workspace: string) {
-    this.eventPath = tutorialStatePath(workspace, "workbook", "events.jsonl");
+  constructor(workspace: string);
+  constructor(roots: WorkbookTimelineRoots);
+  constructor(input: string | WorkbookTimelineRoots) {
+    const stateRoot = typeof input === "string" ? tutorialStatePath(input) : input.stateRoot;
+    this.eventPath = tutorialSessionStatePath(stateRoot, "workbook", "events.jsonl");
   }
 
   async read(): Promise<WorkbookTimelineRecord[]> {

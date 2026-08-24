@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -192,6 +192,35 @@ describe("FastWorkbookBlockTutor", () => {
     await expect((tools.get("read") as any).execute("read-ok", { path: "factory/answer.md" }, undefined, undefined, undefined))
       .resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("Evidence stays") }] });
     await expect((tools.get("read") as any).execute("read-outside", { path: "../outside.txt" }, undefined, undefined, undefined)).rejects.toThrow(/outside/);
+  });
+
+  it("can read authored content and learner workspace through the same read-only tool boundary", async () => {
+    const contentRoot = await mkdtemp(join(tmpdir(), "workbook-block-content-")); roots.push(contentRoot);
+    const workspace = await workspaceFixture();
+    await mkdir(join(contentRoot, "lessons/001/blocks"), { recursive: true });
+    await writeFile(join(contentRoot, "lessons/001/blocks/step.md"), "authored lesson text\n", "utf8");
+    await mkdir(join(contentRoot, "factory"), { recursive: true });
+    await writeFile(join(contentRoot, "factory/answer.md"), "authored stale answer\n", "utf8");
+    const outside = await mkdtemp(join(tmpdir(), "workbook-block-outside-factory-")); roots.push(outside);
+    await mkdir(join(outside, "factory"));
+    await writeFile(join(outside, "factory/answer.md"), "outside factory secret\n", "utf8");
+    await symlink(join(outside, "factory/answer.md"), join(contentRoot, "lessons/001/blocks/leak.md"));
+    const requests: WorkbookBlockTutorSessionFactoryRequest[] = [];
+    const tutor = new FastWorkbookBlockTutor({ workspace, contentRoot, sessionFactory: async (request) => {
+      requests.push(request);
+      return new FakeSession(request);
+    } });
+
+    await tutor.hint({ context: activeContext(), briefing: "Private guidance." });
+
+    const tools = new Map(requests[0].customTools.map((tool: any) => [tool.name, tool]));
+    await expect((tools.get("read") as any).execute("read-authored", { path: "lessons/001/blocks/step.md" }, undefined, undefined, undefined))
+      .resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("authored lesson text") }] });
+    await expect((tools.get("read") as any).execute("read-learner", { path: "factory/answer.md" }, undefined, undefined, undefined))
+      .resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("Evidence stays") }] });
+    await expect((tools.get("read") as any).execute("read-outside-absolute", { path: join(outside, "factory/answer.md") }, undefined, undefined, undefined)).rejects.toThrow(/outside/);
+    await expect((tools.get("read") as any).execute("read-authored-symlink", { path: "lessons/001/blocks/leak.md" }, undefined, undefined, undefined)).rejects.toThrow(/outside/);
+    expect(tools.has("write")).toBe(false);
   });
 
   it("reports attempt readiness only through report_attempt_readiness", async () => {
