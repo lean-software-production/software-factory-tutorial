@@ -28,3 +28,4 @@ Update the index below whenever you create a record or change its status.
 | [0004](0004-use-the-workbook-event-log-as-canonical-tutor-history.md) | superseded | Use the workbook event log as canonical tutor history |
 | [0005](0005-use-a-main-tutor-with-on-demand-block-tutors.md) | accepted | Use a main tutor with on-demand block tutors |
 | [0006](0006-project-workbook-tutor-history-by-role-and-compaction-scope.md) | accepted | Project workbook tutor history by role and compaction scope |
+| [0007](0007-model-every-progression-unit-as-a-workbook-block.md) | accepted | Model every progression unit as a workbook block |
