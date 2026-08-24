@@ -101,6 +101,8 @@ describe("MainWorkbookTutor", () => {
       async compact() { return { summary: "Summary." }; },
       dispose() {}
     });
+    const previousTutorModel = process.env.TUTOR_MODEL;
+    delete process.env.TUTOR_MODEL;
     const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", log: logger().log });
 
     try {
@@ -108,6 +110,8 @@ describe("MainWorkbookTutor", () => {
       await vi.advanceTimersByTimeAsync(250);
       await expect(reply).resolves.toBe("Recovered main reply.");
     } finally {
+      if (previousTutorModel === undefined) delete process.env.TUTOR_MODEL;
+      else process.env.TUTOR_MODEL = previousTutorModel;
       vi.useRealTimers();
     }
   });
