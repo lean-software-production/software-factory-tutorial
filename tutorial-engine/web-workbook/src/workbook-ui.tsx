@@ -91,9 +91,14 @@ function progressFor(progress: Progress, id: string) { return progress.blocks.fi
 function domSafe(value: string) { return value.replace(/[^A-Za-z0-9_-]+/g, "-"); }
 export function scrollActiveLessonIntoView(doc: Pick<Document, "getElementById">, activeLessonId: string) { doc.getElementById(lessonElementId(activeLessonId))?.scrollIntoView({ behavior: "smooth", block: "start" }); }
 let suppressPassiveHistoryUntil = 0;
+let passiveAnchorScrollSuppression: { anchorId: string; until: number } | undefined;
 function replaceUrlAnchor(anchorId: string) {
   suppressPassiveHistoryUntil = Date.now() + 450;
+  passiveAnchorScrollSuppression = { anchorId, until: suppressPassiveHistoryUntil };
   if (typeof history !== "undefined") history.replaceState(null, "", `#${anchorId}`);
+}
+function passiveAnchorScrollIsSuppressed(anchorId: string) {
+  return Boolean(passiveAnchorScrollSuppression?.anchorId === anchorId && Date.now() <= passiveAnchorScrollSuppression.until);
 }
 
 export function navigateToAnchor(anchorId: string, mode: "push" | "replace" | "none" = "push") {
@@ -246,13 +251,14 @@ function useContinueOnce(block: Block, state: BlockProgress | undefined, refresh
   return { active, pending, continueOnce };
 }
 
-export function ContinueControls({ block, state, refresh }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void }) {
+export function ContinueControls({ block, state, refresh, label }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void; label?: string }) {
   const { active, pending, continueOnce } = useContinueOnce(block, state, refresh);
 
   if (state?.completed) return <p className="next-ready">The next step has appeared below.</p>;
   if (!active) return null;
+  const buttonLabel = label ?? (block.id === "workbook--introduction" ? "Ready to continue" : "Continue");
   return <div className="continuation-controls">
-    <button className="button primary" disabled={pending} onClick={() => continueOnce("push")}>{pending ? "Continuing…" : block.id === "workbook--introduction" ? "Ready to continue" : "Continue"}</button>
+    <button className="button primary" disabled={pending} onClick={() => continueOnce("push")}>{pending ? "Continuing…" : buttonLabel}</button>
     <div className="continuation-page-break" aria-hidden="true" />
   </div>;
 }
@@ -269,7 +275,7 @@ function CheckpointEvidence({ checkpoint }: { checkpoint: PublicCheckpoint }) {
   return <div className="reflection-thread accepted-evidence" aria-label="Accepted reflection evidence">{(evidence.conversation ?? []).map((turn, index) => <div key={index} className={`reflection-turn ${turn.role}`}><b>{turn.role === "learner" ? "You" : "Tutor"}</b><p>{turn.text}</p></div>)}</div>;
 }
 
-export function AcceptedCheckpoint({ block, state, refresh }: { block: Block; state: BlockProgress; refresh(state: State): void }) {
+export function AcceptedCheckpoint({ block, state, refresh, continueLabel }: { block: Block; state: BlockProgress; refresh(state: State): void; continueLabel?: string }) {
   const checkpoint = state.checkpoint;
   const [pending, setPending] = useState(false);
   if (checkpoint?.status !== "accepted") return null;
@@ -282,7 +288,7 @@ export function AcceptedCheckpoint({ block, state, refresh }: { block: Block; st
     });
   };
   return <aside className="success-checkpoint accepted-checkpoint" aria-live="polite">
-    <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Accepted</p><h3>Nice work — accepted.</h3><p>{checkpointMessage(checkpoint)}</p><CheckpointEvidence checkpoint={checkpoint} /><button className="button primary" disabled={pending} onClick={continueAccepted}>{pending ? "Continuing…" : "Continue"}</button></div>
+    <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Accepted</p><h3>Nice work — accepted.</h3><p>{checkpointMessage(checkpoint)}</p><CheckpointEvidence checkpoint={checkpoint} /><button className="button primary" disabled={pending} onClick={continueAccepted}>{pending ? "Continuing…" : continueLabel ?? "Continue"}</button></div>
   </aside>;
 }
 
@@ -293,16 +299,16 @@ function AttemptCheckpointStatus({ state }: { state: BlockProgress | undefined }
   return <aside className="observer-status" aria-live="polite">{checkpoint.status === "reviewing" ? "Reviewing your latest attempt…" : "Keep working — the tutor will review your evidence when you pause."}</aside>;
 }
 
-function NarrativeBlock({ lessonId, block, state, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void }) {
+function NarrativeBlock({ lessonId, block, state, refresh, continueLabel }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; continueLabel?: string }) {
   return <section id={blockElementId(lessonId, block.id)} className={`work-block narrative ${state?.active ? "is-active" : ""}`}>
     <p className="section-label">The idea</p>
     <h2>{block.title}</h2>
     <Markdown>{block.markdown}</Markdown>
-    <ContinueControls block={block} state={state} refresh={refresh} />
+    <ContinueControls block={block} state={state} refresh={refresh} label={continueLabel} />
   </section>;
 }
 
-function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = true, onTerminalInsertionChange }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = true, onTerminalInsertionChange, continueLabel }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; continueLabel?: string }) {
   const [observerFeedback, setObserverFeedback] = useState<string>();
   const [observerStatus, setObserverStatus] = useState<string>();
   const command = shellCommandFrom(block.markdown);
@@ -319,7 +325,7 @@ function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = 
   useEffect(() => { setObserverFeedback(undefined); setObserverStatus(undefined); }, [block.id, state?.completed, state?.checkpoint?.status]);
   return <section id={blockElementId(lessonId, block.id)} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
     {showAuthoredContent && <><p className="section-label">Practice · embedded terminal</p><h2>{block.title}</h2><Markdown>{block.markdown}</Markdown></>}
-    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} /> : state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : !state?.completed && <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={false} refresh={refresh} onAdvice={setObserverFeedback} onError={setObserverFeedback} onStatus={setObserverStatus} onTerminalInsertionChange={onTerminalInsertionChange} />}
+    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : !state?.completed && <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={false} refresh={refresh} onAdvice={setObserverFeedback} onError={setObserverFeedback} onStatus={setObserverStatus} onTerminalInsertionChange={onTerminalInsertionChange} />}
     {!accepted && liveFeedback && <aside className="live-block-feedback" aria-live="polite">{liveFeedback}</aside>}
   </section>;
 }
@@ -336,7 +342,7 @@ function editorStatusText(state: BlockProgress | undefined, completed: boolean):
   return "Editing — changes are reviewed automatically after you pause.";
 }
 
-function EditorPracticeBlockView({ lessonId, block, state, refresh, showAuthoredContent = true }: { lessonId: string; block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void; showAuthoredContent?: boolean }) {
+function EditorPracticeBlockView({ lessonId, block, state, refresh, showAuthoredContent = true, continueLabel }: { lessonId: string; block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void; showAuthoredContent?: boolean; continueLabel?: string }) {
   const editorElement = useRef<HTMLDivElement | null>(null);
   const editor = useRef<EditorView | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -428,49 +434,49 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh, showAuthored
     {canEdit && <div className="editor-status" role="status" aria-live="polite">{localError ?? status}</div>}
     {canEdit && (state?.checkpoint?.feedback || state?.feedback) && <aside className="advice editor-feedback" aria-live="polite"><b>Inline feedback:</b> {state.checkpoint?.feedback ?? state.feedback}</aside>}
     {canEdit && <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />}
-    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} /> : completed ? <aside className="success-checkpoint editor-unlocked" aria-live="polite">
+    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : completed ? <aside className="success-checkpoint editor-unlocked" aria-live="polite">
       <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Unlocked</p><h3>Accepted revision unlocked the next step.</h3><p>{state?.feedback || "The latest accepted editor draft was written to the target file."}</p></div>
     </aside> : !canEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
   </section>;
 }
 
-function ReflectionBlock({ lessonId, block, state, turns, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; turns: ReflectionTurn[]; refresh(state: State): void }) {
+function ReflectionBlock({ lessonId, block, state, turns, refresh, continueLabel }: { lessonId: string; block: Block; state: BlockProgress | undefined; turns: ReflectionTurn[]; refresh(state: State): void; continueLabel?: string }) {
   const accepted = state?.checkpoint?.status === "accepted";
   const visibleTurns = accepted ? state?.checkpoint?.evidence?.conversation ?? turns : turns;
   return <section id={blockElementId(lessonId, block.id)} className={`work-block reflection ${state?.active ? "is-active" : ""}`}><p className="section-label">Reflection · discuss it</p><h2>{block.title}</h2><div className="question"><Markdown>{block.markdown}</Markdown></div>
     {visibleTurns.length > 0 && !accepted && <div className="reflection-thread" aria-live="polite">{visibleTurns.map((turn, index) => <div key={index} className={`reflection-turn ${turn.role}`}><b>{turn.role === "learner" ? "You" : "Tutor"}</b><p>{turn.text}</p></div>)}</div>}
-    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} /> : state?.completed ? <p className="next-ready">Reflection complete. The next step has appeared below.</p> : <AttemptCheckpointStatus state={state} />}
+    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : state?.completed ? <p className="next-ready">Reflection complete. The next step has appeared below.</p> : <AttemptCheckpointStatus state={state} />}
   </section>;
 }
 
-function TransitionBlock({ lessonId, block, state, refresh }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void }) {
+function TransitionBlock({ lessonId, block, state, refresh, continueLabel }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; continueLabel?: string }) {
   return <section id={blockElementId(lessonId, block.id)} className={`work-block lesson-end ${state?.active ? "is-active" : ""}`}>
     <p className="section-label">Lesson transition</p>
     <h2>{block.title}</h2>
     <Markdown>{block.markdown}</Markdown>
-    <ContinueControls block={block} state={state} refresh={refresh} />
+    <ContinueControls block={block} state={state} refresh={refresh} label={continueLabel} />
   </section>;
 }
 
-export function BlockView({ lessonId, block, progress, refresh, showAuthoredContent = true, onTerminalInsertionChange }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+export function BlockView({ lessonId, block, progress, refresh, showAuthoredContent = true, onTerminalInsertionChange, continueLabel }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; continueLabel?: string }) {
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
-  if (block.type === "narrative") return <NarrativeBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
-  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} onTerminalInsertionChange={onTerminalInsertionChange} />;
-  if (block.type === "editor-practice") return <EditorPracticeBlockView lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} />;
-  if (block.type === "reflection") return <ReflectionBlock lessonId={resolvedLessonId} block={block} state={state} turns={activeLessonValue(progress, resolvedLessonId, progress.reflectionConversations[block.id], [])} refresh={refresh} />;
-  return <TransitionBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
+  if (block.type === "narrative") return <NarrativeBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} continueLabel={continueLabel} />;
+  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} onTerminalInsertionChange={onTerminalInsertionChange} continueLabel={continueLabel} />;
+  if (block.type === "editor-practice") return <EditorPracticeBlockView lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} continueLabel={continueLabel} />;
+  if (block.type === "reflection") return <ReflectionBlock lessonId={resolvedLessonId} block={block} state={state} turns={activeLessonValue(progress, resolvedLessonId, progress.reflectionConversations[block.id], [])} refresh={refresh} continueLabel={continueLabel} />;
+  return <TransitionBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} continueLabel={continueLabel} />;
 }
 
 function WorkbookIntroduction({ state, refresh }: { state: State; refresh(state: State): void }) {
   return <section className="workbook-intro" aria-label="Workbook introduction">
     <header><h1>{state.workbook.title}</h1></header>
     <Markdown>{state.introduction}</Markdown>
-    {state.introductionComplete ? <p className="next-ready">The first lesson is ready below.</p> : <button className="button primary introduction-continue" onClick={() => completeBlockRequest("workbook--introduction").then((result) => refresh(stateFromCompletion(result)))}>Ready to continue</button>}
+    {state.introductionComplete ? <p className="next-ready">The first lesson is ready below.</p> : <button className="button primary introduction-continue" onClick={() => completeBlockRequest("workbook--introduction").then((result) => refresh(stateFromCompletion(result)))}>{continueLabelFor(state, "workbook--introduction") ?? "Ready to continue"}</button>}
   </section>;
 }
 
-function IntroductionContinue({ refresh }: { refresh(state: State): void }) {
+function IntroductionContinue({ refresh, label = "Ready to continue" }: { refresh(state: State): void; label?: string }) {
   const [pending, setPending] = useState(false);
   const continueIntroduction = () => {
     if (pending) return;
@@ -481,17 +487,29 @@ function IntroductionContinue({ refresh }: { refresh(state: State): void }) {
     });
   };
   return <div className="continuation-controls introduction-continuation">
-    <button className="button primary introduction-continue" disabled={pending} onClick={continueIntroduction}>{pending ? "Continuing…" : "Ready to continue"}</button>
+    <button className="button primary introduction-continue" disabled={pending} onClick={continueIntroduction}>{pending ? "Continuing…" : label}</button>
   </div>;
 }
 
-export function LessonRail({ title, chapters, progress, viewedLessonId, setViewedLesson }: { title: string; chapters: Chapter[]; progress: Progress; viewedLessonId: string; setViewedLesson(id: string): void }) {
+type PublicOrderedBlock = NonNullable<State["orderedBlocks"]>[number];
+
+function outlineBlocksForLesson(chapter: Chapter, orderedBlocks?: readonly PublicOrderedBlock[]) {
+  const ordered = orderedBlocks?.filter((block) => block.origin === "declared" && block.lessonId === chapter.id) ?? [];
+  if (ordered.length > 0) return ordered.map((block) => ({ id: block.id, anchorId: block.anchorId, title: block.title }));
+  return chapter.lesson?.blocks.map((block) => ({ id: block.id, anchorId: blockElementId(chapter.id, block.id), title: block.title })) ?? [];
+}
+
+export function LessonRail({ title, chapters, progress, viewedLessonId, setViewedLesson, orderedBlocks }: { title: string; chapters: Chapter[]; progress: Progress; viewedLessonId: string; setViewedLesson(id: string): void; orderedBlocks?: readonly PublicOrderedBlock[] }) {
   const renderChapter = (chapter: Chapter) => {
     const complete = progress.completedLessons.includes(chapter.id);
     const current = chapter.id === progress.activeLessonId;
     if (!chapter.lesson) return <span key={chapter.id} className="lesson-row ahead unavailable" aria-disabled="true"><span>Lesson {chapter.lessonNumber}: {chapter.title}</span></span>;
     const lessonAnchor = canonicalLessonAnchor(chapter.id);
-    return <details key={chapter.id} className="lesson-nav" open={viewedLessonId === chapter.id}><summary><a href={`#${lessonAnchor}`} className={`lesson-row ${complete ? "done" : current ? "current" : "ahead"}`} onClick={(event) => { event.preventDefault(); setViewedLesson(chapter.id); navigateToAnchor(lessonAnchor, "push"); }}>Lesson {chapter.lessonNumber}: {chapter.title}</a></summary>{viewedLessonId === chapter.id && <nav className="lesson-outline" aria-label={`${chapter.title} outline`}>{chapter.lesson.blocks.map((block) => { const blockAnchor = blockElementId(chapter.id, block.id); return <a href={`#${blockAnchor}`} key={block.id} aria-current={block.id === progress.activeBlockId ? "true" : undefined} onClick={(event) => { event.preventDefault(); navigateToAnchor(blockAnchor, "push"); }}>{block.title}</a>; })}</nav>}</details>;
+    return <details key={chapter.id} className="lesson-nav" open={viewedLessonId === chapter.id}><summary><a href={`#${lessonAnchor}`} className={`lesson-row ${complete ? "done" : current ? "current" : "ahead"}`} onClick={(event) => { event.preventDefault(); setViewedLesson(chapter.id); navigateToAnchor(lessonAnchor, "push"); }}>Lesson {chapter.lessonNumber}: {chapter.title}</a></summary>{viewedLessonId === chapter.id && <nav className="lesson-outline" aria-label={`${chapter.title} outline`}>{outlineBlocksForLesson(chapter, orderedBlocks).map((block) => {
+      const blockProgress = progressFor(progress, block.id);
+      const navigable = Boolean(blockProgress?.completed || blockProgress?.active);
+      return navigable ? <a href={`#${block.anchorId}`} key={block.id} aria-current={blockProgress?.active ? "true" : undefined} onClick={(event) => { event.preventDefault(); navigateToAnchor(block.anchorId, "push"); }}>{block.title}</a> : <span className="outline-row disabled" key={block.id} aria-disabled="true">{block.title}</span>;
+    })}</nav>}</details>;
   };
   const parts = [...new Set(chapters.map((chapter) => chapter.part).filter((part): part is string => Boolean(part)))];
   const renderedPartName = (part: string) => {
@@ -567,6 +585,22 @@ function readySuccessorId(progress: Progress): string | undefined {
   return progress.blocks.find((block) => block.ready && !block.active && !block.completed)?.id ?? progress.readyBlocks?.[0];
 }
 
+function successorAfter(state: State, blockId: string): { successor?: PublicOrderedBlock; currentIndex: number; count: number } {
+  const ordered = state.orderedBlocks ?? [];
+  const index = ordered.findIndex((block) => block.id === blockId);
+  return { successor: index >= 0 ? ordered[index + 1] : undefined, currentIndex: index, count: ordered.length };
+}
+
+function continueLabelFor(state: State, blockId: string): string | undefined {
+  const { successor, currentIndex, count } = successorAfter(state, blockId);
+  if (!successor) return count > 0 && currentIndex === count - 1 ? "Continue to completion" : undefined;
+  if (successor.kind === "lesson-preamble") {
+    const lesson = state.chapters.find((chapter) => chapter.id === successor.lessonId);
+    return `Continue to lesson ${lesson?.lessonNumber ?? successor.title}`;
+  }
+  return `Continue to ${successor.title}`;
+}
+
 function CompletionPanel({ state, onRetry }: { state: State; onRetry(failureId: string): Promise<void> }) {
   if (!state.completion?.complete) return null;
   const failures = state.timeline?.filter((record) => record.type === "tutor_failed" && record.blockId === "workbook--complete") ?? [];
@@ -595,6 +629,7 @@ export function App() {
     const revealed = new Set(state.revealedBlockIds ?? state.progress.blocks.filter((block) => block.emerged).map((block) => block.id));
     const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback: FrameRequestCallback) => setTimeout(callback, 0) as unknown as number;
     if (!fragment) { raf(() => navigateToAnchor(state.progress.activeAnchorId ?? state.progress.activeBlockId, "replace")); return; }
+    if (passiveAnchorScrollIsSuppressed(fragment)) { passiveAnchorScrollSuppression = undefined; return; }
     if (revealed.has(fragment) || fragment === "workbook--complete" && state.progress.workbookComplete) { raf(() => navigateToAnchor(fragment, "none")); return; }
     setBlockedLink(true);
   }, [state?.workbook.title, state?.progress.activeAnchorId, state?.progress.workbookComplete]);
@@ -674,24 +709,25 @@ export function App() {
   const reflectionComposerDisabled = Boolean(state.introductionComplete && activeBlock?.type === "reflection" && ["reviewing", "accepted"].includes(activeBlockProgress?.checkpoint?.status ?? ""));
   const renderTimelineContinuation = (record: PublicTimelineRecord) => {
     if (record.type !== "message") return null;
-    if (record.source === "authored" && !state.introductionComplete && record.lessonId === INTRODUCTION_LESSON_ID && record.blockId === INTRODUCTION_BLOCK_ID) return <IntroductionContinue refresh={setState} />;
+    if (record.source === "authored" && !state.introductionComplete && record.lessonId === INTRODUCTION_LESSON_ID && record.blockId === INTRODUCTION_BLOCK_ID) return <IntroductionContinue refresh={setState} label={continueLabelFor(state, INTRODUCTION_BLOCK_ID)} />;
     if (record.blockId !== state.progress.activeBlockId) return null;
     const eligible = state.progress.canComplete ? state.progress.canComplete.eligible : Boolean(activeBlockProgress?.active && activeBlockProgress.ready && !activeBlockProgress.completed && (activeBlock?.type === "narrative" || activeBlock?.type === "lesson-transition" || activeBlockProgress.checkpoint?.status === "accepted"));
     if (!eligible) return null;
     const blockForContinue: Block = activeBlock ?? { id: record.blockId, type: "narrative", title: state.currentBlock?.title ?? state.workbook.title, markdown: "" };
     const progressForContinue = activeBlockProgress ?? state.progress.blocks.find((block) => block.id === record.blockId);
     if (!progressForContinue) return null;
-    if (activeBlockAccepted) return record.id === latestActiveTargetRecordId ? <ContinueControls block={blockForContinue} state={progressForContinue} refresh={setState} /> : null;
-    if (record.source === "authored") return <ContinueControls block={blockForContinue} state={progressForContinue} refresh={setState} />;
+    const continueLabel = continueLabelFor(state, record.blockId);
+    if (activeBlockAccepted) return record.id === latestActiveTargetRecordId ? <ContinueControls block={blockForContinue} state={progressForContinue} refresh={setState} label={continueLabel} /> : null;
+    if (record.source === "authored") return <ContinueControls block={blockForContinue} state={progressForContinue} refresh={setState} label={continueLabel} />;
     return null;
   };
   return <div className="shell">
     {blockedLink && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Lesson not ready"><div className="modal"><p>The lesson you're linking to is not ready yet — you still have some work to do!</p><button className="button primary" onClick={() => { setBlockedLink(false); navigateToAnchor(state.progress.activeAnchorId ?? state.progress.activeBlockId, "replace"); }}>OK</button></div></div>}
     <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
-    <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} />
+    <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
       {hasTimeline ? <>
-        <TimelineThread records={state.timeline} activeLessonId={state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeLessonId : INTRODUCTION_LESSON_ID} activeBlockId={state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion} inputDisabled={reflectionComposerDisabled} renderContinuation={renderTimelineContinuation} activeSurface={activeChapter && activeBlock ? <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
+        <TimelineThread records={state.timeline} activeLessonId={state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeLessonId : INTRODUCTION_LESSON_ID} activeBlockId={state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion} inputDisabled={reflectionComposerDisabled} renderContinuation={renderTimelineContinuation} readyBlockIds={state.readyBlockIds ?? state.progress.readyBlocks ?? []} activeSurface={activeChapter && activeBlock ? <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
       </> : <>
         <WorkbookIntroduction state={state} refresh={setState} />
         {emerged.map((chapter, index) => <React.Fragment key={chapter.id}>{(index === 0 || chapter.part !== emerged[index - 1]!.part) && <PartChapter chapter={chapter} />}<LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}

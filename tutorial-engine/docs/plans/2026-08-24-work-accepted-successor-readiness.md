@@ -46,15 +46,17 @@ not yet part of the navigable workbook history.
 The ready successor, not an invisible end sentinel, is the scroll continuation target.
 
 The current block's region ends with its chat and any explicit Continue control, followed by a
-page-break. The ready successor is rendered after that break. When the ready successor crosses the
-fixed reading line, the browser requests:
+page-break. The ready successor is rendered after that break, with an unobtrusive scroll runway after it
+so even a short bottom-of-document successor can genuinely cross the fixed line through ordinary
+scrolling. When the ready successor crosses the fixed reading line, the browser requests:
 
 ```ts
 completeBlock(currentBlockId)
 ```
 
 The server records `block_completed` for the current block and promotes the ready successor to active.
-The browser does not add a history entry for this scroll completion.
+The browser updates the fragment for this scroll completion with `replaceState` only. It does not add a
+history entry and does not run a fragment-navigation scroll after the state update.
 
 An explicit Continue control and the tutor's completion tool use the same server operation. They promote
 the ready successor and navigate to its already-rendered anchor with `pushState`.
@@ -63,6 +65,9 @@ the ready successor and navigate to its already-rendered anchor with `pushState`
 
 - Only one successor may be ready at a time.
 - A ready successor is not a valid sidebar, direct-link, chat, terminal, editor, or tutor-tool target.
+- The rail shows the current lesson's complete authored block outline immediately. Completed and active
+  entries remain normal links. Ready and later entries are visible but disabled, preserving the same
+  ready-boundary rule as direct links.
 - Reaching the ready successor must be idempotent. Duplicate observer callbacks cannot skip a block.
 - The server validates that the requested current block has `workAccepted`; the browser never decides
   acceptance.
@@ -75,7 +80,10 @@ Add deterministic coverage for:
 
 1. immediate `workAccepted` on a no-work active block and ready successor rendering;
 2. accepted evidence producing `workAccepted` and exactly one ready successor;
-3. crossing the ready successor's reading line completing only its predecessor and activating it;
-4. button and tutor completion promoting that same ready successor;
-5. duplicate crossings, a sidebar click, and a direct link never treating a ready block as active; and
-6. a restart reconstructing the same active, accepted, ready, and completed state from events.
+3. crossing the ready successor's reading line completing only its predecessor and activating it,
+   including the below-line-then-scroll browser sequence and no viewport jump;
+4. a short bottom successor having enough scroll runway to cross the line without a fallback;
+5. button and tutor completion promoting that same ready successor with destination-specific labels;
+6. the current lesson rail outline showing all blocks while disabling ready and future entries;
+7. duplicate crossings, a sidebar click, and a direct link never treating a ready block as active; and
+8. a restart reconstructing the same active, accepted, ready, and completed state from events.

@@ -1073,9 +1073,11 @@ describe("workbook lesson UI", () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? { outcome: "completed", state: completedState, navigationTarget: "part--validation-loop" } : initialState }));
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("IntersectionObserver", class { observe = vi.fn(); disconnect = vi.fn(); } as any);
+    const scrollIntoView = vi.fn();
 
     const container = await mount(createElement(App), (win) => {
       stubAppShellGlobals(win);
+      win.HTMLElement.prototype.scrollIntoView = scrollIntoView;
       win.history.replaceState(null, "", "#workbook--introduction");
       const replaceState = vi.spyOn(win.history, "replaceState");
       const pushState = vi.spyOn(win.history, "pushState");
@@ -1084,7 +1086,11 @@ describe("workbook lesson UI", () => {
       replaceState.mockClear();
       pushState.mockClear();
     });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => {
+      await Promise.resolve();
+      vi.advanceTimersByTime(20);
+    });
+    scrollIntoView.mockClear();
 
     const introElement = container.querySelector<HTMLElement>("#workbook--introduction")!;
     introElement.getBoundingClientRect = () => ({ top: 0, bottom: 200, left: 0, right: 800, width: 800, height: 200, x: 0, y: 0, toJSON: () => ({}) });
@@ -1101,6 +1107,7 @@ describe("workbook lesson UI", () => {
     expect(history.replaceState).toHaveBeenCalledWith(null, "", "#part--validation-loop");
     expect(location.hash).toBe("#part--validation-loop");
     expect(history.pushState).not.toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   it("completes a ready successor that first enters below the reading line and later crosses on scroll", async () => {
@@ -1163,6 +1170,7 @@ describe("workbook lesson UI", () => {
 
     const readyElement = container.querySelector<HTMLElement>("#part--validation-loop")!;
     expect(readyElement).toBeTruthy();
+    expect(readyElement.querySelector(".ready-successor-scroll-runway")).toBeTruthy();
     let readyTop = 240;
     readyElement.getBoundingClientRect = () => ({ top: readyTop, bottom: readyTop + 200, left: 0, right: 800, width: 800, height: 200, x: 0, y: readyTop, toJSON: () => ({}) });
 
@@ -1182,6 +1190,68 @@ describe("workbook lesson UI", () => {
     const completionCalls = fetchMock.mock.calls.filter(([url, init]) => url === "api/workbook/complete-block" && (init as RequestInit | undefined)?.method === "POST");
     expect(completionCalls).toHaveLength(1);
     expect(JSON.parse((completionCalls[0]![1] as RequestInit).body as string)).toEqual({ blockId: "workbook--introduction" });
+  });
+
+  it("shows the current lesson's full outline while disabling ready and future blocks", () => {
+    const currentLesson = { ...lesson, id: "001-first", blocks: lesson.blocks };
+    const chapters: Chapter[] = [{ id: "001-first", title: "First", part: "Part One", partMarkdown: "Part copy.", partNumber: 1, lessonNumber: 1, lesson: { ...currentLesson, blocks: currentLesson.blocks.slice(0, 2) } } as any];
+    const outlineProgress: Progress = {
+      ...progress,
+      activeLessonId: "001-first",
+      activeBlockId: "lesson--001-first--practice",
+      completedBlocks: ["lesson--001-first--orientation"],
+      readyBlocks: ["lesson--001-first--reflect"],
+      blocks: [
+        { id: "lesson--001-first--orientation", type: "narrative", ready: false, active: false, completed: true, verified: false, emerged: true },
+        { id: "lesson--001-first--practice", type: "terminal-practice", ready: false, active: true, completed: false, verified: false, emerged: true },
+        { id: "lesson--001-first--reflect", type: "reflection", ready: true, active: false, completed: false, verified: false, emerged: true },
+        { id: "lesson--001-first--transition", type: "lesson-transition", ready: false, active: false, completed: false, verified: false, emerged: false },
+      ] as any,
+    };
+    const orderedBlocks = currentLesson.blocks.map((block) => ({ id: `lesson--001-first--${block.id}`, anchorId: `lesson--001-first--${block.id}`, title: block.title, origin: "declared", kind: block.type, lessonId: "001-first", declaredId: block.id }));
+
+    const markup = html(createElement(LessonRail, { title: "Workbook", chapters, progress: outlineProgress, viewedLessonId: "001-first", setViewedLesson: vi.fn(), orderedBlocks }));
+
+    expect(markup).toContain("Orientation");
+    expect(markup).toContain("Practice");
+    expect(markup).toContain("Reflect");
+    expect(markup).toContain("Next");
+    expect(markup).toContain('href="#lesson--001-first--orientation"');
+    expect(markup).toContain('href="#lesson--001-first--practice"');
+    expect(markup).not.toContain('href="#lesson--001-first--reflect"');
+    expect(markup).not.toContain('href="#lesson--001-first--transition"');
+    expect(markup.match(/aria-disabled="true"/g)).toHaveLength(2);
+  });
+
+  it("labels explicit timeline Continue buttons with their successor destination", async () => {
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ id: "001-first", lessonNumber: 1, title: "First", lesson: { ...lesson, id: "001-first" } })],
+      progress: {
+        ...progress,
+        activeLessonId: "001-first",
+        activeBlockId: "part--validation-loop",
+        activeAnchorId: "part--validation-loop",
+        canComplete: { blockId: "part--validation-loop", eligible: true },
+        blocks: [{ id: "part--validation-loop", type: "part-preamble", ready: false, active: true, completed: false, verified: false, emerged: true, workAccepted: true }],
+      },
+      adapter: {},
+      orderedBlocks: [
+        { id: "workbook--introduction", anchorId: "workbook--introduction", title: "Workbook", origin: "structural", kind: "workbook-introduction", lessonId: "workbook--introduction" },
+        { id: "part--validation-loop", anchorId: "part--validation-loop", title: "Validation loop", origin: "structural", kind: "part-preamble", lessonId: "001-first" },
+        { id: "lesson--001-first", anchorId: "lesson--001-first", title: "First", origin: "structural", kind: "lesson-preamble", lessonId: "001-first" },
+        { id: "lesson--001-first--orientation", anchorId: "lesson--001-first--orientation", title: "Orientation", origin: "declared", kind: "narrative", lessonId: "001-first", declaredId: "orientation" },
+      ],
+      timeline: [{ type: "message", id: "part", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "001-first", blockId: "part--validation-loop", role: "assistant", source: "authored", presentation: "course", text: "# Validation loop\n\nPart copy." }],
+    } as any;
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => state })));
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toContain("Continue to lesson 1");
   });
 
   it("keeps a ready successor out of sidebar navigation and direct-link access", async () => {

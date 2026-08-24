@@ -17,7 +17,7 @@ function resizeComposerTextarea(textarea: HTMLTextAreaElement) {
   textarea.style.overflowY = textarea.scrollHeight > composerMaxHeightPx ? "auto" : "hidden";
 }
 
-export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, activeSurface, completionPanel, inputDisabled = false }: {
+export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, activeSurface, completionPanel, readyBlockIds = [], inputDisabled = false }: {
   records: readonly TimelineThreadRecord[];
   activeLessonId: string;
   activeBlockId: string;
@@ -27,6 +27,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   renderContinuation?(record: TimelineMessageRecord): React.ReactNode;
   activeSurface?: React.ReactNode;
   completionPanel?: React.ReactNode;
+  readyBlockIds?: readonly string[];
   inputDisabled?: boolean;
 }) {
   const [draft, setDraft] = useState("");
@@ -39,6 +40,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   const chatEntryCount = records.reduce((count, record) => count + ((record.type === "message" && record.presentation !== "course") || record.type === "tutor_failed" ? 1 : 0), 0) + pendingEchoes.length;
   const recordMatchesActive = (record: { lessonId: string; blockId: string }) => record.blockId === activeBlockId && (record.lessonId === activeLessonId || activeBlockId.includes("--"));
   const activeAuthoredRecordId = [...records].reverse().find((record) => record.type === "message" && record.presentation === "course" && record.source === "authored" && recordMatchesActive(record))?.id;
+  const readyBlockIdSet = new Set(readyBlockIds);
   useEffect(() => {
     if (chatEntryCount === 0) return;
     (latestEntryRef.current as (HTMLElement & { scrollIntoView?(options?: ScrollIntoViewOptions): void }) | null)?.scrollIntoView?.({ behavior: "smooth", block: "end" });
@@ -120,6 +122,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
           {active && pendingEchoNodes}
           {active && pendingThinkingNode}
           {active ? renderContinuation?.(lastMessage) : null}
+          {readyBlockIdSet.has(record.blockId) ? <div className="ready-successor-scroll-runway" aria-hidden="true" /> : null}
         </section>);
         index = nextIndex - 1;
         continue;
