@@ -55,3 +55,74 @@ Reviewed the changed root wiring against Task 1's contract. Authored roots are u
 ## Concerns
 
 Task 3 still needs to expose session creation/resume on the launch CLI and documentation. Legacy pre-session mode remains available for existing tests and still writes `.tutorial/.tmp` by design until Task 3 migrates launch behavior.
+
+## Follow-up: split-root block-tutor `find` overlay fix
+
+### Focused issue reproduced
+
+I first added the focused regression around the interrupted `find` edit and ran the block-tutor test file before changing the implementation. The in-progress edit was still returning the SDK/built-in `find` tool instead of the overlay-aware implementation, so the focused call failed inside the built-in tool:
+
+```text
+$ npm run --workspace=tutorial-engine test -- workbook-block-tutor.test.ts
+
+> @lean-software-production/tutorial-engine@0.1.0 test
+> vitest run --root . workbook-block-tutor.test.ts
+
+ RUN  v4.1.10 /Users/matt/git/lean-software-production/software-factory-tutorial/.worktrees/session-local-learner-state/tutorial-engine
+
+[tutorial 2026-08-24T18:00:30.462Z] INFO Block tutor tool audit: read ok (factory/answer.md; mutation=false).
+[tutorial 2026-08-24T18:00:30.464Z] INFO Block tutor tool audit: find error (factory; mutation=false).
+ ❯ test/workbook-block-tutor.test.ts (10 tests | 1 failed) 47ms
+     × can read authored content and learner workspace through the same read-only tool boundary 9ms
+
+ FAIL  test/workbook-block-tutor.test.ts > FastWorkbookBlockTutor > can read authored content and learner workspace through the same read-only tool boundary
+TypeError: Cannot read properties of undefined (reading 'includes')
+ ❯ ../../../node_modules/@earendil-works/pi-coding-agent/src/core/tools/find.ts:253:18
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 9 passed (10)
+```
+
+### Fix
+
+Replaced the handed-off duplicate/built-in `find` wiring with one minimal overlay-aware `find` tool. It resolves `factory/` and `calculator/` through the learner boundary, authored paths through the content boundary, merges learner overlay roots into a root find, skips stale authored overlay-root contents, and continues to reject absolute/root escapes through the existing `WorkspaceBoundary.resolve()` path checks. The tool keeps the same read-only audit logging shape as the other block-tutor tools.
+
+### Regression coverage
+
+Extended `workbook-block-tutor.test.ts` so the split-root fixture contains an authored-only stale `factory/authored-stale.md` and a learner-only current `factory/learner-only.md`. The test now asserts:
+
+- `find { path: "factory" }` returns `factory/learner-only.md`;
+- root `find {}` also returns the learner overlay file;
+- neither result returns `authored-stale.md`;
+- `find` rejects an absolute outside `factory` path.
+
+### Verification output
+
+```text
+$ npm run --workspace=tutorial-engine test -- workbook-block-tutor.test.ts
+
+> @lean-software-production/tutorial-engine@0.1.0 test
+> vitest run --root . workbook-block-tutor.test.ts
+
+ RUN  v4.1.10 /Users/matt/git/lean-software-production/software-factory-tutorial/.worktrees/session-local-learner-state/tutorial-engine
+
+[tutorial 2026-08-24T18:01:30.208Z] INFO Block tutor tool audit: find ok (factory; mutation=false).
+[tutorial 2026-08-24T18:01:30.210Z] INFO Block tutor tool audit: find ok (.; mutation=false).
+[tutorial 2026-08-24T18:01:30.210Z] INFO Block tutor tool audit: find rejected (/var/folders/xp/6wywttgn3rv5_q7cq8jbm37w0000gn/T/workbook-block-outside-factory-v5P8ek/factory; mutation=false).
+
+ Test Files  1 passed (1)
+      Tests  10 passed (10)
+```
+
+```text
+$ npm run --workspace=tutorial-engine check
+
+> @lean-software-production/tutorial-engine@0.1.0 check
+> tsc --noEmit && npm run test
+
+> @lean-software-production/tutorial-engine@0.1.0 test
+> vitest run --root .
+
+ Test Files  40 passed (40)
+      Tests  342 passed (342)
+```

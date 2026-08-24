@@ -8,7 +8,7 @@ import {
   getAgentDir,
   type ToolDefinition
 } from "@earendil-works/pi-coding-agent";
-import { access, readFile, readdir, stat } from "node:fs/promises";
+import { access, lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, sep } from "node:path";
 import { Type } from "typebox";
 import { BLOCK_TUTOR_MODEL_ENV, resolveBlockTutorModel } from "../agent/pi-adapter.js";
@@ -147,6 +147,92 @@ async function overlayPath(contentBoundary: WorkspaceBoundary, learnerBoundary: 
     : contentBoundary.resolve(path);
 }
 
+function wildcardPattern(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, ".*").replace(/\?/gu, ".");
+  return new RegExp(`^${escaped}$`, "u");
+}
+
+function overlayBoundaryRoot(relativePath: string, contentBoundary: WorkspaceBoundary, learnerBoundary: WorkspaceBoundary): string {
+  const segment = firstSegment(relativePath);
+  return segment === "factory" || segment === "calculator" ? learnerBoundary.root : contentBoundary.root;
+}
+
+function childOverlayPath(parent: string, child: string): string {
+  return parent === "." ? child : `${parent}/${child}`;
+}
+
+async function overlayRootChildren(contentAbsolute: string, learnerBoundary: WorkspaceBoundary): Promise<string[]> {
+  const children = new Set(await readdir(contentAbsolute));
+  for (const overlayRoot of ["factory", "calculator"]) {
+    try {
+      await learnerBoundary.resolve(overlayRoot);
+      children.add(overlayRoot);
+    } catch {
+      // The learner overlay wins when present, but an absent learner tree should
+      // not make a root find fall back to stale authored factory/calculator files.
+    }
+  }
+  return [...children].sort();
+}
+
+function createOverlayFindTool(
+  contentBoundary: WorkspaceBoundary,
+  learnerBoundary: WorkspaceBoundary,
+  audit?: (event: { tool: string; paths: string[]; mutation: boolean; outcome: string; message?: string }) => void
+): ToolDefinition {
+  return defineTool({
+    name: "find",
+    label: "Find files",
+    description: "Find files and directories inside the authored tutorial content and learner workspace overlay. The factory/ and calculator/ trees resolve to the learner workspace.",
+    parameters: Type.Object({
+      path: Type.Optional(Type.String({ minLength: 1, maxLength: 400, description: "Directory to search, relative to the tutorial workspace. Defaults to the workspace root." })),
+      pattern: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Optional basename pattern. '*' and '?' wildcards are supported." }))
+    }, { additionalProperties: false }),
+    async execute(id, params) {
+      const rawPath = params.path ?? ".";
+      let auditPaths = [rawPath.replaceAll("\\", "/")];
+      try {
+        const matcher = params.pattern ? wildcardPattern(params.pattern) : undefined;
+        const matches = new Set<string>();
+        const visit = async (virtualPath: string, isStart = false): Promise<void> => {
+          if (matches.size >= 1_000) return;
+          let resolved: Awaited<ReturnType<typeof overlayPath>>;
+          try {
+            resolved = await overlayPath(contentBoundary, learnerBoundary, virtualPath);
+          } catch (error) {
+            if (isStart) throw error;
+            return;
+          }
+          const boundaryRoot = overlayBoundaryRoot(resolved.relative, contentBoundary, learnerBoundary);
+          const real = await realpath(resolved.absolute).catch(() => resolved.absolute);
+          if (!inside(boundaryRoot, real)) {
+            if (isStart) throw new Error("Path is outside the tutorial workspace.");
+            return;
+          }
+          const entry = await lstat(resolved.absolute);
+          const name = resolved.relative === "." ? "." : resolved.relative.split("/").at(-1) ?? resolved.relative;
+          if (!matcher || matcher.test(name)) matches.add(resolved.relative);
+          if (!entry.isDirectory() || entry.isSymbolicLink()) return;
+          const children = resolved.relative === "."
+            ? await overlayRootChildren(resolved.absolute, learnerBoundary)
+            : (await readdir(resolved.absolute)).sort();
+          for (const child of children) await visit(childOverlayPath(resolved.relative, child));
+        };
+        const start = await overlayPath(contentBoundary, learnerBoundary, rawPath);
+        auditPaths = [start.relative];
+        await visit(start.relative, true);
+        const sorted = [...matches].sort();
+        audit?.({ tool: "find", paths: auditPaths, mutation: false, outcome: "ok" });
+        return { content: [{ type: "text", text: sorted.join("\n") || "No files found." }], details: { matches: sorted } };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Tool failed.";
+        audit?.({ tool: "find", paths: auditPaths, mutation: false, outcome: /outside/i.test(message) ? "rejected" : "error", message });
+        throw error;
+      }
+    }
+  });
+}
+
 function safeWorkspaceTools(contentRoot: string, learnerBoundary: WorkspaceBoundary, contentBoundary: WorkspaceBoundary, log: TutorialLogger): ToolDefinition[] {
   const audit = (event: { tool: string; paths: string[]; mutation: boolean; outcome: string; message?: string }) => {
     log.info(`Block tutor tool audit: ${event.tool} ${event.outcome} (${event.paths.join(", ") || "."}; mutation=${event.mutation}).`);
@@ -166,7 +252,9 @@ function safeWorkspaceTools(contentRoot: string, learnerBoundary: WorkspaceBound
     async resolve(path: string) { return overlayPath(contentBoundary, learnerBoundary, path); }
   };
   const safeNames = new Set(SAFE_TOOL_NAMES);
-  return createWorkspaceTools(contentRoot, readBoundary, audit).filter((tool) => safeNames.has(tool.name));
+  const tools = createWorkspaceTools(contentRoot, readBoundary, audit)
+    .filter((tool) => safeNames.has(tool.name) && tool.name !== "find");
+  return [...tools, createOverlayFindTool(contentBoundary, learnerBoundary, audit)];
 }
 
 async function createPiWorkbookBlockTutorSession(workspace: string, request: WorkbookBlockTutorSessionFactoryRequest, log: TutorialLogger): Promise<WorkbookBlockTutorSession> {

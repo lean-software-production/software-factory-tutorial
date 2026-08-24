@@ -201,6 +201,8 @@ describe("FastWorkbookBlockTutor", () => {
     await writeFile(join(contentRoot, "lessons/001/blocks/step.md"), "authored lesson text\n", "utf8");
     await mkdir(join(contentRoot, "factory"), { recursive: true });
     await writeFile(join(contentRoot, "factory/answer.md"), "authored stale answer\n", "utf8");
+    await writeFile(join(contentRoot, "factory/authored-stale.md"), "authored stale factory-only file\n", "utf8");
+    await writeFile(join(workspace, "factory/learner-only.md"), "learner current factory-only file\n", "utf8");
     const outside = await mkdtemp(join(tmpdir(), "workbook-block-outside-factory-")); roots.push(outside);
     await mkdir(join(outside, "factory"));
     await writeFile(join(outside, "factory/answer.md"), "outside factory secret\n", "utf8");
@@ -218,7 +220,14 @@ describe("FastWorkbookBlockTutor", () => {
       .resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("authored lesson text") }] });
     await expect((tools.get("read") as any).execute("read-learner", { path: "factory/answer.md" }, undefined, undefined, undefined))
       .resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("Evidence stays") }] });
+    const findFactory = await (tools.get("find") as any).execute("find-factory", { path: "factory" }, undefined, undefined, undefined);
+    expect(findFactory.content[0].text).toContain("factory/learner-only.md");
+    expect(findFactory.content[0].text).not.toContain("authored-stale.md");
+    const findRoot = await (tools.get("find") as any).execute("find-root", {}, undefined, undefined, undefined);
+    expect(findRoot.content[0].text).toContain("factory/learner-only.md");
+    expect(findRoot.content[0].text).not.toContain("authored-stale.md");
     await expect((tools.get("read") as any).execute("read-outside-absolute", { path: join(outside, "factory/answer.md") }, undefined, undefined, undefined)).rejects.toThrow(/outside/);
+    await expect((tools.get("find") as any).execute("find-outside-absolute", { path: join(outside, "factory") }, undefined, undefined, undefined)).rejects.toThrow(/outside/);
     await expect((tools.get("read") as any).execute("read-authored-symlink", { path: "lessons/001/blocks/leak.md" }, undefined, undefined, undefined)).rejects.toThrow(/outside/);
     expect(tools.has("write")).toBe(false);
   });
