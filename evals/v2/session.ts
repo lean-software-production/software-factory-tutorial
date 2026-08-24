@@ -38,8 +38,8 @@ export function recordEditorStatus(trace: V2SessionTrace, entry: V2EditorEntry):
   return entry;
 }
 
-export async function readWorkbookEvents(workspaceRoot: string): Promise<WorkbookEvent[]> {
-  const eventPath = resolve(workspaceRoot, ".tutorial/.tmp/workbook/events.jsonl");
+export async function readWorkbookEvents(sessionRoot: string): Promise<WorkbookEvent[]> {
+  const eventPath = resolve(sessionRoot, "workbook/events.jsonl");
   let text: string;
   try { text = await readFile(eventPath, "utf8"); }
   catch (error: any) { if (error?.code === "ENOENT") return []; throw error; }

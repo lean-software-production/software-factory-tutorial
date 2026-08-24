@@ -82,7 +82,10 @@ async function runOnce(scenario: V2Scenario, repetition: number): Promise<{ pass
         judgeInputFile: "judge-input.txt",
         scenario: scenario.id,
         timestamps: { started, ended },
-        workspaceRoot: workspace.root
+        contentRoot: workspace.root,
+        workspaceRoot: workspace.latestSession().workspaceRoot,
+        sessionRoot: workspace.latestSession().sessionRoot,
+        sessionId: workspace.latestSession().sessionId
       }, null, 2))
     ]);
     return { passed: gate.passed && verdict.passed, percentage: verdict.percentage, directory };

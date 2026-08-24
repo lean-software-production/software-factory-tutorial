@@ -145,8 +145,9 @@ export function deterministicV2Gate(scenario: V2Scenario, trace: V2SessionTrace)
 export async function runV2ScenarioSession(options: { scenario: V2Scenario; workspace: EvaluationWorkspace; serverUrl: string; trace: V2SessionTrace }): Promise<V2SessionTrace> {
   const driver = createV2WorkbookDriver({ serverUrl: options.serverUrl, trace: options.trace });
   await driveV2Scenario(driver, options.scenario);
-  options.trace.events = await readWorkbookEvents(options.workspace.root);
-  options.trace.artifacts = await snapshotArtifacts(options.workspace.root);
+  const session = options.workspace.latestSession();
+  options.trace.events = await readWorkbookEvents(session.sessionRoot);
+  options.trace.artifacts = await snapshotArtifacts(session.workspaceRoot);
   return options.trace;
 }
 

@@ -53,7 +53,7 @@ Use `--all --yes` only when you intend to run every scenario. Use `--repeat 2` o
 
 ## What it exercises
 
-The runner copies `evals/workbook/` into a disposable temporary repository under `tutorial/`, starts the checked-out v2 workbook server on that nested learner workspace, and drives the same public workbook API, editor endpoint, and terminal WebSocket used by the browser. It records only public workbook state, public editor status/feedback, learner-visible terminal transcript, reflection turns, public workbook events, and `factory/.tmp` plus `editor-artifacts` artifact snapshots.
+The runner copies `evals/workbook/` into a disposable temporary repository under `tutorial/`, materializes a fresh session workspace under `tutorial/.tutorial/<session-id>/workspace/`, and drives the same public workbook API, editor endpoint, and terminal WebSocket used by the browser. It records only public workbook state, public editor status/feedback, learner-visible terminal transcript, reflection turns, public workbook events, and session-local `factory/.tmp` plus `editor-artifacts` artifact snapshots.
 
 The recorder refuses to store a private `tutor` field or known private tutor-guidance text. Deterministic gates inspect the trace before any judge call. The judge receives the scenario criteria and the recorded public learner session, not the authored curriculum or private tutor guidance.
 

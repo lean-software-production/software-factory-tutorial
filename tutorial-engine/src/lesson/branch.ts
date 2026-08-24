@@ -12,11 +12,10 @@ const pad = (value: number) => String(value).padStart(2, "0");
  * Where this session's commits go.
  *
  * From lesson 007 the line commits to the calculator, and from 008 it does so
- * unattended, up to five times a run. `calculator/` has no repository of its
- * own, so those commits land in the learner's clone of the tutorial — on
- * whichever branch they happen to have checked out, which for anyone who just
- * cloned is the default one. A branch of their own keeps that one pullable and
- * makes a run easy to throw away.
+ * unattended, up to five times a run. In the workbook launcher those commits
+ * land in the session-local repository under `.tutorial/<id>/workspace/.git`,
+ * not in the cloned tutorial repository. This legacy branch helper keeps any
+ * one-root workspace on a discardable branch when the older server path uses it.
  *
  * One branch per session rather than one for all of them, stamped to the
  * minute: each session's work is separable, and the branch a learner was on

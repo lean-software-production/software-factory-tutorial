@@ -64,7 +64,13 @@ describe("v2 public session trace", () => {
       }).then((response) => response.json() as any);
 
       recordPublicState(trace, "exact-command-visible", state);
-      trace.events = await readWorkbookEvents(workspace.root);
+      const session = workspace.latestSession();
+      trace.events = await readWorkbookEvents(session.sessionRoot);
+
+      expect(session.contentRoot).toBe(await realpath(workspace.root));
+      expect(session.workspaceRoot).toBe(resolve(session.sessionRoot, "workspace"));
+      await expect(stat(resolve(session.workspaceRoot, "factory"))).resolves.toBeDefined();
+      await expect(stat(resolve(session.workspaceRoot, "calculator"))).resolves.toBeDefined();
 
       expect(trace).toMatchObject({
         scenarioId: "public-state",
@@ -95,8 +101,11 @@ describe("v2 public session trace", () => {
   it("rejects private tutor text in workbook events before they enter the trace", async () => {
     const workspace = await createEvaluationWorkspace();
     tempRoots.push(workspace.repositoryRoot);
-    await mkdir(resolve(workspace.root, ".tutorial/.tmp/workbook"), { recursive: true });
-    await writeFile(resolve(workspace.root, ".tutorial/.tmp/workbook/events.jsonl"), `${JSON.stringify({
+    const server = await workspace.startServer({ embeddedTerminal: false, mainTutor: new SessionFakeMainTutor() as unknown as NonNullable<WorkbookServerOptions["mainTutor"]> });
+    await server.close();
+    const { sessionRoot } = workspace.latestSession();
+    await mkdir(resolve(sessionRoot, "workbook"), { recursive: true });
+    await writeFile(resolve(sessionRoot, "workbook/events.jsonl"), `${JSON.stringify({
       type: "observation_verified",
       at: "2026-08-20T00:00:00.000Z",
       lessonId: "001-live-session",
@@ -106,7 +115,7 @@ describe("v2 public session trace", () => {
       terminalHtml: ""
     })}\n`);
 
-    await expect(readWorkbookEvents(workspace.root)).rejects.toThrow(/private tutor/i);
+    await expect(readWorkbookEvents(sessionRoot)).rejects.toThrow(/private tutor/i);
 
     await workspace.close();
     tempRoots.length = 0;
@@ -116,12 +125,15 @@ describe("v2 public session trace", () => {
     const trace = createEmptyV2SessionTrace("artifacts");
     const workspace = await createEvaluationWorkspace();
     tempRoots.push(workspace.repositoryRoot);
-    await mkdir(resolve(workspace.root, "factory/.tmp"), { recursive: true });
-    await mkdir(resolve(workspace.root, "editor-artifacts"), { recursive: true });
-    await writeFile(resolve(workspace.root, "factory/.tmp/evaluator-command.txt"), "command block complete\n");
-    await writeFile(resolve(workspace.root, "editor-artifacts/evaluator-editor.txt"), "editor draft complete\n");
+    const server = await workspace.startServer({ embeddedTerminal: false, mainTutor: new SessionFakeMainTutor() as unknown as NonNullable<WorkbookServerOptions["mainTutor"]> });
+    await server.close();
+    const { workspaceRoot } = workspace.latestSession();
+    await mkdir(resolve(workspaceRoot, "factory/.tmp"), { recursive: true });
+    await mkdir(resolve(workspaceRoot, "editor-artifacts"), { recursive: true });
+    await writeFile(resolve(workspaceRoot, "factory/.tmp/evaluator-command.txt"), "command block complete\n");
+    await writeFile(resolve(workspaceRoot, "editor-artifacts/evaluator-editor.txt"), "editor draft complete\n");
 
-    trace.artifacts = await snapshotArtifacts(workspace.root);
+    trace.artifacts = await snapshotArtifacts(workspaceRoot);
 
     expect(trace.artifacts).toEqual([
       { path: "editor-artifacts/evaluator-editor.txt", content: "editor draft complete\n" },

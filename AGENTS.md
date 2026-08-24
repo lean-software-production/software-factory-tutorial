@@ -4,12 +4,15 @@
 
 - The repository root is the developer workspace: npm orchestration, setup scripts, evals, and the
   tutorial engine live here.
-- The learner workspace is [`tutorial/`](tutorial/). Its [`README`](tutorial/README.md),
+- The authored tutorial template is [`tutorial/`](tutorial/). Its [`README`](tutorial/README.md),
   `workbook.md`, `parts/`, `lessons/`, `docs/specs/`, `docs/seeds/`, `factory/`, and
-  `calculator/` move together. Learner shell commands run from the tutorial root.
-- The root `npm run tutorial` command is only a convenience launcher. It starts
-  `tutorial-engine/` against `tutorial/`; it does not make the repository root the learner
-  workspace.
+  `calculator/` move together. Treat this content as immutable during learner runs.
+- Each learner session has a private workspace at `tutorial/.tutorial/<session-id>/workspace/`.
+  Learner shell commands, edits, and commits happen there, not in the authored template and not in
+  the repository root.
+- The root `npm run tutorial` command is a convenience launcher. By default it creates a fresh
+  session and prints the session ID and workspace path. `npm run tutorial -- --session <id>` is the
+  only way to reopen that ID; legacy `tutorial/.tutorial/.tmp` state is not resumed.
 - Engine documentation starts in [`tutorial-engine/README.md`](tutorial-engine/README.md); durable
   engine architecture decisions live under [`tutorial-engine/docs/adr/`](tutorial-engine/docs/adr/).
 - Historical plans live under `docs/plans/`, `docs/superpowers/plans/`, and
@@ -67,41 +70,37 @@ The `## What this costs` section exists to state a trade honestly. Do not soften
 both halves — the guarantee and the limitation — should be stated plainly enough that a learner could
 argue with them.
 
-## Tutor state belongs in tutorial/.tutorial/.tmp/, never in the curriculum
+## Session state belongs under tutorial/.tutorial/<id>/, never in the curriculum
 
 `tutorial/docs/specs/README.md` lists the lessons and nothing about any particular learner. The
-generic tutor keeps its transcript and progress in `tutorial/.tutorial/.tmp/`, not in a curriculum
-working directory. Writing progress back into the ledger would hand everyone who clones the tutorial
-a copy that claims to be part finished, so the ledger's rows carry a specification link and a goal,
-and no status.
+workbook tutor keeps its transcript, progress, attempts, and learner workspace under
+`tutorial/.tutorial/<session-id>/`, not in the authored curriculum. Writing progress back into the
+ledger would hand everyone who clones the tutorial a copy that claims to be part finished, so the
+ledger's rows carry a specification link and a goal, and no status.
 
-Inside `tutorial/`, `factory/` sorts into three kinds, and the split is what `.gitignore` encodes:
+Inside a session workspace, `factory/` sorts into three kinds, and the split is what `.gitignore`
+encodes:
 
-- **The learner's line** — every `.sh` and `.md` they write — is **tracked**, so their own work
-  survives a mistake and can be committed if they want it kept.
-- **Everything else** goes in a `.tmp/` beside the script that writes it, and one rule —
-  `tutorial/factory/**/.tmp/` — ignores the evidence, findings, baselines, commit messages and
-  iteration records a run regenerates. Generic tutor state is separately ignored under
-  `tutorial/.tutorial/`. Committing either
-  would churn the history every run.
+- **The learner's line** — every `.sh` and `.md` they write — is tracked by the session-local Git
+  repository, so their own work survives a mistake inside that session and can be committed there.
+- **Everything else** goes in a `.tmp/` beside the script that writes it. The product repository
+  ignores authored example `.tmp/` paths and all of `tutorial/.tutorial/`, so regenerated evidence,
+  findings, baselines, commit messages, iteration records, workbook state, and session-local Git
+  history never churn the product history.
 
 So a lesson that writes anything a run recreates writes it to `.tmp/`, whatever its name or format.
 Scripts `cd "$(dirname "$0")"` before doing anything, so the path is just `.tmp/evidence.txt`, and a
 learner who builds a second line gets the same rule without a second `.gitignore` entry. A script that
 writes there needs `mkdir -p .tmp` after its `cd`: this curriculum's reset clears its learner work.
+Existing ignored legacy state under `tutorial/.tutorial/.tmp/` may remain on disk but is not resumed
+by the launcher.
 
-## The line commits to a branch of its own, one per session
+## The line commits to the session-local repository
 
-From lesson 007 the line commits to the calculator, and from 008 it does so unattended.
-`tutorial/calculator/` has no repository of its own, so those commits land in the learner's clone of
-the tutorial. The engine
-switches to `factory-line-<date>-<time>` when a session starts (`ensureLineBranch`), which keeps the
-branch they cloned pullable and makes a run easy to throw away.
-
-One branch per session, stamped to the minute, and each is cut from wherever the last one left off —
-so the calculator keeps the work already done to it, and the branch a learner was on last week is
-still there to go back to. It never fails a session over any of this: a workspace that is not a
-repository still gets a working tutorial.
+From lesson 007 the line commits to the calculator, and from 008 it does so unattended. Those commits
+land in `tutorial/.tutorial/<session-id>/workspace/.git`, not in the cloned tutorial repository. A
+plain `npm run tutorial` creates a new session-local repository; `--session <id>` reopens that same
+repository so the learner can inspect or continue its private history.
 
 ## Changing a Part 1 lesson means changing the Part 2 seed
 

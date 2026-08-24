@@ -9,22 +9,29 @@ function run(argv: string[]) {
 
 describe("parseArguments", () => {
   it("serves the named directory on an ephemeral loopback port by default", () => {
-    expect(run(["/tutorials/factory"])).toEqual({ target: "/tutorials/factory", port: undefined, host: undefined, noOpen: false });
+    expect(run(["/tutorials/factory"])).toEqual({ target: "/tutorials/factory", port: undefined, host: undefined, noOpen: false, session: undefined });
   });
 
   it("reads the port, host, and browser flags", () => {
     expect(run(["/tutorials/factory", "--port", "4310", "--host", "0.0.0.0", "--no-open"]))
-      .toEqual({ target: "/tutorials/factory", port: 4310, host: "0.0.0.0", noOpen: true });
+      .toEqual({ target: "/tutorials/factory", port: 4310, host: "0.0.0.0", noOpen: true, session: undefined });
   });
 
   it("accepts flags before the directory, because a flag value is never the target", () => {
     expect(run(["--host", "0.0.0.0", "--port", "4310", "/tutorials/factory"]))
-      .toEqual({ target: "/tutorials/factory", port: 4310, host: "0.0.0.0", noOpen: false });
+      .toEqual({ target: "/tutorials/factory", port: 4310, host: "0.0.0.0", noOpen: false, session: undefined });
   });
 
   it("accepts --flag=value", () => {
     expect(run(["--port=4310", "--host=::1", "/tutorials/factory"]))
       .toMatchObject({ target: "/tutorials/factory", port: 4310, host: "::1" });
+  });
+
+  it("accepts an explicit session ID to reopen", () => {
+    expect(run(["/tutorials/factory", "--session", "lesson-007"]))
+      .toMatchObject({ target: "/tutorials/factory", session: "lesson-007" });
+    expect(run(["--session=lesson-008", "/tutorials/factory"]))
+      .toMatchObject({ target: "/tutorials/factory", session: "lesson-008" });
   });
 
   it("treats everything after -- as a path, so directories may start with a dash", () => {
@@ -53,6 +60,7 @@ describe("parseArguments", () => {
     expect(() => parseArguments(["/tutorials/factory", "--port", "--no-open"])).toThrow(/--port needs a value/);
     expect(() => parseArguments(["/tutorials/factory", "--host"])).toThrow(/--host needs a value/);
     expect(() => parseArguments(["/tutorials/factory", "--host="])).toThrow(/--host needs a value/);
+    expect(() => parseArguments(["/tutorials/factory", "--session"])).toThrow(/--session needs a value/);
   });
 
   it("insists on a plain port number in range", () => {

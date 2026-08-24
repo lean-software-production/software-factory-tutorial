@@ -20,9 +20,12 @@ describe("tutorial launcher", () => {
     assert.deepEqual(manifest.workspaces, ["tutorial/calculator", "tutorial-engine"]);
   });
 
-  it("forwards engine options after the tutorial workspace target", () => {
+  it("forwards engine options after the tutorial content target", () => {
     assert.deepEqual(tutorialArguments(["--port", "4310", "--no-open"]), [
       "run", "--workspace=tutorial-engine", "dev:workbook", "--", tutorialRoot, "--port", "4310", "--no-open"
+    ]);
+    assert.deepEqual(tutorialArguments(["--session", "lesson-007"]), [
+      "run", "--workspace=tutorial-engine", "dev:workbook", "--", tutorialRoot, "--session", "lesson-007"
     ]);
   });
 });

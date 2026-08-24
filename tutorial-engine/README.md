@@ -4,8 +4,9 @@ A local, browser-led tutorial runner. It embeds `@earendil-works/pi-coding-agent
 
 ## Run a tutorial
 
-Point the engine at a tutorial directory. In this repository, the authored learner workspace is
-`../tutorial` from the engine package:
+Point the workbook engine at an authored tutorial directory. In this repository, that content
+template is `../tutorial` from the engine package; learner edits happen in a session workspace
+under `../tutorial/.tutorial/<session-id>/workspace/`:
 
 ```sh
 cd tutorial-engine
@@ -13,7 +14,9 @@ npm install
 npm run dev -- ../tutorial
 ```
 
-From the repository root, `npm run tutorial` is the convenience launcher for the same target.
+From the repository root, `npm run tutorial` is the convenience launcher for the same target. A
+plain launch creates a fresh session and prints its ID and workspace path. Reopen a specific
+session with `npm run tutorial -- --session <id>`; legacy `.tutorial/.tmp` state is not resumed.
 
 Add `--no-open` to suppress browser launch, or `--port 4310` to choose a port. The server binds only to `127.0.0.1`. Pi credentials remain in the server process; the browser has no filesystem or provider-credential access.
 

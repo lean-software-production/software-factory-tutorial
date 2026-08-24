@@ -39,20 +39,22 @@ npm install
 npm run setup
 ```
 
-After setup, change into the tutorial root for learner commands:
+After setup, start the tutor from the repository root. It prints a learner workspace path;
+use that path for lesson commands:
 
 ```sh
-cd tutorial
+npm run tutorial
+cd tutorial/.tutorial/<session-id>/workspace
 ```
 
-The lessons run from this `tutorial/` directory, where `factory/` and
-`calculator/` are siblings. The lessons call `pi` directly, so it has to be on your
-`PATH`. `npm install` already fetched the version this repository pins. From the
-tutorial root, exporting the repository's local binary directory is enough; install
-Pi globally if you would rather:
+The lessons run from this session workspace, where `factory/` and `calculator/` are
+siblings. The lessons call `pi` directly, so it has to be on your `PATH`. `npm install`
+already fetched the version this repository pins. From the session workspace, exporting
+the repository's local binary directory is enough; install Pi globally if you would
+rather:
 
 ```sh
-export PATH="$PWD/../node_modules/.bin:$PATH"
+export PATH="$PWD/../../../../node_modules/.bin:$PATH"
 ```
 
 `npm run setup` checks that Pi has an authenticated model for the web tutor. If it reports that Pi needs authentication, run `pi`, enter `/login`, and choose a provider. Pi keeps those credentials in its user-level configuration; this repository does not store them.
@@ -100,8 +102,10 @@ From the repository root, use the retained convenience launcher:
 npm run tutorial
 ```
 
-It starts the tutor against this `tutorial/` workspace and opens it in your browser. It
-listens on loopback only; if no browser opens, visit the printed address yourself.
+It uses this `tutorial/` directory as the authored content template, creates a fresh
+session under `.tutorial/<session-id>/`, prints that session ID and learner workspace
+path, and opens the tutor in your browser. It listens on loopback only; if no browser
+opens, visit the printed address yourself.
 
 To reach the tutor from another machine — for example through a proxy that serves it under
 a subfolder, such as the EnsembleWorks canvas dev-server control at `/dev/4310/` — pick the
@@ -111,8 +115,8 @@ port the proxy expects and bind beyond loopback:
 npm run tutorial -- --port 4310 --host 0.0.0.0 --no-open
 ```
 
-The tutor has no authentication and edits the working tree, so only do that on a network you
-trust.
+The tutor has no authentication and edits the session-local learner workspace, so only do that
+on a network you trust.
 
 ## Check the workbook
 
@@ -126,9 +130,17 @@ npm run --workspace=tutorial-engine check:workbook
 This uses the same loader as the tutor. It checks lesson and optional-part structure, manifests,
 blocks, and lesson references, then prints the workbook's lesson and part counts.
 
-Leave the tutor running and open a second terminal, then run `cd tutorial` there too. Stay in the tutorial root: every command the lessons give you is written to run from there, and the scripts you build take their paths relative to it. If you put `pi` on your `PATH` with the `export` above rather than installing it globally, repeat that export in this terminal after `cd tutorial` — from lesson 002 the scripts you write call `pi` themselves.
+Leave the tutor running and open a second terminal, then `cd` to the printed learner workspace
+path: `tutorial/.tutorial/<session-id>/workspace`. Stay there: every command the lessons give
+you is written to run from that learner workspace, and the scripts you build take their paths
+relative to it. If you put `pi` on your `PATH` with the `export` above rather than installing it
+globally, repeat that export in this terminal after changing directory — from lesson 002 the
+scripts you write call `pi` themselves.
 
-The files you write by hand all live under `factory/`, which is where the tutor looks for your work. Edit them with your usual editor as the tutor instructs, then go back to the tutor for the next step or for feedback. Once you have created `factory/refactor-do.sh` in lesson 002, run it directly:
+The files you write by hand all live under `factory/` in that session workspace, which is where
+the tutor looks for your work. Edit them with your usual editor as the tutor instructs, then go
+back to the tutor for the next step or for feedback. Once you have created
+`factory/refactor-do.sh` in lesson 002, run it directly:
 
 ```sh
 chmod +x factory/refactor-do.sh
@@ -139,13 +151,26 @@ Lesson 005 moves the whole line into `factory/refactor/`, and from then on you r
 
 ## Where to begin, and how to resume
 
-The first time you run the root `npm run tutorial` launcher, it asks where to start. Start at the beginning to build everything yourself. Start at Part 2 to skip the first four lessons: it copies the files those lessons build into `factory/` and opens the assembly line, so you get Part 2 without having written Part 1 by hand.
+Every plain `npm run tutorial` launch creates a new session. The launcher prints the session ID,
+the session state path, and the learner workspace path. Save the ID if you want to come back to
+that exact work later:
 
-After that, running it again offers to resume as well. Resume keeps your factory files and asks a fresh tutor process to inspect them before continuing. The other two options delete everything in `factory/` first.
+```sh
+npm run tutorial -- --session <session-id>
+```
 
-The tutor keeps its own state — the transcript and how far you have got — in `.tutorial/.tmp/`. Your line's regenerated evidence stays in `factory/**/.tmp/`. Both locations are ignored by git; the scripts and prompts you write are not, so your own work is yours to commit if you want to keep it.
+Only an explicit `--session <session-id>` resumes a previous session. Legacy state under
+`.tutorial/.tmp/` is ignored by the launcher and is not resumed or deleted automatically.
 
-Each session moves you onto a branch of its own, named `factory-line-` and the date and time. From lesson 007 your line commits to the calculator, and from 008 it does so without asking, so those commits land there rather than on the branch you cloned.
+The tutor keeps its transcript and progress in `.tutorial/<session-id>/workbook/`. Your editable
+copy of `factory/` and `calculator/` lives in `.tutorial/<session-id>/workspace/`. Regenerated
+evidence still belongs in `factory/**/.tmp/` inside that workspace. Both `.tutorial/` and those
+`.tmp/` directories are ignored by git; the scripts, prompts, calculator changes, and commits you
+make are private to the session-local repository.
+
+From lesson 007 your line commits to the session-local calculator, and from 008 it does so
+without asking, so those commits land in `.tutorial/<session-id>/workspace/.git` rather than in
+the cloned tutorial repository.
 
 ## Inspiration
 

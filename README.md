@@ -1,12 +1,12 @@
 # Software factory tutorial developer workspace
 
-This repository contains a learner tutorial and the local engine that runs it. The repository root is the developer workspace; the authored learner workspace lives under [`tutorial/`](tutorial/).
+This repository contains a learner tutorial and the local engine that runs it. The repository root is the developer workspace; the authored tutorial template lives under [`tutorial/`](tutorial/). Each launch creates or reopens a private learner workspace under `tutorial/.tutorial/<session-id>/workspace/`.
 
 ## Architecture map
 
 | Path | Purpose |
 | --- | --- |
-| [`tutorial/`](tutorial/) | Learner-facing workbook, lessons, specs, seed files, `factory/`, and the calculator kata. Learner lesson commands run from this directory. |
+| [`tutorial/`](tutorial/) | Learner-facing workbook, lessons, specs, seed files, and the authored `factory/`/calculator template. Do not treat it as writable learner state. |
 | [`tutorial-engine/`](tutorial-engine/) | Generic browser-led workbook engine and its tests. The root launcher points it at `tutorial/`. |
 | [`scripts/`](scripts/) | Root convenience launchers and setup helpers. |
 | [`evals/`](evals/) | Live and deterministic tutor evaluation harnesses. |
@@ -19,7 +19,8 @@ Run these from the repository root:
 ```sh
 npm install                 # install root, engine, and calculator workspaces
 npm run setup               # check Node, npm, Pi, and configured tutor models
-npm run tutorial            # convenience launcher for tutorial/ in the workbook engine
+npm run tutorial            # create a fresh learner session and launch the workbook engine
+npm run tutorial -- --session <id>  # reopen an explicit session ID
 npm run --workspace=tutorial-engine check:workbook
 ```
 
@@ -37,7 +38,7 @@ npm run test:eval
 
 ## Start points
 
-- Learners: start with [`tutorial/README.md`](tutorial/README.md). Start the tutor with the root `npm run tutorial` convenience command, then run lesson shell commands from the `tutorial/` root.
+- Learners: start with [`tutorial/README.md`](tutorial/README.md). Start the tutor with the root `npm run tutorial` convenience command, save the printed session ID if you want to resume, then run lesson shell commands from the printed `.tutorial/<id>/workspace` path.
 - Engine developers: start with [`tutorial-engine/README.md`](tutorial-engine/README.md) and ADRs in [`tutorial-engine/docs/adr/`](tutorial-engine/docs/adr/).
 - Curriculum maintainers: edit authored lesson prose under [`tutorial/lessons/`](tutorial/lessons/) and canonical lesson specs under [`tutorial/docs/specs/`](tutorial/docs/specs/).
 - Coding agents: read [`AGENTS.md`](AGENTS.md) for the repository map, workflow rules, and curriculum-writing conventions.
