@@ -171,6 +171,13 @@ describe("v2 live evaluator scenarios", () => {
     const trace = clueOnlyTrace();
     allGateAssertionsPass(trace);
 
+    const wrongPath = clueOnlyTrace();
+    wrongPath.terminalTranscript = wrongPath.terminalTranscript.map((entry) => entry.blockId === "clue-only" && entry.direction === "input"
+      ? { ...entry, text: "mkdir -p .tmp && printf 'clue block complete\\n' > .tmp/evaluator-clue.txt && cat .tmp/evaluator-clue.txt\r" }
+      : entry);
+    const wrongPathFailed = deterministicV2Gate(findV2Scenario(wrongPath.scenarioId), wrongPath);
+    expect(wrongPathFailed.assertions.find((assertion) => assertion.name === "clue-only learner command")?.passed).toBe(false);
+
     const leaky = clueOnlyTrace();
     (leaky.publicStates[2]!.state as any).chapters[0].lesson.blocks[0].markdown += `\n\`\`\`sh command\n${clueCommand}\n\`\`\``;
     const failed = deterministicV2Gate(findV2Scenario(leaky.scenarioId), leaky);

@@ -14,6 +14,6 @@ Then print it back with a command that reads the file.
 
 Clues:
 
-- keep the file under `.tmp/`;
+- keep the file under `factory/.tmp/`;
 - create the directory before writing the file;
 - use one shell command to write the text and another to display it.

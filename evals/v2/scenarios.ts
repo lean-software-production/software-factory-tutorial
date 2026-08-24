@@ -292,13 +292,13 @@ function exactCommandInput(trace: V2SessionTrace): V2GateAssertion {
 
 function learnerChoseClueCommand(trace: V2SessionTrace): V2GateAssertion {
   const input = trace.terminalTranscript.find((entry) => entry.blockId === "clue-only" && entry.direction === "input")?.text.trim() ?? "";
-  const passed = input.length > 0 && input !== exactCommand && /evaluator-clue\.txt/.test(input);
+  const passed = input.length > 0 && input !== exactCommand && /factory\/\.tmp\/evaluator-clue\.txt/.test(input);
   return { name: "clue-only learner command", passed, detail: input || "No clue-only input was recorded." };
 }
 
 function clueOnlyPublicPrompt(trace: V2SessionTrace): V2GateAssertion {
   const prompt = trace.publicStates.map((state) => JSON.stringify(state.state)).find((text) => text.includes("clue-only")) ?? "";
-  const passed = prompt.includes("evaluator-clue.txt") && !/```sh\s+command|This is private tutor guidance|Do not reveal an exact command/i.test(prompt);
+  const passed = prompt.includes("factory/.tmp/evaluator-clue.txt") && !/```sh\s+command|This is private tutor guidance|Do not reveal an exact command/i.test(prompt);
   return { name: "clue-only public prompt", passed, detail: passed ? "Public clue-only prompt has clues and no insertable command." : "Public clue-only prompt is missing clues or exposes an insertable/private command." };
 }
 
