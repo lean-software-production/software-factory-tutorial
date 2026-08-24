@@ -1193,7 +1193,7 @@ describe("workbook lesson UI", () => {
     expect(action.textContent).toBe("Inserted — press Enter");
 
     await act(async () => { socket.readyState = FakeWebSocket.CLOSED; socket.emit("close"); });
-    expect(container.textContent).not.toContain("Do it for me");
+    expect(container.querySelector(".timeline-do-it")).toBeNull();
   });
 
   it.each([

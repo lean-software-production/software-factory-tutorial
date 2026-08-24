@@ -156,13 +156,13 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
   }, [command, verified]);
 
   useEffect(() => {
-    if (!active || !command || verified || socket.current?.readyState !== WebSocket.OPEN) {
+    if (!active || !command || verified || !connected || socket.current?.readyState !== WebSocket.OPEN) {
       onTerminalInsertionChange?.(undefined);
       return;
     }
     onTerminalInsertionChange?.(insertCommand);
     return () => onTerminalInsertionChange?.(undefined);
-  }, [active, command, connectionEpoch, insertCommand, onTerminalInsertionChange, verified]);
+  }, [active, command, connected, connectionEpoch, insertCommand, onTerminalInsertionChange, verified]);
 
   return <div className="embedded-terminal-panel">
     <span className={`terminal-connection-status${connected ? " connected" : ""}`} aria-label={connected ? "Terminal connected" : "Terminal disconnected"} />
