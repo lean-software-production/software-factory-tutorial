@@ -5,8 +5,9 @@ import { runWorkbookCheck } from "../src/workbook/check.js";
 import type { LoadedWorkbook } from "../src/workbook/load.js";
 
 // This test file lives at tutorial-engine/test/workbook-check.test.ts; the
-// repository root (where workbook.md is authored) is two levels up from it.
+// default workbook target is the tutorial/ workspace two levels up from it.
 const REPOSITORY_ROOT = resolve(fileURLToPath(import.meta.url), "../../..");
+const TUTORIAL_ROOT = resolve(REPOSITORY_ROOT, "tutorial");
 
 function chapter(partNumber: number | undefined): LoadedWorkbook["chapters"][number] {
   return {
@@ -57,9 +58,9 @@ describe("workbook check", () => {
     expect(writeError).toHaveBeenCalledWith(expect.stringContaining("workbook.md must have exactly one H1 title heading"));
   });
 
-  it("defaults the target to the repository root when none is given, regardless of cwd", async () => {
+  it("defaults the target to the tutorial workspace when none is given, regardless of cwd", async () => {
     const load = vi.fn(async (target: string): Promise<LoadedWorkbook> => {
-      expect(target).toBe(REPOSITORY_ROOT);
+      expect(target).toBe(TUTORIAL_ROOT);
       return { workspace: target, identity: { title: "Untitled" }, introduction: "", chapters: [] };
     });
 
@@ -68,7 +69,7 @@ describe("workbook check", () => {
     expect(exitCode).toBe(0);
   });
 
-  it("still honors an explicit target argument instead of the repository root default", async () => {
+  it("still honors an explicit target argument instead of the tutorial workspace default", async () => {
     const load = vi.fn(async (target: string): Promise<LoadedWorkbook> => {
       expect(target).toBe("/tmp/some-other-workbook");
       return { workspace: target, identity: { title: "Untitled" }, introduction: "", chapters: [] };

@@ -9,18 +9,18 @@
     "npm": ">=11.0.0"
   },
   "workspaces": [
-    "calculator",
+    "tutorial/calculator",
     "tutorial-engine"
   ],
   "scripts": {
-    "start": "npm run tutorial:workbook",
+    "start": "npm run tutorial",
     "setup": "node scripts/setup.mjs",
     "tutorial": "node scripts/tutorial.mjs",
     "test:onboarding": "node --test test/onboarding.test.mjs",
     "test:eval": "vitest run --root . --exclude '.worktrees/**' ./evals/test/*.test.ts",
     "check:eval": "tsc -p evals/tsconfig.json",
     "eval": "npm run --workspace=tutorial-engine build && tsx evals/run.ts",
-    "check": "npm run test:onboarding && npm run check:eval && npm run test:eval && npm run --workspace=tutorial-engine check && npm run --workspace=calculator test",
+    "check": "npm run test:onboarding && npm run check:eval && npm run test:eval && npm run --workspace=tutorial-engine check && npm run --workspace=tutorial/calculator test",
     "tutorial:workbook": "node scripts/tutorial-workbook.mjs"
   },
   "dependencies": {

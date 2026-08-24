@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { lessonsBeforePartTwo, readProgress, skipToPartTwo } from "../src/lesson/load.js";
 import { PART_TWO_SEED, seedPartTwo } from "../src/lesson/seed.js";
 
-const tutorialRoot = fileURLToPath(new URL("../../", import.meta.url));
+const tutorialRoot = fileURLToPath(new URL("../../tutorial/", import.meta.url));
 const seedDirectory = join(tutorialRoot, PART_TWO_SEED);
 
 describe("the Part 2 seed", () => {
