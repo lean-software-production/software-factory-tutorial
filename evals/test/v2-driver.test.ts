@@ -1,4 +1,5 @@
 import { rm } from "node:fs/promises";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkbookBlockTutor } from "../../tutorial-engine/src/workbook/block-tutor.js";
 import type { ActiveBlockContext } from "../../tutorial-engine/src/workbook/pi-history.js";
@@ -8,7 +9,7 @@ import type { BlockTutorReadiness, TimelineMessage } from "../../tutorial-engine
 import type { MainTutorContext, TutorDecision, TutorReview } from "../../tutorial-engine/src/workbook/tutor.js";
 import { createV2WorkbookDriver, V2WorkbookDriver } from "../v2/driver.js";
 import { clueCommand, exactCommand, satisfactoryEditorDraft } from "../v2/scenarios.js";
-import { createEmptyV2SessionTrace } from "../v2/session.js";
+import { createEmptyV2SessionTrace, readWorkbookEvents } from "../v2/session.js";
 import { createEvaluationWorkspace, type CreateEvaluationWorkspaceOptions } from "../v2/workspace.js";
 
 type DriverMainTutorContract = Pick<NonNullable<WorkbookServerOptions["mainTutor"]>, "restore" | "reply" | "prepareBlockBriefing" | "review" | "summarizeBlock" | "summarizeLesson" | "dispose">;
@@ -325,7 +326,7 @@ describe("v2 workbook driver", () => {
   });
 
   it("submits reflections and records the public learner/tutor conversation", async () => {
-    const { server, trace, driver, workbookTutor } = await startDriver();
+    const { workspace, server, trace, driver, workbookTutor } = await startDriver();
     try {
       await reachReflection(driver);
 
@@ -336,7 +337,10 @@ describe("v2 workbook driver", () => {
         { blockId: "lesson--001-live-session--reflection", role: "learner", text: "The exact block gave a command; the clue block required me to choose one." },
         { blockId: "lesson--001-live-session--reflection", role: "tutor", text: "Tutor reply that asks one public follow-up." }
       ]);
-      trace.events = await import("../v2/session.js").then(({ readWorkbookEvents }) => readWorkbookEvents(tempRoots[0]!));
+      const session = workspace.latestSession();
+      expect(session.sessionRoot.endsWith(`/.tutorial/${session.sessionId}`)).toBe(true);
+      expect(session.workspaceRoot).toBe(resolve(session.sessionRoot, "workspace"));
+      trace.events = await readWorkbookEvents(session.sessionRoot);
       expect(trace.events).toEqual(expect.arrayContaining([
         expect.objectContaining({ type: "reflection_submitted", blockId: "lesson--001-live-session--reflection" }),
         expect.objectContaining({ type: "reflection_reply_recorded", blockId: "lesson--001-live-session--reflection" })

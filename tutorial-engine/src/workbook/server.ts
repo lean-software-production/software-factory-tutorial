@@ -637,7 +637,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       request.on("close", unsubscribe);
       return;
     }
-    if (request.method === "GET" && isRoute(url.pathname, "state")) return sendJson(response, 200, await currentPublicState());
+    if (request.method === "GET" && isRoute(url.pathname, "state")) return transact(async () => sendJson(response, 200, await currentPublicState()));
     if (request.method === "POST" && isRoute(url.pathname, "introduction")) {
       return transact(async () => {
         const result = await completeBlock(WORKBOOK_INTRODUCTION_BLOCK_ID);
