@@ -46,6 +46,7 @@ export interface V2SessionTrace {
 }
 
 export interface EvaluationWorkspace {
+  repositoryRoot: string;
   root: string;
   webRoot: string;
   startServer(options?: Partial<Omit<WorkbookServerOptions, "target" | "webRoot">>): Promise<StartedWorkbookServer>;

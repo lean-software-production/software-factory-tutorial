@@ -25,8 +25,8 @@ export interface V2Scenario {
 }
 
 const lessonId = "001-live-session";
-export const exactCommand = "mkdir -p .tmp && printf 'command block complete\\n' > .tmp/evaluator-command.txt && cat .tmp/evaluator-command.txt";
-export const clueCommand = "mkdir -p .tmp && printf 'clue block complete\\n' > .tmp/evaluator-clue.txt && cat .tmp/evaluator-clue.txt";
+export const exactCommand = "mkdir -p factory/.tmp && printf 'command block complete\\n' > factory/.tmp/evaluator-command.txt && cat factory/.tmp/evaluator-command.txt";
+export const clueCommand = "mkdir -p factory/.tmp && printf 'clue block complete\\n' > factory/.tmp/evaluator-clue.txt && cat factory/.tmp/evaluator-clue.txt";
 export const insufficientEditorDraft = "This is a vague draft.";
 export const satisfactoryEditorDraft = "editor-artifacts/evaluator-editor.txt: editor practice draft is ready for promotion.\n";
 
@@ -172,7 +172,7 @@ function gateExactCommandSuccess(trace: V2SessionTrace): V2GateResult {
     exactCommandInput(trace),
     terminalOutput("exact-command", "command block complete", trace),
     observedAndCompleted("exact-command", trace),
-    artifactEquals(".tmp/evaluator-command.txt", "command block complete\n", trace)
+    artifactEquals("factory/.tmp/evaluator-command.txt", "command block complete\n", trace)
   ]);
 }
 
@@ -202,7 +202,7 @@ function gateClueOnlyTask(trace: V2SessionTrace): V2GateResult {
     learnerChoseClueCommand(trace),
     terminalOutput("clue-only", "clue block complete", trace),
     observedAndCompleted("clue-only", trace),
-    artifactEquals(".tmp/evaluator-clue.txt", "clue block complete\n", trace)
+    artifactEquals("factory/.tmp/evaluator-clue.txt", "clue block complete\n", trace)
   ]);
 }
 
@@ -243,8 +243,8 @@ function gateTransitionCompletion(trace: V2SessionTrace): V2GateResult {
       passed: completedProjection,
       detail: completedProjection ? "Public projection marks the evaluator lesson complete." : "No public projection marks the evaluator lesson complete."
     },
-    artifactEquals(".tmp/evaluator-command.txt", "command block complete\n", trace),
-    artifactEquals(".tmp/evaluator-clue.txt", "clue block complete\n", trace)
+    artifactEquals("factory/.tmp/evaluator-command.txt", "command block complete\n", trace),
+    artifactEquals("factory/.tmp/evaluator-clue.txt", "clue block complete\n", trace)
   ]);
 }
 

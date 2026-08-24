@@ -4,7 +4,7 @@ import type { WorkbookEvent } from "../../tutorial-engine/src/workbook/events.js
 import type { PublicWorkbookState, V2ArtifactSnapshot, V2EditorEntry, V2RecordedPublicState, V2ReflectionEntry, V2SessionTrace, V2TerminalTranscriptEntry } from "./types.js";
 
 const PRIVATE_TEXT_PATTERNS = [/This is private tutor guidance/i, /Do not reveal an exact command/i, /Follow up until the learner/i, /Private editor criterion/i];
-const DEFAULT_ARTIFACT_ROOTS = [".tmp", "editor-artifacts"];
+const DEFAULT_ARTIFACT_ROOTS = ["factory/.tmp", "editor-artifacts"];
 const MAX_ARTIFACT_BYTES = 64 * 1024;
 
 export function createEmptyV2SessionTrace(scenarioId: string): V2SessionTrace {

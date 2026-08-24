@@ -61,13 +61,13 @@ describe("v2 live-evaluation workbook fixture", () => {
 
     const exactCommand = chapter.lesson.blocks[2]!;
     if (exactCommand.type !== "terminal-practice") throw new Error("exact-command must be terminal-practice");
-    expect(exactCommand.markdown).toContain("```sh command\nmkdir -p .tmp && printf 'command block complete\\n' > .tmp/evaluator-command.txt && cat .tmp/evaluator-command.txt\n```");
+    expect(exactCommand.markdown).toContain("```sh command\nmkdir -p factory/.tmp && printf 'command block complete\\n' > factory/.tmp/evaluator-command.txt && cat factory/.tmp/evaluator-command.txt\n```");
     expect(exactCommand.tutor).toContain("private tutor guidance");
     expect(exactCommand.markdown).not.toContain("private tutor guidance");
 
     const clueOnly = chapter.lesson.blocks[3]!;
     if (clueOnly.type !== "terminal-practice") throw new Error("clue-only must be terminal-practice");
-    expect(clueOnly.markdown).toContain("Create `.tmp/evaluator-clue.txt`");
+    expect(clueOnly.markdown).toContain("Create `factory/.tmp/evaluator-clue.txt`");
     expect(clueOnly.markdown).toContain("print it back with a command that reads the file");
     expect(clueOnly.markdown).not.toContain("```sh command");
     expect(clueOnly.tutor).toContain("Do not reveal an exact command");

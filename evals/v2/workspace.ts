@@ -13,16 +13,20 @@ export interface CreateEvaluationWorkspaceOptions {
 const defaultFixtureRoot = resolve(import.meta.dirname, "../workbook");
 
 export async function createEvaluationWorkspace(options: CreateEvaluationWorkspaceOptions = {}): Promise<EvaluationWorkspace> {
-  const root = await mkdtemp(join(options.tempParent ?? tmpdir(), "v2-eval-workbook-"));
-  const webRoot = resolve(root, "web");
+  const repositoryRoot = await mkdtemp(join(options.tempParent ?? tmpdir(), "v2-eval-repository-"));
+  const root = resolve(repositoryRoot, "tutorial");
+  const webRoot = resolve(repositoryRoot, "web");
   const servers = new Set<StartedWorkbookServer>();
   let closed = false;
 
+  await mkdir(root, { recursive: true });
   await cp(options.fixtureRoot ?? defaultFixtureRoot, root, { recursive: true });
+  await mkdir(resolve(root, "factory"), { recursive: true });
   await mkdir(webRoot, { recursive: true });
   await writeFile(resolve(webRoot, "index.html"), "<!doctype html><title>V2 evaluator workbook</title><div id=\"root\"></div>\n");
 
   return {
+    repositoryRoot,
     root,
     webRoot,
     async startServer(serverOptions: Partial<Omit<WorkbookServerOptions, "target" | "webRoot">> = {}) {
@@ -44,7 +48,7 @@ export async function createEvaluationWorkspace(options: CreateEvaluationWorkspa
       closed = true;
       await Promise.all([...servers].map((server) => server.close()));
       servers.clear();
-      if (!options.keep) await rm(root, { recursive: true, force: true });
+      if (!options.keep) await rm(repositoryRoot, { recursive: true, force: true });
     }
   };
 }

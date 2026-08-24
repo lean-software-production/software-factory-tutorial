@@ -53,7 +53,7 @@ Use `--all --yes` only when you intend to run every scenario. Use `--repeat 2` o
 
 ## What it exercises
 
-The runner copies `evals/workbook/` to a temporary learner workspace, starts the checked-out v2 workbook server on an ephemeral port, and drives the same public workbook API, editor endpoint, and terminal WebSocket used by the browser. It records only public workbook state, public editor status/feedback, learner-visible terminal transcript, reflection turns, public workbook events, and `.tmp` plus `editor-artifacts` artifact snapshots.
+The runner copies `evals/workbook/` into a disposable temporary repository under `tutorial/`, starts the checked-out v2 workbook server on that nested learner workspace, and drives the same public workbook API, editor endpoint, and terminal WebSocket used by the browser. It records only public workbook state, public editor status/feedback, learner-visible terminal transcript, reflection turns, public workbook events, and `factory/.tmp` plus `editor-artifacts` artifact snapshots.
 
 The recorder refuses to store a private `tutor` field or known private tutor-guidance text. Deterministic gates inspect the trace before any judge call. The judge receives the scenario criteria and the recorded public learner session, not the authored curriculum or private tutor guidance.
 
@@ -63,7 +63,7 @@ Each run writes an ignored report directory under `evals/reports/<run-id>/`. Imp
 
 - `evals/reports/<run-id>/trace.json`: recorded public state, terminal transcript, reflections, workbook events, and artifacts.
 - `evals/reports/<run-id>/gate.json`: deterministic gate assertions.
-- `evals/reports/<run-id>/artifacts.json`: captured `.tmp` and `editor-artifacts` artifact contents.
+- `evals/reports/<run-id>/artifacts.json`: captured `factory/.tmp` and `editor-artifacts` artifact contents.
 - `evals/reports/<run-id>/judge-input.txt`: exact prompt sent to the judge, including scenario criteria and the recorded public trace citations.
 - `evals/reports/<run-id>/judge.json`: verified judge JSON.
 - `evals/reports/<run-id>/report.json`: combined scenario, model identities, gate, trace, judge input, judge result, artifacts, and verdict.

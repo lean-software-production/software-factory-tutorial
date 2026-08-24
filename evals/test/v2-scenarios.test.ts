@@ -70,7 +70,7 @@ function exactCommandTrace(scenarioId = "v2-exact-command-success"): V2SessionTr
     event({ type: "observation_verified", lessonId, blockId: "exact-command", source: "terminal_observer", summary: "created and printed the command artifact", terminalHtml: "command block complete" }),
     event({ type: "block_completed", lessonId, blockId: "exact-command" })
   );
-  trace.artifacts.push({ path: ".tmp/evaluator-command.txt", content: "command block complete\n" });
+  trace.artifacts.push({ path: "factory/.tmp/evaluator-command.txt", content: "command block complete\n" });
   return trace;
 }
 
@@ -80,7 +80,7 @@ function clueOnlyTrace(): V2SessionTrace {
     label: "clue-only-visible",
     state: {
       progress: { activeLessonId: lessonId, activeBlockId: "clue-only", completedLessons: [], blocks: [] },
-      chapters: [{ lesson: { blocks: [{ id: "clue-only", type: "terminal-practice", markdown: "Create `.tmp/evaluator-clue.txt` and print it back with a command that reads the file." }] } }]
+      chapters: [{ lesson: { blocks: [{ id: "clue-only", type: "terminal-practice", markdown: "Create `factory/.tmp/evaluator-clue.txt` and print it back with a command that reads the file." }] } }]
     }
   });
   trace.terminalTranscript.push(
@@ -92,7 +92,7 @@ function clueOnlyTrace(): V2SessionTrace {
     event({ type: "observation_verified", lessonId, blockId: "clue-only", source: "terminal_observer", summary: "created and printed the clue artifact", terminalHtml: "clue block complete" }),
     event({ type: "block_completed", lessonId, blockId: "clue-only" })
   );
-  trace.artifacts.push({ path: ".tmp/evaluator-clue.txt", content: "clue block complete\n" });
+  trace.artifacts.push({ path: "factory/.tmp/evaluator-clue.txt", content: "clue block complete\n" });
   return trace;
 }
 
@@ -123,7 +123,7 @@ describe("v2 live evaluator scenarios", () => {
     expect(gate.assertions.map((assertion) => assertion.name)).toContain("exact command input");
 
     const wrong = exactCommandTrace();
-    wrong.terminalTranscript[0] = { blockId: "exact-command", direction: "input", text: "cat .tmp/evaluator-command.txt\r" };
+    wrong.terminalTranscript[0] = { blockId: "exact-command", direction: "input", text: "cat factory/.tmp/evaluator-command.txt\r" };
     const failed = deterministicV2Gate(findV2Scenario(wrong.scenarioId), wrong);
     expect(failed.assertions.find((assertion) => assertion.name === "exact command input")?.passed).toBe(false);
   });
