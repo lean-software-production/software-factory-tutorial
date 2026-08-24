@@ -104,7 +104,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    an answer. Extend its `jq` so the assistant's words come through too:
 
    ```sh
-   tail -f -n +1 "$line"/events/*.jsonl \
+   tail -f -n +1 "$line"/.tmp/events/*.jsonl \
      | jq -rj --unbuffered '
          if .type=="tool_execution_start" then "\n→ \(.toolName)\n"
          elif .type=="message_update" and .assistantMessageEvent.type=="text_delta"
@@ -112,10 +112,13 @@ Build this lesson in this order. Complete each small step before moving to the n
          else empty end'
    ```
 
-6. **Steer a run.** Three terminals, all at the session workspace. Run the line in the first, watch it in
-   the second, and in the third, while the doer is working:
+6. **Steer a run.** Start the line and watcher in the background from the session workspace, using a
+   writable log directory under `factory/`. Then, while the doer is working, send these messages:
 
    ```sh
+   mkdir -p factory/refactor/.tmp
+   ./factory/refactor/run.sh > factory/refactor/.tmp/refactor-run.log 2>&1 &
+   ./factory/watch.sh refactor > factory/refactor/.tmp/refactor-watch.log 2>&1 &
    ./factory/steer.sh refactor "What are you changing, and why that file?"
    ./factory/steer.sh refactor "Leave the parser alone. The duplication is in the formatter."
    ```
@@ -148,11 +151,12 @@ has been shell all the way down. Mention it as the thing to reach for outside a 
 
 ## Checks
 
-From the session workspace, in three terminals:
+From the session workspace:
 
 ```sh
-./factory/refactor/run.sh
-./factory/watch.sh refactor
+mkdir -p factory/refactor/.tmp
+./factory/refactor/run.sh > factory/refactor/.tmp/refactor-run.log 2>&1 &
+./factory/watch.sh refactor > factory/refactor/.tmp/refactor-watch.log 2>&1 &
 ./factory/steer.sh refactor "Which file are you working on?"
 ```
 

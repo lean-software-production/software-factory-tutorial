@@ -117,8 +117,9 @@ Work in this order. Complete each small step before moving to the next one:
    while the doer is working, send these messages:
 
    ```sh
-   ./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &
-   ./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &
+   mkdir -p factory/refactor/.tmp
+   ./factory/refactor/run.sh > factory/refactor/.tmp/refactor-run.log 2>&1 &
+   ./factory/watch.sh refactor > factory/refactor/.tmp/refactor-watch.log 2>&1 &
    ./factory/steer.sh refactor "What are you changing, and why that file?"
    ./factory/steer.sh refactor "Leave the parser alone. The duplication is in the formatter."
    ```

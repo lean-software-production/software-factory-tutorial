@@ -314,6 +314,20 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("rejects an explicit invalid dependency root instead of silently falling back", async () => {
+    const { dir, session } = await sessionFixture();
+
+    await expect(startWorkbookServer({
+      target: dir,
+      session: { ...session, dependencyRoot: resolve(dir, "missing-dependencies") },
+      webRoot: resolve(dir, "web"),
+      port: 0,
+      embeddedTerminal: false,
+      mainTutor: new FakeMainTutor(),
+      blockTutor: new FakeBlockTutor()
+    })).rejects.toThrow(/dependency root|no such file|ENOENT/i);
+  });
+
   it("opens the introduction as durable tutor conversation before any real block is active", async () => {
     const dir = await fixture();
     const firstTutor = new FakeMainTutor();

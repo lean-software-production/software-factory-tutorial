@@ -41,6 +41,7 @@ export type WorkbookBlockTutorSessionFactory = (request: WorkbookBlockTutorSessi
 
 const SAFE_TOOL_NAMES = ["read", "grep", "find", "ls"];
 const READINESS_TOOL_NAME = "report_attempt_readiness";
+const PRIVATE_SESSION_STATE_DIRECTORY = ".tutorial";
 
 type Readiness = "likely_ready" | "still_working";
 
@@ -126,11 +127,24 @@ function inside(root: string, candidate: string): boolean {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
+function pathSegments(path: string): string[] {
+  return path.replaceAll("\\", "/").split("/").filter(Boolean);
+}
+
 function firstSegment(path: string): string {
-  return path.replaceAll("\\", "/").split("/").find(Boolean) ?? ".";
+  return pathSegments(path).at(0) ?? ".";
+}
+
+function hasPrivateSessionStateSegment(path: string): boolean {
+  return pathSegments(path).includes(PRIVATE_SESSION_STATE_DIRECTORY);
+}
+
+function assertPublicOverlayPath(path: string): void {
+  if (hasPrivateSessionStateSegment(path)) throw new Error("Private tutorial session state is not available to the block tutor.");
 }
 
 async function overlayPath(contentBoundary: WorkspaceBoundary, learnerBoundary: WorkspaceBoundary, path: string): Promise<{ absolute: string; relative: string }> {
+  assertPublicOverlayPath(path);
   if (isAbsolute(path)) {
     if (inside(learnerBoundary.root, path)) return learnerBoundary.resolve(relative(learnerBoundary.root, path));
     if (inside(contentBoundary.root, path)) {
@@ -162,7 +176,7 @@ function childOverlayPath(parent: string, child: string): string {
 }
 
 async function overlayRootChildren(contentAbsolute: string, learnerBoundary: WorkspaceBoundary): Promise<string[]> {
-  const children = new Set(await readdir(contentAbsolute));
+  const children = new Set((await readdir(contentAbsolute)).filter((child) => child !== PRIVATE_SESSION_STATE_DIRECTORY));
   for (const overlayRoot of ["factory", "calculator"]) {
     try {
       await learnerBoundary.resolve(overlayRoot);
@@ -216,7 +230,10 @@ function createOverlayFindTool(
           const children = resolved.relative === "."
             ? await overlayRootChildren(resolved.absolute, learnerBoundary)
             : (await readdir(resolved.absolute)).sort();
-          for (const child of children) await visit(childOverlayPath(resolved.relative, child));
+          for (const child of children) {
+            const childPath = childOverlayPath(resolved.relative, child);
+            if (!hasPrivateSessionStateSegment(childPath)) await visit(childPath);
+          }
         };
         const start = await overlayPath(contentBoundary, learnerBoundary, rawPath);
         auditPaths = [start.relative];
@@ -226,7 +243,86 @@ function createOverlayFindTool(
         return { content: [{ type: "text", text: sorted.join("\n") || "No files found." }], details: { matches: sorted } };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Tool failed.";
-        audit?.({ tool: "find", paths: auditPaths, mutation: false, outcome: /outside/i.test(message) ? "rejected" : "error", message });
+        audit?.({ tool: "find", paths: auditPaths, mutation: false, outcome: /outside|private/i.test(message) ? "rejected" : "error", message });
+        throw error;
+      }
+    }
+  });
+}
+
+function createOverlayGrepTool(
+  contentBoundary: WorkspaceBoundary,
+  learnerBoundary: WorkspaceBoundary,
+  audit?: (event: { tool: string; paths: string[]; mutation: boolean; outcome: string; message?: string }) => void
+): ToolDefinition {
+  return defineTool({
+    name: "grep",
+    label: "grep",
+    description: "Search file contents inside the authored tutorial content and learner workspace overlay without exposing private session state.",
+    parameters: Type.Object({
+      pattern: Type.String({ minLength: 1, maxLength: 400, description: "Pattern to search for." }),
+      path: Type.Optional(Type.String({ minLength: 1, maxLength: 400, description: "File or directory to search. Defaults to the workspace root." })),
+      glob: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Optional basename or relative-path wildcard. '*' and '?' wildcards are supported." })),
+      ignoreCase: Type.Optional(Type.Boolean({ description: "Case-insensitive search." })),
+      literal: Type.Optional(Type.Boolean({ description: "Treat pattern as literal text." })),
+      context: Type.Optional(Type.Number({ minimum: 0, maximum: 20, description: "Lines to show before and after each match." })),
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: 1_000, description: "Maximum matches to return." }))
+    }, { additionalProperties: false }),
+    async execute(id, params) {
+      const rawPath = params.path ?? ".";
+      let auditPaths = [rawPath.replaceAll("\\", "/")];
+      try {
+        const context = Math.max(0, Math.min(20, Math.floor(params.context ?? 0)));
+        const limit = Math.max(1, Math.min(1_000, Math.floor(params.limit ?? 100)));
+        const glob = params.glob ? wildcardPattern(params.glob) : undefined;
+        const matchLine = params.literal
+          ? (line: string) => (params.ignoreCase ? line.toLowerCase().includes(params.pattern.toLowerCase()) : line.includes(params.pattern))
+          : ((regexp: RegExp) => (line: string) => regexp.test(line))(new RegExp(params.pattern, params.ignoreCase ? "iu" : "u"));
+        const output: string[] = [];
+        const details: Array<{ path: string; line: number }> = [];
+        const emitBlock = (relativePath: string, lines: string[], lineNumber: number) => {
+          const start = Math.max(1, lineNumber - context);
+          const end = Math.min(lines.length, lineNumber + context);
+          for (let current = start; current <= end; current++) {
+            const separator = current === lineNumber ? ":" : "-";
+            output.push(`${relativePath}${separator}${current}${separator} ${lines[current - 1] ?? ""}`);
+          }
+          details.push({ path: relativePath, line: lineNumber });
+        };
+        const visit = async (virtualPath: string, isStart = false): Promise<void> => {
+          if (details.length >= limit || hasPrivateSessionStateSegment(virtualPath)) return;
+          let resolved: Awaited<ReturnType<typeof overlayPath>>;
+          try {
+            resolved = await overlayPath(contentBoundary, learnerBoundary, virtualPath);
+          } catch (error) {
+            if (isStart) throw error;
+            return;
+          }
+          const entry = await lstat(resolved.absolute);
+          if (entry.isDirectory() && !entry.isSymbolicLink()) {
+            const children = resolved.relative === "."
+              ? await overlayRootChildren(resolved.absolute, learnerBoundary)
+              : (await readdir(resolved.absolute)).filter((child) => !hasPrivateSessionStateSegment(childOverlayPath(resolved.relative, child))).sort();
+            for (const child of children) await visit(childOverlayPath(resolved.relative, child));
+            return;
+          }
+          if (!entry.isFile()) return;
+          const name = resolved.relative.split("/").at(-1) ?? resolved.relative;
+          if (glob && !glob.test(resolved.relative) && !glob.test(name)) return;
+          const lines = (await readFile(resolved.absolute, "utf8")).replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+          for (const [index, line] of lines.entries()) {
+            if (details.length >= limit) return;
+            if (matchLine(line)) emitBlock(resolved.relative, lines, index + 1);
+          }
+        };
+        const start = await overlayPath(contentBoundary, learnerBoundary, rawPath);
+        auditPaths = [start.relative];
+        await visit(start.relative, true);
+        audit?.({ tool: "grep", paths: auditPaths, mutation: false, outcome: "ok" });
+        return { content: [{ type: "text", text: output.join("\n") || "No matches found" }], details: details.length ? { matches: details } : undefined };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Tool failed.";
+        audit?.({ tool: "grep", paths: auditPaths, mutation: false, outcome: /outside|private/i.test(message) ? "rejected" : "error", message });
         throw error;
       }
     }
@@ -247,14 +343,17 @@ function safeWorkspaceTools(contentRoot: string, learnerBoundary: WorkspaceBound
     async move() { return readOnlyMutation(); },
     async isDirectory(path: string) { return (await stat((await overlayPath(contentBoundary, learnerBoundary, path)).absolute)).isDirectory(); },
     async stat(path: string) { return stat((await overlayPath(contentBoundary, learnerBoundary, path)).absolute); },
-    async readdir(path: string) { return readdir((await overlayPath(contentBoundary, learnerBoundary, path)).absolute); },
+    async readdir(path: string) {
+      const resolved = await overlayPath(contentBoundary, learnerBoundary, path);
+      return (await readdir(resolved.absolute)).filter((child) => !hasPrivateSessionStateSegment(childOverlayPath(resolved.relative, child)));
+    },
     async exists(path: string) { try { await access((await overlayPath(contentBoundary, learnerBoundary, path)).absolute); return true; } catch { return false; } },
     async resolve(path: string) { return overlayPath(contentBoundary, learnerBoundary, path); }
   };
   const safeNames = new Set(SAFE_TOOL_NAMES);
   const tools = createWorkspaceTools(contentRoot, readBoundary, audit)
-    .filter((tool) => safeNames.has(tool.name) && tool.name !== "find");
-  return [...tools, createOverlayFindTool(contentBoundary, learnerBoundary, audit)];
+    .filter((tool) => safeNames.has(tool.name) && tool.name !== "find" && tool.name !== "grep");
+  return [...tools, createOverlayGrepTool(contentBoundary, learnerBoundary, audit), createOverlayFindTool(contentBoundary, learnerBoundary, audit)];
 }
 
 async function createPiWorkbookBlockTutorSession(workspace: string, request: WorkbookBlockTutorSessionFactoryRequest, log: TutorialLogger): Promise<WorkbookBlockTutorSession> {

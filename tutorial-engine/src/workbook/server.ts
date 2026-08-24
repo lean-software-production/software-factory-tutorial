@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { access, readFile, realpath } from "node:fs/promises";
+import { access, readFile, realpath, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, extname, resolve, sep } from "node:path";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
@@ -138,12 +138,20 @@ function publicTimeline(loaded: LoadedWorkbook, records: readonly WorkbookTimeli
   return output;
 }
 
+async function requireDirectoryRoot(path: string, label: string): Promise<string> {
+  const real = await realpath(resolve(path));
+  if (!(await stat(real)).isDirectory()) throw new Error(`${label} must be a directory: ${path}`);
+  return real;
+}
+
 async function resolveRuntime(options: WorkbookServerOptions): Promise<Required<WorkbookRuntimeDescriptor>> {
-  const contentRoot = await realpath(resolve(options.session?.contentRoot ?? options.target));
-  const sessionRoot = options.session ? await realpath(resolve(options.session.sessionRoot)) : resolve(tutorialStatePath(options.target));
-  const workspaceRoot = await realpath(resolve(options.session?.workspaceRoot ?? options.target));
+  const contentRoot = await requireDirectoryRoot(options.session?.contentRoot ?? options.target, "Workbook content root");
+  const sessionRoot = options.session ? await requireDirectoryRoot(options.session.sessionRoot, "Workbook session root") : resolve(tutorialStatePath(options.target));
+  const workspaceRoot = await requireDirectoryRoot(options.session?.workspaceRoot ?? options.target, "Workbook workspace root");
   const defaultDependencyRoot = resolve(contentRoot, "..");
-  const dependencyRoot = await realpath(resolve(options.session?.dependencyRoot ?? defaultDependencyRoot)).catch(() => dirname(contentRoot));
+  const dependencyRoot = options.session?.dependencyRoot === undefined
+    ? await requireDirectoryRoot(defaultDependencyRoot, "Workbook dependency root").catch(() => dirname(contentRoot))
+    : await requireDirectoryRoot(options.session.dependencyRoot, "Workbook dependency root");
   return { contentRoot, sessionRoot, workspaceRoot, dependencyRoot };
 }
 

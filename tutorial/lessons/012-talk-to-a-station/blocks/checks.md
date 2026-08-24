@@ -13,8 +13,9 @@ tutor: |-
 From the session workspace, start the line and watcher in the background, then steer the active run:
 
 ```sh
-./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &
-./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &
+mkdir -p factory/refactor/.tmp
+./factory/refactor/run.sh > factory/refactor/.tmp/refactor-run.log 2>&1 &
+./factory/watch.sh refactor > factory/refactor/.tmp/refactor-watch.log 2>&1 &
 ./factory/steer.sh refactor "Which file are you working on?"
 ```
 

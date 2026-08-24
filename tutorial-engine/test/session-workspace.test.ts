@@ -89,7 +89,7 @@ describe("SessionWorkspaceManager", () => {
 
     const session = await manager.createSession({ id: "minimal" });
 
-    expect((await readdir(session.workspaceRoot)).sort()).toEqual([".git", ...MATERIALIZED_WORKSPACE_DIRECTORIES].sort());
+    expect((await readdir(session.workspaceRoot)).sort()).toEqual([".git", ".gitignore", ...MATERIALIZED_WORKSPACE_DIRECTORIES].sort());
     await expect(readdir(join(session.workspaceRoot, "calculator"))).resolves.not.toContain("node_modules");
     await expect(readFile(join(session.workspaceRoot, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
     await expect(readFile(join(session.workspaceRoot, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
@@ -131,6 +131,18 @@ describe("SessionWorkspaceManager", () => {
     expect(await git(workspaceRoot, "rev-parse", "--show-toplevel")).toBe(workspaceRoot);
     expect(await git(workspaceRoot, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
     expect(await git(workspaceRoot, "log", "--oneline", "-1")).toMatch(/Materialize tutorial workspace/);
+    expect(await git(workspaceRoot, "ls-files", ".gitignore")).toBe(".gitignore");
+    expect(await git(workspaceRoot, "status", "--porcelain")).toBe("");
+  });
+
+  it("ignores regenerated factory .tmp evidence in the session-local Git repository", async () => {
+    const contentRoot = await contentFixture();
+    const { workspaceRoot } = await (await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "gitignore-ready" });
+
+    await write(join(workspaceRoot, "factory/refactor/.tmp/evidence.txt"), "regenerated evidence\n");
+
+    expect(await readFile(join(workspaceRoot, ".gitignore"), "utf8")).toBe("factory/**/.tmp/\n");
+    expect(await git(workspaceRoot, "check-ignore", "factory/refactor/.tmp/evidence.txt")).toBe("factory/refactor/.tmp/evidence.txt");
     expect(await git(workspaceRoot, "status", "--porcelain")).toBe("");
   });
 

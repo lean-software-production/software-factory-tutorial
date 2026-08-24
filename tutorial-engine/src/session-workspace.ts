@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomBytes as defaultRandomBytes } from "node:crypto";
-import { copyFile, lstat, mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
@@ -12,6 +12,7 @@ export const MATERIALIZED_WORKSPACE_DIRECTORIES = ["calculator", "factory"] as c
 export const SAFE_SESSION_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 
 const SESSION_ID_MAX_LENGTH = 64;
+const SESSION_GITIGNORE = "factory/**/.tmp/\n";
 
 export class SessionWorkspaceError extends Error {}
 
@@ -119,10 +120,11 @@ async function git(workspaceRoot: string, ...args: string[]): Promise<string> {
 }
 
 async function initializeLocalRepository(workspaceRoot: string): Promise<void> {
+  await writeFile(resolve(workspaceRoot, ".gitignore"), SESSION_GITIGNORE, "utf8");
   await git(workspaceRoot, "init", "-q", "-b", "main");
   await git(workspaceRoot, "config", "user.email", "learner@example.invalid");
   await git(workspaceRoot, "config", "user.name", "Tutorial Learner");
-  await git(workspaceRoot, "add", ...MATERIALIZED_WORKSPACE_DIRECTORIES);
+  await git(workspaceRoot, "add", ".gitignore", ...MATERIALIZED_WORKSPACE_DIRECTORIES);
   const status = await git(workspaceRoot, "status", "--porcelain");
   if (status.trim()) await git(workspaceRoot, "commit", "-qm", "Materialize tutorial workspace");
 }

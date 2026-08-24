@@ -232,6 +232,53 @@ describe("FastWorkbookBlockTutor", () => {
     expect(tools.has("write")).toBe(false);
   });
 
+  it("does not expose private .tutorial session state when the workspace lives under the content root", async () => {
+    const contentRoot = await mkdtemp(join(tmpdir(), "workbook-block-session-content-")); roots.push(contentRoot);
+    const workspace = join(contentRoot, ".tutorial/current-session/workspace");
+    await mkdir(join(contentRoot, "lessons/001/blocks"), { recursive: true });
+    await writeFile(join(contentRoot, "lessons/001/blocks/step.md"), "authored public lesson text\n", "utf8");
+    await mkdir(join(contentRoot, "factory"), { recursive: true });
+    await writeFile(join(contentRoot, "factory/answer.md"), "authored stale answer\n", "utf8");
+    await mkdir(join(workspace, "factory"), { recursive: true });
+    await writeFile(join(workspace, "factory/answer.md"), "learner visible answer\n", "utf8");
+    await mkdir(join(contentRoot, ".tutorial/current-session/workbook/attempts/lesson/block"), { recursive: true });
+    await writeFile(join(contentRoot, ".tutorial/current-session/workbook/events.jsonl"), "PRIVATE_EVENT_SECRET\n", "utf8");
+    await writeFile(join(contentRoot, ".tutorial/current-session/workbook/attempts/lesson/block/current.json"), "PRIVATE_ATTEMPT_SECRET\n", "utf8");
+    await mkdir(join(contentRoot, ".tutorial/other-session/workbook"), { recursive: true });
+    await writeFile(join(contentRoot, ".tutorial/other-session/workbook/events.jsonl"), "OTHER_SESSION_SECRET\n", "utf8");
+    const requests: WorkbookBlockTutorSessionFactoryRequest[] = [];
+    const tutor = new FastWorkbookBlockTutor({ workspace, contentRoot, sessionFactory: async (request) => {
+      requests.push(request);
+      return new FakeSession(request);
+    } });
+
+    await tutor.hint({ context: activeContext(), briefing: "Private guidance." });
+
+    const tools = new Map(requests[0].customTools.map((tool: any) => [tool.name, tool]));
+    await expect((tools.get("read") as any).execute("read-learner", { path: "factory/answer.md" }, undefined, undefined, undefined))
+      .resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("learner visible answer") }] });
+    for (const privatePath of [
+      ".tutorial/current-session/workbook/events.jsonl",
+      ".tutorial/current-session/workbook/attempts/lesson/block/current.json",
+      ".tutorial/other-session/workbook/events.jsonl",
+    ]) {
+      await expect((tools.get("read") as any).execute(`read-${privatePath}`, { path: privatePath }, undefined, undefined, undefined), privatePath).rejects.toThrow(/private/i);
+    }
+    await expect((tools.get("ls") as any).execute("ls-private", { path: ".tutorial" }, undefined, undefined, undefined)).rejects.toThrow(/private/i);
+    await expect((tools.get("find") as any).execute("find-private", { path: ".tutorial" }, undefined, undefined, undefined)).rejects.toThrow(/private/i);
+    await expect((tools.get("grep") as any).execute("grep-private", { pattern: "PRIVATE", path: ".tutorial" }, undefined, undefined, undefined)).rejects.toThrow(/private/i);
+    const lsRoot = await (tools.get("ls") as any).execute("ls-root", { path: "." }, undefined, undefined, undefined);
+    expect(lsRoot.content[0].text).not.toContain(".tutorial");
+    const findRoot = await (tools.get("find") as any).execute("find-root-session", {}, undefined, undefined, undefined);
+    expect(findRoot.content[0].text).toContain("factory/answer.md");
+    expect(findRoot.content[0].text).not.toContain(".tutorial");
+    expect(findRoot.content[0].text).not.toContain("PRIVATE_EVENT_SECRET");
+    const grepRoot = await (tools.get("grep") as any).execute("grep-root-session", { pattern: "PRIVATE", path: "." }, undefined, undefined, undefined);
+    expect(grepRoot.content[0].text).toBe("No matches found");
+    expect(grepRoot.content[0].text).not.toContain("PRIVATE_ATTEMPT_SECRET");
+    expect(grepRoot.content[0].text).not.toContain("OTHER_SESSION_SECRET");
+  });
+
   it("reports attempt readiness only through report_attempt_readiness", async () => {
     const workspace = await workspaceFixture();
     const requests: WorkbookBlockTutorSessionFactoryRequest[] = [];
