@@ -761,23 +761,27 @@ describe("workbook lesson UI", () => {
     expect(markup).not.toContain("private");
   });
 
-  it("shows continuation controls and scroll sentinels only for active narrative and transition blocks", () => {
+  it("shows continuation controls and page breaks only for active narrative and transition blocks", () => {
     const activeNarrative = html(createElement(BlockView, { block: lesson.blocks[0], progress, refresh: vi.fn() }));
     expect(activeNarrative).toContain("Continue");
-    expect(activeNarrative).toContain('data-completion-action="continue"');
+    expect(activeNarrative).toContain('class="continuation-page-break"');
+    expect(activeNarrative).not.toContain('block-end-sentinel');
 
     const activeTransitionProgress = { ...progress, activeBlockId: "transition", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "transition", ready: true, emerged: true })) };
     const activeTransition = html(createElement(BlockView, { block: lesson.blocks[3], progress: activeTransitionProgress, refresh: vi.fn() }));
     expect(activeTransition).toContain("Continue");
-    expect(activeTransition).toContain('data-completion-action="continue"');
+    expect(activeTransition).toContain('class="continuation-page-break"');
+    expect(activeTransition).not.toContain('block-end-sentinel');
 
     const activeTerminalProgress = { ...progress, activeBlockId: "practice", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "practice", ready: true, emerged: true })) };
     const activeTerminal = html(createElement(BlockView, { block: lesson.blocks[1], progress: activeTerminalProgress, refresh: vi.fn() }));
-    expect(activeTerminal).not.toContain('data-completion-action="continue"');
+    expect(activeTerminal).not.toContain('class="continuation-page-break"');
+    expect(activeTerminal).not.toContain('block-end-sentinel');
 
     const activeReflectionProgress = { ...progress, activeBlockId: "reflect", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "reflect", ready: true, emerged: true })) };
     const activeReflection = html(createElement(BlockView, { block: lesson.blocks[2], progress: activeReflectionProgress, refresh: vi.fn() }));
-    expect(activeReflection).not.toContain('data-completion-action="continue"');
+    expect(activeReflection).not.toContain('class="continuation-page-break"');
+    expect(activeReflection).not.toContain('block-end-sentinel');
   });
 
   it("keeps the embedded terminal as the only terminal path and extracts only authored command fences", () => {
@@ -919,9 +923,10 @@ describe("workbook lesson UI", () => {
     const activeMarkup = html(createElement(LessonView, { chapter: activeChapter, progress: duplicateProgress, refresh: vi.fn() }));
 
     expect(completedMarkup).not.toContain('class="continuation-controls"');
-    expect(completedMarkup).not.toContain('data-completion-action="continue"');
+    expect(completedMarkup).not.toContain('class="continuation-page-break"');
     expect(activeMarkup).toContain('class="continuation-controls"');
-    expect(activeMarkup).toContain('data-completion-action="continue"');
+    expect(activeMarkup).toContain('class="continuation-page-break"');
+    expect(activeMarkup).not.toContain('block-end-sentinel');
   });
 
   it("renders a completed lesson's duplicate terminal block frozen instead of live", () => {
@@ -938,6 +943,111 @@ describe("workbook lesson UI", () => {
     expect(completedMarkup).not.toContain("Insert command");
     expect(activeMarkup).toContain("Embedded terminal");
     expect(activeMarkup).toContain("terminal-connection-status");
+  });
+
+  it("completes only the active predecessor when the ready successor crosses the reading line", async () => {
+    let observerCallback: ((entries: any[]) => void) | undefined;
+    class FakeIntersectionObserver {
+      observe = vi.fn();
+      disconnect = vi.fn();
+      constructor(callback: (entries: any[]) => void) { observerCallback = callback; }
+    }
+    const initialState = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: false,
+      chapters: [{ id: "001-first", title: "First", part: "Part One", partId: "validation-loop", partMarkdown: "Part copy.", lessonNumber: 1 }],
+      progress: {
+        activeLessonId: "001-first",
+        activeBlockId: "workbook--introduction",
+        activeAnchorId: "workbook--introduction",
+        completedLessons: [],
+        completedBlocks: [],
+        workAcceptedBlocks: ["workbook--introduction"],
+        readyBlocks: ["part--validation-loop"],
+        blocks: [
+          { id: "workbook--introduction", type: "workbook-introduction", ready: false, active: true, completed: false, verified: false, emerged: true, workAccepted: true },
+          { id: "part--validation-loop", type: "part-preamble", ready: true, active: false, completed: false, verified: false, emerged: true },
+        ],
+        reflections: {},
+        reflectionConversations: {},
+        canComplete: { blockId: "workbook--introduction", eligible: true },
+      },
+      adapter: {},
+      revealedBlockIds: ["workbook--introduction"],
+      renderedBlockIds: ["workbook--introduction", "part--validation-loop"],
+      readyBlockIds: ["part--validation-loop"],
+      timeline: [
+        { type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nIntro copy." },
+        { type: "message", id: "part", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part--validation-loop", blockId: "part--validation-loop", role: "assistant", source: "authored", presentation: "course", text: "# Part One\n\nPart copy." },
+      ],
+    } as any;
+    const completedState = {
+      ...initialState,
+      introductionComplete: true,
+      progress: {
+        ...initialState.progress,
+        activeBlockId: "part--validation-loop",
+        activeAnchorId: "part--validation-loop",
+        completedBlocks: ["workbook--introduction"],
+        readyBlocks: [],
+        blocks: initialState.progress.blocks.map((block: any) => block.id === "workbook--introduction" ? { ...block, active: false, completed: true } : { ...block, active: true, ready: false, workAccepted: true }),
+      },
+      revealedBlockIds: ["workbook--introduction", "part--validation-loop"],
+      readyBlockIds: [],
+    } as any;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? completedState : initialState }));
+    const pushState = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver as any);
+
+    await mount(createElement(App), (win) => { stubAppShellGlobals(win); vi.stubGlobal("history", { pushState, replaceState: vi.fn() }); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(observerCallback).toBeTruthy();
+    await act(async () => {
+      observerCallback?.([{ isIntersecting: true, boundingClientRect: { top: 100 } }]);
+      observerCallback?.([{ isIntersecting: true, boundingClientRect: { top: 80 } }]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const completionCalls = fetchMock.mock.calls.filter(([url, init]) => url === "api/workbook/complete-block" && (init as RequestInit | undefined)?.method === "POST");
+    expect(completionCalls).toHaveLength(1);
+    expect(JSON.parse((completionCalls[0]![1] as RequestInit).body as string)).toEqual({ blockId: "workbook--introduction" });
+    expect(pushState).not.toHaveBeenCalled();
+  });
+
+  it("keeps a ready successor out of sidebar navigation and direct-link access", async () => {
+    const chapters: Chapter[] = [{ id: "001-first", title: "First", part: "Part One", partId: "validation-loop", partMarkdown: "Part copy.", partNumber: 1, lessonNumber: 1 } as any];
+    const readyProgress: Progress = {
+      activeLessonId: "001-first",
+      activeBlockId: "workbook--introduction",
+      activeAnchorId: "workbook--introduction",
+      completedLessons: [],
+      completedBlocks: [],
+      blocks: [
+        { id: "workbook--introduction", type: "workbook-introduction", ready: false, active: true, completed: false, verified: false, emerged: true },
+        { id: "part--validation-loop", type: "part-preamble", ready: true, active: false, completed: false, verified: false, emerged: true },
+      ],
+      reflections: {},
+      reflectionConversations: {},
+    };
+    const railMarkup = html(createElement(LessonRail, { title: "Workbook", chapters, progress: readyProgress, viewedLessonId: "001-first", setViewedLesson: vi.fn() }));
+    expect(railMarkup).toContain('<p class="part-name">Part One</p>');
+    expect(railMarkup).not.toContain('href="#part--validation-loop"');
+
+    const state = { workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: false, chapters, progress: readyProgress, adapter: {}, revealedBlockIds: ["workbook--introduction"], renderedBlockIds: ["workbook--introduction", "part--validation-loop"], timeline: [] } as any;
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+    const container = await mount(createElement(App), (win) => {
+      stubAppShellGlobals(win);
+      win.history.replaceState(null, "", "#part--validation-loop");
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("history", win.history);
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(container.textContent).toContain("The lesson you're linking to is not ready yet");
   });
 
   it("renders the unopened introduction through the timeline with a composer and durable intro target", async () => {

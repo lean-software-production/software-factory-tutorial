@@ -37,7 +37,7 @@ describe("workbook event projection", () => {
     const initial = project([], lesson);
     expect(initial.activeBlockId).toBe("narrate");
     expect(initial.blocks.map((block) => [block.id, block.emerged, block.ready, block.active])).toEqual([
-      ["narrate", true, true, true],
+      ["narrate", true, false, true],
       ["edit-answer", false, false, false],
       ["first-practice", false, false, false],
       ["second-practice", false, false, false],
@@ -48,7 +48,7 @@ describe("workbook event projection", () => {
     const continued = project([nowEvent({ type: "block_continued", lessonId: LESSON_ID, blockId: "narrate" })], lesson);
     expect(continued.activeBlockId).toBe("edit-answer");
     expect(continued.blocks.find((block) => block.id === "narrate")?.completed).toBe(true);
-    expect(continued.blocks.find((block) => block.id === "edit-answer")).toMatchObject({ emerged: true, ready: true, active: true, editorStatus: "editing" });
+    expect(continued.blocks.find((block) => block.id === "edit-answer")).toMatchObject({ emerged: true, ready: false, active: true, editorStatus: "editing" });
   });
 
   it("holds accepted evaluated attempts at a common checkpoint until the learner continues", () => {

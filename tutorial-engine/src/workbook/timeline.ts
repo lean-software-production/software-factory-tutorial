@@ -12,6 +12,7 @@ export type WorkflowPayload =
   | { type: "observation_acknowledged"; lessonId: string; blockId: string }
   | { type: "observation_verified"; lessonId: string; blockId: string; source: "terminal_observer"; summary: string; terminalHtml: string }
   | { type: "attempt_accepted"; lessonId: string; blockId: string; attemptId: string; version: number; kind: AttemptKind; summary: string }
+  | { type: "work_accepted"; blockId: string }
   | { type: "block_completed"; blockId: string; lessonId?: string }
   | { type: "block_continued"; lessonId: string; blockId: string }
   | { type: "reflection_submitted"; lessonId: string; blockId: string; response: string }
