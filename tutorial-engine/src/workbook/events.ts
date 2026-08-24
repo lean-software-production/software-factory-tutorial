@@ -11,7 +11,7 @@ export type WorkbookEvent =
   | { type: "observation_acknowledged"; at: string; lessonId: string; blockId: string }
   | { type: "observation_verified"; at: string; lessonId: string; blockId: string; source: "terminal_observer"; summary: string; terminalHtml: string }
   | { type: "attempt_accepted"; at: string; lessonId: string; blockId: string; attemptId: string; version: number; kind: AttemptKind; summary: string }
-  | { type: "block_completed"; at: string; lessonId: string; blockId: string }
+  | { type: "block_completed"; at: string; blockId: string; lessonId?: string }
   | { type: "block_continued"; at: string; lessonId: string; blockId: string }
   | { type: "reflection_submitted"; at: string; lessonId: string; blockId: string; response: string }
   | { type: "reflection_follow_up_submitted"; at: string; lessonId: string; blockId: string; response: string }

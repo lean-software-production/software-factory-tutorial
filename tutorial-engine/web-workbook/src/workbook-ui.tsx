@@ -30,17 +30,24 @@ export type PublicCheckpoint = {
   evidence?: { kind: AttemptKind; text?: string; terminalHtml?: string; conversation?: ReflectionTurn[] };
 };
 export type BlockProgress = { id: string; type?: string; ready: boolean; active: boolean; completed: boolean; verified: boolean; checkpoint?: PublicCheckpoint; feedback?: string; terminalHtml?: string; emerged: boolean; revision?: number; draftText?: string; editorStatus?: EditorStatus };
-export type Progress = { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: BlockProgress[]; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]> };
+export type Progress = { activeLessonId: string; activeBlockId: string; activeAnchorId?: string; completedLessons: string[]; completedBlocks?: string[]; blocks: BlockProgress[]; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]>; canComplete?: { blockId: string; eligible: boolean; reason?: string }; workbookComplete?: boolean };
 type Identity = { title: string };
-export type State = { workbook: Identity; introduction: string; introductionComplete: boolean; chapters: Chapter[]; progress: Progress; adapter: { note?: string; modelBackedHelp?: boolean }; timeline?: readonly PublicTimelineRecord[] };
+export type CompleteBlockResult = { outcome: "completed"; state: State; navigationTarget: string } | { outcome: "already-completed"; state: State } | { outcome: "rejected"; state: State; reason: string };
+export type State = { workbook: Identity; introduction: string; introductionComplete: boolean; chapters: Chapter[]; progress: Progress; adapter: { note?: string; modelBackedHelp?: boolean }; orderedBlocks?: Array<{ id: string; anchorId: string; title: string; origin: string; kind: string; lessonId: string; declaredId?: string }>; revealedBlockIds?: string[]; currentBlock?: { id: string; anchorId: string; title: string; origin: string; kind: string; lessonId: string }; completion?: { complete: true; anchorId: string; summary?: string }; timeline?: readonly PublicTimelineRecord[] };
 
-async function completeIntroduction(): Promise<State> {
+async function completeBlockRequest(blockId: string): Promise<CompleteBlockResult> {
+  const response = await fetch("api/workbook/complete-block", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId }) });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+async function completeIntroduction(): Promise<State | CompleteBlockResult> {
   const response = await fetch("api/workbook/introduction", { method: "POST" });
   if (!response.ok) throw new Error(await response.text());
   return response.json();
 }
 
-async function post(blockId: string, body: object): Promise<State> {
+async function post(blockId: string, body: object): Promise<State | CompleteBlockResult> {
   const response = await fetch("api/workbook/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, ...body }) });
   if (!response.ok) throw new Error(await response.text());
   return response.json();
@@ -55,8 +62,8 @@ async function postEditorDraft(blockId: string, revision: number, text: string):
 const INTRODUCTION_BLOCK_ID = "__introduction__";
 const INTRODUCTION_LESSON_ID = "workbook:introduction";
 
-async function postTutorMessage(blockId: string, text: string): Promise<State> {
-  const response = await fetch("/api/workbook/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, text }) });
+async function postTutorMessage(blockId: string, text: string, blockInView?: string): Promise<State> {
+  const response = await fetch("/api/workbook/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, text, blockInView }) });
   if (!response.ok) throw new Error(await response.text());
   return response.json();
 }
@@ -73,10 +80,23 @@ async function readWorkbookState(): Promise<State> {
   return response.json();
 }
 
+function stateFromCompletion(result: State | CompleteBlockResult): State { return "outcome" in result ? result.state : result; }
+function navigationTargetFrom(result: State | CompleteBlockResult): string | undefined { return "outcome" in result && result.outcome === "completed" ? result.navigationTarget : undefined; }
 function progressFor(progress: Progress, id: string) { return progress.blocks.find((block) => block.id === id); }
 function domSafe(value: string) { return value.replace(/[^A-Za-z0-9_-]+/g, "-"); }
 export function scrollActiveLessonIntoView(doc: Pick<Document, "getElementById">, activeLessonId: string) { doc.getElementById(lessonElementId(activeLessonId))?.scrollIntoView({ behavior: "smooth", block: "start" }); }
-function blockElementId(lessonId: string, blockId: string) { return `${lessonElementId(lessonId)}-block-${domSafe(blockId)}`; }
+export function navigateToAnchor(anchorId: string, mode: "push" | "replace" | "none" = "push") {
+  if (typeof document === "undefined") return false;
+  const element = document.getElementById(anchorId);
+  if (!element) return false;
+  element.scrollIntoView({ behavior: "smooth", block: "start" });
+  const fragment = `#${anchorId}`;
+  if (typeof history !== "undefined" && mode === "push") history.pushState(null, "", fragment);
+  if (typeof history !== "undefined" && mode === "replace") history.replaceState(null, "", fragment);
+  return true;
+}
+function canonicalLessonAnchor(lessonId: string) { return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(lessonId) ? `lesson--${lessonId}` : lessonElementId(lessonId); }
+function blockElementId(lessonId: string, blockId: string) { return blockId.includes("--") ? blockId : `${lessonElementId(lessonId)}-block-${domSafe(blockId)}`; }
 function completedBlockState(block: Block): BlockProgress { return { id: block.id, type: block.type, ready: true, active: false, completed: true, verified: block.type === "terminal-practice", terminalHtml: block.type === "terminal-practice" ? "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" : undefined, editorStatus: block.type === "editor-practice" ? "unlocked" : undefined, emerged: true }; }
 function stateForBlock(progress: Progress, lessonId: string, block: Block): BlockProgress | undefined {
   if (lessonId === progress.activeLessonId) return progressFor(progress, block.id);
@@ -85,6 +105,15 @@ function stateForBlock(progress: Progress, lessonId: string, block: Block): Bloc
 }
 function activeLessonValue<T>(progress: Progress, lessonId: string, value: T | undefined, fallback: T): T { return lessonId === progress.activeLessonId ? value ?? fallback : fallback; }
 function commandForInsertion(command = "") { return command.replace(/\\\r?\n\s*/g, " "); }
+
+function canonicalBlockInView(state: State): string | undefined {
+  const revealed = state.revealedBlockIds ?? state.progress.blocks.filter((block) => block.emerged).map((block) => block.id);
+  const candidates = revealed.flatMap((id) => {
+    const element = typeof document !== "undefined" ? document.getElementById(id) : null;
+    return element ? [{ id, top: element.getBoundingClientRect().top }] : [];
+  }).filter((candidate) => candidate.top <= 120);
+  return candidates.at(-1)?.id ?? state.progress.activeBlockId;
+}
 
 const SHELL_FENCE = /^```([^`\n]*)\n([\s\S]*?)^```/gm;
 const SHELL_LANGUAGES = new Set(["sh", "bash", "shell", "zsh", "console"]);
@@ -175,14 +204,21 @@ function useContinueOnce(block: Block, state: BlockProgress | undefined, refresh
   const pendingRef = useRef(false);
   const active = Boolean(state?.active && state.ready && !state.completed);
   useEffect(() => { pendingRef.current = false; setPending(false); }, [block.id, state?.completed]);
-  const continueOnce = useCallback(() => {
+  const continueOnce = useCallback((historyMode: "push" | "none" = "push") => {
     if (!active || pendingRef.current) return;
     pendingRef.current = true;
     setPending(true);
-    post(block.id, { action: "continue" }).then(refresh).catch((error) => {
+    post(block.id, { action: "continue" }).then((result) => {
+      refresh(stateFromCompletion(result));
+      const target = navigationTargetFrom(result);
+      if (target) requestAnimationFrame(() => navigateToAnchor(target, historyMode));
+    }).catch((error) => {
       pendingRef.current = false;
       setPending(false);
       console.error(error);
+      readWorkbookState().then((next) => {
+        if (next.progress.completedBlocks?.includes(block.id)) refresh(next);
+      }).catch(() => undefined);
     });
   }, [active, block.id, refresh]);
   return { active, pending, continueOnce };
@@ -190,12 +226,27 @@ function useContinueOnce(block: Block, state: BlockProgress | undefined, refresh
 
 export function ContinueControls({ block, state, refresh }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void }) {
   const { active, pending, continueOnce } = useContinueOnce(block, state, refresh);
+  const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!active || pending || !sentinel || typeof IntersectionObserver === "undefined") return;
+    let armed = false;
+    const arm = () => {
+      const region = sentinel.closest<HTMLElement>(".work-block");
+      if (region && region.getBoundingClientRect().top <= 120) armed = true;
+    };
+    arm();
+    addEventListener("scroll", arm, { passive: true });
+    const observer = new IntersectionObserver(([entry]) => { if (armed && entry?.isIntersecting) continueOnce("none"); }, { threshold: 1 });
+    observer.observe(sentinel);
+    return () => { removeEventListener("scroll", arm); observer.disconnect(); };
+  }, [active, pending, sentinel, continueOnce]);
 
   if (state?.completed) return <p className="next-ready">The next step has appeared below.</p>;
   if (!active) return null;
   return <div className="continuation-controls">
-    <button className="button primary" disabled={pending} onClick={continueOnce}>{pending ? "Continuing…" : "Continue"}</button>
-    <div className="block-end-sentinel" data-completion-action="continue" aria-hidden="true" />
+    <button className="button primary" disabled={pending} onClick={() => continueOnce("push")}>{pending ? "Continuing…" : block.id === "workbook--introduction" ? "Ready to continue" : "Continue"}</button>
+    <div className="continuation-page-break" aria-hidden="true" />
+    <div ref={setSentinel} className="block-end-sentinel" data-completion-action="continue" data-block-id={block.id} aria-hidden="true" />
   </div>;
 }
 
@@ -218,7 +269,7 @@ export function AcceptedCheckpoint({ block, state, refresh }: { block: Block; st
   const continueAccepted = () => {
     if (pending) return;
     setPending(true);
-    post(block.id, { action: "continue" }).then(refresh).catch((error) => {
+    post(block.id, { action: "continue" }).then((result) => { refresh(stateFromCompletion(result)); const target = navigationTargetFrom(result); if (target) requestAnimationFrame(() => navigateToAnchor(target, "push")); }).catch((error) => {
       console.error(error);
       setPending(false);
     });
@@ -409,7 +460,7 @@ function WorkbookIntroduction({ state, refresh }: { state: State; refresh(state:
   useEffect(() => {
     if (state.introductionComplete || !sentinel || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(([entry]) => {
-      if (entry?.isIntersecting) completeIntroduction().then(refresh);
+      if (entry?.isIntersecting) completeIntroduction().then((result) => refresh(stateFromCompletion(result)));
     }, { threshold: 1 });
     observer.observe(sentinel);
     return () => observer.disconnect();
@@ -417,7 +468,7 @@ function WorkbookIntroduction({ state, refresh }: { state: State; refresh(state:
   return <section className="workbook-intro" aria-label="Workbook introduction">
     <header><h1>{state.workbook.title}</h1></header>
     <Markdown>{state.introduction}</Markdown>
-    {state.introductionComplete ? <p className="next-ready">The first lesson is ready below.</p> : <button className="button primary introduction-continue" onClick={() => completeIntroduction().then(refresh)}>Ready to continue</button>}
+    {state.introductionComplete ? <p className="next-ready">The first lesson is ready below.</p> : <button className="button primary introduction-continue" onClick={() => completeIntroduction().then((result) => refresh(stateFromCompletion(result)))}>Ready to continue</button>}
     <div ref={setSentinel} className="introduction-end" aria-hidden="true" />
   </section>;
 }
@@ -427,7 +478,7 @@ function IntroductionContinue({ refresh }: { refresh(state: State): void }) {
   const continueIntroduction = () => {
     if (pending) return;
     setPending(true);
-    completeIntroduction().then(refresh).catch((error) => {
+    completeIntroduction().then((result) => { refresh(stateFromCompletion(result)); const target = navigationTargetFrom(result); if (target) requestAnimationFrame(() => navigateToAnchor(target, "push")); }).catch((error) => {
       console.error(error);
       setPending(false);
     });
@@ -442,7 +493,8 @@ export function LessonRail({ title, chapters, progress, viewedLessonId, setViewe
     const complete = progress.completedLessons.includes(chapter.id);
     const current = chapter.id === progress.activeLessonId;
     if (!chapter.lesson) return <span key={chapter.id} className="lesson-row ahead unavailable" aria-disabled="true"><span>Lesson {chapter.lessonNumber}: {chapter.title}</span></span>;
-    return <details key={chapter.id} className="lesson-nav" open={viewedLessonId === chapter.id}><summary><a href={`#${lessonElementId(chapter.id)}`} className={`lesson-row ${complete ? "done" : current ? "current" : "ahead"}`} onClick={() => setViewedLesson(chapter.id)}>Lesson {chapter.lessonNumber}: {chapter.title}</a></summary>{viewedLessonId === chapter.id && <nav className="lesson-outline" aria-label={`${chapter.title} outline`}>{chapter.lesson.blocks.map((block) => <a href={`#${blockElementId(chapter.id, block.id)}`} key={block.id} aria-current={block.id === progress.activeBlockId ? "true" : undefined}>{block.title}</a>)}</nav>}</details>;
+    const lessonAnchor = canonicalLessonAnchor(chapter.id);
+    return <details key={chapter.id} className="lesson-nav" open={viewedLessonId === chapter.id}><summary><a href={`#${lessonAnchor}`} className={`lesson-row ${complete ? "done" : current ? "current" : "ahead"}`} onClick={(event) => { event.preventDefault(); setViewedLesson(chapter.id); navigateToAnchor(lessonAnchor, "push"); }}>Lesson {chapter.lessonNumber}: {chapter.title}</a></summary>{viewedLessonId === chapter.id && <nav className="lesson-outline" aria-label={`${chapter.title} outline`}>{chapter.lesson.blocks.map((block) => { const blockAnchor = blockElementId(chapter.id, block.id); return <a href={`#${blockAnchor}`} key={block.id} aria-current={block.id === progress.activeBlockId ? "true" : undefined} onClick={(event) => { event.preventDefault(); navigateToAnchor(blockAnchor, "push"); }}>{block.title}</a>; })}</nav>}</details>;
   };
   const parts = [...new Set(chapters.map((chapter) => chapter.part).filter((part): part is string => Boolean(part)))];
   return <aside className="rail" aria-label="Lesson navigation">
@@ -510,25 +562,36 @@ export function App() {
   const [state, setState] = useState<State>();
   const [viewed, setViewed] = useState<string>();
   const [terminalInsertion, setTerminalInsertion] = useState<(() => void) | undefined>();
+  const [blockedLink, setBlockedLink] = useState(false);
   const registerTerminalInsertion = useCallback((insertCommand: (() => void) | undefined) => {
     setTerminalInsertion(() => insertCommand);
   }, []);
   useEffect(() => { fetch("api/workbook/state").then((response) => response.json()).then((next: State) => setState(next)); }, []);
   useEffect(() => { if (state) document.title = state.workbook.title; }, [state?.workbook.title]);
   useEffect(() => {
-    if (!state?.introductionComplete) return;
-    scrollActiveLessonIntoView(document, state.progress.activeLessonId);
-  }, [state?.introductionComplete, state?.progress.activeLessonId]);
+    if (!state) return;
+    const fragment = typeof location === "undefined" ? "" : decodeURIComponent(location.hash.replace(/^#/, ""));
+    const revealed = new Set(state.revealedBlockIds ?? state.progress.blocks.filter((block) => block.emerged).map((block) => block.id));
+    const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback: FrameRequestCallback) => setTimeout(callback, 0) as unknown as number;
+    if (!fragment) { raf(() => navigateToAnchor(state.progress.activeAnchorId ?? state.progress.activeBlockId, "replace")); return; }
+    if (revealed.has(fragment) || fragment === "workbook--complete" && state.progress.workbookComplete) { raf(() => navigateToAnchor(fragment, "none")); return; }
+    setBlockedLink(true);
+  }, [state?.workbook.title]);
   useEffect(() => { setTerminalInsertion(undefined); }, [state?.progress.activeLessonId, state?.progress.activeBlockId]);
   useEffect(() => {
     if (!state) return;
-    const headings = [...document.querySelectorAll<HTMLElement>(".chapter")];
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const selectViewed = () => {
-      const passed = headings.filter((heading) => heading.getBoundingClientRect().top <= 120);
-      setViewed((passed.at(-1) ?? headings[0])?.dataset.lessonId ?? state.progress.activeLessonId);
+      const id = canonicalBlockInView(state);
+      const lesson = state.orderedBlocks?.find((block) => block.id === id)?.lessonId;
+      if (lesson && !lesson.startsWith("workbook--") && !lesson.startsWith("part--")) setViewed(lesson.replace(/^lesson--/, ""));
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => { if (id && typeof history !== "undefined") history.replaceState(null, "", `#${id}`); }, 120);
     };
     selectViewed(); addEventListener("scroll", selectViewed, { passive: true });
-    return () => removeEventListener("scroll", selectViewed);
+    const pop = () => { const id = typeof location === "undefined" ? "" : decodeURIComponent(location.hash.replace(/^#/, "")); if (id) navigateToAnchor(id, "none"); };
+    addEventListener("popstate", pop);
+    return () => { removeEventListener("scroll", selectViewed); removeEventListener("popstate", pop); if (timer) clearTimeout(timer); };
   }, [state]);
   const emerged = useMemo(() => state?.chapters.filter((chapter): chapter is Chapter & { lesson: Lesson } => Boolean(chapter.lesson)) ?? [], [state]);
   if (!state) return <p className="loading">Loading workbook…</p>;
@@ -537,12 +600,13 @@ export function App() {
   const activeBlock = activeChapter?.lesson.blocks.find((block) => block.id === state.progress.activeBlockId);
   const activeBlockProgress = state.progress.blocks.find((block) => block.id === state.progress.activeBlockId);
   const hasTimeline = state.timeline !== undefined;
+  const blockInView = () => canonicalBlockInView(state);
   const sendTutorText = (text: string) => {
     if (state.introductionComplete && activeBlock?.type === "reflection") {
       const turns = state.progress.reflectionConversations[activeBlock.id] ?? [];
-      return post(activeBlock.id, { action: turns.length > 0 ? "reflection-follow-up" : "reflection-submit", response: text }).then((next) => setState(next));
+      return post(activeBlock.id, { action: turns.length > 0 ? "reflection-follow-up" : "reflection-submit", response: text }).then((next) => setState(stateFromCompletion(next)));
     }
-    return postTutorMessage(state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID, text).then((next) => setState(next));
+    return postTutorMessage(state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID, text, state.introductionComplete ? blockInView() : undefined).then((next) => setState(next));
   };
   const activeTargetRecords = state.timeline?.filter((record) => record.type === "message" && record.lessonId === state.progress.activeLessonId && record.blockId === state.progress.activeBlockId) ?? [];
   const latestActiveTargetRecordId = activeTargetRecords.at(-1)?.id;
@@ -551,12 +615,18 @@ export function App() {
   const renderTimelineContinuation = (record: PublicTimelineRecord) => {
     if (record.type !== "message") return null;
     if (record.source === "authored" && !state.introductionComplete && record.lessonId === INTRODUCTION_LESSON_ID && record.blockId === INTRODUCTION_BLOCK_ID) return <IntroductionContinue refresh={setState} />;
-    if (!activeBlock || !activeBlockProgress || record.lessonId !== state.progress.activeLessonId || record.blockId !== activeBlock.id) return null;
-    if (record.source === "authored" && ["narrative", "lesson-transition"].includes(activeBlock.type)) return <ContinueControls block={activeBlock} state={activeBlockProgress} refresh={setState} />;
-    if (activeBlockAccepted && record.id === latestActiveTargetRecordId) return <ContinueControls block={activeBlock} state={activeBlockProgress} refresh={setState} />;
+    if (record.blockId !== state.progress.activeBlockId) return null;
+    const eligible = state.progress.canComplete ? state.progress.canComplete.eligible : Boolean(activeBlockProgress?.active && activeBlockProgress.ready && !activeBlockProgress.completed && (activeBlock?.type === "narrative" || activeBlock?.type === "lesson-transition" || activeBlockProgress.checkpoint?.status === "accepted"));
+    if (!eligible) return null;
+    const blockForContinue: Block = activeBlock ?? { id: record.blockId, type: "narrative", title: state.currentBlock?.title ?? state.workbook.title, markdown: "" };
+    const progressForContinue = activeBlockProgress ?? state.progress.blocks.find((block) => block.id === record.blockId);
+    if (!progressForContinue) return null;
+    if (activeBlockAccepted) return record.id === latestActiveTargetRecordId ? <ContinueControls block={blockForContinue} state={progressForContinue} refresh={setState} /> : null;
+    if (record.source === "authored") return <ContinueControls block={blockForContinue} state={progressForContinue} refresh={setState} />;
     return null;
   };
   return <div className="shell">
+    {blockedLink && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Lesson not ready"><div className="modal"><p>The lesson you're linking to is not ready yet — you still have some work to do!</p><button className="button primary" onClick={() => { setBlockedLink(false); navigateToAnchor(state.progress.activeAnchorId ?? state.progress.activeBlockId, "replace"); }}>OK</button></div></div>}
     <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} />
     <main><article className="page">

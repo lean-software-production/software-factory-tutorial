@@ -12,7 +12,7 @@ export type WorkflowPayload =
   | { type: "observation_acknowledged"; lessonId: string; blockId: string }
   | { type: "observation_verified"; lessonId: string; blockId: string; source: "terminal_observer"; summary: string; terminalHtml: string }
   | { type: "attempt_accepted"; lessonId: string; blockId: string; attemptId: string; version: number; kind: AttemptKind; summary: string }
-  | { type: "block_completed"; lessonId: string; blockId: string }
+  | { type: "block_completed"; blockId: string; lessonId?: string }
   | { type: "block_continued"; lessonId: string; blockId: string }
   | { type: "reflection_submitted"; lessonId: string; blockId: string; response: string }
   | { type: "reflection_follow_up_submitted"; lessonId: string; blockId: string; response: string }
@@ -37,6 +37,8 @@ export type TimelineMessage = TimelineMetadata & {
   presentation: TimelinePresentation;
   text: string;
   inReplyTo?: string;
+  /** Canonical block visible at the reading line when the learner sent this message. */
+  blockInView?: string;
 };
 
 export type BlockSummary = TimelineMetadata & {
@@ -76,11 +78,16 @@ export type TutorFailure = TimelineMetadata & {
   lessonId: string;
   blockId: string;
   requestId: string;
-  operation: "reply" | "hint" | "briefing" | "readiness" | "review" | "restore" | "block_summary" | "lesson_summary";
+  operation: "reply" | "hint" | "briefing" | "readiness" | "review" | "restore" | "block_summary" | "lesson_summary" | "completion_summary";
   publicMessage: string;
 };
 
-export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TimelineMessage | BlockSummary | LessonSummary | BlockTutorBriefing | BlockTutorReadiness | TutorFailure;
+export type WorkbookCompletionSummary = TimelineMetadata & {
+  type: "workbook_completion_summary";
+  text: string;
+};
+
+export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TimelineMessage | BlockSummary | LessonSummary | BlockTutorBriefing | BlockTutorReadiness | TutorFailure | WorkbookCompletionSummary;
 export type TimelineAppendInput =
   | WorkflowPayload
   | Omit<TimelineMessage, keyof TimelineMetadata>
@@ -88,7 +95,8 @@ export type TimelineAppendInput =
   | Omit<LessonSummary, keyof TimelineMetadata>
   | Omit<BlockTutorBriefing, keyof TimelineMetadata>
   | Omit<BlockTutorReadiness, keyof TimelineMetadata>
-  | Omit<TutorFailure, keyof TimelineMetadata>;
+  | Omit<TutorFailure, keyof TimelineMetadata>
+  | Omit<WorkbookCompletionSummary, keyof TimelineMetadata>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

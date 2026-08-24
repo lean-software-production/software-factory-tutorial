@@ -209,8 +209,8 @@ function gateClueOnlyTask(trace: V2SessionTrace): V2GateResult {
 function gateReflectionFollowUp(trace: V2SessionTrace): V2GateResult {
   const turns = trace.reflections.filter((entry) => entry.blockId === "reflection");
   const roles = turns.map((entry) => entry.role).join(",");
-  const followUpEvent = trace.events.some((event) => event.type === "reflection_follow_up_submitted" && event.blockId === "reflection");
-  const completed = trace.events.some((event) => event.type === "reflection_completed" && event.blockId === "reflection");
+  const followUpEvent = trace.events.some((event) => event.type === "reflection_follow_up_submitted" && matchBlockId(event.blockId, "reflection"));
+  const completed = trace.events.some((event) => (event.type === "reflection_completed" || event.type === "block_completed") && matchBlockId(event.blockId, "reflection"));
   return collectAssertions([
     publicStateClean(trace),
     {
@@ -227,7 +227,7 @@ function gateReflectionFollowUp(trace: V2SessionTrace): V2GateResult {
 }
 
 function gateTransitionCompletion(trace: V2SessionTrace): V2GateResult {
-  const transitionEvent = trace.events.some((event) => (event.type === "block_continued" || event.type === "lesson_transitioned") && event.blockId === "transition");
+  const transitionEvent = trace.events.some((event) => (event.type === "block_continued" || event.type === "lesson_transitioned" || event.type === "block_completed") && matchBlockId(event.blockId, "transition"));
   const completedProjection = trace.publicStates.some((state) => stateIncludesCompletedLesson(state.state));
   return collectAssertions([
     publicStateClean(trace),
@@ -273,7 +273,7 @@ function editorNotUnlocked(trace: V2SessionTrace): V2GateAssertion {
 }
 
 function editorUnlocked(trace: V2SessionTrace): V2GateAssertion {
-  const event = trace.events.find((candidate): candidate is Extract<V2SessionTrace["events"][number], { type: "editor_practice_unlocked" }> => candidate.type === "editor_practice_unlocked" && candidate.blockId === "editor-practice");
+  const event = trace.events.find((candidate): candidate is Extract<V2SessionTrace["events"][number], { type: "editor_practice_unlocked" }> => candidate.type === "editor_practice_unlocked" && matchBlockId(candidate.blockId, "editor-practice"));
   const completed = trace.publicStates.some((state) => stateContainsCompletedBlock(state.state, "editor-practice"));
   const passed = event?.revisionId === 1 && event.path === "editor-artifacts/evaluator-editor.txt" && completed;
   return { name: "editor unlocked", passed, detail: event ? `revision=${event.revisionId}, path=${event.path}, completed=${completed}` : "No editor unlock event was recorded." };
@@ -308,8 +308,8 @@ function terminalOutput(blockId: string, expected: string, trace: V2SessionTrace
 }
 
 function observedAndCompleted(blockId: string, trace: V2SessionTrace): V2GateAssertion {
-  const verified = trace.events.some((event) => event.type === "observation_verified" && event.blockId === blockId);
-  const completed = trace.events.some((event) => event.type === "block_completed" && event.blockId === blockId);
+  const verified = trace.events.some((event) => event.type === "observation_verified" && matchBlockId(event.blockId, blockId));
+  const completed = trace.events.some((event) => event.type === "block_completed" && matchBlockId(event.blockId, blockId));
   return { name: `${blockId} verified completion`, passed: verified && completed, detail: `verified=${verified}, completed=${completed}` };
 }
 
@@ -323,7 +323,7 @@ function stateContainsActiveBlock(value: unknown, blockId: string): boolean {
   if (!value || typeof value !== "object") return false;
   if (Array.isArray(value)) return value.some((item) => stateContainsActiveBlock(item, blockId));
   const object = value as Record<string, unknown>;
-  if (object.id === blockId && object.active === true) return true;
+  if (matchBlockId(object.id, blockId) && object.active === true) return true;
   return Object.values(object).some((item) => stateContainsActiveBlock(item, blockId));
 }
 
@@ -331,8 +331,12 @@ function stateContainsCompletedBlock(value: unknown, blockId: string): boolean {
   if (!value || typeof value !== "object") return false;
   if (Array.isArray(value)) return value.some((item) => stateContainsCompletedBlock(item, blockId));
   const object = value as Record<string, unknown>;
-  if (object.id === blockId && object.completed === true) return true;
+  if (matchBlockId(object.id, blockId) && object.completed === true) return true;
   return Object.values(object).some((item) => stateContainsCompletedBlock(item, blockId));
+}
+
+function matchBlockId(value: unknown, expected: string): boolean {
+  return typeof value === "string" && (value === expected || value.endsWith(`--${expected}`));
 }
 
 function stateIncludesCompletedLesson(value: unknown): boolean {

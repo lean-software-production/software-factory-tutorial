@@ -50,14 +50,19 @@ export class V2WorkbookDriver {
   }
 
   async completeIntroduction(label = "introduction"): Promise<WorkbookApiState> {
-    return this.#requestState("POST", "/api/workbook/introduction", undefined, label);
+    let state = await this.#requestState("POST", "/api/workbook/introduction", undefined, label);
+    while (state.currentBlock?.origin === "structural" && state.progress?.activeBlockId && state.progress.activeBlockId !== "workbook--complete") {
+      state = await this.#requestState("POST", "/api/workbook/complete-block", { blockId: state.progress.activeBlockId }, `${label}:structural:${state.progress.activeBlockId}`);
+    }
+    return state;
   }
 
   async continueBlock(blockId: string, label = `continue:${blockId}`): Promise<WorkbookApiState> {
-    return this.submitWorkbookAction(blockId, "continue", {}, label);
+    return this.submitWorkbookAction(await this.#canonicalBlockId(blockId), "continue", {}, label);
   }
 
   async submitReflection(blockId: string, response: string, label = `reflection:${blockId}:submit`): Promise<WorkbookApiState> {
+    blockId = await this.#canonicalBlockId(blockId);
     const state = await this.submitWorkbookAction(blockId, "reflection-submit", { response }, label);
     this.#recordReflectionConversation(blockId, state);
     if (this.#reflectionReviewComplete(blockId, state)) return state;
@@ -65,6 +70,7 @@ export class V2WorkbookDriver {
   }
 
   async submitReflectionFollowUp(blockId: string, response: string, label = `reflection:${blockId}:follow-up`): Promise<WorkbookApiState> {
+    blockId = await this.#canonicalBlockId(blockId);
     const state = await this.submitWorkbookAction(blockId, "reflection-follow-up", { response }, label);
     this.#recordReflectionConversation(blockId, state);
     if (this.#reflectionReviewComplete(blockId, state)) return state;
@@ -72,20 +78,29 @@ export class V2WorkbookDriver {
   }
 
   async completeReflection(blockId: string, label = `reflection:${blockId}:complete`): Promise<WorkbookApiState> {
-    return this.submitWorkbookAction(blockId, "continue", {}, label);
+    return this.submitWorkbookAction(await this.#canonicalBlockId(blockId), "continue", {}, label);
   }
 
   async completeTerminalBlock(blockId: string, label = `terminal:${blockId}:complete`): Promise<WorkbookApiState> {
-    return this.submitWorkbookAction(blockId, "continue", {}, label);
+    return this.submitWorkbookAction(await this.#canonicalBlockId(blockId), "continue", {}, label);
   }
 
   async submitWorkbookAction(blockId: string, action: string, payload: Record<string, unknown> = {}, label = `${action}:${blockId}`): Promise<WorkbookApiState> {
     return this.#requestState("POST", "/api/workbook/events", { blockId, action, ...payload }, label);
   }
 
+  async #canonicalBlockId(blockId: string): Promise<string> {
+    if (blockId.includes("--") || blockId.startsWith("workbook--") || blockId.startsWith("part--")) return blockId;
+    const state = await this.readState(`resolve:${blockId}`);
+    const match = Array.isArray(state.orderedBlocks) ? state.orderedBlocks.find((candidate: any) => candidate?.declaredId === blockId || candidate?.id === blockId) : undefined;
+    return typeof match?.id === "string" ? match.id : blockId;
+  }
+
   async submitEditorDraft(blockId: string, text: string, options: SubmitEditorDraftOptions = {}): Promise<WorkbookApiState> {
+    const authoredBlockId = blockId;
+    blockId = await this.#canonicalBlockId(blockId);
     const revision = (this.#editorRevisions.get(blockId) ?? 0) + 1;
-    const label = options.label ?? `editor:${blockId}`;
+    const label = options.label ?? `editor:${authoredBlockId}`;
     const submitted = await this.#requestState("POST", "/api/workbook/editor", { blockId, revision, text }, `${label}:reviewing`);
     this.#editorRevisions.set(blockId, revision);
     const submittedStatus = this.#recordEditorProgress(blockId, revision, submitted);
@@ -94,8 +109,10 @@ export class V2WorkbookDriver {
   }
 
   async submitTerminalCommand(blockId: string, command: string, options: SubmitTerminalCommandOptions = {}): Promise<WorkbookApiState> {
+    const authoredBlockId = blockId;
+    blockId = await this.#canonicalBlockId(blockId);
     const input = /[\r\n]$/.test(command) ? command : `${command}\r`;
-    const acceptedState = await this.#submitTerminalInput(blockId, input, options.label ?? `terminal:${blockId}`, options.timeoutMs);
+    const acceptedState = await this.#submitTerminalInput(blockId, input, options.label ?? `terminal:${authoredBlockId}`, options.timeoutMs);
     if (options.complete === false) return acceptedState;
     return this.completeTerminalBlock(blockId);
   }
@@ -117,7 +134,8 @@ export class V2WorkbookDriver {
         : response.statusText;
       throw new Error(`${method} ${path} failed (${response.status}): ${message}`);
     }
-    return recordPublicState(this.trace, label, json).state as WorkbookApiState;
+    const stateJson = json && typeof json === "object" && "outcome" in json && "state" in json ? (json as { state: unknown }).state : json;
+    return recordPublicState(this.trace, label, stateJson).state as WorkbookApiState;
   }
 
   #recordReflectionConversation(blockId: string, state: WorkbookApiState): void {

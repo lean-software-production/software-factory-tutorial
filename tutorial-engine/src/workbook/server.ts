@@ -9,12 +9,13 @@ import { createTutorialLogger } from "../runtime-log.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 import { introductionCompleted, project, type BlockProgress } from "./events.js";
 import { INTRODUCTION_BLOCK_ID, INTRODUCTION_LESSON_ID, LESSON_FRAME_BLOCK_ID, PART_BLOCK_ID, authoredBlockText, authoredIntroductionText, authoredLessonFrameText, authoredPartText, partLessonId } from "./pi-history.js";
+import { WORKBOOK_COMPLETE_ANCHOR_ID, WORKBOOK_INTRODUCTION_BLOCK_ID, anchorForBlock, blockText, buildWorkbookBlockStream, declaredBlockId, declaredSourceFromBlockId, successorAnchor, type AnchorId, type BlockId, type DeclaredWorkbookBlock, type OrderedWorkbookBlock } from "./workbook-blocks.js";
 import { assertDockerTerminalReady, createDockerPty, requireOpenCodeApiKey, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalPtyFactory } from "./terminal.js";
 import { submitReflectionAttempt } from "./reflection.js";
 import { promoteCurrentEditorAttempt, resolveEditorTarget } from "./editor.js";
 import { AttemptStore, type Attempt, type AttemptEvidence } from "./attempts.js";
 import { FastWorkbookBlockTutor, type WorkbookBlockTutor } from "./block-tutor.js";
-import { MainWorkbookTutor as DefaultMainWorkbookTutor, type MainTutorContext, type MainWorkbookTutor, type TutorDecision } from "./tutor.js";
+import { MainWorkbookTutor as DefaultMainWorkbookTutor, type MainTutorContext, type MainWorkbookTutor, type TutorDecision, type TutorReplyResult } from "./tutor.js";
 import { WorkbookTimeline, type BlockTutorReadiness, type TimelineMessage, type TutorFailure, type WorkbookTimelineRecord } from "./timeline.js";
 import type { EditorPracticeBlock, WorkbookBlock, WorkbookLesson } from "./contract.js";
 
@@ -36,6 +37,20 @@ type PublicCheckpoint = {
 type PublicBlockProgress = Omit<BlockProgress, "checkpoint"> & { checkpoint?: PublicCheckpoint; draftText?: string; revision?: number; editorStatus?: "editing" | "reviewing" | "feedback" | "unlocked" };
 type PublicTutorFailure = Omit<TutorFailure, "requestId"> & { failureId: string };
 type PublicTimelineRecord = TimelineMessage | PublicTutorFailure;
+type CompleteBlockResult =
+  | { outcome: "completed"; state: Awaited<ReturnType<typeof publicState>>; navigationTarget: AnchorId }
+  | { outcome: "already-completed"; state: Awaited<ReturnType<typeof publicState>> }
+  | { outcome: "rejected"; state: Awaited<ReturnType<typeof publicState>>; reason: "unrevealed" | "not-current" | "ineligible" };
+
+type WorkbookProjectionState = {
+  stream: OrderedWorkbookBlock[];
+  completedBlockIds: Set<BlockId>;
+  current?: OrderedWorkbookBlock;
+  activeBlockId: BlockId;
+  activeAnchorId: AnchorId;
+  activeIndex: number;
+  workbookComplete: boolean;
+};
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -109,6 +124,8 @@ function publicTimelineRecord(record: WorkbookTimelineRecord): PublicTimelineRec
 }
 function authoredCourseOrder(loaded: LoadedWorkbook, record: PublicTimelineRecord): number | undefined {
   if (record.type !== "message" || record.source !== "authored" || record.presentation !== "course") return undefined;
+  const canonicalIndex = buildWorkbookBlockStream(loaded).findIndex((block) => block.id === record.blockId);
+  if (canonicalIndex >= 0) return canonicalIndex;
   if (record.lessonId === INTRODUCTION_LESSON_ID && record.blockId === INTRODUCTION_BLOCK_ID) return 0;
   const partIndex = loaded.chapters.findIndex((chapter) => chapter.partId && partLessonId(chapter.partId) === record.lessonId);
   if (partIndex >= 0 && record.blockId === PART_BLOCK_ID) return 1_000 + partIndex * 1_000;
@@ -136,32 +153,125 @@ function publicTimeline(loaded: LoadedWorkbook, records: readonly WorkbookTimeli
   return output;
 }
 
+function canonicalCompletedId(record: WorkbookTimelineRecord): BlockId | undefined {
+  if (record.type === "block_completed") {
+    if (record.blockId.includes("--")) return record.blockId;
+    if (record.lessonId) return declaredBlockId(record.lessonId, record.blockId);
+  }
+  if (record.type === "workbook_introduction_completed") return WORKBOOK_INTRODUCTION_BLOCK_ID;
+  if ((record.type === "block_continued" || record.type === "lesson_transitioned" || record.type === "reflection_completed" || record.type === "editor_practice_unlocked") && record.lessonId && record.blockId) return declaredBlockId(record.lessonId, record.blockId);
+  return undefined;
+}
+
+function projectWorkbookBlocks(stream: OrderedWorkbookBlock[], records: readonly WorkbookTimelineRecord[]): WorkbookProjectionState {
+  const validIds = new Set(stream.map((block) => block.id));
+  const completedBlockIds = new Set<BlockId>();
+  for (const record of records) {
+    const id = canonicalCompletedId(record);
+    if (id && validIds.has(id)) completedBlockIds.add(id);
+  }
+  const activeIndex = stream.findIndex((block) => !completedBlockIds.has(block.id));
+  const current = activeIndex >= 0 ? stream[activeIndex] : undefined;
+  const workbookComplete = !current;
+  return {
+    stream,
+    completedBlockIds,
+    current,
+    activeBlockId: current?.id ?? WORKBOOK_COMPLETE_ANCHOR_ID,
+    activeAnchorId: current?.anchorId ?? WORKBOOK_COMPLETE_ANCHOR_ID,
+    activeIndex: activeIndex >= 0 ? activeIndex : stream.length,
+    workbookComplete,
+  };
+}
+
+function isRevealed(workbookProjection: WorkbookProjectionState, blockId: BlockId): boolean {
+  const index = workbookProjection.stream.findIndex((block) => block.id === blockId);
+  return index >= 0 && index <= workbookProjection.activeIndex;
+}
+
+function declaredRefForInput(workbookProjection: WorkbookProjectionState, blockId: string): DeclaredWorkbookBlock | undefined {
+  const current = workbookProjection.current;
+  if (current?.origin === "declared" && (current.id === blockId || current.declaredId === blockId)) return current;
+  const canonical = declaredSourceFromBlockId(blockId);
+  if (canonical) return workbookProjection.stream.find((block): block is DeclaredWorkbookBlock => block.origin === "declared" && block.lessonId === canonical.lessonId && block.declaredId === canonical.declaredId);
+  return undefined;
+}
+
+function publicOrderedBlock(block: OrderedWorkbookBlock, index: number) {
+  return {
+    id: block.id,
+    anchorId: block.anchorId,
+    origin: block.origin,
+    kind: block.kind,
+    title: block.title,
+    lessonId: block.lessonId,
+    declaredId: block.origin === "declared" ? block.declaredId : undefined,
+    order: index,
+  };
+}
+
 async function publicState(loaded: LoadedWorkbook, records: WorkbookTimelineRecord[], attempts: AttemptStore) {
-  const lesson = activeLesson(loaded, records);
-  const activeProgress = project(records, lesson);
-  const completedLessons = completedLessonIds(loaded, records);
-  const blocks = await Promise.all(activeProgress.blocks.map(async (progressBlock): Promise<PublicBlockProgress> => {
-    const authored = lesson.blocks.find((candidate) => candidate.id === progressBlock.id);
-    const currentAttempt = authored && isEvaluatedBlock(authored) ? await attempts.current(lesson.id, authored.id).catch(() => undefined) : undefined;
-    const checkpoint = publicCheckpoint(currentAttempt, progressBlock.checkpoint);
-    const base: PublicBlockProgress = checkpoint ? { ...progressBlock, checkpoint } : { ...progressBlock };
-    if (authored?.type === "editor-practice" && progressBlock.active && progressBlock.ready && !progressBlock.completed) {
-      if (currentAttempt?.evidence.kind === "editor") return { ...base, revision: currentAttempt.version, draftText: currentAttempt.evidence.text, editorStatus: checkpoint?.status === "reviewing" ? "reviewing" : checkpoint?.status === "feedback" ? "feedback" : "editing", feedback: checkpoint?.feedback };
-      return { ...base, revision: 0, draftText: await readTargetDraftText(loaded.workspace, authored).catch(() => ""), editorStatus: "editing" };
-    }
-    if (authored?.type === "editor-practice" && currentAttempt?.status === "accepted") return { ...base, revision: currentAttempt.version, editorStatus: "unlocked" };
-    return base;
-  }));
-  const progress = { ...activeProgress, completedLessons, blocks };
-  const introductionComplete = introductionCompleted(records);
-  const emerged = new Set(activeProgress.blocks.filter((block) => block.emerged).map((block) => block.id));
-  const chapters = loaded.chapters.map((chapter) => {
-    if (!chapter.lesson || !introductionComplete) return { ...chapter, lesson: undefined };
-    if (completedLessons.includes(chapter.lesson.id)) return { ...chapter, lesson: publicLesson(chapter.lesson, chapter.lesson.blocks) };
-    if (chapter.lesson.id === lesson.id) return { ...chapter, lesson: publicLesson(chapter.lesson, chapter.lesson.blocks.filter((block) => emerged.has(block.id))) };
-    return { ...chapter, lesson: undefined };
+  const stream = buildWorkbookBlockStream(loaded);
+  const workbookProjection = projectWorkbookBlocks(stream, records);
+  const current = workbookProjection.current;
+  const completedLessons = loaded.chapters.flatMap((chapter) => {
+    const lessonIds = [lessonPreambleBlockIdForServer(chapter.lesson.id), ...chapter.lesson.blocks.map((block) => declaredBlockId(chapter.lesson.id, block.id))];
+    return lessonIds.every((id) => workbookProjection.completedBlockIds.has(id)) ? [chapter.lesson.id] : [];
   });
-  return { workbook: loaded.identity, introduction: loaded.introduction, introductionComplete, chapters, progress, timeline: publicTimeline(loaded, records), adapter: { modelBackedHelp: true, note: "Free-text help is block-scoped." } };
+  const canComplete = current ? await canCompleteBlock(current, attempts) : { eligible: false as const, reason: "complete" as const };
+  const orderedBlocks = stream.map(publicOrderedBlock);
+  const revealedBlockIds = new Set(stream.slice(0, workbookProjection.activeIndex + 1).map((block) => block.id));
+
+  const blocks = await Promise.all(stream.map(async (ordered): Promise<PublicBlockProgress & { anchorId: string; origin: string; kind: string; title: string }> => {
+    const completed = workbookProjection.completedBlockIds.has(ordered.id);
+    const active = current?.id === ordered.id;
+    const base = { id: ordered.id, type: ordered.kind, anchorId: ordered.anchorId, origin: ordered.origin, kind: ordered.kind, title: ordered.title, ready: revealedBlockIds.has(ordered.id), active, completed, verified: false, emerged: revealedBlockIds.has(ordered.id) };
+    if (ordered.origin !== "declared") return base;
+    const authored = ordered.block;
+    const currentAttempt = isEvaluatedBlock(authored) ? await attempts.current(ordered.lessonId, ordered.id).catch(() => undefined) : undefined;
+    const acceptedProjection = currentAttempt?.status === "accepted" ? { status: "accepted" as const, summary: currentAttempt.successMessage ?? "Nice work — this attempt is accepted.", kind: currentAttempt.evidence.kind } : undefined;
+    const checkpoint = publicCheckpoint(currentAttempt, acceptedProjection);
+    const withCheckpoint = checkpoint ? { ...base, checkpoint } : base;
+    if (authored.type === "terminal-practice") return { ...withCheckpoint, verified: currentAttempt?.status === "accepted", terminalHtml: currentAttempt?.evidence.kind === "terminal" && currentAttempt.status === "accepted" ? currentAttempt.evidence.terminalHtml : undefined };
+    if (authored.type === "editor-practice" && active && !completed) {
+      if (currentAttempt?.evidence.kind === "editor") return { ...withCheckpoint, revision: currentAttempt.version, draftText: currentAttempt.evidence.text, editorStatus: checkpoint?.status === "reviewing" ? "reviewing" : checkpoint?.status === "feedback" ? "feedback" : checkpoint?.status === "accepted" ? "unlocked" : "editing", feedback: checkpoint?.feedback };
+      return { ...withCheckpoint, revision: 0, draftText: await readTargetDraftText(loaded.workspace, authored).catch(() => ""), editorStatus: "editing" };
+    }
+    if (authored.type === "editor-practice" && currentAttempt?.status === "accepted") return { ...withCheckpoint, revision: currentAttempt.version, editorStatus: "unlocked" };
+    return withCheckpoint;
+  }));
+
+  const reflections: Record<string, string> = {};
+  const reflectionConversations: Record<string, Array<{ role: "learner" | "tutor"; text: string }>> = {};
+  for (const record of records) {
+    if (record.type !== "message") continue;
+    const ref = stream.find((block): block is DeclaredWorkbookBlock => block.origin === "declared" && block.id === record.blockId && block.kind === "reflection");
+    if (!ref) continue;
+    if (record.source === "learner") { reflections[ref.id] = record.text; (reflectionConversations[ref.id] ??= []).push({ role: "learner", text: record.text }); }
+    if (record.source === "main_tutor" && record.presentation === "review") (reflectionConversations[ref.id] ??= []).push({ role: "tutor", text: record.text });
+  }
+
+  const chapters = loaded.chapters.map((chapter) => {
+    const lessonPreambleRevealed = revealedBlockIds.has(lessonPreambleBlockIdForServer(chapter.lesson.id));
+    if (!lessonPreambleRevealed) return { ...chapter, lesson: undefined };
+    const emergedBlocks = chapter.lesson.blocks.filter((block) => revealedBlockIds.has(declaredBlockId(chapter.lesson.id, block.id))).map((block) => publicBlock({ ...block, id: declaredBlockId(chapter.lesson.id, block.id) } as WorkbookBlock));
+    return { ...chapter, lesson: publicLesson({ ...chapter.lesson, blocks: emergedBlocks as WorkbookBlock[] }, emergedBlocks as WorkbookBlock[]) };
+  });
+  const progress = { activeLessonId: current?.origin === "declared" ? current.lessonId : current?.chapter?.lesson.id ?? loaded.chapters[0]?.lesson.id ?? "", activeBlockId: workbookProjection.activeBlockId, activeAnchorId: workbookProjection.activeAnchorId, completedLessons, completedBlocks: [...workbookProjection.completedBlockIds], blocks, reflections, reflectionConversations, canComplete: current ? { blockId: current.id, ...canComplete } : { blockId: WORKBOOK_COMPLETE_ANCHOR_ID, eligible: false, reason: "complete" }, workbookComplete: workbookProjection.workbookComplete };
+  const completionSummary = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "workbook_completion_summary" }> => record.type === "workbook_completion_summary");
+  return { workbook: loaded.identity, introduction: loaded.introduction, introductionComplete: workbookProjection.completedBlockIds.has(WORKBOOK_INTRODUCTION_BLOCK_ID), chapters, orderedBlocks, revealedBlockIds: [...revealedBlockIds], currentBlock: current ? publicOrderedBlock(current, workbookProjection.activeIndex) : undefined, completion: workbookProjection.workbookComplete ? { complete: true, anchorId: WORKBOOK_COMPLETE_ANCHOR_ID, summary: completionSummary?.text } : undefined, progress, timeline: publicTimeline(loaded, records), adapter: { modelBackedHelp: true, note: "Free-text help is block-scoped." } };
+}
+
+function lessonPreambleBlockIdForServer(lessonId: string): string { return `lesson--${lessonId}`; }
+
+async function canCompleteBlock(block: OrderedWorkbookBlock, attempts: AttemptStore): Promise<{ eligible: boolean; reason?: "ineligible" | "awaiting-acceptance" }> {
+  if (block.origin === "structural") return { eligible: true };
+  if (block.kind === "narrative" || block.kind === "lesson-transition") return { eligible: true };
+  if (isEvaluatedBlock(block.block)) {
+    const currentAttempt = await attempts.current(block.lessonId, block.id).catch(() => undefined);
+    return currentAttempt?.status === "accepted" ? { eligible: true } : { eligible: false, reason: "awaiting-acceptance" };
+  }
+  return { eligible: false, reason: "ineligible" };
 }
 
 export async function startWorkbookServer(options: WorkbookServerOptions): Promise<StartedWorkbookServer> {
@@ -188,73 +298,68 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     return record;
   };
   const transact = <T>(operation: () => Promise<T>): Promise<T> => timeline.run(operation);
+  const stream = buildWorkbookBlockStream(loaded);
   const authoredMessageExists = (lessonId: string, blockId: string): boolean => records.some((record) => record.type === "message" && record.source === "authored" && record.lessonId === lessonId && record.blockId === blockId);
-  const ensureAuthoredIntroduction = async (): Promise<void> => {
-    if (!authoredMessageExists(INTRODUCTION_LESSON_ID, INTRODUCTION_BLOCK_ID)) await append({ type: "message", lessonId: INTRODUCTION_LESSON_ID, blockId: INTRODUCTION_BLOCK_ID, role: "assistant", source: "authored", presentation: "course", text: authoredIntroductionText(loaded.identity, loaded.introduction) });
-  };
-  const chapterForLesson = (lessonId: string) => loaded.chapters.find((chapter) => chapter.lesson?.id === lessonId);
-  const ensureAuthoredLessonOpenings = async (lesson: WorkbookLesson): Promise<void> => {
-    const chapter = chapterForLesson(lesson.id);
-    if (chapter?.partId && chapter.part && !authoredMessageExists(partLessonId(chapter.partId), PART_BLOCK_ID)) await append({ type: "message", lessonId: partLessonId(chapter.partId), blockId: PART_BLOCK_ID, role: "assistant", source: "authored", presentation: "course", text: authoredPartText({ title: chapter.part, markdown: chapter.partMarkdown }) });
-    if (!authoredMessageExists(lesson.id, LESSON_FRAME_BLOCK_ID)) await append({ type: "message", lessonId: lesson.id, blockId: LESSON_FRAME_BLOCK_ID, role: "assistant", source: "authored", presentation: "course", text: authoredLessonFrameText(lesson) });
-  };
-  if (records.length === 0) await append({ type: "session_started" });
-  if (!introductionCompleted(records)) await ensureAuthoredIntroduction();
-
-  const activeAuthoredBlock = (source = records): { lesson: WorkbookLesson; progress: ReturnType<typeof project>; blockProgress: BlockProgress; block: WorkbookBlock } | undefined => {
-    if (!introductionCompleted(source)) return undefined;
-    const lesson = activeLesson(loaded, source);
-    const progress = project(source, lesson);
-    const blockProgress = progress.blocks.find((block) => block.active && block.ready);
-    const block = lesson.blocks.find((candidate) => candidate.id === blockProgress?.id);
-    return blockProgress && block ? { lesson, progress, blockProgress, block } : undefined;
+  const currentWorkbookProjection = (source = records) => projectWorkbookBlocks(stream, source);
+  const activeOrderedBlock = (source = records) => currentWorkbookProjection(source).current;
+  const activeDeclaredBlock = (source = records): DeclaredWorkbookBlock | undefined => {
+    const active = activeOrderedBlock(source);
+    return active?.origin === "declared" ? active : undefined;
   };
   const blockSupportsHints = (block: WorkbookBlock): block is Extract<WorkbookBlock, { type: "editor-practice" | "terminal-practice" }> => block.type === "editor-practice" || block.type === "terminal-practice";
+  const ensureAuthoredBlock = async (block: OrderedWorkbookBlock): Promise<TimelineMessage | undefined> => {
+    if (authoredMessageExists(block.lessonId, block.id)) return undefined;
+    return await append({ type: "message", lessonId: block.lessonId, blockId: block.id, role: "assistant", source: "authored", presentation: "course", text: blockText(block, loaded.identity.title) }) as TimelineMessage;
+  };
+  const ensureAuthoredCurrentBlock = async (): Promise<void> => {
+    const active = activeOrderedBlock();
+    if (!active) return;
+    const authored = await ensureAuthoredBlock(active);
+    if (active.origin === "declared" && blockSupportsHints(active.block) && !newestBriefing(active.lessonId, active.id)) await refreshBlockBriefing(active, authored?.id ?? records.at(-1)?.id ?? active.id);
+  };
+  if (records.length === 0) await append({ type: "session_started" });
+
   const activeBlockContext = async (source = records) => {
-    const active = activeAuthoredBlock(source);
+    const active = activeDeclaredBlock(source);
     if (!active) return undefined;
     return {
-      lessonId: active.lesson.id,
-      blockId: active.block.id,
+      lessonId: active.lessonId,
+      blockId: active.id,
       title: active.block.title,
       markdown: active.block.markdown,
       authorGuidance: "tutor" in active.block ? active.block.tutor : "",
-      attempts: isEvaluatedBlock(active.block) ? await attempts.list(active.lesson.id, active.block.id) : []
+      attempts: isEvaluatedBlock(active.block) ? await attempts.list(active.lessonId, active.id) : []
     };
   };
-  const mainContext = async (): Promise<MainTutorContext> => ({ records, activeContext: await activeBlockContext() });
-  const isIntroductionTarget = (lessonId: string, blockId: string): boolean => lessonId === INTRODUCTION_LESSON_ID && blockId === INTRODUCTION_BLOCK_ID;
-  const mainContextForTarget = async (lessonId: string, blockId: string): Promise<MainTutorContext> => isIntroductionTarget(lessonId, blockId) ? { records, activeContext: undefined } : mainContext();
+  const mainContext = async (): Promise<MainTutorContext> => {
+    const projection = currentWorkbookProjection();
+    const active = projection.current;
+    const completeStatus = active ? await canCompleteBlock(active, attempts) : { eligible: false };
+    return { records, activeContext: await activeBlockContext(), completionTool: active && completeStatus.eligible ? { blockId: active.id } : undefined };
+  };
+  const mainContextForTarget = async (_lessonId: string, blockId: string): Promise<MainTutorContext> => {
+    const active = activeOrderedBlock();
+    return active?.id === blockId ? mainContext() : { records, activeContext: undefined };
+  };
   const requireTutorText = (text: string, label: TutorFailure["operation"]): string => {
     const trimmed = text.trim();
     if (!trimmed) throw new Error(`Empty tutor response for ${label}.`);
     return trimmed.slice(0, 1_000);
   };
   const newestBriefing = (lessonId: string, blockId: string) => [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "block_tutor_briefed" }> => record.type === "block_tutor_briefed" && record.lessonId === lessonId && record.blockId === blockId);
-  const ensureAuthoredActiveBlock = async (): Promise<void> => {
-    const active = activeAuthoredBlock();
-    if (!active) return;
-    await ensureAuthoredLessonOpenings(active.lesson);
-    let coveredThroughId = records.at(-1)?.id ?? active.block.id;
-    if (!authoredMessageExists(active.lesson.id, active.block.id)) {
-      const authored = await append({ type: "message", lessonId: active.lesson.id, blockId: active.block.id, role: "assistant", source: "authored", presentation: "course", text: authoredBlockText(active.block) });
-      coveredThroughId = authored.id;
-    }
-    if (blockSupportsHints(active.block) && !newestBriefing(active.lesson.id, active.block.id)) await refreshBlockBriefing(active, coveredThroughId);
-  };
   const currentPublicState = () => publicState(loaded, records, attempts);
   const appendFailure = async (input: Omit<TutorFailure, "id" | "sequence" | "at" | "type"> & { operation: TutorFailure["operation"] }): Promise<void> => {
     await append({ type: "tutor_failed", ...input });
   };
-  const refreshBlockBriefing = async (active: ReturnType<typeof activeAuthoredBlock> extends infer T ? NonNullable<T> : never, coveredThroughId: string): Promise<void> => {
+  const refreshBlockBriefing = async (active: DeclaredWorkbookBlock, coveredThroughId: string): Promise<void> => {
     if (!blockSupportsHints(active.block)) return;
     try {
       const context = await activeBlockContext();
-      const text = requireTutorText(await mainTutor.prepareBlockBriefing({ ...(await mainContext()), lessonId: active.lesson.id, blockId: active.block.id, activeContext: context }), "briefing");
-      await append({ type: "block_tutor_briefed", lessonId: active.lesson.id, blockId: active.block.id, text, coveredThroughId });
+      const text = requireTutorText(await mainTutor.prepareBlockBriefing({ ...(await mainContext()), lessonId: active.lessonId, blockId: active.id, activeContext: context }), "briefing");
+      await append({ type: "block_tutor_briefed", lessonId: active.lessonId, blockId: active.id, text, coveredThroughId });
     } catch (error) {
-      log.info(`Workbook tutor briefing failed for ${active.lesson.id}/${active.block.id}: ${error instanceof Error ? error.message : String(error)}`);
-      await appendFailure({ lessonId: active.lesson.id, blockId: active.block.id, requestId: coveredThroughId, operation: "briefing", publicMessage: TUTOR_UNAVAILABLE });
+      log.info(`Workbook tutor briefing failed for ${active.lessonId}/${active.id}: ${error instanceof Error ? error.message : String(error)}`);
+      await appendFailure({ lessonId: active.lessonId, blockId: active.id, requestId: coveredThroughId, operation: "briefing", publicMessage: TUTOR_UNAVAILABLE });
     }
   };
   const appendReviewMessage = async (attempt: Attempt, text: string): Promise<TimelineMessage> => {
@@ -264,14 +369,16 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     await append({ type: "attempt_accepted", lessonId: accepted.lessonId, blockId: accepted.blockId, attemptId: accepted.id, version: accepted.version, kind: accepted.evidence.kind, summary: accepted.successMessage ?? "Nice work — this attempt is accepted." });
   };
 
+  await ensureAuthoredCurrentBlock();
+
   const trackFinalizer = (finalizer: Promise<unknown>): void => {
     reviewFinalizers.add(finalizer); void finalizer.finally(() => reviewFinalizers.delete(finalizer));
   };
   const finishReview = async (attempt: Attempt, privateGuidance: string): Promise<void> => {
     if (closed) return;
-    const activeBeforeAssessment = activeAuthoredBlock();
+    const activeBeforeAssessment = activeDeclaredBlock();
     const currentBeforeAssessment = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
-    if (!activeBeforeAssessment || activeBeforeAssessment.lesson.id !== attempt.lessonId || activeBeforeAssessment.block.id !== attempt.blockId || !currentBeforeAssessment || currentBeforeAssessment.id !== attempt.id || !isEvaluatedBlock(activeBeforeAssessment.block) || !evidenceMatchesBlock(currentBeforeAssessment.evidence, activeBeforeAssessment.block)) return;
+    if (!activeBeforeAssessment || activeBeforeAssessment.lessonId !== attempt.lessonId || activeBeforeAssessment.id !== attempt.blockId || !currentBeforeAssessment || currentBeforeAssessment.id !== attempt.id || !isEvaluatedBlock(activeBeforeAssessment.block) || !evidenceMatchesBlock(currentBeforeAssessment.evidence, activeBeforeAssessment.block)) return;
 
     let readiness: BlockTutorReadiness | undefined;
     try {
@@ -280,9 +387,9 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       const advice = await blockTutor.assess({ context, attempt: currentBeforeAssessment });
       const readinessFinalizer = transact(async () => {
         if (closed) return undefined;
-        const active = activeAuthoredBlock();
+        const active = activeDeclaredBlock();
         const current = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
-        if (!active || active.lesson.id !== attempt.lessonId || active.block.id !== attempt.blockId || !current || current.id !== attempt.id || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(current.evidence, active.block)) return undefined;
+        if (!active || active.lessonId !== attempt.lessonId || active.id !== attempt.blockId || !current || current.id !== attempt.id || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(current.evidence, active.block)) return undefined;
         return await append({ type: "block_tutor_readiness", lessonId: current.lessonId, blockId: current.blockId, attemptId: current.id, readiness: advice.readiness, text: requireTutorText(advice.text, "readiness") }) as BlockTutorReadiness;
       });
       reviewFinalizers.add(readinessFinalizer); void readinessFinalizer.finally(() => reviewFinalizers.delete(readinessFinalizer));
@@ -312,9 +419,9 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
 
     const finalizer = transact(async () => {
       if (closed) return;
-      const active = activeAuthoredBlock();
+      const active = activeDeclaredBlock();
       const current = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
-      if (!active || active.lesson.id !== attempt.lessonId || active.block.id !== attempt.blockId || !current || current.id !== attempt.id || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(current.evidence, active.block)) return;
+      if (!active || active.lessonId !== attempt.lessonId || active.id !== attempt.blockId || !current || current.id !== attempt.id || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(current.evidence, active.block)) return;
       if (decision.outcome === "working") {
         await attempts.markWorking(current.id);
         return;
@@ -332,7 +439,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       if (decision.outcome === "accepted") {
         if (current.evidence.kind === "editor" && active.block.type === "editor-practice") {
           try {
-            if (!await promoteCurrentEditorAttempt({ workspace: loaded.workspace, attempts, lessonId: active.lesson.id, block: active.block, attemptId: current.id })) {
+            if (!await promoteCurrentEditorAttempt({ workspace: loaded.workspace, attempts, lessonId: active.lessonId, block: active.block, attemptId: current.id })) {
               await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
               await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK });
               return;
@@ -362,8 +469,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
 
   const createAttempt = async (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }): Promise<Attempt> => {
     if (closed) throw new Error("Workbook server is closed.");
-    const active = activeAuthoredBlock();
-    if (!active || active.lesson.id !== input.lessonId || active.block.id !== input.blockId || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(input.evidence, active.block)) throw new Error("This block is not active yet.");
+    const active = activeDeclaredBlock();
+    if (!active || active.lessonId !== input.lessonId || active.id !== input.blockId || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(input.evidence, active.block)) throw new Error("This block is not active yet.");
     const attempt = await attempts.create({ lessonId: input.lessonId, blockId: input.blockId, evidence: input.evidence });
     const reviewing = await attempts.markReviewing(attempt.id) ?? attempt;
     void finishReview(reviewing, input.privateGuidance);
@@ -371,57 +478,85 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   };
   const submitAttempt = (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }): Promise<Attempt> => transact(() => createAttempt(input));
   const requeueActiveAttempt = async (): Promise<void> => {
-    const active = activeAuthoredBlock();
+    const active = activeDeclaredBlock();
     if (!active || !isEvaluatedBlock(active.block)) return;
-    const current = await attempts.current(active.lesson.id, active.block.id).catch(() => undefined);
+    const current = await attempts.current(active.lessonId, active.id).catch(() => undefined);
     if (!current || current.status === "accepted" || current.status === "superseded") return;
     const reviewing = await attempts.markReviewing(current.id) ?? current;
     void finishReview(reviewing, active.block.tutor);
   };
 
-  if (introductionCompleted(records)) await ensureAuthoredActiveBlock();
-
   try { await mainTutor.restore(await mainContext()); await requeueActiveAttempt(); }
   catch (error) {
     restoringFailed = true;
     log.info(`Workbook tutor restoration failed: ${error instanceof Error ? error.message : String(error)}`);
-    const active = activeAuthoredBlock();
-    await appendFailure({ lessonId: active?.lesson.id ?? INTRODUCTION_LESSON_ID, blockId: active?.block.id ?? INTRODUCTION_BLOCK_ID, requestId: "restore", operation: "restore", publicMessage: TUTOR_UNAVAILABLE });
+    const active = activeOrderedBlock();
+    await appendFailure({ lessonId: active?.lessonId ?? WORKBOOK_INTRODUCTION_BLOCK_ID, blockId: active?.id ?? WORKBOOK_INTRODUCTION_BLOCK_ID, requestId: "restore", operation: "restore", publicMessage: TUTOR_UNAVAILABLE });
   }
 
   const activeObservedBlock = (): ActiveObservedTerminalBlock | undefined => {
-    const active = activeAuthoredBlock();
-    return active?.block.type === "terminal-practice" ? { lessonId: active.lesson.id, blockId: active.block.id, command: active.block.markdown, context: active.block.markdown, expectedObservation: active.block.tutor } : undefined;
+    const active = activeDeclaredBlock();
+    return active?.block.type === "terminal-practice" ? { lessonId: active.lessonId, blockId: active.id, command: active.block.markdown, context: active.block.markdown, expectedObservation: active.block.tutor } : undefined;
   };
   const terminal = embeddedTerminalEnabled ? new WorkbookTerminalManager({ workspace: loaded.workspace, getActiveBlock: activeObservedBlock, submitAttempt: async (input) => { await submitAttempt(input); }, ptyFactory: options.terminalPtyFactory ?? createDockerPty, debounceMs: options.terminalDebounceMs, logger: log }) : undefined;
 
   const appendHintForActiveBlock = async (blockId: string, requestId: string): Promise<"ok" | "inactive"> => {
-    const active = activeAuthoredBlock();
-    if (!active || active.block.id !== blockId || !blockSupportsHints(active.block)) return "inactive";
-    const briefing = newestBriefing(active.lesson.id, active.block.id);
+    const active = activeDeclaredBlock();
+    if (!active || (active.id !== blockId && active.declaredId !== blockId) || !blockSupportsHints(active.block)) return "inactive";
+    const briefing = newestBriefing(active.lessonId, active.id);
     if (!briefing) {
-      await appendFailure({ lessonId: active.lesson.id, blockId: active.block.id, requestId, operation: "briefing", publicMessage: TUTOR_UNAVAILABLE });
+      await appendFailure({ lessonId: active.lessonId, blockId: active.id, requestId, operation: "briefing", publicMessage: TUTOR_UNAVAILABLE });
       return "ok";
     }
     try {
       const context = await activeBlockContext();
       if (!context) return "inactive";
       const hint = requireTutorText(await blockTutor.hint({ context, briefing: briefing.text }), "hint");
-      await append({ type: "message", lessonId: active.lesson.id, blockId: active.block.id, role: "assistant", source: "block_tutor", presentation: "hint", text: hint });
+      await append({ type: "message", lessonId: active.lessonId, blockId: active.id, role: "assistant", source: "block_tutor", presentation: "hint", text: hint });
     } catch (error) {
-      log.info(`Workbook block tutor hint failed for ${active.lesson.id}/${active.block.id}: ${error instanceof Error ? error.message : String(error)}`);
-      await appendFailure({ lessonId: active.lesson.id, blockId: active.block.id, requestId, operation: "hint", publicMessage: TUTOR_UNAVAILABLE });
+      log.info(`Workbook block tutor hint failed for ${active.lessonId}/${active.id}: ${error instanceof Error ? error.message : String(error)}`);
+      await appendFailure({ lessonId: active.lessonId, blockId: active.id, requestId, operation: "hint", publicMessage: TUTOR_UNAVAILABLE });
     }
     return "ok";
   };
 
-  const summarizeDeparture = async (lesson: WorkbookLesson, leaving: WorkbookBlock, workflowId: string): Promise<void> => {
-    try { await append({ type: "block_summarized", lessonId: lesson.id, blockId: leaving.id, text: requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: lesson.id, blockId: leaving.id, coveredThroughId: workflowId }), "block_summary"), coveredThroughId: workflowId }); }
-    catch { await appendFailure({ lessonId: lesson.id, blockId: leaving.id, requestId: workflowId, operation: "block_summary", publicMessage: TUTOR_UNAVAILABLE }); }
-    if (!project(records, lesson).completedLessons.includes(lesson.id)) { await ensureAuthoredActiveBlock(); return; }
-    try { await append({ type: "lesson_summarized", lessonId: lesson.id, text: requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: lesson.id, coveredThroughId: workflowId }), "lesson_summary"), coveredThroughId: workflowId }); }
-    catch { await appendFailure({ lessonId: lesson.id, blockId: leaving.id, requestId: workflowId, operation: "lesson_summary", publicMessage: TUTOR_UNAVAILABLE }); }
-    await ensureAuthoredActiveBlock();
+  const summarizeDeparture = async (leaving: DeclaredWorkbookBlock, workflowId: string): Promise<void> => {
+    try { await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text: requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId: workflowId }), "block_summary"), coveredThroughId: workflowId }); }
+    catch { await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId, operation: "block_summary", publicMessage: TUTOR_UNAVAILABLE }); }
+    const projection = currentWorkbookProjection();
+    const lessonComplete = stream.filter((block) => block.origin === "declared" && block.lessonId === leaving.lessonId).every((block) => projection.completedBlockIds.has(block.id));
+    if (lessonComplete) {
+      try { await append({ type: "lesson_summarized", lessonId: leaving.lessonId, text: requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: leaving.lessonId, coveredThroughId: workflowId }), "lesson_summary"), coveredThroughId: workflowId }); }
+      catch { await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId, operation: "lesson_summary", publicMessage: TUTOR_UNAVAILABLE }); }
+    }
+  };
+
+  const requestCompletionSummary = async (workflowId: string): Promise<void> => {
+    try {
+      const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: "workbook", coveredThroughId: workflowId }), "completion_summary");
+      await append({ type: "workbook_completion_summary", text });
+    } catch {
+      await appendFailure({ lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID, requestId: workflowId, operation: "completion_summary", publicMessage: TUTOR_UNAVAILABLE });
+    }
+  };
+
+  const completeBlock = async (blockId: string): Promise<CompleteBlockResult> => {
+    const projection = currentWorkbookProjection();
+    const stateBefore = async () => await currentPublicState();
+    if (projection.completedBlockIds.has(blockId)) return { outcome: "already-completed", state: await stateBefore() };
+    const requested = stream.find((block) => block.id === blockId) ?? declaredRefForInput(projection, blockId);
+    if (!requested) return { outcome: "rejected", state: await stateBefore(), reason: "unrevealed" };
+    if (!isRevealed(projection, requested.id) && requested.id !== projection.current?.id) return { outcome: "rejected", state: await stateBefore(), reason: "unrevealed" };
+    if (projection.current?.id !== requested.id) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
+    const eligibility = await canCompleteBlock(requested, attempts);
+    if (!eligibility.eligible) return { outcome: "rejected", state: await stateBefore(), reason: "ineligible" };
+    const written = await append({ type: "block_completed", blockId: requested.id });
+    const nextProjection = currentWorkbookProjection();
+    if (nextProjection.current) await ensureAuthoredBlock(nextProjection.current);
+    if (requested.origin === "declared") await summarizeDeparture(requested, written.id);
+    if (!nextProjection.current) await requestCompletionSummary(written.id);
+    if (nextProjection.current) await ensureAuthoredCurrentBlock();
+    return { outcome: "completed", state: await currentPublicState(), navigationTarget: successorAnchor(stream, requested.id) };
   };
 
   const server = createServer(async (request, response) => {
@@ -440,10 +575,17 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     if (request.method === "GET" && isRoute(url.pathname, "state")) return sendJson(response, 200, await currentPublicState());
     if (request.method === "POST" && isRoute(url.pathname, "introduction")) {
       return transact(async () => {
-        if (!introductionCompleted(records)) await append({ type: "workbook_introduction_completed" });
-        await ensureAuthoredActiveBlock();
-        sendJson(response, 202, await currentPublicState());
+        const result = await completeBlock(WORKBOOK_INTRODUCTION_BLOCK_ID);
+        sendJson(response, 202, result.state);
       });
+    }
+    if (request.method === "POST" && (isRoute(url.pathname, "complete-block") || isRoute(url.pathname, "completeBlock") || url.pathname.endsWith("/api/workbook/blocks/complete"))) {
+      try {
+        const body = await readJson(request);
+        const blockId = typeof body.blockId === "string" ? body.blockId : "";
+        if (!blockId) return sendJson(response, 400, { error: "blockId is required." });
+        return transact(async () => sendJson(response, 202, await completeBlock(blockId)));
+      } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." }); }
     }
     if (request.method === "POST" && isRoute(url.pathname, "messages")) {
       try {
@@ -453,14 +595,20 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         if (!text.trim()) return sendJson(response, 400, { error: "Message text is required." });
         if (Buffer.byteLength(text, "utf8") > MAX_MESSAGE_BYTES) return sendJson(response, 400, { error: "Message text is too large." });
         return transact(async () => {
-          const active = activeAuthoredBlock();
-          const target = active && active.block.id === blockId ? { lessonId: active.lesson.id, blockId, active } : !introductionCompleted(records) && isIntroductionTarget(INTRODUCTION_LESSON_ID, blockId) ? { lessonId: INTRODUCTION_LESSON_ID, blockId: INTRODUCTION_BLOCK_ID, active: undefined } : undefined;
+          const active = activeOrderedBlock();
+          const target = active && active.id === blockId ? { lessonId: active.lessonId, blockId: active.id, active } : undefined;
           if (!target) return sendJson(response, 409, { error: "This block is not active yet." });
-          const learnerMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "user", source: "learner", presentation: "chat", text });
+          const blockInView = typeof body.blockInView === "string" && isRevealed(currentWorkbookProjection(), body.blockInView) ? body.blockInView : undefined;
+          const learnerMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "user", source: "learner", presentation: "chat", text, blockInView });
           try {
-            const reply = requireTutorText(await mainTutor.reply({ ...(await mainContextForTarget(target.lessonId, target.blockId)), learnerMessage: learnerMessage as TimelineMessage }), "reply");
-            const tutorMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: reply, inReplyTo: learnerMessage.id });
-            if (target.active) await refreshBlockBriefing(target.active, tutorMessage.id);
+            const reply = await mainTutor.reply({ ...(await mainContextForTarget(target.lessonId, target.blockId)), learnerMessage: learnerMessage as TimelineMessage });
+            if (typeof reply !== "string" && reply.outcome === "complete-block") {
+              await completeBlock(reply.blockId);
+              return sendJson(response, 202, await currentPublicState());
+            }
+            const textReply = requireTutorText(reply as string, "reply");
+            const tutorMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: textReply, inReplyTo: learnerMessage.id });
+            if (target.active.origin === "declared") await refreshBlockBriefing(target.active, tutorMessage.id);
           } catch (error) {
             log.info(`Workbook tutor reply failed for ${target.lessonId}/${target.blockId}: ${error instanceof Error ? error.message : String(error)}`);
             await appendFailure({ lessonId: target.lessonId, blockId: target.blockId, requestId: learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE });
@@ -491,16 +639,18 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
             const learnerMessage = [...records.slice(0, index)].reverse().find((record): record is TimelineMessage => record.type === "message" && record.source === "learner" && record.lessonId === failure.lessonId && record.blockId === failure.blockId);
             if (!learnerMessage) return sendJson(response, 409, { error: "The original learner message is unavailable." });
             try {
-              const active = activeAuthoredBlock();
-              const reply = requireTutorText(await mainTutor.reply({ ...(await mainContextForTarget(failure.lessonId, failure.blockId)), learnerMessage }), "reply");
-              const tutorMessage = await append({ type: "message", lessonId: failure.lessonId, blockId: failure.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: reply, inReplyTo: learnerMessage.id });
-              if (active && active.lesson.id === failure.lessonId && active.block.id === failure.blockId) await refreshBlockBriefing(active, tutorMessage.id);
+              const active = activeDeclaredBlock();
+              const reply = await mainTutor.reply({ ...(await mainContextForTarget(failure.lessonId, failure.blockId)), learnerMessage });
+              if (typeof reply !== "string" && reply.outcome === "complete-block") { await completeBlock(reply.blockId); return; }
+              const textReply = requireTutorText(reply as string, "reply");
+              const tutorMessage = await append({ type: "message", lessonId: failure.lessonId, blockId: failure.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: textReply, inReplyTo: learnerMessage.id });
+              if (active && active.lessonId === failure.lessonId && active.id === failure.blockId) await refreshBlockBriefing(active, tutorMessage.id);
             } catch { await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE }); }
           } else if (failure.operation === "hint") {
             await appendHintForActiveBlock(failure.blockId, failure.id);
           } else if (failure.operation === "briefing") {
-            const active = activeAuthoredBlock();
-            if (active && active.lesson.id === failure.lessonId && active.block.id === failure.blockId) await refreshBlockBriefing(active, failure.id);
+            const active = activeDeclaredBlock();
+            if (active && active.lessonId === failure.lessonId && active.id === failure.blockId) await refreshBlockBriefing(active, failure.id);
           } else if (failure.operation === "restore") {
             try { await mainTutor.restore(await mainContext()); restoringFailed = false; await requeueActiveAttempt(); }
             catch { await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: "restore", operation: "restore", publicMessage: TUTOR_UNAVAILABLE }); }
@@ -526,10 +676,10 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         const body = await readJson(request); const blockId = typeof body.blockId === "string" ? body.blockId : ""; const text = typeof body.text === "string" ? body.text : undefined;
         if (text === undefined) return sendJson(response, 400, { error: "Editor text must be a string." });
         if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) return sendJson(response, 400, { error: "Editor text is too large." });
-        const active = activeAuthoredBlock();
-        if (!active || active.block.type !== "editor-practice" || active.block.id !== blockId) return sendJson(response, 409, { error: "This editor block is not active yet." });
+        const active = activeDeclaredBlock();
+        if (!active || active.block.type !== "editor-practice" || (active.id !== blockId && active.declaredId !== blockId)) return sendJson(response, 409, { error: "This editor block is not active yet." });
         try { await resolveEditorTarget(loaded.workspace, active.block.path); } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Unsafe editor target path." }); }
-        await submitAttempt({ lessonId: active.lesson.id, blockId: active.block.id, evidence: { kind: "editor", text }, privateGuidance: active.block.tutor });
+        await submitAttempt({ lessonId: active.lessonId, blockId: active.id, evidence: { kind: "editor", text }, privateGuidance: active.block.tutor });
         return sendJson(response, 202, await currentPublicState());
       } catch (error) { const message = error instanceof Error ? error.message : "Bad request."; return sendJson(response, /accepted work|not active/i.test(message) ? 409 : 400, { error: message }); }
     }
@@ -537,34 +687,24 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       try {
         const body = await readJson(request);
         return transact(async () => {
-          if (!introductionCompleted(records)) return sendJson(response, 409, { error: "Complete the workbook introduction first." });
-          const lesson = activeLesson(loaded, records); const block = lesson.blocks.find((candidate) => candidate.id === body.blockId);
-          if (!block) return sendJson(response, 400, { error: "Unknown blockId." });
-          const current = project(records, lesson); const progress = current.blocks.find((candidate) => candidate.id === block.id);
-          if (!progress?.active || !progress.ready) return sendJson(response, 409, { error: "This block is not active yet." });
+          const projection = currentWorkbookProjection();
+          const active = declaredRefForInput(projection, typeof body.blockId === "string" ? body.blockId : "");
+          if (!active || projection.current?.id !== active.id) return sendJson(response, 409, { error: "This block is not active yet." });
+          const block = active.block;
           if ((body.action === "reflection-submit" || body.action === "reflection-follow-up") && block.type === "reflection") {
             const responseText = typeof body.response === "string" ? body.response : "";
-            const priorConversation = current.reflectionConversations[block.id] ?? [];
+            const priorConversation = records.filter((record): record is TimelineMessage => record.type === "message" && record.blockId === active.id && (record.source === "learner" || (record.source === "main_tutor" && record.presentation === "review"))).map((record) => ({ role: record.source === "learner" ? "learner" as const : "tutor" as const, text: record.text }));
             const first = body.action === "reflection-submit";
             if ((first && priorConversation.length > 0) || (!first && priorConversation.length === 0)) return sendJson(response, 409, { error: "Use a follow-up after the first reflection message." });
-            const currentAttempt = await attempts.current(lesson.id, block.id).catch(() => undefined);
+            const currentAttempt = await attempts.current(active.lessonId, active.id).catch(() => undefined);
             if (!first && currentAttempt?.status === "reviewing") return sendJson(response, 409, { error: "Wait for the tutor to finish reviewing before sending a follow-up." });
-            const learnerTurns = await submitReflectionAttempt({ lessonId: lesson.id, blockId: block.id, privateGuidance: block.tutor, response: responseText, conversation: priorConversation, submitAttempt: async () => undefined });
-            await append({ type: "message", lessonId: lesson.id, blockId: block.id, role: "user", source: "learner", presentation: "chat", text: learnerTurns.at(-1)!.text });
-            await createAttempt({ lessonId: lesson.id, blockId: block.id, privateGuidance: block.tutor, evidence: { kind: "reflection", response: learnerTurns.at(-1)!.text, conversation: priorConversation } });
+            const learnerTurns = await submitReflectionAttempt({ lessonId: active.lessonId, blockId: active.id, privateGuidance: block.tutor, response: responseText, conversation: priorConversation, submitAttempt: async () => undefined });
+            await append({ type: "message", lessonId: active.lessonId, blockId: active.id, role: "user", source: "learner", presentation: "chat", text: learnerTurns.at(-1)!.text });
+            await createAttempt({ lessonId: active.lessonId, blockId: active.id, privateGuidance: block.tutor, evidence: { kind: "reflection", response: learnerTurns.at(-1)!.text, conversation: priorConversation } });
             return sendJson(response, 202, await currentPublicState());
           }
-          let event: Parameters<typeof append>[0] | undefined;
-          if (body.action === "continue" && (block.type === "narrative" || block.type === "lesson-transition")) event = { type: "block_continued", lessonId: lesson.id, blockId: block.id };
-          if (body.action === "continue" && isEvaluatedBlock(block)) {
-            const currentAttempt = await attempts.current(lesson.id, block.id).catch(() => undefined);
-            if (!currentAttempt || currentAttempt.status !== "accepted" || !progress?.checkpoint) return sendJson(response, 409, { error: "This block has not been accepted yet." });
-            event = { type: "block_continued", lessonId: lesson.id, blockId: block.id };
-          }
-          if (!event) return sendJson(response, 400, { error: "Invalid workbook action for this block." });
-          const written = await append(event);
-          if (written.type === "block_continued") await summarizeDeparture(lesson, block, written.id);
-          sendJson(response, 202, await currentPublicState());
+          if (body.action !== "continue") return sendJson(response, 400, { error: "Invalid workbook action for this block." });
+          return sendJson(response, 202, await completeBlock(active.id));
         });
       } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." }); }
     }

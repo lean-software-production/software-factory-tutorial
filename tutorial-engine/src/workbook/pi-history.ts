@@ -17,6 +17,7 @@ export type PiHistoryTurn = {
   role: "assistant" | "user";
   text: string;
   timestamp: number;
+  blockInView?: string;
 };
 
 export type PiHistoryProjection = {
@@ -68,7 +69,7 @@ function mapSummary(record: BlockSummary | LessonSummary): PiHistorySummary {
 }
 
 function mapTurn(record: TimelineMessage): PiHistoryTurn {
-  return { sourceEventId: record.id, role: record.role, text: record.text, timestamp: timestampFor(record) };
+  return { sourceEventId: record.id, role: record.role, text: record.text, timestamp: timestampFor(record), blockInView: record.blockInView };
 }
 
 /** Select the hierarchical teaching-boundary summaries and the exact conversation after their boundary. */
