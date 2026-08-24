@@ -29,3 +29,4 @@ Update the index below whenever you create a record or change its status.
 | [0005](0005-use-a-main-tutor-with-on-demand-block-tutors.md) | accepted | Use a main tutor with on-demand block tutors |
 | [0006](0006-project-workbook-tutor-history-by-role-and-compaction-scope.md) | accepted | Project workbook tutor history by role and compaction scope |
 | [0007](0007-model-every-progression-unit-as-a-workbook-block.md) | accepted | Model every progression unit as a workbook block |
+| [0008](0008-separate-authored-content-from-session-local-learner-state.md) | accepted | Separate authored content from session-local learner state |
