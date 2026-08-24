@@ -11,6 +11,7 @@ export type WorkbookEvent =
   | { type: "observation_acknowledged"; at: string; lessonId: string; blockId: string }
   | { type: "observation_verified"; at: string; lessonId: string; blockId: string; source: "terminal_observer"; summary: string; terminalHtml: string }
   | { type: "attempt_accepted"; at: string; lessonId: string; blockId: string; attemptId: string; version: number; kind: AttemptKind; summary: string }
+  | { type: "work_accepted"; at: string; blockId: string }
   | { type: "block_completed"; at: string; blockId: string; lessonId?: string }
   | { type: "block_continued"; at: string; lessonId: string; blockId: string }
   | { type: "reflection_submitted"; at: string; lessonId: string; blockId: string; response: string }
@@ -42,6 +43,7 @@ export function project(events: readonly ProjectedRecord[], lesson: WorkbookLess
   const editorUnlocks = new Map<string, { revision: number; path: string }>();
   const acceptedCheckpoints = new Map<string, { summary: string; kind: AttemptKind }>();
   const completed = new Set<string>();
+  const workAccepted = new Set<string>();
   const activeBlock = () => lesson.blocks.find((block) => !completed.has(block.id));
 
   for (const record of events) {
@@ -51,6 +53,11 @@ export function project(events: readonly ProjectedRecord[], lesson: WorkbookLess
     }
     if (!isWorkflowEvent(record)) continue;
     const event = record;
+    if (event.type === "work_accepted") {
+      const acceptedId = event.blockId.includes("--") ? event.blockId.split("--").at(-1)! : event.blockId;
+      if (lesson.blocks.some((block) => block.id === acceptedId)) workAccepted.add(acceptedId);
+      continue;
+    }
     if (!("lessonId" in event) || event.lessonId !== lesson.id) continue;
     if (event.type === "reflection_submitted") { reflections[event.blockId] = event.response; (reflectionConversations[event.blockId] ??= []).push({ role: "learner", text: event.response }); }
     if (event.type === "reflection_follow_up_submitted") (reflectionConversations[event.blockId] ??= []).push({ role: "learner", text: event.response });
@@ -73,6 +80,7 @@ export function project(events: readonly ProjectedRecord[], lesson: WorkbookLess
   const next = lesson.blocks.find((block) => !completed.has(block.id));
   const active = next ?? lesson.blocks.at(-1) ?? lesson.blocks[0]!;
   const activeIndex = Math.max(0, lesson.blocks.findIndex((block) => block.id === active.id));
+  const readyIndex = next && workAccepted.has(next.id) ? activeIndex + 1 : -1;
   const blocks = lesson.blocks.map((block, index) => {
     const unlock = editorUnlocks.get(block.id);
     const terminalFeedback = verified.get(block.id);
@@ -88,8 +96,8 @@ export function project(events: readonly ProjectedRecord[], lesson: WorkbookLess
       terminalHtml: terminalFeedback?.terminalHtml,
       revision: unlock?.revision,
       editorStatus: unlock ? "unlocked" as const : (block.type === "editor-practice" && isActive ? "editing" as const : undefined),
-      emerged: index <= activeIndex,
-      ready: index <= activeIndex,
+      emerged: index <= activeIndex || index === readyIndex,
+      ready: index === readyIndex,
       active: isActive
     };
   });

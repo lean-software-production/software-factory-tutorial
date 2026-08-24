@@ -37,7 +37,8 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   const latestEntryRef = useRef<HTMLElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const chatEntryCount = records.reduce((count, record) => count + ((record.type === "message" && record.presentation !== "course") || record.type === "tutor_failed" ? 1 : 0), 0) + pendingEchoes.length;
-  const activeAuthoredRecordId = [...records].reverse().find((record) => record.type === "message" && record.presentation === "course" && record.source === "authored" && record.lessonId === activeLessonId && record.blockId === activeBlockId)?.id;
+  const recordMatchesActive = (record: { lessonId: string; blockId: string }) => record.blockId === activeBlockId && (record.lessonId === activeLessonId || activeBlockId.includes("--"));
+  const activeAuthoredRecordId = [...records].reverse().find((record) => record.type === "message" && record.presentation === "course" && record.source === "authored" && recordMatchesActive(record))?.id;
   useEffect(() => {
     if (chatEntryCount === 0) return;
     (latestEntryRef.current as (HTMLElement & { scrollIntoView?(options?: ScrollIntoViewOptions): void }) | null)?.scrollIntoView?.({ behavior: "smooth", block: "end" });
@@ -105,7 +106,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
           if (("lessonId" in next ? next.lessonId : undefined) === record.lessonId && ("blockId" in next ? next.blockId : undefined) === record.blockId) following.push(next);
           nextIndex += 1;
         }
-        const active = record.lessonId === activeLessonId && record.blockId === activeBlockId;
+        const active = recordMatchesActive(record);
         const transitionClass = record.blockId.startsWith("part--") || record.lessonId.startsWith("workbook:part:") && record.blockId === "__part__"
           ? " timeline-part-transition"
           : /^lesson--[^-]+(?:-[^-]+)*$/.test(record.blockId) || record.blockId === "__lesson_frame__" ? " timeline-lesson-transition" : "";

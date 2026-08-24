@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkbook } from "../src/workbook/load.js";
 import { startWorkbookServer } from "../src/workbook/server.js";
+import { tutorialStatePath } from "../src/tutorial-state.js";
 import { buildWorkbookBlockStream } from "../src/workbook/workbook-blocks.js";
 
 let dirs: string[] = [];
@@ -14,8 +15,11 @@ async function fixture() {
   await mkdir(resolve(dir, "lessons/001-first/blocks"), { recursive: true });
   await writeFile(resolve(dir, "workbook.md"), ["---", "parts:", "  - id: validation-loop", "    lessons:", "      - 001-first", "---", "# Demo workbook", "", "Welcome."].join("\n"));
   await writeFile(resolve(dir, "parts/validation-loop.md"), ["---", "---", "# Validation loop", "", "Part preamble."].join("\n"));
-  await writeFile(resolve(dir, "lessons/001-first/lesson.md"), ["---", "durationMinutes: 5", "outcomes:", "  - Know the flow.", "blocks:", "  - orientation", "  - finish", "---", "# Run an agent headlessly", "", "Lesson preamble."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/lesson.md"), ["---", "durationMinutes: 5", "outcomes:", "  - Know the flow.", "blocks:", "  - orientation", "  - edit-answer", "  - finish", "---", "# Run an agent headlessly", "", "Lesson preamble."].join("\n"));
   await writeFile(resolve(dir, "lessons/001-first/blocks/orientation.md"), ["---", "type: narrative", "---", "## Orientation", "", "Read this."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/blocks/edit-answer.md"), ["---", "type: editor-practice", "path: factory/answer.txt", "tutor: Accept any clear answer.", "---", "## Edit answer", "", "Write the answer."].join("\n"));
+  await mkdir(resolve(dir, "factory"), { recursive: true });
+  await writeFile(resolve(dir, "factory/answer.txt"), "");
   await writeFile(resolve(dir, "lessons/001-first/blocks/finish.md"), ["---", "type: lesson-transition", "---", "## Finish", "", "Done."].join("\n"));
   await mkdir(resolve(dir, "web")); await writeFile(resolve(dir, "web/index.html"), "<!doctype html><div id=\"root\"></div>");
   return dir;
@@ -31,6 +35,7 @@ describe("workbook block progression", () => {
       ["structural", "part-preamble", "part--validation-loop", "part--validation-loop"],
       ["structural", "lesson-preamble", "lesson--001-first", "lesson--001-first"],
       ["declared", "narrative", "lesson--001-first--orientation", "lesson--001-first--orientation"],
+      ["declared", "editor-practice", "lesson--001-first--edit-answer", "lesson--001-first--edit-answer"],
       ["declared", "lesson-transition", "lesson--001-first--finish", "lesson--001-first--finish"],
     ]);
   });
@@ -42,6 +47,12 @@ describe("workbook block progression", () => {
       const initial = await fetch(`${server.url}/api/workbook/state`).then((response) => response.json() as any);
       expect(initial.progress.activeBlockId).toBe("workbook--introduction");
       expect(initial.progress.canComplete).toMatchObject({ blockId: "workbook--introduction", eligible: true });
+      expect(initial.progress.workAcceptedBlocks).toEqual(["workbook--introduction"]);
+      expect(initial.progress.readyBlocks).toEqual(["part--validation-loop"]);
+      expect(initial.revealedBlockIds).toEqual(["workbook--introduction"]);
+      expect(initial.renderedBlockIds).toEqual(["workbook--introduction", "part--validation-loop"]);
+      expect(block(initial, "workbook--introduction")).toMatchObject({ active: true, ready: false, completed: false, workAccepted: true });
+      expect(block(initial, "part--validation-loop")).toMatchObject({ active: false, ready: true, completed: false, emerged: true });
 
       const skipped = await complete(server.url, "lesson--001-first--orientation");
       expect(skipped).toMatchObject({ outcome: "rejected", reason: "unrevealed" });
@@ -51,11 +62,79 @@ describe("workbook block progression", () => {
       expect(intro).toMatchObject({ outcome: "completed", navigationTarget: "part--validation-loop" });
       expect(intro.state.progress.completedBlocks).toContain("workbook--introduction");
       expect(intro.state.progress.activeBlockId).toBe("part--validation-loop");
+      expect(intro.state.progress.readyBlocks).toEqual(["lesson--001-first"]);
+      expect(block(intro.state, "part--validation-loop")).toMatchObject({ active: true, ready: false, completed: false, workAccepted: true });
 
       const duplicate = await complete(server.url, "workbook--introduction");
       expect(duplicate).toMatchObject({ outcome: "already-completed" });
       expect(duplicate.state.progress.activeBlockId).toBe("part--validation-loop");
     } finally { await server.close(); }
+  });
+
+  it("accepts evaluated evidence once, renders exactly one ready successor, and reconstructs it after restart", async () => {
+    const dir = await fixture();
+    const tutor = fakeTutor({ outcome: "accepted", message: "Accepted editor answer." });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor, blockTutor: fakeBlockTutor() });
+    try {
+      await complete(server.url, "workbook--introduction");
+      await complete(server.url, "part--validation-loop");
+      await complete(server.url, "lesson--001-first");
+      await complete(server.url, "lesson--001-first--orientation");
+      const opened = await fetch(`${server.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(opened.progress.activeBlockId).toBe("lesson--001-first--edit-answer");
+      expect(opened.progress.readyBlocks).toEqual([]);
+
+      const draft = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", text: "The answer is 42." }) });
+      expect(draft.status).toBe(202);
+      const accepted = await waitForState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted");
+      expect(accepted.progress.activeBlockId).toBe("lesson--001-first--edit-answer");
+      expect(accepted.progress.workAcceptedBlocks.filter((id: string) => id === "lesson--001-first--edit-answer")).toHaveLength(1);
+      expect(accepted.progress.readyBlocks).toEqual(["lesson--001-first--finish"]);
+      expect(block(accepted, "lesson--001-first--finish")).toMatchObject({ ready: true, active: false, completed: false, emerged: true });
+      expect(await workAcceptedEvents(dir, "lesson--001-first--edit-answer")).toHaveLength(1);
+      expect(authoredCourseBlocks(accepted).filter((id: string) => id === "lesson--001-first--finish")).toHaveLength(1);
+
+      const restarted = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor(), blockTutor: fakeBlockTutor() });
+      try {
+        const restored = await fetch(`${restarted.url}/api/workbook/state`).then((response) => response.json() as any);
+        expect(restored.progress.activeBlockId).toBe("lesson--001-first--edit-answer");
+        expect(restored.progress.workAcceptedBlocks).toContain("lesson--001-first--edit-answer");
+        expect(restored.progress.readyBlocks).toEqual(["lesson--001-first--finish"]);
+        expect(block(restored, "lesson--001-first--finish")).toMatchObject({ ready: true, active: false, completed: false });
+      } finally { await restarted.close(); }
+    } finally { await server.close(); }
+  });
+
+  it("promotes the same ready successor by button or tutor and duplicate crossings cannot skip", async () => {
+    const dir = await fixture();
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor(), blockTutor: fakeBlockTutor() });
+    try {
+      const initial = await fetch(`${server.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(initial.progress.readyBlocks).toEqual(["part--validation-loop"]);
+      expect((await postMessage(server.url, { blockId: "part--validation-loop", text: "ready chat target?" })).status).toBe(409);
+
+      const readyRequest = await complete(server.url, "part--validation-loop");
+      expect(readyRequest).toMatchObject({ outcome: "rejected", reason: "not-current" });
+      expect(readyRequest.state.progress.activeBlockId).toBe("workbook--introduction");
+
+      const button = await complete(server.url, "workbook--introduction");
+      expect(button).toMatchObject({ outcome: "completed", navigationTarget: "part--validation-loop" });
+      expect(button.state.progress.activeBlockId).toBe("part--validation-loop");
+
+      const duplicateCrossing = await complete(server.url, "workbook--introduction");
+      expect(duplicateCrossing).toMatchObject({ outcome: "already-completed" });
+      expect(duplicateCrossing.state.progress.activeBlockId).toBe("part--validation-loop");
+    } finally { await server.close(); }
+
+    const tutorDir = await fixture();
+    const tutorServer = await startWorkbookServer({ target: tutorDir, webRoot: resolve(tutorDir, "web"), embeddedTerminal: false, mainTutor: fakeTutor(undefined, { outcome: "complete-block", blockId: "workbook--introduction" }), blockTutor: fakeBlockTutor() });
+    try {
+      const response = await postMessage(tutorServer.url, { blockId: "workbook--introduction", text: "I'm ready to continue." });
+      expect(response.status).toBe(202);
+      const advanced = await response.json() as any;
+      expect(advanced.progress.activeBlockId).toBe("part--validation-loop");
+      expect(advanced.progress.completedBlocks).toContain("workbook--introduction");
+    } finally { await tutorServer.close(); }
   });
 });
 
@@ -65,8 +144,27 @@ async function complete(serverUrl: string, blockId: string) {
   return response.json() as Promise<any>;
 }
 
-function fakeTutor(): any {
-  return { restore: async () => undefined, reply: async () => "Tutor reply.", prepareBlockBriefing: async () => "Briefing.", review: async () => ({ outcome: "working" }), summarizeBlock: async () => "Block summary.", summarizeLesson: async () => "Lesson summary.", dispose() {} };
+async function postMessage(serverUrl: string, body: unknown) {
+  return fetch(`${serverUrl}/api/workbook/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
+function block(state: any, id: string) { return state.progress.blocks.find((candidate: any) => candidate.id === id); }
+function authoredCourseBlocks(state: any): string[] { return state.timeline.filter((record: any) => record.type === "message" && record.source === "authored" && record.presentation === "course").map((record: any) => record.blockId); }
+async function workAcceptedEvents(dir: string, blockId: string) {
+  const text = await readFile(tutorialStatePath(dir, "workbook", "events.jsonl"), "utf8");
+  return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)).filter((record) => record.type === "work_accepted" && record.blockId === blockId);
+}
+async function waitForState(serverUrl: string, predicate: (state: any) => boolean) {
+  for (let index = 0; index < 50; index += 1) {
+    const next = await fetch(`${serverUrl}/api/workbook/state`).then((response) => response.json() as any);
+    if (predicate(next)) return next;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+  }
+  throw new Error("Timed out waiting for workbook state.");
+}
+
+function fakeTutor(decision: any = { outcome: "working" }, reply: any = "Tutor reply."): any {
+  return { restore: async () => undefined, reply: async () => reply, prepareBlockBriefing: async () => "Briefing.", review: async () => decision, summarizeBlock: async () => "Block summary.", summarizeLesson: async () => "Lesson summary.", dispose() {} };
 }
 
 function fakeBlockTutor(): any {

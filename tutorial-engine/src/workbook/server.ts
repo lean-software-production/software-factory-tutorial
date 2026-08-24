@@ -7,9 +7,9 @@ import { LOOPBACK_HOST } from "../server/local-server.js";
 import type { TutorialLogger } from "../runtime-log.js";
 import { createTutorialLogger } from "../runtime-log.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
-import { introductionCompleted, project, type BlockProgress } from "./events.js";
+import { project, type BlockProgress } from "./events.js";
 import { INTRODUCTION_BLOCK_ID, INTRODUCTION_LESSON_ID, LESSON_FRAME_BLOCK_ID, PART_BLOCK_ID, authoredBlockText, authoredIntroductionText, authoredLessonFrameText, authoredPartText, partLessonId } from "./pi-history.js";
-import { WORKBOOK_COMPLETE_ANCHOR_ID, WORKBOOK_INTRODUCTION_BLOCK_ID, anchorForBlock, blockText, buildWorkbookBlockStream, declaredBlockId, declaredSourceFromBlockId, successorAnchor, type AnchorId, type BlockId, type DeclaredWorkbookBlock, type OrderedWorkbookBlock } from "./workbook-blocks.js";
+import { WORKBOOK_COMPLETE_ANCHOR_ID, WORKBOOK_INTRODUCTION_BLOCK_ID, blockText, buildWorkbookBlockStream, declaredBlockId, declaredSourceFromBlockId, successorAnchor, type AnchorId, type BlockId, type DeclaredWorkbookBlock, type OrderedWorkbookBlock } from "./workbook-blocks.js";
 import { assertDockerTerminalReady, createDockerPty, requireOpenCodeApiKey, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalPtyFactory } from "./terminal.js";
 import { submitReflectionAttempt } from "./reflection.js";
 import { promoteCurrentEditorAttempt, resolveEditorTarget } from "./editor.js";
@@ -45,6 +45,8 @@ type CompleteBlockResult =
 type WorkbookProjectionState = {
   stream: OrderedWorkbookBlock[];
   completedBlockIds: Set<BlockId>;
+  workAcceptedBlockIds: Set<BlockId>;
+  readyBlockIds: Set<BlockId>;
   current?: OrderedWorkbookBlock;
   activeBlockId: BlockId;
   activeAnchorId: AnchorId;
@@ -90,6 +92,7 @@ function originAllowed(request: IncomingMessage, port: number): boolean {
 function parseTerminalMessage(data: RawData) { try { return JSON.parse(Buffer.isBuffer(data) ? data.toString("utf8") : Buffer.from(data as any).toString("utf8")); } catch { return undefined; } }
 function isEvaluatedBlock(block: WorkbookBlock): block is Extract<WorkbookBlock, { type: "editor-practice" | "terminal-practice" | "reflection" }> { return block.type === "editor-practice" || block.type === "terminal-practice" || block.type === "reflection"; }
 function evidenceMatchesBlock(evidence: AttemptEvidence, block: WorkbookBlock): boolean { return (evidence.kind === "editor" && block.type === "editor-practice") || (evidence.kind === "terminal" && block.type === "terminal-practice") || (evidence.kind === "reflection" && block.type === "reflection"); }
+function acceptsWorkImmediately(block: OrderedWorkbookBlock): boolean { return block.origin === "structural" || block.kind === "narrative" || block.kind === "lesson-transition"; }
 
 function activeLesson(loaded: LoadedWorkbook, records: readonly WorkbookTimelineRecord[] = []): WorkbookLesson {
   const lessons = loaded.chapters.map((chapter) => chapter.lesson).filter((lesson): lesson is WorkbookLesson => Boolean(lesson));
@@ -163,19 +166,34 @@ function canonicalCompletedId(record: WorkbookTimelineRecord): BlockId | undefin
   return undefined;
 }
 
+function canonicalWorkAcceptedId(record: WorkbookTimelineRecord): BlockId | undefined {
+  if (record.type === "work_accepted") return record.blockId;
+  return undefined;
+}
+
 function projectWorkbookBlocks(stream: OrderedWorkbookBlock[], records: readonly WorkbookTimelineRecord[]): WorkbookProjectionState {
   const validIds = new Set(stream.map((block) => block.id));
   const completedBlockIds = new Set<BlockId>();
+  const workAcceptedBlockIds = new Set<BlockId>();
   for (const record of records) {
-    const id = canonicalCompletedId(record);
-    if (id && validIds.has(id)) completedBlockIds.add(id);
+    const completedId = canonicalCompletedId(record);
+    if (completedId && validIds.has(completedId)) completedBlockIds.add(completedId);
+    const acceptedId = canonicalWorkAcceptedId(record);
+    if (acceptedId && validIds.has(acceptedId)) workAcceptedBlockIds.add(acceptedId);
   }
   const activeIndex = stream.findIndex((block) => !completedBlockIds.has(block.id));
   const current = activeIndex >= 0 ? stream[activeIndex] : undefined;
   const workbookComplete = !current;
+  const readyBlockIds = new Set<BlockId>();
+  if (current && workAcceptedBlockIds.has(current.id)) {
+    const successor = stream[activeIndex + 1];
+    if (successor && !completedBlockIds.has(successor.id)) readyBlockIds.add(successor.id);
+  }
   return {
     stream,
     completedBlockIds,
+    workAcceptedBlockIds,
+    readyBlockIds,
     current,
     activeBlockId: current?.id ?? WORKBOOK_COMPLETE_ANCHOR_ID,
     activeAnchorId: current?.anchorId ?? WORKBOOK_COMPLETE_ANCHOR_ID,
@@ -184,9 +202,13 @@ function projectWorkbookBlocks(stream: OrderedWorkbookBlock[], records: readonly
   };
 }
 
-function isRevealed(workbookProjection: WorkbookProjectionState, blockId: BlockId): boolean {
+function isNavigable(workbookProjection: WorkbookProjectionState, blockId: BlockId): boolean {
   const index = workbookProjection.stream.findIndex((block) => block.id === blockId);
   return index >= 0 && index <= workbookProjection.activeIndex;
+}
+
+function isRendered(workbookProjection: WorkbookProjectionState, blockId: BlockId): boolean {
+  return isNavigable(workbookProjection, blockId) || workbookProjection.readyBlockIds.has(blockId);
 }
 
 function declaredRefForInput(workbookProjection: WorkbookProjectionState, blockId: string): DeclaredWorkbookBlock | undefined {
@@ -218,18 +240,21 @@ async function publicState(loaded: LoadedWorkbook, records: WorkbookTimelineReco
     const lessonIds = [lessonPreambleBlockIdForServer(chapter.lesson.id), ...chapter.lesson.blocks.map((block) => declaredBlockId(chapter.lesson.id, block.id))];
     return lessonIds.every((id) => workbookProjection.completedBlockIds.has(id)) ? [chapter.lesson.id] : [];
   });
-  const canComplete = current ? await canCompleteBlock(current, attempts) : { eligible: false as const, reason: "complete" as const };
+  const canComplete = current ? canCompleteBlock(current, workbookProjection) : { eligible: false as const, reason: "complete" as const };
   const orderedBlocks = stream.map(publicOrderedBlock);
   const revealedBlockIds = new Set(stream.slice(0, workbookProjection.activeIndex + 1).map((block) => block.id));
+  const renderedBlockIds = new Set([...revealedBlockIds, ...workbookProjection.readyBlockIds]);
 
-  const blocks = await Promise.all(stream.map(async (ordered): Promise<PublicBlockProgress & { anchorId: string; origin: string; kind: string; title: string }> => {
+  const blocks = await Promise.all(stream.map(async (ordered): Promise<PublicBlockProgress & { anchorId: string; origin: string; kind: string; title: string; workAccepted: boolean }> => {
     const completed = workbookProjection.completedBlockIds.has(ordered.id);
     const active = current?.id === ordered.id;
-    const base = { id: ordered.id, type: ordered.kind, anchorId: ordered.anchorId, origin: ordered.origin, kind: ordered.kind, title: ordered.title, ready: revealedBlockIds.has(ordered.id), active, completed, verified: false, emerged: revealedBlockIds.has(ordered.id) };
+    const ready = workbookProjection.readyBlockIds.has(ordered.id);
+    const base = { id: ordered.id, type: ordered.kind, anchorId: ordered.anchorId, origin: ordered.origin, kind: ordered.kind, title: ordered.title, ready, active, completed, verified: false, emerged: renderedBlockIds.has(ordered.id), workAccepted: workbookProjection.workAcceptedBlockIds.has(ordered.id) };
     if (ordered.origin !== "declared") return base;
     const authored = ordered.block;
     const currentAttempt = isEvaluatedBlock(authored) ? await attempts.current(ordered.lessonId, ordered.id).catch(() => undefined) : undefined;
-    const acceptedProjection = currentAttempt?.status === "accepted" ? { status: "accepted" as const, summary: currentAttempt.successMessage ?? "Nice work — this attempt is accepted.", kind: currentAttempt.evidence.kind } : undefined;
+    const acceptedRecord = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }> => record.type === "attempt_accepted" && record.blockId === ordered.id);
+    const acceptedProjection = currentAttempt?.status === "accepted" && acceptedRecord && workbookProjection.workAcceptedBlockIds.has(ordered.id) ? { status: "accepted" as const, summary: currentAttempt.successMessage ?? acceptedRecord.summary, kind: currentAttempt.evidence.kind } : undefined;
     const checkpoint = publicCheckpoint(currentAttempt, acceptedProjection);
     const withCheckpoint = checkpoint ? { ...base, checkpoint } : base;
     if (authored.type === "terminal-practice") return { ...withCheckpoint, verified: currentAttempt?.status === "accepted", terminalHtml: currentAttempt?.evidence.kind === "terminal" && currentAttempt.status === "accepted" ? currentAttempt.evidence.terminalHtml : undefined };
@@ -257,21 +282,15 @@ async function publicState(loaded: LoadedWorkbook, records: WorkbookTimelineReco
     const emergedBlocks = chapter.lesson.blocks.filter((block) => revealedBlockIds.has(declaredBlockId(chapter.lesson.id, block.id))).map((block) => publicBlock({ ...block, id: declaredBlockId(chapter.lesson.id, block.id) } as WorkbookBlock));
     return { ...chapter, lesson: publicLesson({ ...chapter.lesson, blocks: emergedBlocks as WorkbookBlock[] }, emergedBlocks as WorkbookBlock[]) };
   });
-  const progress = { activeLessonId: current?.origin === "declared" ? current.lessonId : current?.chapter?.lesson.id ?? loaded.chapters[0]?.lesson.id ?? "", activeBlockId: workbookProjection.activeBlockId, activeAnchorId: workbookProjection.activeAnchorId, completedLessons, completedBlocks: [...workbookProjection.completedBlockIds], blocks, reflections, reflectionConversations, canComplete: current ? { blockId: current.id, ...canComplete } : { blockId: WORKBOOK_COMPLETE_ANCHOR_ID, eligible: false, reason: "complete" }, workbookComplete: workbookProjection.workbookComplete };
+  const progress = { activeLessonId: current?.origin === "declared" ? current.lessonId : current?.chapter?.lesson.id ?? loaded.chapters[0]?.lesson.id ?? "", activeBlockId: workbookProjection.activeBlockId, activeAnchorId: workbookProjection.activeAnchorId, completedLessons, completedBlocks: [...workbookProjection.completedBlockIds], workAcceptedBlocks: [...workbookProjection.workAcceptedBlockIds], readyBlocks: [...workbookProjection.readyBlockIds], blocks, reflections, reflectionConversations, canComplete: current ? { blockId: current.id, ...canComplete } : { blockId: WORKBOOK_COMPLETE_ANCHOR_ID, eligible: false, reason: "complete" }, workbookComplete: workbookProjection.workbookComplete };
   const completionSummary = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "workbook_completion_summary" }> => record.type === "workbook_completion_summary");
-  return { workbook: loaded.identity, introduction: loaded.introduction, introductionComplete: workbookProjection.completedBlockIds.has(WORKBOOK_INTRODUCTION_BLOCK_ID), chapters, orderedBlocks, revealedBlockIds: [...revealedBlockIds], currentBlock: current ? publicOrderedBlock(current, workbookProjection.activeIndex) : undefined, completion: workbookProjection.workbookComplete ? { complete: true, anchorId: WORKBOOK_COMPLETE_ANCHOR_ID, summary: completionSummary?.text } : undefined, progress, timeline: publicTimeline(loaded, records), adapter: { modelBackedHelp: true, note: "Free-text help is block-scoped." } };
+  return { workbook: loaded.identity, introduction: loaded.introduction, introductionComplete: workbookProjection.completedBlockIds.has(WORKBOOK_INTRODUCTION_BLOCK_ID), chapters, orderedBlocks, revealedBlockIds: [...revealedBlockIds], renderedBlockIds: [...renderedBlockIds], readyBlockIds: [...workbookProjection.readyBlockIds], currentBlock: current ? { ...publicOrderedBlock(current, workbookProjection.activeIndex), workAccepted: workbookProjection.workAcceptedBlockIds.has(current.id) } : undefined, completion: workbookProjection.workbookComplete ? { complete: true, anchorId: WORKBOOK_COMPLETE_ANCHOR_ID, summary: completionSummary?.text } : undefined, progress, timeline: publicTimeline(loaded, records), adapter: { modelBackedHelp: true, note: "Free-text help is block-scoped." } };
 }
 
 function lessonPreambleBlockIdForServer(lessonId: string): string { return `lesson--${lessonId}`; }
 
-async function canCompleteBlock(block: OrderedWorkbookBlock, attempts: AttemptStore): Promise<{ eligible: boolean; reason?: "ineligible" | "awaiting-acceptance" }> {
-  if (block.origin === "structural") return { eligible: true };
-  if (block.kind === "narrative" || block.kind === "lesson-transition") return { eligible: true };
-  if (isEvaluatedBlock(block.block)) {
-    const currentAttempt = await attempts.current(block.lessonId, block.id).catch(() => undefined);
-    return currentAttempt?.status === "accepted" ? { eligible: true } : { eligible: false, reason: "awaiting-acceptance" };
-  }
-  return { eligible: false, reason: "ineligible" };
+function canCompleteBlock(block: OrderedWorkbookBlock, projection: WorkbookProjectionState): { eligible: boolean; reason?: "ineligible" | "awaiting-acceptance" } {
+  return projection.workAcceptedBlockIds.has(block.id) ? { eligible: true } : { eligible: false, reason: "awaiting-acceptance" };
 }
 
 export async function startWorkbookServer(options: WorkbookServerOptions): Promise<StartedWorkbookServer> {
@@ -311,11 +330,33 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     if (authoredMessageExists(block.lessonId, block.id)) return undefined;
     return await append({ type: "message", lessonId: block.lessonId, blockId: block.id, role: "assistant", source: "authored", presentation: "course", text: blockText(block, loaded.identity.title) }) as TimelineMessage;
   };
+  const successorOf = (block: OrderedWorkbookBlock): OrderedWorkbookBlock | undefined => {
+    const index = stream.findIndex((candidate) => candidate.id === block.id);
+    return index >= 0 ? stream[index + 1] : undefined;
+  };
+  const hasWorkAccepted = (blockId: string): boolean => records.some((record) => record.type === "work_accepted" && record.blockId === blockId);
+  const ensureReadySuccessor = async (block: OrderedWorkbookBlock): Promise<void> => {
+    const successor = successorOf(block);
+    if (successor) await ensureAuthoredBlock(successor);
+  };
+  const recordWorkAccepted = async (block: OrderedWorkbookBlock): Promise<WorkbookTimelineRecord | undefined> => {
+    let accepted: WorkbookTimelineRecord | undefined;
+    if (!hasWorkAccepted(block.id)) accepted = await append({ type: "work_accepted", blockId: block.id });
+    await ensureReadySuccessor(block);
+    return accepted;
+  };
   const ensureAuthoredCurrentBlock = async (): Promise<void> => {
     const active = activeOrderedBlock();
     if (!active) return;
     const authored = await ensureAuthoredBlock(active);
     if (active.origin === "declared" && blockSupportsHints(active.block) && !newestBriefing(active.lessonId, active.id)) await refreshBlockBriefing(active, authored?.id ?? records.at(-1)?.id ?? active.id);
+  };
+  const ensureActiveWorkAcceptance = async (): Promise<void> => {
+    const active = activeOrderedBlock();
+    if (!active) return;
+    await ensureAuthoredCurrentBlock();
+    if (acceptsWorkImmediately(active)) await recordWorkAccepted(active);
+    else if (hasWorkAccepted(active.id)) await ensureReadySuccessor(active);
   };
   if (records.length === 0) await append({ type: "session_started" });
 
@@ -334,7 +375,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const mainContext = async (): Promise<MainTutorContext> => {
     const projection = currentWorkbookProjection();
     const active = projection.current;
-    const completeStatus = active ? await canCompleteBlock(active, attempts) : { eligible: false };
+    const completeStatus = active ? canCompleteBlock(active, projection) : { eligible: false };
     return { records, activeContext: await activeBlockContext(), completionTool: active && completeStatus.eligible ? { blockId: active.id } : undefined };
   };
   const mainContextForTarget = async (_lessonId: string, blockId: string): Promise<MainTutorContext> => {
@@ -371,7 +412,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     await append({ type: "attempt_accepted", lessonId: accepted.lessonId, blockId: accepted.blockId, attemptId: accepted.id, version: accepted.version, kind: accepted.evidence.kind, summary: accepted.successMessage ?? "Nice work — this attempt is accepted." });
   };
 
-  await ensureAuthoredCurrentBlock();
+  await transact(ensureActiveWorkAcceptance);
 
   const trackFinalizer = (finalizer: Promise<unknown>): void => {
     reviewFinalizers.add(finalizer); void finalizer.finally(() => reviewFinalizers.delete(finalizer));
@@ -457,6 +498,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         if (!accepted) return;
         await appendReviewMessage(accepted, message);
         await appendAcceptedCheckpoint(accepted);
+        await recordWorkAccepted(active);
         return;
       }
 
@@ -548,16 +590,15 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     if (projection.completedBlockIds.has(blockId)) return { outcome: "already-completed", state: await stateBefore() };
     const requested = stream.find((block) => block.id === blockId) ?? declaredRefForInput(projection, blockId);
     if (!requested) return { outcome: "rejected", state: await stateBefore(), reason: "unrevealed" };
-    if (!isRevealed(projection, requested.id) && requested.id !== projection.current?.id) return { outcome: "rejected", state: await stateBefore(), reason: "unrevealed" };
+    if (!isRendered(projection, requested.id) && requested.id !== projection.current?.id) return { outcome: "rejected", state: await stateBefore(), reason: "unrevealed" };
     if (projection.current?.id !== requested.id) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
-    const eligibility = await canCompleteBlock(requested, attempts);
+    const eligibility = canCompleteBlock(requested, projection);
     if (!eligibility.eligible) return { outcome: "rejected", state: await stateBefore(), reason: "ineligible" };
     const written = await append({ type: "block_completed", blockId: requested.id });
     const nextProjection = currentWorkbookProjection();
-    if (nextProjection.current) await ensureAuthoredBlock(nextProjection.current);
     if (requested.origin === "declared") await summarizeDeparture(requested, written.id);
     if (!nextProjection.current) await requestCompletionSummary(written.id);
-    if (nextProjection.current) await ensureAuthoredCurrentBlock();
+    if (nextProjection.current) await ensureActiveWorkAcceptance();
     return { outcome: "completed", state: await currentPublicState(), navigationTarget: successorAnchor(stream, requested.id) };
   };
 
@@ -603,7 +644,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
             ? { lessonId: active.lessonId, blockId: active.id, active }
             : (!active && blockId === WORKBOOK_COMPLETE_ANCHOR_ID ? { lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID, active: undefined } : undefined);
           if (!target) return sendJson(response, 409, { error: "This block is not active yet." });
-          const blockInView = typeof body.blockInView === "string" && (isRevealed(projection, body.blockInView) || body.blockInView === WORKBOOK_COMPLETE_ANCHOR_ID && projection.workbookComplete) ? body.blockInView : undefined;
+          const blockInView = typeof body.blockInView === "string" && (isNavigable(projection, body.blockInView) || body.blockInView === WORKBOOK_COMPLETE_ANCHOR_ID && projection.workbookComplete) ? body.blockInView : undefined;
           const learnerMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "user", source: "learner", presentation: "chat", text, blockInView });
           try {
             const reply = await mainTutor.reply({ ...(await mainContextForTarget(target.lessonId, target.blockId)), learnerMessage: learnerMessage as TimelineMessage });

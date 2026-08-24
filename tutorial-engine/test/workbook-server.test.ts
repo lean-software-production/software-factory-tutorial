@@ -284,8 +284,13 @@ describe("workbook browser API", () => {
     try {
       const initial = await state(firstServer.url);
       expect(initial.introductionComplete).toBe(false);
+      expect(initial.progress.activeBlockId).toBe("workbook--introduction");
+      expect(initial.progress.workAcceptedBlocks).toContain("workbook--introduction");
+      expect(initial.progress.readyBlocks).toEqual(["part--loop"]);
+      expect(initial.revealedBlockIds).toEqual(["workbook--introduction"]);
       expect(initial.timeline.filter((record: any) => record.type === "message")).toEqual([
-        expect.objectContaining({ lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "authored", presentation: "course", text: expect.stringContaining("# Fixture workbook") })
+        expect.objectContaining({ lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "authored", presentation: "course", text: expect.stringContaining("# Fixture workbook") }),
+        expect.objectContaining({ lessonId: "part--loop", blockId: "part--loop", role: "assistant", source: "authored", presentation: "course", text: expect.stringContaining("# Part 1") })
       ]);
       expect(initial.timeline[0].text).toContain("Welcome to the fixture workbook.");
       expect((await postHint(firstServer.url, { blockId: "workbook--introduction" })).status).toBe(409);
@@ -361,6 +366,7 @@ describe("workbook browser API", () => {
       authored = recovered.timeline.filter((record: any) => record.type === "message" && record.source === "authored");
       expect(authored.map((record: any) => [record.lessonId, record.blockId])).toEqual([
         ["part--loop", "part--loop"],
+        ["lesson--001-first", "lesson--001-first"],
       ]);
       expect(JSON.stringify(recovered.timeline)).not.toContain("workbook--introduction");
       expect(recovered.timeline.find((record: any) => record.type === "message" && record.blockId === "workbook--introduction")).toBeUndefined();
@@ -389,12 +395,14 @@ describe("workbook browser API", () => {
       projectedAuthored = (await state(firstServer.url)).timeline.filter((record: any) => record.type === "message" && record.source === "authored");
       expect(projectedAuthored.map((record: any) => [record.id, record.lessonId, record.blockId])).toEqual([
         [expect.any(String), "part--loop", "part--loop"],
+        [expect.any(String), "lesson--001-first", "lesson--001-first"],
         ["legacy-active-block", "001-first", "lesson--001-first--orientation"],
       ]);
       const canonicalLog = (await privateTimeline(dir)).filter((record) => record.type === "message" && record.source === "authored");
       expect(canonicalLog.map((record: any) => [record.id, record.lessonId, record.blockId])).toEqual([
         ["legacy-active-block", "001-first", "lesson--001-first--orientation"],
         [expect.any(String), "part--loop", "part--loop"],
+        [expect.any(String), "lesson--001-first", "lesson--001-first"],
       ]);
     } finally { await firstServer.close(); }
 
@@ -415,6 +423,7 @@ describe("workbook browser API", () => {
       expect(authoredAfterContinue.map((record: any) => [record.lessonId, record.blockId])).toEqual([
         ["workbook--introduction", "workbook--introduction"],
         ["part--loop", "part--loop"],
+        ["lesson--001-first", "lesson--001-first"],
       ]);
       expect(authoredAfterContinue[1].text).toContain("# Part 1 — Loop");
       expect(authoredAfterContinue[1].text).toContain("Part copy.");
@@ -668,7 +677,8 @@ describe("workbook browser API", () => {
       const opened = await fetch(`${firstServer.url}/api/workbook/introduction`, { method: "POST" }).then((response) => response.json() as any);
       const authored = opened.timeline.filter((record: any) => record.type === "message" && record.source === "authored");
       expect(authored.filter((record: any) => record.lessonId === "part--loop" && record.blockId === "part--loop")).toHaveLength(1);
-      expect(authored.at(-1)).toMatchObject({ blockId: "part--loop", presentation: "course", text: expect.stringContaining("# Part 1") });
+      expect(authored.at(-2)).toMatchObject({ blockId: "part--loop", presentation: "course", text: expect.stringContaining("# Part 1") });
+      expect(authored.at(-1)).toMatchObject({ blockId: "lesson--001-first", presentation: "course", text: expect.stringContaining("# First lesson") });
       expect(JSON.stringify(opened.timeline)).not.toContain("Private editor rubric");
       persisted = (await state(firstServer.url)).timeline;
       expect((await state(firstServer.url)).timeline).toEqual(persisted);
@@ -879,7 +889,7 @@ describe("workbook browser API", () => {
       await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--reflection")?.checkpoint?.status === "reviewing", "reflection reviewing state");
       const followUp = await postEvent(server.url, { blockId: "lesson--001-first--reflection", action: "reflection-follow-up", response: "The validator cannot run commands." });
       expect(followUp.status).toBe(409);
-      expect(tutor.reviews).toHaveLength(3);
+      expect(tutor.reviews).toHaveLength(4);
       const afterRejected = await state(server.url);
       expect(afterRejected.progress.reflectionConversations["lesson--001-first--reflection"]).toEqual([{ role: "learner", text: "It was headless." }]);
     } finally {
