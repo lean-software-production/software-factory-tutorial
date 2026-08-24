@@ -61,12 +61,6 @@ async function postTutorMessage(blockId: string, text: string): Promise<State> {
   return response.json();
 }
 
-export async function postBlockHint(blockId: string): Promise<State> {
-  const response = await fetch("/api/workbook/hints", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId }) });
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
-}
-
 async function retryTutorOperation(failureId: string): Promise<State> {
   const response = await fetch("/api/workbook/retry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId }) });
   if (!response.ok) throw new Error(await response.text());
@@ -102,12 +96,13 @@ function shellCommandFrom(markdown: string): string | undefined {
   return undefined;
 }
 
-function EmbeddedTerminal({ block, command, active, completed, verified, refresh, onAdvice, onError, onStatus }: { block: Block; command?: string; active: boolean; completed: boolean; verified: boolean; refresh(state: State): void; onAdvice(message: string): void; onError(message: string): void; onStatus(message: string): void }) {
+function EmbeddedTerminal({ block, command, active, completed, verified, refresh, onAdvice, onError, onStatus, onTerminalInsertionChange }: { block: Block; command?: string; active: boolean; completed: boolean; verified: boolean; refresh(state: State): void; onAdvice(message: string): void; onError(message: string): void; onStatus(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
   const socket = useRef<WebSocket | null>(null);
-  const [connected, setConnected] = useState(false);
+  const [connected, setConnected] = useState(true);
+  const [connectionEpoch, setConnectionEpoch] = useState(0);
 
   useEffect(() => {
     if (!active || completed || !terminalElement.current) return;
@@ -127,7 +122,7 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: nextTerminal.cols, rows: nextTerminal.rows }));
     };
     const dataDisposable = nextTerminal.onData((data) => { if (!verified && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data })); });
-    ws.addEventListener("open", () => { setConnected(true); onStatus("Terminal connected in an isolated workbook container."); sendResize(); });
+    ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); onStatus("Terminal connected in an isolated workbook container."); sendResize(); });
     ws.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
       if (message.type === "output") nextTerminal.write(message.data);
@@ -140,7 +135,7 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
       if (message.type === "exit") onStatus("The embedded shell exited. Refresh the page to start a new one.");
     });
     ws.addEventListener("close", () => setConnected(false));
-    ws.addEventListener("error", () => onError("Embedded terminal connection failed. Refresh the page and try again."));
+    ws.addEventListener("error", () => { setConnected(false); onError("Embedded terminal connection failed. Refresh the page and try again."); });
     addEventListener("resize", sendResize);
     return () => {
       removeEventListener("resize", sendResize);
@@ -154,16 +149,24 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
     };
   }, [active, completed, verified, block.id, refresh, onAdvice, onError, onStatus]);
 
-  const insertCommand = () => {
+  const insertCommand = useCallback(() => {
     if (!command) return;
     const data = commandForInsertion(command);
     if (!verified && socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({ type: "input", data }));
-  };
+  }, [command, verified]);
+
+  useEffect(() => {
+    if (!active || !command || verified || socket.current?.readyState !== WebSocket.OPEN) {
+      onTerminalInsertionChange?.(undefined);
+      return;
+    }
+    onTerminalInsertionChange?.(insertCommand);
+    return () => onTerminalInsertionChange?.(undefined);
+  }, [active, command, connectionEpoch, insertCommand, onTerminalInsertionChange, verified]);
 
   return <div className="embedded-terminal-panel">
-    <div className="embedded-terminal-head"><div><b>Embedded terminal</b><p>Observed by the tutor in an isolated container with write access only to learner work folders.</p></div><span className={connected ? "status connected" : "status"}>{connected ? "connected" : "offline"}</span></div>
+    <span className={`terminal-connection-status${connected ? " connected" : ""}`} aria-label={connected ? "Terminal connected" : "Terminal disconnected"} />
     <div ref={terminalElement} className="embedded-terminal" aria-label="Embedded terminal" />
-    {verified ? <div className="action-row"><span className="terminal-note">Your terminal transcript is preserved here as evidence of what you did.</span></div> : command && <div className="action-row"><button className="button primary" disabled={!connected} onClick={insertCommand}>Insert command — do not press Enter</button><span className="terminal-note">The button types a single-line equivalent only. You decide when to press Enter.</span></div>}
   </div>;
 }
 
@@ -241,27 +244,25 @@ function NarrativeBlock({ lessonId, block, state, refresh }: { lessonId: string;
   </section>;
 }
 
-function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = true }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; showAuthoredContent?: boolean }) {
-  const [observerAdvice, setObserverAdvice] = useState<string>();
-  const [observerError, setObserverError] = useState<string>();
+function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = true, onTerminalInsertionChange }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+  const [observerFeedback, setObserverFeedback] = useState<string>();
   const [observerStatus, setObserverStatus] = useState<string>();
   const command = shellCommandFrom(block.markdown);
   const accepted = state?.checkpoint?.status === "accepted";
-  useEffect(() => { setObserverAdvice(undefined); setObserverError(undefined); setObserverStatus(undefined); }, [block.id, state?.completed, state?.checkpoint?.status]);
+  const checkpoint = state?.checkpoint;
+  const persistedFeedback = !accepted && checkpoint
+    ? checkpoint.status === "feedback"
+      ? `Tutor feedback: ${checkpoint.feedback ?? "Keep going and try again."}`
+      : checkpoint.status === "reviewing"
+        ? "Reviewing your latest attempt…"
+        : "Keep working — the tutor will review your evidence when you pause."
+    : undefined;
+  const liveFeedback = observerFeedback ?? observerStatus ?? persistedFeedback;
+  useEffect(() => { setObserverFeedback(undefined); setObserverStatus(undefined); }, [block.id, state?.completed, state?.checkpoint?.status]);
   return <section id={blockElementId(lessonId, block.id)} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
     {showAuthoredContent && <><p className="section-label">Practice · embedded terminal</p><h2>{block.title}</h2><Markdown>{block.markdown}</Markdown></>}
-    <div className="mode practice">
-      <div className="mode-head"><span className="mode-icon" aria-hidden="true">›_</span><div><span className="tag">Terminal practice</span><h3>Run this in the embedded terminal</h3><p>The tutor watches this terminal for the expected result and keeps the transcript as evidence.</p></div></div>
-      <div className="mode-body">
-        {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} /> : state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : !state?.completed && <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={false} refresh={refresh} onAdvice={setObserverAdvice} onError={setObserverError} onStatus={setObserverStatus} />}
-        {!accepted && <>
-          <AttemptCheckpointStatus state={state} />
-          {observerStatus && !observerAdvice && !observerError && <aside className="observer-status" aria-live="polite">{observerStatus}</aside>}
-          {observerAdvice && <aside className="advice" aria-live="polite"><b>Try this:</b> {observerAdvice}</aside>}
-          {observerError && <aside className="advice warning" aria-live="polite">{observerError}</aside>}
-        </>}
-      </div>
-    </div>
+    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} /> : state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : !state?.completed && <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={false} refresh={refresh} onAdvice={setObserverFeedback} onError={setObserverFeedback} onStatus={setObserverStatus} onTerminalInsertionChange={onTerminalInsertionChange} />}
+    {!accepted && liveFeedback && <aside className="live-block-feedback" aria-live="polite">{liveFeedback}</aside>}
   </section>;
 }
 
@@ -393,11 +394,11 @@ function TransitionBlock({ lessonId, block, state, refresh }: { lessonId: string
   </section>;
 }
 
-export function BlockView({ lessonId, block, progress, refresh, showAuthoredContent = true }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; showAuthoredContent?: boolean }) {
+export function BlockView({ lessonId, block, progress, refresh, showAuthoredContent = true, onTerminalInsertionChange }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
   if (block.type === "narrative") return <NarrativeBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
-  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} />;
+  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} onTerminalInsertionChange={onTerminalInsertionChange} />;
   if (block.type === "editor-practice") return <EditorPracticeBlockView lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} />;
   if (block.type === "reflection") return <ReflectionBlock lessonId={resolvedLessonId} block={block} state={state} turns={activeLessonValue(progress, resolvedLessonId, progress.reflectionConversations[block.id], [])} refresh={refresh} />;
   return <TransitionBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
@@ -508,12 +509,17 @@ function activeAcceptedKey(progress: Progress): string | undefined {
 export function App() {
   const [state, setState] = useState<State>();
   const [viewed, setViewed] = useState<string>();
+  const [terminalInsertion, setTerminalInsertion] = useState<(() => void) | undefined>();
+  const registerTerminalInsertion = useCallback((insertCommand: (() => void) | undefined) => {
+    setTerminalInsertion(() => insertCommand);
+  }, []);
   useEffect(() => { fetch("api/workbook/state").then((response) => response.json()).then((next: State) => setState(next)); }, []);
   useEffect(() => { if (state) document.title = state.workbook.title; }, [state?.workbook.title]);
   useEffect(() => {
     if (!state?.introductionComplete) return;
     scrollActiveLessonIntoView(document, state.progress.activeLessonId);
   }, [state?.introductionComplete, state?.progress.activeLessonId]);
+  useEffect(() => { setTerminalInsertion(undefined); }, [state?.progress.activeLessonId, state?.progress.activeBlockId]);
   useEffect(() => {
     if (!state) return;
     const headings = [...document.querySelectorAll<HTMLElement>(".chapter")];
@@ -555,8 +561,8 @@ export function App() {
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} />
     <main><article className="page">
       {hasTimeline ? <>
-        {activeChapter && activeBlock && <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onHint={(blockId) => postBlockHint(blockId).then((next) => setState(next))} />}
-        <TimelineThread records={state.timeline} activeLessonId={state.introductionComplete ? state.progress.activeLessonId : INTRODUCTION_LESSON_ID} activeBlockId={state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} inputDisabled={reflectionComposerDisabled} renderContinuation={renderTimelineContinuation} />
+        {activeChapter && activeBlock && <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} />}
+        <TimelineThread records={state.timeline} activeLessonId={state.introductionComplete ? state.progress.activeLessonId : INTRODUCTION_LESSON_ID} activeBlockId={state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion} inputDisabled={reflectionComposerDisabled} renderContinuation={renderTimelineContinuation} />
       </> : <>
         <WorkbookIntroduction state={state} refresh={setState} />
         {emerged.map((chapter, index) => <React.Fragment key={chapter.id}>{(index === 0 || chapter.part !== emerged[index - 1]!.part) && <PartChapter chapter={chapter} />}<LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}

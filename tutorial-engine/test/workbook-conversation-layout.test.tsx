@@ -30,9 +30,9 @@ const progress: Progress = {
 };
 
 describe("workbook fixed conversation layout", () => {
-  it("places one sticky hint control with the live terminal/editor activity before the fixed composer thread", () => {
+  it("places the live terminal/editor activity before the fixed composer thread without a hint control", () => {
     const markup = renderToStaticMarkup(createElement("main", null,
-      createElement(ActivityBand, { lessonId: "part/lesson", activeBlock: editorBlock, progress, refresh: vi.fn(), onHint: vi.fn(async () => undefined) }),
+      createElement(ActivityBand, { lessonId: "part/lesson", activeBlock: editorBlock, progress, refresh: vi.fn() }),
       createElement(TimelineThread, {
         activeLessonId: "part/lesson",
         activeBlockId: editorBlock.id,
@@ -43,8 +43,7 @@ describe("workbook fixed conversation layout", () => {
     ));
 
     expect(markup).toContain('class="current-activity-band"');
-    expect(markup).toContain("Get a hint");
-    expect(markup.match(/Get a hint/g)).toHaveLength(1);
+    expect(markup).not.toContain("Get a hint");
     expect(markup.indexOf("current-activity-band")).toBeLessThan(markup.indexOf("timeline-thread"));
     expect(markup).toContain('class="timeline-thread has-fixed-composer"');
     expect(markup).toContain('class="timeline-input fixed-composer"');
@@ -62,8 +61,7 @@ describe("workbook fixed conversation layout", () => {
       lessonId: "part/lesson",
       activeBlock: reflectionBlock,
       progress: reflectionProgress,
-      refresh: vi.fn(),
-      onHint: vi.fn(async () => undefined)
+      refresh: vi.fn()
     }));
 
     expect(markup).toBe("");

@@ -17,22 +17,25 @@ function resizeComposerTextarea(textarea: HTMLTextAreaElement) {
   textarea.style.overflowY = textarea.scrollHeight > composerMaxHeightPx ? "auto" : "hidden";
 }
 
-export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, renderContinuation, inputDisabled = false }: {
+export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, inputDisabled = false }: {
   records: readonly TimelineThreadRecord[];
   activeLessonId: string;
   activeBlockId: string;
   onSend(text: string): Promise<void>;
   onRetry(failureId: string): Promise<void>;
+  onDoItForMe?(): void;
   renderContinuation?(record: TimelineMessageRecord): React.ReactNode;
   inputDisabled?: boolean;
 }) {
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
+  const [commandInserted, setCommandInserted] = useState(false);
   const [pendingEchoes, setPendingEchoes] = useState<{ id: string; text: string }[]>([]);
   const nextEchoId = useRef(0);
   const latestEntryRef = useRef<HTMLElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const chatEntryCount = records.reduce((count, record) => count + ((record.type === "message" && record.presentation !== "course") || record.type === "tutor_failed" ? 1 : 0), 0) + pendingEchoes.length;
+  const activeAuthoredRecordId = [...records].reverse().find((record) => record.type === "message" && record.presentation === "course" && record.source === "authored" && record.lessonId === activeLessonId && record.blockId === activeBlockId)?.id;
   useEffect(() => {
     if (chatEntryCount === 0) return;
     (latestEntryRef.current as (HTMLElement & { scrollIntoView?(options?: ScrollIntoViewOptions): void }) | null)?.scrollIntoView?.({ behavior: "smooth", block: "end" });
@@ -40,6 +43,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   useLayoutEffect(() => {
     if (textareaRef.current) resizeComposerTextarea(textareaRef.current);
   }, [draft]);
+  useEffect(() => { setCommandInserted(false); }, [activeLessonId, activeBlockId]);
   const submitText = async (text: string) => {
     const trimmed = text.trim();
     if (inputDisabled || pending || !trimmed) return;
@@ -87,7 +91,8 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
         const transitionClass = record.lessonId.startsWith("workbook:part:") && record.blockId === "__part__"
           ? " timeline-part-transition"
           : record.blockId === "__lesson_frame__" ? " timeline-lesson-transition" : "";
-        return <React.Fragment key={record.id}><article className={`timeline-authored-content${transitionClass}`}><Markdown>{record.text}</Markdown></article>{continuation}</React.Fragment>;
+        const canInsertCommand = Boolean(onDoItForMe && record.id === activeAuthoredRecordId);
+        return <React.Fragment key={record.id}><article className={`timeline-authored-content${transitionClass}`}><Markdown>{record.text}</Markdown></article>{canInsertCommand && <button className="button primary timeline-do-it" onClick={() => { onDoItForMe?.(); setCommandInserted(true); }}>{commandInserted ? "Inserted — press Enter" : "Do it for me"}</button>}{continuation}</React.Fragment>;
       }
       const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : record.presentation === "hint" ? " hint" : ""}`;
       return <React.Fragment key={record.id}><article ref={(el) => { latestEntryRef.current = el; }} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown>{record.text}</Markdown>}</article>{continuation}</React.Fragment>;

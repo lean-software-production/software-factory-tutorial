@@ -39,6 +39,20 @@ vi.mock("@codemirror/view", () => {
 
 vi.mock("@codemirror/commands", () => ({ defaultKeymap: [] }));
 
+vi.mock("@xterm/xterm", () => ({
+  Terminal: class {
+    cols = 80;
+    rows = 24;
+    loadAddon() {}
+    open() {}
+    onData() { return { dispose() {} }; }
+    write() {}
+    dispose() {}
+  }
+}));
+
+vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
+
 vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/workbook/lesson-links.js")>();
   return { ...actual, lessonElementId: vi.fn(actual.lessonElementId) };
@@ -367,6 +381,19 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector(".timeline-message.tutor.review")?.textContent).toContain("Review reply.");
   });
 
+  it("renders Do it for me only for the active authored terminal record with an insertion callback", () => {
+    const record = { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson-one", blockId: "practice", role: "assistant", source: "authored", presentation: "course", text: "## Practice\n\nRun the command." } as const;
+    const sharedProps = { onSend: vi.fn(async () => undefined), onRetry: vi.fn(async () => undefined), records: [record] };
+
+    const activeMarkup = html(createElement(TimelineThread, { ...sharedProps, activeLessonId: record.lessonId, activeBlockId: record.blockId, onDoItForMe: vi.fn() }));
+    const inactiveMarkup = html(createElement(TimelineThread, { ...sharedProps, activeLessonId: record.lessonId, activeBlockId: "other", onDoItForMe: vi.fn() }));
+    const unavailableMarkup = html(createElement(TimelineThread, { ...sharedProps, activeLessonId: record.lessonId, activeBlockId: record.blockId }));
+
+    expect(activeMarkup.match(/Do it for me/g)).toHaveLength(1);
+    expect(inactiveMarkup).not.toContain("Do it for me");
+    expect(unavailableMarkup).not.toContain("Do it for me");
+  });
+
   it("marks only authored part and lesson-frame records as timeline transitions", async () => {
     const container = await mount(createElement(TimelineThread, {
       activeLessonId: "part/lesson-one",
@@ -506,21 +533,23 @@ describe("workbook lesson UI", () => {
     expect(reflectionMarkup).not.toContain("Your reflection");
   });
 
-  it("renders terminal activity chrome without duplicating the authored title or markdown", () => {
+  it("renders a compact terminal activity without duplicating authored content", () => {
     const terminalBlock = lesson.blocks[1];
     const markup = html(createElement(ActivityBand, {
       lessonId: lesson.id,
       activeBlock: terminalBlock,
       progress: activeBlockProgress(terminalBlock),
-      refresh: vi.fn(),
-      onHint: vi.fn(async () => undefined)
+      refresh: vi.fn()
     }));
 
     expect(markup).toContain("current-activity-band");
     expect(markup).toContain("data-activity-type=\"terminal-practice\"");
-    expect(markup).toContain("Embedded terminal");
-    expect(markup).toContain("Insert command");
-    expect(markup).toContain("Get a hint");
+    expect(markup).toContain('class="terminal-connection-status connected"');
+    expect(markup).toContain('aria-label="Terminal connected"');
+    expect(markup).not.toContain("Terminal practice");
+    expect(markup).not.toContain("Run this in the embedded terminal");
+    expect(markup).not.toContain("Observed by the tutor");
+    expect(markup).not.toContain("Get a hint");
     expect(markup).not.toContain("Practice");
     expect(markup).not.toContain("Run this:");
     expect(markup).not.toContain("echo hi");
@@ -531,8 +560,7 @@ describe("workbook lesson UI", () => {
       lessonId: lesson.id,
       activeBlock: editorBlock,
       progress: activeEditorProgress(),
-      refresh: vi.fn(),
-      onHint: vi.fn(async () => undefined)
+      refresh: vi.fn()
     }));
 
     expect(markup).toContain("current-activity-band");
@@ -540,7 +568,7 @@ describe("workbook lesson UI", () => {
     expect(markup).toContain("factory/answer.md");
     expect(markup).toContain("editor-surface");
     expect(markup).toContain("role=\"status\"");
-    expect(markup).toContain("Get a hint");
+    expect(markup).not.toContain("Get a hint");
     expect(markup).not.toContain("Edit the answer");
     expect(markup).not.toContain("Update the answer file");
   });
@@ -752,23 +780,21 @@ describe("workbook lesson UI", () => {
     expect(activeReflection).not.toContain('data-completion-action="continue"');
   });
 
-  it("keeps embedded terminal as the only terminal path and inserts only authored command fences", () => {
+  it("keeps the embedded terminal as the only terminal path and extracts only authored command fences", () => {
     const activeTerminalProgress = { ...progress, activeBlockId: "practice", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "practice", ready: true, emerged: true })) };
     const withCommand = html(createElement(BlockView, { block: lesson.blocks[1], progress: activeTerminalProgress, refresh: vi.fn() }));
-    expect(withCommand).toContain("Embedded terminal");
-    expect(withCommand).toContain("Insert command");
+    expect(withCommand).toContain("terminal-connection-status");
     expect(withCommand).not.toContain("Use your own terminal");
     expect(withCommand).not.toContain("fallback");
+    expect(withCommand).not.toContain("Insert command");
 
     const scriptSnippetBlock = { ...lesson.blocks[1], markdown: "Create this script:\n\n```sh\n#!/usr/bin/env bash\necho script body\n```" };
     const withSnippet = html(createElement(BlockView, { block: scriptSnippetBlock, progress: activeTerminalProgress, refresh: vi.fn() }));
-    expect(withSnippet).toContain("Embedded terminal");
-    expect(withSnippet).not.toContain("Insert command");
+    expect(withSnippet).toContain("terminal-connection-status");
 
     const clueOnlyBlock = { ...lesson.blocks[1], markdown: "Try the command you just edited, then compare its output." };
     const withoutCommand = html(createElement(BlockView, { block: clueOnlyBlock, progress: activeTerminalProgress, refresh: vi.fn() }));
-    expect(withoutCommand).toContain("Embedded terminal");
-    expect(withoutCommand).not.toContain("Insert command");
+    expect(withoutCommand).toContain("terminal-connection-status");
   });
 
   it("renders no part grouping in the rail when chapters have no part", () => {
@@ -911,7 +937,7 @@ describe("workbook lesson UI", () => {
     expect(completedMarkup).not.toContain("Embedded terminal");
     expect(completedMarkup).not.toContain("Insert command");
     expect(activeMarkup).toContain("Embedded terminal");
-    expect(activeMarkup).toContain("Insert command");
+    expect(activeMarkup).toContain("terminal-connection-status");
   });
 
   it("renders the unopened introduction through the timeline with a composer and durable intro target", async () => {
@@ -1122,41 +1148,52 @@ describe("workbook lesson UI", () => {
     expect(container.textContent).toContain("Next");
   });
 
-  it("posts a block hint from the sticky terminal/editor band and disables the hint button while pending", async () => {
-    let resolveHint: ((value: any) => void) | undefined;
-    const hintedState = {
+  it("inserts an authored terminal command without Enter and removes the action when the socket closes", async () => {
+    class FakeWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.CONNECTING;
+      sent: string[] = [];
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      constructor(_url: string) { FakeWebSocket.instances.push(this); }
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      send(message: string) { this.sent.push(message); }
+      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
+      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalProgress = activeBlockProgress(lesson.blocks[1]);
+    const state = {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
       introductionComplete: true,
-      chapters: [chapter({ lesson: { ...lesson, blocks: [editorBlock] } as any })],
-      progress: activeEditorProgress(),
+      chapters: [chapter()],
+      progress: terminalProgress,
       adapter: {},
-      timeline: [{ type: "message", id: "hint", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "block_tutor", presentation: "hint", text: "Check the requested marker." }]
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "practice", role: "assistant", source: "authored", presentation: "course", text: "## Practice\n\nRun the authored command." }]
     } as any;
-    const initialState = { ...hintedState, timeline: [] };
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      if (input === "/api/workbook/hints") return new Promise((resolve) => { resolveHint = resolve; });
-      return Promise.resolve({ ok: true, json: async () => init?.method === "POST" ? hintedState : initialState });
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => state })));
 
-    const container = await mount(createElement(App), stubAppShellGlobals);
+    const container = await mount(createElement(App), (win) => { stubAppShellGlobals(win); vi.stubGlobal("location", win.location); });
     await act(async () => { await Promise.resolve(); });
-    const hintButton = [...container.querySelectorAll("button")].filter((button) => button.textContent === "Get a hint");
+    const socket = FakeWebSocket.instances[0]!;
+    await act(async () => { socket.readyState = FakeWebSocket.OPEN; socket.emit("open"); });
 
-    expect(hintButton).toHaveLength(1);
-    act(() => { hintButton[0]!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
-    expect(hintButton[0]!.disabled).toBe(true);
-    expect(fetchMock).toHaveBeenCalledWith("/api/workbook/hints", expect.objectContaining({ method: "POST" }));
-    const hintCall = fetchMock.mock.calls.find(([url]) => url === "/api/workbook/hints")!;
-    expect(JSON.parse((hintCall[1] as RequestInit).body as string)).toEqual({ blockId: editorBlock.id });
+    const action = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Do it for me")!;
+    expect(action).toBeTruthy();
+    await act(async () => { action.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
-    await act(async () => {
-      resolveHint!({ ok: true, json: async () => hintedState });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(container.textContent).toContain("Check the requested marker.");
+    expect(socket.sent).toHaveLength(2);
+    const input = JSON.parse(socket.sent[1]!);
+    expect(input).toEqual({ type: "input", data: "echo hi  | cat" });
+    expect(input.data).not.toMatch(/[\r\n]/);
+    expect(action.textContent).toBe("Inserted — press Enter");
+
+    await act(async () => { socket.readyState = FakeWebSocket.CLOSED; socket.emit("close"); });
+    expect(container.textContent).not.toContain("Do it for me");
   });
 
   it.each([
