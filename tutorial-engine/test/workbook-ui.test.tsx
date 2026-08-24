@@ -367,6 +367,30 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector(".timeline-message.tutor.review")?.textContent).toContain("Review reply.");
   });
 
+  it("marks only authored part and lesson-frame records as timeline transitions", async () => {
+    const container = await mount(createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend: vi.fn(async () => undefined),
+      onRetry: vi.fn(async () => undefined),
+      records: [
+        { type: "message", id: "part", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook:part:part-one", blockId: "__part__", role: "assistant", source: "authored", presentation: "course", text: "# Part One" },
+        { type: "message", id: "frame", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson-one", blockId: "__lesson_frame__", role: "assistant", source: "authored", presentation: "course", text: "# Lesson One" },
+        { type: "message", id: "block", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation" },
+      ] as any
+    }));
+
+    const part = container.querySelector(".timeline-authored-content.timeline-part-transition");
+    const frame = container.querySelector(".timeline-authored-content.timeline-lesson-transition");
+    const ordinary = container.querySelector(".timeline-authored-content:not(.timeline-part-transition):not(.timeline-lesson-transition)");
+
+    expect(part?.textContent).toContain("Part One");
+    expect(frame?.textContent).toContain("Lesson One");
+    expect(ordinary?.textContent).toContain("Orientation");
+    expect(container.querySelectorAll(".timeline-part-transition")).toHaveLength(1);
+    expect(container.querySelectorAll(".timeline-lesson-transition")).toHaveLength(1);
+  });
+
   it("scrolls the newest conversation entry into view but not for course-only records", async () => {
     const scrollIntoView = vi.fn();
     const baseRecords = [
