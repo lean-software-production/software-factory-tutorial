@@ -117,9 +117,9 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Sta
       bootstrap = { ...bootstrap, state: "starting" };
       runState = "working";
       publishBootstrap();
-      // From lesson 007 the line commits to the calculator, which has no
-      // repository of its own. Do this before the tutor begins so no commit can
-      // land on the branch the learner cloned.
+      // From lesson 007 the line commits to the calculator. The workbook
+      // launcher uses a session-local repository; this older one-root server
+      // still moves its workspace onto a discardable branch before tutoring.
       await ensureLineBranch(options.workspace, log);
       if (mode === "resume") {
         const history = await sessionLog.read();

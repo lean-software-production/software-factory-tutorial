@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { currentSpecPath, loadLesson, readProgress } from "../src/lesson/load.js";
 
 const fixture = fileURLToPath(new URL("./fixtures/sample-lesson", import.meta.url));
-const tutorialRoot = fileURLToPath(new URL("../../", import.meta.url));
+const tutorialRoot = fileURLToPath(new URL("../../tutorial/", import.meta.url));
 
 describe("loadLesson", () => {
   it("groups lesson rows under the part heading that precedes them", async () => {
@@ -24,7 +24,7 @@ describe("loadLesson", () => {
     expect(loaded.progress.some((item) => item.id === "Lesson")).toBe(false);
   });
 
-  it("loads the repository tutorial regardless of how many lesson rows its ledger contains", async () => {
+  it("loads the authored tutorial regardless of how many lesson rows its ledger contains", async () => {
     const loaded = await loadLesson(tutorialRoot);
     expect(loaded.definition.title).toBe("Software factory tutorial 🏭");
     expect(loaded.definition.validationCommands).toEqual([]);
@@ -34,7 +34,7 @@ describe("loadLesson", () => {
     expect(loaded.progress.slice(1).every((item) => item.id.length > 0 && item.label.length > 0)).toBe(true);
   });
 
-  it("groups the repository's own two-part ledger under the headings the sidebar renders", async () => {
+  it("groups the authored tutorial's two-part ledger under the headings the sidebar renders", async () => {
     // The fixture proves the parser; this proves the real ledger still feeds it
     // what it expects. A row that lands with no part renders above both
     // headings, which is the failure this catches and the fixture cannot.

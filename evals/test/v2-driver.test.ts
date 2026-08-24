@@ -162,7 +162,7 @@ afterEach(async () => {
 
 async function startDriver(options: CreateEvaluationWorkspaceOptions = {}) {
   const workspace = await createEvaluationWorkspace(options);
-  tempRoots.push(workspace.root);
+  tempRoots.push(workspace.repositoryRoot);
   const pty = new DriverFakePty();
   const workbookTutor = new DriverFakeMainTutor();
   const blockTutor = new DriverFakeBlockTutor();

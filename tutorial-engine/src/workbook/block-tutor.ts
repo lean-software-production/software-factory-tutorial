@@ -8,9 +8,11 @@ import {
   getAgentDir,
   type ToolDefinition
 } from "@earendil-works/pi-coding-agent";
+import { access, lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { isAbsolute, relative, sep } from "node:path";
 import { Type } from "typebox";
 import { BLOCK_TUTOR_MODEL_ENV, resolveBlockTutorModel } from "../agent/pi-adapter.js";
-import { createWorkspaceTools, WorkspaceBoundary } from "../agent/workspace-boundary.js";
+import { createWorkspaceTools, WorkspaceBoundary, type WorkspaceToolBoundary } from "../agent/workspace-boundary.js";
 import { createTutorialLogger, type TutorialLogger } from "../runtime-log.js";
 import type { Attempt } from "./attempts.js";
 import type { ActiveBlockContext } from "./pi-history.js";
@@ -39,6 +41,7 @@ export type WorkbookBlockTutorSessionFactory = (request: WorkbookBlockTutorSessi
 
 const SAFE_TOOL_NAMES = ["read", "grep", "find", "ls"];
 const READINESS_TOOL_NAME = "report_attempt_readiness";
+const PRIVATE_SESSION_STATE_DIRECTORY = ".tutorial";
 
 type Readiness = "likely_ready" | "still_working";
 
@@ -119,12 +122,238 @@ function assertNoReadinessAcceptanceClaims(text: string, label: string): void {
   }
 }
 
-function safeWorkspaceTools(workspace: string, boundary: WorkspaceBoundary, log: TutorialLogger): ToolDefinition[] {
+function inside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function pathSegments(path: string): string[] {
+  return path.replaceAll("\\", "/").split("/").filter(Boolean);
+}
+
+function firstSegment(path: string): string {
+  return pathSegments(path).at(0) ?? ".";
+}
+
+function hasPrivateSessionStateSegment(path: string): boolean {
+  return pathSegments(path).includes(PRIVATE_SESSION_STATE_DIRECTORY);
+}
+
+function assertPublicOverlayPath(path: string): void {
+  if (hasPrivateSessionStateSegment(path)) throw new Error("Private tutorial session state is not available to the block tutor.");
+}
+
+async function overlayPath(contentBoundary: WorkspaceBoundary, learnerBoundary: WorkspaceBoundary, path: string): Promise<{ absolute: string; relative: string }> {
+  assertPublicOverlayPath(path);
+  if (isAbsolute(path)) {
+    if (inside(learnerBoundary.root, path)) return learnerBoundary.resolve(relative(learnerBoundary.root, path));
+    if (inside(contentBoundary.root, path)) {
+      const contentRelative = relative(contentBoundary.root, path) || ".";
+      return firstSegment(contentRelative) === "factory" || firstSegment(contentRelative) === "calculator"
+        ? learnerBoundary.resolve(contentRelative)
+        : contentBoundary.resolve(contentRelative);
+    }
+    throw new Error("Path is outside the tutorial workspace.");
+  }
+
+  return firstSegment(path) === "factory" || firstSegment(path) === "calculator"
+    ? learnerBoundary.resolve(path)
+    : contentBoundary.resolve(path);
+}
+
+function wildcardPattern(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, ".*").replace(/\?/gu, ".");
+  return new RegExp(`^${escaped}$`, "u");
+}
+
+function overlayBoundaryRoot(relativePath: string, contentBoundary: WorkspaceBoundary, learnerBoundary: WorkspaceBoundary): string {
+  const segment = firstSegment(relativePath);
+  return segment === "factory" || segment === "calculator" ? learnerBoundary.root : contentBoundary.root;
+}
+
+function childOverlayPath(parent: string, child: string): string {
+  return parent === "." ? child : `${parent}/${child}`;
+}
+
+async function overlayRootChildren(contentAbsolute: string, learnerBoundary: WorkspaceBoundary): Promise<string[]> {
+  const children = new Set((await readdir(contentAbsolute)).filter((child) => child !== PRIVATE_SESSION_STATE_DIRECTORY));
+  for (const overlayRoot of ["factory", "calculator"]) {
+    try {
+      await learnerBoundary.resolve(overlayRoot);
+      children.add(overlayRoot);
+    } catch {
+      // The learner overlay wins when present, but an absent learner tree should
+      // not make a root find fall back to stale authored factory/calculator files.
+    }
+  }
+  return [...children].sort();
+}
+
+function createOverlayFindTool(
+  contentBoundary: WorkspaceBoundary,
+  learnerBoundary: WorkspaceBoundary,
+  audit?: (event: { tool: string; paths: string[]; mutation: boolean; outcome: string; message?: string }) => void
+): ToolDefinition {
+  return defineTool({
+    name: "find",
+    label: "Find files",
+    description: "Find files and directories inside the authored tutorial content and learner workspace overlay. The factory/ and calculator/ trees resolve to the learner workspace.",
+    parameters: Type.Object({
+      path: Type.Optional(Type.String({ minLength: 1, maxLength: 400, description: "Directory to search, relative to the tutorial workspace. Defaults to the workspace root." })),
+      pattern: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Optional basename pattern. '*' and '?' wildcards are supported." }))
+    }, { additionalProperties: false }),
+    async execute(id, params) {
+      const rawPath = params.path ?? ".";
+      let auditPaths = [rawPath.replaceAll("\\", "/")];
+      try {
+        const matcher = params.pattern ? wildcardPattern(params.pattern) : undefined;
+        const matches = new Set<string>();
+        const visit = async (virtualPath: string, isStart = false): Promise<void> => {
+          if (matches.size >= 1_000) return;
+          let resolved: Awaited<ReturnType<typeof overlayPath>>;
+          try {
+            resolved = await overlayPath(contentBoundary, learnerBoundary, virtualPath);
+          } catch (error) {
+            if (isStart) throw error;
+            return;
+          }
+          const boundaryRoot = overlayBoundaryRoot(resolved.relative, contentBoundary, learnerBoundary);
+          const real = await realpath(resolved.absolute).catch(() => resolved.absolute);
+          if (!inside(boundaryRoot, real)) {
+            if (isStart) throw new Error("Path is outside the tutorial workspace.");
+            return;
+          }
+          const entry = await lstat(resolved.absolute);
+          const name = resolved.relative === "." ? "." : resolved.relative.split("/").at(-1) ?? resolved.relative;
+          if (!matcher || matcher.test(name)) matches.add(resolved.relative);
+          if (!entry.isDirectory() || entry.isSymbolicLink()) return;
+          const children = resolved.relative === "."
+            ? await overlayRootChildren(resolved.absolute, learnerBoundary)
+            : (await readdir(resolved.absolute)).sort();
+          for (const child of children) {
+            const childPath = childOverlayPath(resolved.relative, child);
+            if (!hasPrivateSessionStateSegment(childPath)) await visit(childPath);
+          }
+        };
+        const start = await overlayPath(contentBoundary, learnerBoundary, rawPath);
+        auditPaths = [start.relative];
+        await visit(start.relative, true);
+        const sorted = [...matches].sort();
+        audit?.({ tool: "find", paths: auditPaths, mutation: false, outcome: "ok" });
+        return { content: [{ type: "text", text: sorted.join("\n") || "No files found." }], details: { matches: sorted } };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Tool failed.";
+        audit?.({ tool: "find", paths: auditPaths, mutation: false, outcome: /outside|private/i.test(message) ? "rejected" : "error", message });
+        throw error;
+      }
+    }
+  });
+}
+
+function createOverlayGrepTool(
+  contentBoundary: WorkspaceBoundary,
+  learnerBoundary: WorkspaceBoundary,
+  audit?: (event: { tool: string; paths: string[]; mutation: boolean; outcome: string; message?: string }) => void
+): ToolDefinition {
+  return defineTool({
+    name: "grep",
+    label: "grep",
+    description: "Search file contents inside the authored tutorial content and learner workspace overlay without exposing private session state.",
+    parameters: Type.Object({
+      pattern: Type.String({ minLength: 1, maxLength: 400, description: "Pattern to search for." }),
+      path: Type.Optional(Type.String({ minLength: 1, maxLength: 400, description: "File or directory to search. Defaults to the workspace root." })),
+      glob: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Optional basename or relative-path wildcard. '*' and '?' wildcards are supported." })),
+      ignoreCase: Type.Optional(Type.Boolean({ description: "Case-insensitive search." })),
+      literal: Type.Optional(Type.Boolean({ description: "Treat pattern as literal text." })),
+      context: Type.Optional(Type.Number({ minimum: 0, maximum: 20, description: "Lines to show before and after each match." })),
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: 1_000, description: "Maximum matches to return." }))
+    }, { additionalProperties: false }),
+    async execute(id, params) {
+      const rawPath = params.path ?? ".";
+      let auditPaths = [rawPath.replaceAll("\\", "/")];
+      try {
+        const context = Math.max(0, Math.min(20, Math.floor(params.context ?? 0)));
+        const limit = Math.max(1, Math.min(1_000, Math.floor(params.limit ?? 100)));
+        const glob = params.glob ? wildcardPattern(params.glob) : undefined;
+        const matchLine = params.literal
+          ? (line: string) => (params.ignoreCase ? line.toLowerCase().includes(params.pattern.toLowerCase()) : line.includes(params.pattern))
+          : ((regexp: RegExp) => (line: string) => regexp.test(line))(new RegExp(params.pattern, params.ignoreCase ? "iu" : "u"));
+        const output: string[] = [];
+        const details: Array<{ path: string; line: number }> = [];
+        const emitBlock = (relativePath: string, lines: string[], lineNumber: number) => {
+          const start = Math.max(1, lineNumber - context);
+          const end = Math.min(lines.length, lineNumber + context);
+          for (let current = start; current <= end; current++) {
+            const separator = current === lineNumber ? ":" : "-";
+            output.push(`${relativePath}${separator}${current}${separator} ${lines[current - 1] ?? ""}`);
+          }
+          details.push({ path: relativePath, line: lineNumber });
+        };
+        const visit = async (virtualPath: string, isStart = false): Promise<void> => {
+          if (details.length >= limit || hasPrivateSessionStateSegment(virtualPath)) return;
+          let resolved: Awaited<ReturnType<typeof overlayPath>>;
+          try {
+            resolved = await overlayPath(contentBoundary, learnerBoundary, virtualPath);
+          } catch (error) {
+            if (isStart) throw error;
+            return;
+          }
+          const entry = await lstat(resolved.absolute);
+          if (entry.isDirectory() && !entry.isSymbolicLink()) {
+            const children = resolved.relative === "."
+              ? await overlayRootChildren(resolved.absolute, learnerBoundary)
+              : (await readdir(resolved.absolute)).filter((child) => !hasPrivateSessionStateSegment(childOverlayPath(resolved.relative, child))).sort();
+            for (const child of children) await visit(childOverlayPath(resolved.relative, child));
+            return;
+          }
+          if (!entry.isFile()) return;
+          const name = resolved.relative.split("/").at(-1) ?? resolved.relative;
+          if (glob && !glob.test(resolved.relative) && !glob.test(name)) return;
+          const lines = (await readFile(resolved.absolute, "utf8")).replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+          for (const [index, line] of lines.entries()) {
+            if (details.length >= limit) return;
+            if (matchLine(line)) emitBlock(resolved.relative, lines, index + 1);
+          }
+        };
+        const start = await overlayPath(contentBoundary, learnerBoundary, rawPath);
+        auditPaths = [start.relative];
+        await visit(start.relative, true);
+        audit?.({ tool: "grep", paths: auditPaths, mutation: false, outcome: "ok" });
+        return { content: [{ type: "text", text: output.join("\n") || "No matches found" }], details: details.length ? { matches: details } : undefined };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Tool failed.";
+        audit?.({ tool: "grep", paths: auditPaths, mutation: false, outcome: /outside|private/i.test(message) ? "rejected" : "error", message });
+        throw error;
+      }
+    }
+  });
+}
+
+function safeWorkspaceTools(contentRoot: string, learnerBoundary: WorkspaceBoundary, contentBoundary: WorkspaceBoundary, log: TutorialLogger): ToolDefinition[] {
   const audit = (event: { tool: string; paths: string[]; mutation: boolean; outcome: string; message?: string }) => {
     log.info(`Block tutor tool audit: ${event.tool} ${event.outcome} (${event.paths.join(", ") || "."}; mutation=${event.mutation}).`);
   };
+  const readOnlyMutation = async (): Promise<never> => { throw new Error("Block tutor tools are read-only."); };
+  const readBoundary: WorkspaceToolBoundary = {
+    root: contentBoundary.root,
+    async readFile(path: string) { return readFile((await overlayPath(contentBoundary, learnerBoundary, path)).absolute); },
+    async access(path: string) { await access((await overlayPath(contentBoundary, learnerBoundary, path)).absolute); },
+    async writeFile() { return readOnlyMutation(); },
+    async mkdir() { return readOnlyMutation(); },
+    async move() { return readOnlyMutation(); },
+    async isDirectory(path: string) { return (await stat((await overlayPath(contentBoundary, learnerBoundary, path)).absolute)).isDirectory(); },
+    async stat(path: string) { return stat((await overlayPath(contentBoundary, learnerBoundary, path)).absolute); },
+    async readdir(path: string) {
+      const resolved = await overlayPath(contentBoundary, learnerBoundary, path);
+      return (await readdir(resolved.absolute)).filter((child) => !hasPrivateSessionStateSegment(childOverlayPath(resolved.relative, child)));
+    },
+    async exists(path: string) { try { await access((await overlayPath(contentBoundary, learnerBoundary, path)).absolute); return true; } catch { return false; } },
+    async resolve(path: string) { return overlayPath(contentBoundary, learnerBoundary, path); }
+  };
   const safeNames = new Set(SAFE_TOOL_NAMES);
-  return createWorkspaceTools(workspace, boundary, audit).filter((tool) => safeNames.has(tool.name));
+  const tools = createWorkspaceTools(contentRoot, readBoundary, audit)
+    .filter((tool) => safeNames.has(tool.name) && tool.name !== "find" && tool.name !== "grep");
+  return [...tools, createOverlayGrepTool(contentBoundary, learnerBoundary, audit), createOverlayFindTool(contentBoundary, learnerBoundary, audit)];
 }
 
 async function createPiWorkbookBlockTutorSession(workspace: string, request: WorkbookBlockTutorSessionFactoryRequest, log: TutorialLogger): Promise<WorkbookBlockTutorSession> {
@@ -163,6 +392,7 @@ async function createPiWorkbookBlockTutorSession(workspace: string, request: Wor
 
 export interface FastWorkbookBlockTutorOptions {
   workspace: string;
+  contentRoot?: string;
   log?: TutorialLogger;
   sessionFactory?: WorkbookBlockTutorSessionFactory;
 }
@@ -172,12 +402,14 @@ export class FastWorkbookBlockTutor implements WorkbookBlockTutor {
   readonly #log: TutorialLogger;
   readonly #sessionFactory: WorkbookBlockTutorSessionFactory;
   readonly #boundary: Promise<WorkspaceBoundary>;
+  readonly #contentBoundary: Promise<WorkspaceBoundary>;
 
   constructor(options: FastWorkbookBlockTutorOptions) {
     this.#log = options.log ?? createTutorialLogger();
     this.#boundary = WorkspaceBoundary.create(options.workspace);
+    this.#contentBoundary = WorkspaceBoundary.create(options.contentRoot ?? options.workspace);
     this.workspace = options.workspace;
-    this.#sessionFactory = options.sessionFactory ?? (async (request) => createPiWorkbookBlockTutorSession((await this.#boundary).root, request, this.#log));
+    this.#sessionFactory = options.sessionFactory ?? (async (request) => createPiWorkbookBlockTutorSession((await this.#contentBoundary).root, request, this.#log));
   }
 
   async hint(input: { context: ActiveBlockContext; briefing: string }): Promise<string> {
@@ -224,10 +456,11 @@ export class FastWorkbookBlockTutor implements WorkbookBlockTutor {
 
   async #createSession(tools: string[], extraTools: ToolDefinition[] = []): Promise<WorkbookBlockTutorSession> {
     const boundary = await this.#boundary;
-    const workspace = boundary.root;
+    const contentBoundary = await this.#contentBoundary;
+    const workspace = contentBoundary.root;
     const request = {
       systemPrompt: systemPrompt(),
-      customTools: [...safeWorkspaceTools(workspace, boundary, this.#log), ...extraTools],
+      customTools: [...safeWorkspaceTools(workspace, boundary, contentBoundary, this.#log), ...extraTools],
       tools
     };
     return this.#sessionFactory(request);

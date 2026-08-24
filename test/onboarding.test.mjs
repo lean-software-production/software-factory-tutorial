@@ -7,16 +7,25 @@ import { checkPiAuthentication, describeBlockTutorModel, describeDoerModel, desc
 import { tutorialArguments } from "../scripts/tutorial.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const tutorialRoot = resolve(repositoryRoot, "tutorial");
 
 describe("tutorial launcher", () => {
   it("starts the workbook from npm start", async () => {
     const manifest = JSON.parse(await readFile(resolve(repositoryRoot, "package.json"), "utf8"));
-    assert.equal(manifest.scripts.start, "npm run tutorial:workbook");
+    assert.equal(manifest.scripts.start, "npm run tutorial");
   });
 
-  it("forwards engine options after the tutorial workspace target", () => {
+  it("keeps the calculator workspace under the tutorial workspace", async () => {
+    const manifest = JSON.parse(await readFile(resolve(repositoryRoot, "package.json"), "utf8"));
+    assert.deepEqual(manifest.workspaces, ["tutorial/calculator", "tutorial-engine"]);
+  });
+
+  it("forwards engine options after the tutorial content target", () => {
     assert.deepEqual(tutorialArguments(["--port", "4310", "--no-open"]), [
-      "run", "--workspace=tutorial-engine", "dev", "--", repositoryRoot, "--port", "4310", "--no-open"
+      "run", "--workspace=tutorial-engine", "dev:workbook", "--", tutorialRoot, "--port", "4310", "--no-open"
+    ]);
+    assert.deepEqual(tutorialArguments(["--session", "lesson-007"]), [
+      "run", "--workspace=tutorial-engine", "dev:workbook", "--", tutorialRoot, "--session", "lesson-007"
     ]);
   });
 });

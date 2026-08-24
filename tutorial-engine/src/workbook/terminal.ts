@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import * as pty from "node-pty";
 import type { TutorialLogger } from "../runtime-log.js";
 import { createTutorialLogger } from "../runtime-log.js";
@@ -21,7 +21,7 @@ export interface TerminalPty {
   onExit(callback: (event: { exitCode: number; signal?: number }) => void): void;
 }
 
-export interface TerminalPtyOptions { cwd: string; cols: number; rows: number; }
+export interface TerminalPtyOptions { cwd: string; cols: number; rows: number; dependencyRoot?: string; }
 interface DockerPty extends TerminalPty { stopContainer?(): void; }
 const WORKBOOK_TERMINAL_IMAGE = "lean-software-production/workbook-terminal:latest";
 const OPENCODE_API_KEY_ENV = "OPENCODE_API_KEY";
@@ -33,8 +33,9 @@ const PI_PREFLIGHT = [
 ].join(" ");
 const DEFAULT_WRITABLE_WORKSPACE_PATHS = ["factory", "calculator", ".tmp", ".tutorial/.tmp", ".git"] as const;
 const DEFAULT_WRITABLE_SCRATCH_DIRECTORIES = [".tmp", ".tutorial/.tmp"] as const;
+const DEFAULT_READONLY_DEPENDENCY_PATHS = ["node_modules", "package.json", "package-lock.json"] as const;
 export type TerminalPtyFactory = (options: TerminalPtyOptions) => TerminalPty;
-export interface DockerRunArgumentsOptions { workspace: string; name: string; apiKey: string; writableWorkspacePaths?: readonly string[]; }
+export interface DockerRunArgumentsOptions { workspace: string; name: string; apiKey: string; writableWorkspacePaths?: readonly string[]; dependencyRoot?: string; readonlyDependencyPaths?: readonly string[]; }
 
 export interface ActiveObservedTerminalBlock {
   lessonId: string;
@@ -48,6 +49,7 @@ export type PracticeTranscript = { lessonId: string; blockId: string; transcript
 
 export interface WorkbookTerminalManagerOptions {
   workspace: string;
+  dependencyRoot?: string;
   getActiveBlock(): ActiveObservedTerminalBlock | undefined;
   submitAttempt: SubmitAttempt;
   ptyFactory?: TerminalPtyFactory;
@@ -83,16 +85,17 @@ export function requireOpenCodeApiKey(): string {
   return key;
 }
 
-export function assertDockerTerminalReady(workspace = process.cwd()): void {
+export function assertDockerTerminalReady(workspace: string | { workspace: string; dependencyRoot?: string } = process.cwd()): void {
   const apiKey = requireOpenCodeApiKey();
+  const roots = typeof workspace === "string" ? { workspace } : workspace;
   const available = spawnSync("docker", ["info"], { stdio: "ignore" });
   if (available.error || available.status !== 0) throw new Error("Docker must be running before starting the workbook terminal.");
   const image = spawnSync("docker", ["image", "inspect", WORKBOOK_TERMINAL_IMAGE], { stdio: "ignore" });
   if (image.error || image.status !== 0) throw new Error(`Docker image ${WORKBOOK_TERMINAL_IMAGE} is missing. Run npm run --workspace=tutorial-engine build:workbook-terminal.`);
-  prepareDefaultWritableWorkspaceDirectories(workspace);
+  prepareDefaultWritableWorkspaceDirectories(roots.workspace);
   const name = `workbook-terminal-preflight-${randomUUID()}`;
   try {
-    const args = dockerRunArguments({ workspace, name, apiKey });
+    const args = dockerRunArguments({ workspace: roots.workspace, dependencyRoot: roots.dependencyRoot, name, apiKey });
     args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
     execFileSync("docker", args, { stdio: "ignore" });
     const preflight = spawnSync("docker", ["exec", name, "node", "--input-type=module", "-e", PI_PREFLIGHT], { stdio: "ignore", timeout: 20_000 });
@@ -110,20 +113,36 @@ function prepareDefaultWritableWorkspaceDirectories(workspace: string): void {
   for (const child of DEFAULT_WRITABLE_SCRATCH_DIRECTORIES) mkdirSync(resolve(workspace, child), { recursive: true });
 }
 
-function workspaceChildForMount(workspace: string, child: string): string | undefined {
-  const candidate = resolve(workspace, child);
+function safeExistingChildForMount(root: string, child: string, label: string): string | undefined {
+  const candidate = resolve(root, child);
   if (!existsSync(candidate)) return undefined;
-  const realWorkspace = realpathSync(workspace);
+  const realRoot = realpathSync(root);
   const realCandidate = realpathSync(candidate);
-  const inside = relative(realWorkspace, realCandidate);
-  if (inside === "" || (!inside.startsWith("..") && !isAbsolute(inside))) return candidate;
-  throw new Error(`Refusing to mount ${child} because it resolves outside the workbook workspace.`);
+  const inside = relative(realRoot, realCandidate);
+  if (inside === "" || (inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside))) return candidate;
+  throw new Error(`Refusing to mount ${child} because it resolves outside the ${label}.`);
+}
+
+function workspaceChildForMount(workspace: string, child: string): string | undefined {
+  return safeExistingChildForMount(workspace, child, "workbook workspace");
+}
+
+function dependencyChildForMount(dependencyRoot: string | undefined, workspace: string, child: string): string | undefined {
+  if (!dependencyRoot) return undefined;
+  if (child === ".git" || child.startsWith(`.git/`)) throw new Error("Refusing to mount repository Git metadata as a dependency.");
+  if (existsSync(resolve(workspace, child))) return undefined;
+  return safeExistingChildForMount(dependencyRoot, child, "dependency root");
 }
 
 export function dockerRunArguments(options: DockerRunArgumentsOptions): string[] {
   const workspace = resolve(options.workspace);
+  const dependencyRoot = options.dependencyRoot ? resolve(options.dependencyRoot) : undefined;
   const [uid, gid] = dockerContainerUser().split(":");
   const args = ["run", "-d", "--rm", "--name", options.name, "--label", "workbook-terminal=true", "--user", dockerContainerUser(), "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--env", `${OPENCODE_API_KEY_ENV}=${options.apiKey}`, "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--tmpfs", `${CONTAINER_AGENT_DIR}:uid=${uid},gid=${gid},mode=0700`, "--mount", bindMount(workspace, "/workspace", true), "--workdir", "/workspace"];
+  for (const child of options.readonlyDependencyPaths ?? DEFAULT_READONLY_DEPENDENCY_PATHS) {
+    const source = dependencyChildForMount(dependencyRoot, workspace, child);
+    if (source) args.push("--mount", bindMount(source, `/workspace/${child}`, true));
+  }
   for (const child of options.writableWorkspacePaths ?? DEFAULT_WRITABLE_WORKSPACE_PATHS) {
     const source = workspaceChildForMount(workspace, child);
     if (source) args.push("--mount", bindMount(source, `/workspace/${child}`));
@@ -140,7 +159,7 @@ export function createDockerPty(options: TerminalPtyOptions): TerminalPty {
   const workspace = resolve(options.cwd);
   prepareDefaultWritableWorkspaceDirectories(workspace);
   const name = `workbook-terminal-${randomUUID()}`;
-  const args = dockerRunArguments({ workspace, name, apiKey: requireOpenCodeApiKey() });
+  const args = dockerRunArguments({ workspace, dependencyRoot: options.dependencyRoot, name, apiKey: requireOpenCodeApiKey() });
   args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
   try { execFileSync("docker", args, { stdio: "ignore" }); }
   catch (error) { throw new Error(`Could not start isolated terminal container: ${error instanceof Error ? error.message : String(error)}`); }
@@ -159,6 +178,7 @@ export function createDockerPty(options: TerminalPtyOptions): TerminalPty {
  */
 export class WorkbookTerminalManager {
   readonly workspace: string;
+  readonly dependencyRoot: string | undefined;
   #pty: TerminalPty | undefined;
   #client: TerminalClient | undefined;
   #replay = "";
@@ -179,6 +199,7 @@ export class WorkbookTerminalManager {
 
   constructor(options: WorkbookTerminalManagerOptions) {
     this.workspace = resolve(options.workspace);
+    this.dependencyRoot = options.dependencyRoot ? resolve(options.dependencyRoot) : undefined;
     this.#getActiveBlock = options.getActiveBlock;
     this.#submitAttempt = options.submitAttempt;
     this.#ptyFactory = options.ptyFactory ?? createDockerPty;
@@ -251,7 +272,7 @@ export class WorkbookTerminalManager {
 
   #ensurePty(): void {
     if (this.#pty) return;
-    const instance = this.#ptyFactory({ cwd: this.workspace, cols: 90, rows: 24 });
+    const instance = this.#ptyFactory({ cwd: this.workspace, dependencyRoot: this.dependencyRoot, cols: 90, rows: 24 });
     this.#pty = instance;
     instance.onData((data) => {
       this.#replay = boundedAppend(this.#replay, data, MAX_REPLAY_BYTES);

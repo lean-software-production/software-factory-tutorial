@@ -4,13 +4,14 @@
  * never be mistaken for the tutorial directory however the flags are ordered.
  */
 
-export const USAGE = "Usage: tutorial-engine <tutorial-directory> [--port 4310] [--host 0.0.0.0] [--no-open]";
+export const USAGE = "Usage: tutorial-engine <tutorial-directory> [--session <id>] [--port 4310] [--host 0.0.0.0] [--no-open]";
 
 export interface TutorialArguments {
   target: string;
   port?: number;
   host?: string;
   noOpen: boolean;
+  session?: string;
 }
 
 export type ParsedArguments = { kind: "run"; options: TutorialArguments } | { kind: "help" };
@@ -18,7 +19,7 @@ export type ParsedArguments = { kind: "run"; options: TutorialArguments } | { ki
 /** A misuse of the command line, reported with the usage line rather than a stack trace. */
 export class ArgumentError extends Error {}
 
-const VALUE_FLAGS = ["--port", "--host"] as const;
+const VALUE_FLAGS = ["--port", "--host", "--session"] as const;
 const BARE_FLAGS = ["--no-open"] as const;
 
 function splitFlag(argument: string): { flag: string; inlineValue?: string } {
@@ -49,6 +50,7 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
   let port: number | undefined;
   let host: string | undefined;
   let noOpen = false;
+  let session: string | undefined;
   let endOfFlags = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -70,7 +72,8 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
       }
       if (value === undefined || value === "") throw new ArgumentError(`${flag} needs a value.`);
       if (flag === "--port") port = parsePort(value);
-      else host = parseHost(value);
+      else if (flag === "--host") host = parseHost(value);
+      else session = value;
       continue;
     }
     if ((BARE_FLAGS as readonly string[]).includes(flag)) {
@@ -84,5 +87,5 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
   const [target, ...extra] = positional;
   if (!target) throw new ArgumentError("Name the tutorial directory to serve.");
   if (extra.length > 0) throw new ArgumentError(`Serve one tutorial directory at a time; got ${positional.length} (${positional.join(", ")}).`);
-  return { kind: "run", options: { target, port, host, noOpen } };
+  return { kind: "run", options: { target, port, host, noOpen, session } };
 }

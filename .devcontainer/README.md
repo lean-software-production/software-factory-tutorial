@@ -1,9 +1,9 @@
 # Devcontainer
 
-A ready-made environment for the tutorial, so participants don't have to install
+A ready-made environment for the tutorial and its engine, so participants don't have to install
 Node, npm 11 and Pi themselves. Docker and VS Code remain optional — the tutorial
-runs fine on a host that already meets the prerequisites in the top-level
-[README](../README.md).
+runs fine on a host that already meets the learner prerequisites in
+[`tutorial/README.md`](../tutorial/README.md). The repository root remains the developer workspace.
 
 ## What is in the image
 
@@ -22,13 +22,17 @@ Open the repository in VS Code and choose **Dev Containers: Reopen in Container*
 or `devcontainer up --workspace-folder .` with the CLI. `post-create.sh` runs
 `npm install` once the container exists, so the first lesson doesn't wait on it.
 
-Then authenticate Pi and start the tutor:
+Then authenticate Pi and start the tutor from the repository root:
 
 ```sh
 pi          # enter /login and choose a provider
 npm run setup
 npm run tutorial -- --port 4310
 ```
+
+The launcher targets the authored `tutorial/` template, then prints a private session workspace path.
+When the lessons ask for shell commands, open a second terminal and `cd` to that printed workspace;
+`factory/` and `calculator/` are siblings there.
 
 If the host already exports `OPENCODE_API_KEY`, skip the `pi` step — see
 [Bringing a key from the host](#bringing-a-key-from-the-host) below.
@@ -45,7 +49,7 @@ no authentication and edits the working tree.
 ## Which models the container picks
 
 The tutorial runs separate model choices — see
-[Models, on purpose](../README.md#models-on-purpose) — and the container supplies
+[Models, on purpose](../tutorial/README.md#models-on-purpose) — and the container supplies
 or reports defaults for the main tutor, fast block helper, and doer:
 
 | Agent | Model | Set by |

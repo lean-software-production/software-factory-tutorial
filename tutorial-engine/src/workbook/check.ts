@@ -3,13 +3,13 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 
-// This file lives at tutorial-engine/src/workbook/check.ts; the workbook is
-// authored at the repository root, three directories up from here. Resolving
-// the default target from this file's own location (rather than from
-// `process.cwd()`) means `check:workbook` finds workbook.md no matter which
-// directory `npm run` was invoked from, including from the tutorial-engine
-// workspace itself.
+// This file lives at tutorial-engine/src/workbook/check.ts; the default workbook
+// is authored in the repository's tutorial/ root. Resolving that target
+// from this file's own location (rather than from `process.cwd()`) means
+// `check:workbook` finds workbook.md no matter which directory `npm run` was
+// invoked from, including from the tutorial-engine workspace itself.
 const REPOSITORY_ROOT = resolve(fileURLToPath(import.meta.url), "../../../..");
+export const DEFAULT_WORKBOOK_TARGET = resolve(REPOSITORY_ROOT, "tutorial");
 
 export interface WorkbookCheckDependencies {
   load?: (target: string) => Promise<LoadedWorkbook>;
@@ -27,7 +27,7 @@ export async function runWorkbookCheck(argv: readonly string[], dependencies: Wo
   const writeLine = dependencies.writeLine ?? console.log;
   const writeError = dependencies.writeError ?? console.error;
 
-  const target = argv[0] ?? REPOSITORY_ROOT;
+  const target = argv[0] ?? DEFAULT_WORKBOOK_TARGET;
   let workbook: LoadedWorkbook;
   try {
     workbook = await load(target);

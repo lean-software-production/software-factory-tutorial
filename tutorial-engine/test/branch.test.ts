@@ -41,7 +41,7 @@ describe("lineBranchName", () => {
 });
 
 describe("ensureLineBranch", () => {
-  it("moves the learner off the branch they cloned, so the line's commits land elsewhere", async () => {
+  it("moves a one-root workspace onto a discardable line branch", async () => {
     const workspace = await repository();
 
     expect(await ensure(workspace)).toEqual({ moved: "created", branch: branch });

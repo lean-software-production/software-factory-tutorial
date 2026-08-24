@@ -63,8 +63,13 @@ describe("WorkbookTerminalManager", () => {
     await mkdir(resolve(workspace, ".tmp"));
     await mkdir(resolve(workspace, ".tutorial/.tmp"), { recursive: true });
     await mkdir(resolve(workspace, ".git"));
+    const dependencyRoot = await mkdtemp(resolve(tmpdir(), "workbook-terminal-deps-"));
+    tempDirs.push(dependencyRoot);
+    await mkdir(resolve(dependencyRoot, "node_modules/.bin"), { recursive: true });
+    await writeFile(resolve(dependencyRoot, "package.json"), "{}\n", "utf8");
+    await mkdir(resolve(dependencyRoot, ".git"));
 
-    const args = dockerRunArguments({ workspace, name: "workbook-terminal-test", apiKey: "test-opencode-key" });
+    const args = dockerRunArguments({ workspace, dependencyRoot, name: "workbook-terminal-test", apiKey: "test-opencode-key" });
     const mounts = args.filter((arg) => arg.startsWith("type=bind"));
 
     expect(args).toContain("--read-only");
@@ -78,6 +83,9 @@ describe("WorkbookTerminalManager", () => {
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, ".tmp")},dst=/workspace/.tmp`);
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, ".tutorial/.tmp")},dst=/workspace/.tutorial/.tmp`);
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, ".git")},dst=/workspace/.git`);
+    expect(mounts).toContain(`type=bind,src=${resolve(dependencyRoot, "node_modules")},dst=/workspace/node_modules,readonly`);
+    expect(mounts).toContain(`type=bind,src=${resolve(dependencyRoot, "package.json")},dst=/workspace/package.json,readonly`);
+    expect(mounts).not.toContain(`type=bind,src=${resolve(dependencyRoot, ".git")},dst=/workspace/.git,readonly`);
     expect(mounts).not.toContain(expect.stringContaining("auth.json"));
     expect(mounts).not.toContain(`type=bind,src=${workspace},dst=/workspace`);
   });

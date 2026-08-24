@@ -1,5 +1,6 @@
 import type { StartedWorkbookServer, WorkbookServerOptions } from "../../tutorial-engine/src/workbook/server.js";
 import type { WorkbookEvent } from "../../tutorial-engine/src/workbook/events.js";
+import type { TutorialSessionPaths } from "../../tutorial-engine/src/session-workspace.js";
 
 export type PublicWorkbookState = Record<string, unknown>;
 
@@ -46,8 +47,11 @@ export interface V2SessionTrace {
 }
 
 export interface EvaluationWorkspace {
+  repositoryRoot: string;
   root: string;
   webRoot: string;
-  startServer(options?: Partial<Omit<WorkbookServerOptions, "target" | "webRoot">>): Promise<StartedWorkbookServer>;
+  sessions: TutorialSessionPaths[];
+  latestSession(): TutorialSessionPaths;
+  startServer(options?: Partial<Omit<WorkbookServerOptions, "target" | "webRoot" | "session">>): Promise<StartedWorkbookServer>;
   close(): Promise<void>;
 }

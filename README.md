@@ -1,141 +1,44 @@
-# Software factory tutorial 🏭
+# Software factory tutorial developer workspace
 
-You're going to build one assembly line: software that improves a codebase a little at a time and checks its own work.
+This repository contains a learner tutorial and the local engine that runs it. The repository root is the developer workspace; the authored tutorial template lives under [`tutorial/`](tutorial/). Each launch creates or reopens a private learner workspace under `tutorial/.tutorial/<session-id>/workspace/`.
 
-A software factory is made of lines like it. A real one runs several — one that refactors, one that upgrades dependencies, one that writes the tests nobody got round to — each with its own agents, its own criteria, and its own definition of done, with the factory deciding which runs when. You are building the first, and everything you learn doing it is how you would build the rest.
+## Architecture map
 
-The tutorial is two pieces of work. **Part 1** builds one agent at a time and runs each of them by hand — a doer that changes the code, then a validator that gathers independent evidence about the change — so you can see what each one contributes before anything is automated. **Part 2** joins them into an assembly line, takes you out of the loop, and then builds the instruments you need to operate something you are no longer driving: a record of what it did, a live view of what it is doing, a way to ask about a finished run, and a way to say something to a station while it works.
+| Path | Purpose |
+| --- | --- |
+| [`tutorial/`](tutorial/) | Learner-facing workbook, lessons, specs, seed files, and the authored `factory/`/calculator template. Do not treat it as writable learner state. |
+| [`tutorial-engine/`](tutorial-engine/) | Generic browser-led workbook engine and its tests. The root launcher points it at `tutorial/`. |
+| [`scripts/`](scripts/) | Root convenience launchers and setup helpers. |
+| [`evals/`](evals/) | Live and deterministic tutor evaluation harnesses. |
+| [`docs/plans/`](docs/plans/), [`docs/superpowers/plans/`](docs/superpowers/plans/), [`tutorial-engine/docs/plans/`](tutorial-engine/docs/plans/) | Historical planning records; paths inside them may predate the `tutorial/` split. |
 
-## About the calculator
+## Root commands
 
-The raw material is a natural-language calculator written in TypeScript. It has a solid set of automated tests to provide your first validation evidence, but its code has become messy and hard to maintain. You can inspect the code in [`./calculator`](./calculator). Your job is to make safe, repeated refactorings that clean it up without changing what it does.
-
-See the calculator's [README](./calculator/README.md) for more details.
-
-## Your goal
-
-You begin with a single headless `pi -p` command that reads the calculator and answers a question. It creates no files and there is no loop yet. From there you build a doer that changes the code, then a validator that checks the change against written criteria, then carry the validator's findings back to the doer by hand. Only once you have run that loop yourself do you automate it.
-
-Thirteen lessons: 001–004 are Part 1, 005–013 are Part 2. Each part is a separate piece of homework, and the tutor stops at the end of lesson 004 so you can choose whether to carry straight on.
-
-The two parts are comparable homework, but not comparable in length. Part 2 is roughly twice the lessons, because automating something you were doing by hand is the easy half — the other half is being able to see what it did once you stopped watching, and neither half is optional. Every lesson in it is the same size as a lesson in Part 1, and there are simply more of them.
-
-## Setup
-
-You need Node.js 24.2 or later on the 24.x line, npm 11 or later, a browser, and an authenticated `pi` on your `PATH`. Use Vim or any other editor; Docker and VS Code are not required.
-
-The Node floor is not arbitrary, and neither is the ceiling. Below 24.2 the `npm run setup`
-preflight silently does nothing, so it never tells you whether Pi is authenticated. And on
-Node 23 the runtime prints an experimental-feature warning to stderr that makes the
-calculator's own test suite fail before you have touched a line of it — which would then fail
-the first success criterion on every verdict the tutorial teaches you to trust. Odd-numbered
-Node releases are Current rather than LTS, and that is where such warnings appear; this
-tutorial is tested on 24.x. Node 24 bundles npm 11, so a current Node gets you both.
-
-From the repository root:
+Run these from the repository root:
 
 ```sh
-npm install
-npm run setup
-```
-
-The lessons call `pi` directly, so it has to be on your `PATH`. `npm install` already
-fetched the version this repository pins, so exporting npm's local binary directory is
-enough; install it globally if you would rather:
-
-```sh
-export PATH="$PWD/node_modules/.bin:$PATH"
-```
-
-`npm run setup` checks that Pi has an authenticated model for the web tutor. If it reports that Pi needs authentication, run `pi`, enter `/login`, and choose a provider. Pi keeps those credentials in its user-level configuration; this repository does not store them.
-
-It also names the model choices the tutorial runs on.
-
-## Models, on purpose
-
-The tutorial runs three agent roles, and they want different things.
-
-| Agent | Wants | Chosen with |
-| --- | --- | --- |
-| The main web tutor | To teach well, at whatever a good explanation costs you | `TUTOR_MODEL` |
-| The fast block helper | Quick read-only hints and readiness checks | `BLOCK_TUTOR_MODEL` |
-| The doer you drive with `pi -p` | To be cheap and fast | `pi`, then `/model` |
-
-The doer's mistakes are not a problem to design away — catching them with independent
-validation is the skill this tutorial teaches, so a small quick model is the better
-raw material. Give the main tutor whatever you would rather it used:
-
-```sh
-export TUTOR_MODEL=<provider>/<model>   # `pi --list-models` shows your options
-```
-
-Leave `TUTOR_MODEL` unset and Pi picks the main tutor's model for you. Name a model
-that does not exist or is not authenticated and the tutor falls back to Pi's pick
-rather than failing; `npm run setup` reports whichever happened.
-
-The block helper is a short-lived read-only tutor used for fast hints and readiness
-signals. It normally follows Pi's ordinary model selection too. If you want it to use
-a smaller or faster authenticated model, set it separately:
-
-```sh
-export BLOCK_TUTOR_MODEL=<provider>/<model>
-```
-
-Leave `BLOCK_TUTOR_MODEL` unset and Pi chooses normally. Invalid or unauthenticated
-values fall back to that same Pi choice.
-
-## Start the tutorial
-
-```sh
-npm run tutorial
-```
-
-The command opens the local tutor in your browser. It listens on loopback only; if no
-browser opens, visit the printed address yourself.
-
-To reach the tutor from another machine — for example through a proxy that serves it under
-a subfolder, such as the EnsembleWorks canvas dev-server control at `/dev/4310/` — pick the
-port the proxy expects and bind beyond loopback:
-
-```sh
-npm run tutorial -- --port 4310 --host 0.0.0.0 --no-open
-```
-
-The tutor has no authentication and edits the working tree, so only do that on a network you
-trust.
-
-## Check the workbook
-
-Before starting the tutor, check the authored workbook without opening a browser or starting a server:
-
-```sh
+npm install                 # install root, engine, and calculator workspaces
+npm run setup               # check Node, npm, Pi, and configured tutor models
+npm run tutorial            # create a fresh learner session and launch the workbook engine
+npm run tutorial -- --session <id>  # reopen an explicit session ID
 npm run --workspace=tutorial-engine check:workbook
 ```
 
-This uses the same loader as the tutor. It checks lesson and optional-part structure, manifests,
-blocks, and lesson references, then prints the workbook's lesson and part counts.
-
-Leave it running and open a second terminal at the repository root. Stay there: every command the lessons give you is written to run from the root, and the scripts you build take their paths relative to it. If you put `pi` on your `PATH` with the `export` above rather than installing it globally, repeat that export in this terminal too — from lesson 002 the scripts you write call `pi` themselves.
-
-The files you write by hand all live under `factory/`, which is where the tutor looks for your work. Edit them with your usual editor as the tutor instructs, then go back to the tutor for the next step or for feedback. Once you have created `factory/refactor-do.sh` in lesson 002, run it directly:
+Useful developer checks:
 
 ```sh
-chmod +x factory/refactor-do.sh
-./factory/refactor-do.sh
+npm run test:onboarding
+npm run --workspace=tutorial-engine check
+npm run --workspace=tutorial/calculator test
+npm run check:eval
+npm run test:eval
 ```
 
-Lesson 005 moves the whole line into `factory/refactor/`, and from then on you run `./factory/refactor/run.sh`. From lesson 010 you also build scripts that sit one level up, in `factory/` itself, for watching and questioning a line while it runs — those want a second terminal of their own, and lesson 012 wants a third. The lessons use Pi as the default doer. Advanced users may substitute another CLI harness when it preserves the doer requirements described in each lesson.
+`npm run check` runs the full deterministic root check. `npm run eval` is the explicit live evaluator command and may spend model tokens.
 
-## Where to begin, and how to resume
+## Start points
 
-The first time you run `npm run tutorial`, it asks where to start. Start at the beginning to build everything yourself. Start at Part 2 to skip the first four lessons: it copies the files those lessons build into `factory/` and opens the assembly line, so you get Part 2 without having written Part 1 by hand.
-
-After that, running it again offers to resume as well. Resume keeps your factory files and asks a fresh tutor process to inspect them before continuing. The other two options delete everything in `factory/` first.
-
-The tutor keeps its own state — the transcript and how far you have got — in `.tutorial/.tmp/`. Your line's regenerated evidence stays in `factory/**/.tmp/`. Both locations are ignored by git; the scripts and prompts you write are not, so your own work is yours to commit if you want to keep it.
-
-Each session moves you onto a branch of its own, named `factory-line-` and the date and time. From lesson 007 your line commits to the calculator, and from 008 it does so without asking, so those commits land there rather than on the branch you cloned.
-
-## Inspiration
-
-This independent TypeScript kata was inspired by Chelsea Troy's natural-language calculator exercise. See [`ATTRIBUTION.md`](ATTRIBUTION.md).
+- Learners: start with [`tutorial/README.md`](tutorial/README.md). Start the tutor with the root `npm run tutorial` convenience command, save the printed session ID if you want to resume, then run lesson shell commands from the printed `.tutorial/<id>/workspace` path.
+- Engine developers: start with [`tutorial-engine/README.md`](tutorial-engine/README.md) and ADRs in [`tutorial-engine/docs/adr/`](tutorial-engine/docs/adr/).
+- Curriculum maintainers: edit authored lesson prose under [`tutorial/lessons/`](tutorial/lessons/) and canonical lesson specs under [`tutorial/docs/specs/`](tutorial/docs/specs/).
+- Coding agents: read [`AGENTS.md`](AGENTS.md) for the repository map, workflow rules, and curriculum-writing conventions.

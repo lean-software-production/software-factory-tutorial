@@ -8,7 +8,7 @@ import type { V2GateResult } from "../v2/scenarios.js";
 import type { V2SessionTrace } from "../v2/types.js";
 
 const lessonId = "001-live-session";
-const exactCommand = "mkdir -p .tmp && printf 'command block complete\\n' > .tmp/evaluator-command.txt && cat .tmp/evaluator-command.txt";
+const exactCommand = "mkdir -p factory/.tmp && printf 'command block complete\\n' > factory/.tmp/evaluator-command.txt && cat factory/.tmp/evaluator-command.txt";
 
 function event(event: Record<string, unknown>): WorkbookEvent {
   return { at: "2026-08-20T00:00:00.000Z", ...event } as WorkbookEvent;
@@ -63,7 +63,7 @@ function auditableTrace(): V2SessionTrace {
   );
   trace.artifacts.push(
     { path: "editor-artifacts/evaluator-editor.txt", content: satisfactoryEditorDraft },
-    { path: ".tmp/evaluator-command.txt", content: "command block complete\n" }
+    { path: "factory/.tmp/evaluator-command.txt", content: "command block complete\n" }
   );
   return trace;
 }
@@ -101,7 +101,7 @@ describe("live v2 evaluator regressions", () => {
     expect(judgeInput).toContain("terminal:exact-command:verified");
     expect(judgeInput).toContain("command block complete");
     expect(judgeInput).toContain("The public workbook state showed the command block.");
-    expect(judgeInput).toContain(".tmp/evaluator-command.txt");
+    expect(judgeInput).toContain("factory/.tmp/evaluator-command.txt");
     expect(judgeInput).not.toContain('"tutor":');
     expect(judgeInput).not.toContain("This is private tutor guidance");
     expect(judgeInput).not.toContain("Do not reveal an exact command");

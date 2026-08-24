@@ -33,7 +33,7 @@ export interface WorkbookChapter {
 }
 export interface LoadedWorkbook { workspace: string; identity: WorkbookIdentity; introduction: string; chapters: WorkbookChapter[]; }
 
-/** The workbook document and lesson directories are authored at the repository root. */
+/** The workbook document and lesson directories are authored relative to a workbook target. */
 const WORKBOOK_DOCUMENT = "workbook.md";
 const LESSONS_ROOT = "lessons";
 const PARTS_ROOT = "parts";

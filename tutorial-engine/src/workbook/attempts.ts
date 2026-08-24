@@ -2,7 +2,7 @@ import type { Dirent } from "node:fs";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
-import { tutorialStatePath } from "../tutorial-state.js";
+import { tutorialSessionStatePath, tutorialStatePath } from "../tutorial-state.js";
 import type { ReflectionTurn } from "./events.js";
 
 export type AttemptKind = "editor" | "terminal" | "reflection";
@@ -70,10 +70,23 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await rename(temporary, path);
 }
 
+export interface AttemptStoreRoots { stateRoot: string; }
+
 export class AttemptStore {
   readonly workspace: string;
+  readonly stateRoot: string;
 
-  constructor(workspace: string) { this.workspace = resolve(workspace); }
+  constructor(workspace: string);
+  constructor(roots: AttemptStoreRoots);
+  constructor(input: string | AttemptStoreRoots) {
+    if (typeof input === "string") {
+      this.workspace = resolve(input);
+      this.stateRoot = tutorialStatePath(this.workspace);
+    } else {
+      this.stateRoot = resolve(input.stateRoot);
+      this.workspace = this.stateRoot;
+    }
+  }
 
   async create(input: AttemptInput): Promise<Attempt> {
     assertIdentifier(input.lessonId, "Attempt lesson ID");
@@ -166,7 +179,7 @@ export class AttemptStore {
   }
 
   #pointer(attempt: Attempt): AttemptPointer { return { id: attempt.id, lessonId: attempt.lessonId, blockId: attempt.blockId, version: attempt.version }; }
-  #root(): string { return tutorialStatePath(this.workspace, "workbook", "attempts"); }
+  #root(): string { return tutorialSessionStatePath(this.stateRoot, "workbook", "attempts"); }
   #blockDirectory(lessonId: string, blockId: string): string { return resolve(this.#root(), encodedSegment(lessonId, "Attempt lesson ID"), encodedSegment(blockId, "Attempt block ID")); }
   #attemptPath(lessonId: string, blockId: string, version: number, id: string): string { return resolve(this.#blockDirectory(lessonId, blockId), `${version}-${id}.json`); }
   #currentPath(lessonId: string, blockId: string): string { return resolve(this.#blockDirectory(lessonId, blockId), "current.json"); }

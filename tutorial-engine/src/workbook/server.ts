@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, realpath, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { extname, resolve, sep } from "node:path";
+import { dirname, extname, resolve, sep } from "node:path";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { LOOPBACK_HOST } from "../server/local-server.js";
 import type { TutorialLogger } from "../runtime-log.js";
@@ -15,7 +15,8 @@ import { submitReflectionAttempt } from "./reflection.js";
 import { promoteCurrentEditorAttempt, resolveEditorTarget } from "./editor.js";
 import { AttemptStore, type Attempt, type AttemptEvidence } from "./attempts.js";
 import { FastWorkbookBlockTutor, type WorkbookBlockTutor } from "./block-tutor.js";
-import { MainWorkbookTutor as DefaultMainWorkbookTutor, type MainTutorContext, type MainWorkbookTutor, type TutorDecision, type TutorReplyResult } from "./tutor.js";
+import { MainWorkbookTutor as DefaultMainWorkbookTutor, type MainTutorContext, type MainWorkbookTutor, type TutorDecision } from "./tutor.js";
+import { tutorialStatePath } from "../tutorial-state.js";
 import { WorkbookTimeline, type BlockTutorReadiness, type TimelineMessage, type TutorFailure, type WorkbookTimelineRecord } from "./timeline.js";
 import type { EditorPracticeBlock, WorkbookBlock, WorkbookLesson } from "./contract.js";
 
@@ -25,7 +26,8 @@ const MAX_MESSAGE_BYTES = 4_000;
 const REVIEW_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please try another attempt in a moment.";
 const TUTOR_UNAVAILABLE = "The tutor is temporarily unavailable. Please retry.";
 
-export interface WorkbookServerOptions { target: string; webRoot: string; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; mainTutor?: MainWorkbookTutor; blockTutor?: WorkbookBlockTutor; }
+export interface WorkbookRuntimeDescriptor { contentRoot: string; sessionRoot: string; workspaceRoot: string; dependencyRoot?: string; }
+export interface WorkbookServerOptions { target: string; webRoot: string; session?: WorkbookRuntimeDescriptor; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; mainTutor?: MainWorkbookTutor; blockTutor?: WorkbookBlockTutor; }
 export interface StartedWorkbookServer { url: string; port: number; host: string; close(): Promise<void>; }
 
 type PublicCheckpoint = {
@@ -156,6 +158,24 @@ function publicTimeline(loaded: LoadedWorkbook, records: readonly WorkbookTimeli
   return output;
 }
 
+
+async function requireDirectoryRoot(path: string, label: string): Promise<string> {
+  const real = await realpath(resolve(path));
+  if (!(await stat(real)).isDirectory()) throw new Error(`${label} must be a directory: ${path}`);
+  return real;
+}
+
+async function resolveRuntime(options: WorkbookServerOptions): Promise<Required<WorkbookRuntimeDescriptor>> {
+  const contentRoot = await requireDirectoryRoot(options.session?.contentRoot ?? options.target, "Workbook content root");
+  const sessionRoot = options.session ? await requireDirectoryRoot(options.session.sessionRoot, "Workbook session root") : resolve(tutorialStatePath(options.target));
+  const workspaceRoot = await requireDirectoryRoot(options.session?.workspaceRoot ?? options.target, "Workbook workspace root");
+  const defaultDependencyRoot = resolve(contentRoot, "..");
+  const dependencyRoot = options.session?.dependencyRoot === undefined
+    ? await requireDirectoryRoot(defaultDependencyRoot, "Workbook dependency root").catch(() => dirname(contentRoot))
+    : await requireDirectoryRoot(options.session.dependencyRoot, "Workbook dependency root");
+  return { contentRoot, sessionRoot, workspaceRoot, dependencyRoot };
+}
+
 function canonicalCompletedId(record: WorkbookTimelineRecord): BlockId | undefined {
   if (record.type === "block_completed") {
     if (record.blockId.includes("--")) return record.blockId;
@@ -232,7 +252,7 @@ function publicOrderedBlock(block: OrderedWorkbookBlock, index: number) {
   };
 }
 
-async function publicState(loaded: LoadedWorkbook, records: WorkbookTimelineRecord[], attempts: AttemptStore) {
+async function publicState(loaded: LoadedWorkbook, learnerWorkspace: string, records: WorkbookTimelineRecord[], attempts: AttemptStore) {
   const stream = buildWorkbookBlockStream(loaded);
   const workbookProjection = projectWorkbookBlocks(stream, records);
   const current = workbookProjection.current;
@@ -260,7 +280,7 @@ async function publicState(loaded: LoadedWorkbook, records: WorkbookTimelineReco
     if (authored.type === "terminal-practice") return { ...withCheckpoint, verified: currentAttempt?.status === "accepted", terminalHtml: currentAttempt?.evidence.kind === "terminal" && currentAttempt.status === "accepted" ? currentAttempt.evidence.terminalHtml : undefined };
     if (authored.type === "editor-practice" && active && !completed) {
       if (currentAttempt?.evidence.kind === "editor") return { ...withCheckpoint, revision: currentAttempt.version, draftText: currentAttempt.evidence.text, editorStatus: checkpoint?.status === "reviewing" ? "reviewing" : checkpoint?.status === "feedback" ? "feedback" : checkpoint?.status === "accepted" ? "unlocked" : "editing", feedback: checkpoint?.feedback };
-      return { ...withCheckpoint, revision: 0, draftText: await readTargetDraftText(loaded.workspace, authored).catch(() => ""), editorStatus: "editing" };
+      return { ...withCheckpoint, revision: 0, draftText: await readTargetDraftText(learnerWorkspace, authored).catch(() => ""), editorStatus: "editing" };
     }
     if (authored.type === "editor-practice" && currentAttempt?.status === "accepted") return { ...withCheckpoint, revision: currentAttempt.version, editorStatus: "unlocked" };
     return withCheckpoint;
@@ -296,16 +316,18 @@ function canCompleteBlock(block: OrderedWorkbookBlock, projection: WorkbookProje
 export async function startWorkbookServer(options: WorkbookServerOptions): Promise<StartedWorkbookServer> {
   const log = options.logger ?? createTutorialLogger();
   await access(resolve(options.webRoot, "index.html"));
-  const loaded = await loadWorkbook(options.target);
+  const runtime = await resolveRuntime(options);
+  const loaded = await loadWorkbook(runtime.contentRoot);
+  const learnerWorkspace = runtime.workspaceRoot;
   const embeddedTerminalEnabled = options.embeddedTerminal ?? true;
   const host = options.host ?? LOOPBACK_HOST;
   if (embeddedTerminalEnabled && !isLoopbackHost(host)) throw new Error("The embedded terminal can only be enabled on a loopback host; it exposes an isolated container shell.");
-  if (embeddedTerminalEnabled) { requireOpenCodeApiKey(); if (!options.terminalPtyFactory) assertDockerTerminalReady(loaded.workspace); }
+  if (embeddedTerminalEnabled) { requireOpenCodeApiKey(); if (!options.terminalPtyFactory) assertDockerTerminalReady({ workspace: learnerWorkspace, dependencyRoot: runtime.dependencyRoot }); }
 
-  const timeline = new WorkbookTimeline(loaded.workspace);
-  const attempts = new AttemptStore(loaded.workspace);
-  const mainTutor = options.mainTutor ?? new DefaultMainWorkbookTutor({ workspace: loaded.workspace, log });
-  const blockTutor = options.blockTutor ?? new FastWorkbookBlockTutor({ workspace: loaded.workspace, log });
+  const timeline = new WorkbookTimeline({ stateRoot: runtime.sessionRoot });
+  const attempts = new AttemptStore({ stateRoot: runtime.sessionRoot });
+  const mainTutor = options.mainTutor ?? new DefaultMainWorkbookTutor({ workspace: runtime.contentRoot, log });
+  const blockTutor = options.blockTutor ?? new FastWorkbookBlockTutor({ workspace: learnerWorkspace, contentRoot: runtime.contentRoot, log });
   let records = await timeline.read();
   let closed = false;
   let restoringFailed = false;
@@ -388,7 +410,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     return trimmed.slice(0, 1_000);
   };
   const newestBriefing = (lessonId: string, blockId: string) => [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "block_tutor_briefed" }> => record.type === "block_tutor_briefed" && record.lessonId === lessonId && record.blockId === blockId);
-  const currentPublicState = () => publicState(loaded, records, attempts);
+  const currentPublicState = () => publicState(loaded, learnerWorkspace, records, attempts);
   const appendFailure = async (input: Omit<TutorFailure, "id" | "sequence" | "at" | "type"> & { operation: TutorFailure["operation"] }): Promise<void> => {
     await append({ type: "tutor_failed", ...input });
   };
@@ -482,7 +504,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       if (decision.outcome === "accepted") {
         if (current.evidence.kind === "editor" && active.block.type === "editor-practice") {
           try {
-            if (!await promoteCurrentEditorAttempt({ workspace: loaded.workspace, attempts, lessonId: active.lessonId, block: { ...active.block, id: active.id }, attemptId: current.id })) {
+            if (!await promoteCurrentEditorAttempt({ workspace: learnerWorkspace, attempts, lessonId: active.lessonId, block: { ...active.block, id: active.id }, attemptId: current.id })) {
               await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
               await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK });
               return;
@@ -542,7 +564,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     const active = activeDeclaredBlock();
     return active?.block.type === "terminal-practice" ? { lessonId: active.lessonId, blockId: active.id, command: active.block.markdown, context: active.block.markdown, expectedObservation: active.block.tutor } : undefined;
   };
-  const terminal = embeddedTerminalEnabled ? new WorkbookTerminalManager({ workspace: loaded.workspace, getActiveBlock: activeObservedBlock, submitAttempt: async (input) => { await submitAttempt(input); }, ptyFactory: options.terminalPtyFactory ?? createDockerPty, debounceMs: options.terminalDebounceMs, logger: log }) : undefined;
+  const terminal = embeddedTerminalEnabled ? new WorkbookTerminalManager({ workspace: learnerWorkspace, dependencyRoot: runtime.dependencyRoot, getActiveBlock: activeObservedBlock, submitAttempt: async (input) => { await submitAttempt(input); }, ptyFactory: options.terminalPtyFactory ?? createDockerPty, debounceMs: options.terminalDebounceMs, logger: log }) : undefined;
 
   const appendHintForActiveBlock = async (blockId: string, requestId: string): Promise<"ok" | "inactive"> => {
     const active = activeDeclaredBlock();
@@ -725,7 +747,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) return sendJson(response, 400, { error: "Editor text is too large." });
         const active = activeDeclaredBlock();
         if (!active || active.block.type !== "editor-practice" || (active.id !== blockId && active.declaredId !== blockId)) return sendJson(response, 409, { error: "This editor block is not active yet." });
-        try { await resolveEditorTarget(loaded.workspace, active.block.path); } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Unsafe editor target path." }); }
+        try { await resolveEditorTarget(learnerWorkspace, active.block.path); } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Unsafe editor target path." }); }
         await submitAttempt({ lessonId: active.lessonId, blockId: active.id, evidence: { kind: "editor", text }, privateGuidance: active.block.tutor });
         return sendJson(response, 202, await currentPublicState());
       } catch (error) { const message = error instanceof Error ? error.message : "Bad request."; return sendJson(response, /accepted work|not active/i.test(message) ? 409 : 400, { error: message }); }

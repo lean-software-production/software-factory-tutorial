@@ -25,6 +25,8 @@ const learnerVisibleAuthorDirections = [
 ];
 function exposesAuthorDirection(markdown: string) { return learnerVisibleAuthorDirections.some((pattern) => pattern.test(markdown)); }
 
+const REAL_WORKBOOK_ROOT = resolve(import.meta.dirname, "../../tutorial");
+
 /**
  * Author a self-contained workbook whose every string is synthetic, so these
  * tests exercise front-matter assembly and directory-driven discovery without
@@ -349,7 +351,7 @@ describe("workbook lesson contract", () => {
   });
 
   it("keeps the real workbook free of unresolved [[lesson: reference tokens", async () => {
-    const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
+    const workbook = await loadWorkbook(REAL_WORKBOOK_ROOT);
     expect(workbook.introduction).not.toContain("[[lesson:");
     const offenders = workbook.chapters.flatMap((chapter) => {
       const found: string[] = [];
@@ -362,7 +364,7 @@ describe("workbook lesson contract", () => {
   });
 
   it("loads the real migrated lesson 001 content unchanged", async () => {
-    const lessonDir = resolve(import.meta.dirname, "../../lessons/001-run-an-agent-headlessly");
+    const lessonDir = resolve(REAL_WORKBOOK_ROOT, "lessons/001-run-an-agent-headlessly");
     const lesson = await loadWorkbookLesson(lessonDir, "001-run-an-agent-headlessly");
     expect(lesson.title).toBe("Run an agent headlessly");
     expect(lesson.durationMinutes).toBe(10);
@@ -374,7 +376,7 @@ describe("workbook lesson contract", () => {
   });
 
   it("loads the real migrated lesson 002 editor-practice blocks", async () => {
-    const lessonDir = resolve(import.meta.dirname, "../../lessons/002-build-a-doer");
+    const lessonDir = resolve(REAL_WORKBOOK_ROOT, "lessons/002-build-a-doer");
     const lesson = await loadWorkbookLesson(lessonDir, "002-build-a-doer");
     expect(lesson.blocks.map((block) => block.id)).toEqual([
       "key-concept",
@@ -399,7 +401,7 @@ describe("workbook lesson contract", () => {
   });
 
   it("loads the real migrated workbook rail with all 13 lessons", async () => {
-    const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
+    const workbook = await loadWorkbook(REAL_WORKBOOK_ROOT);
 
     expect(workbook.identity.title).toBe("Software Factory Tutorial");
     expect(workbook.chapters).toHaveLength(13);
@@ -422,7 +424,7 @@ describe("workbook lesson contract", () => {
   });
 
   it("keeps real curriculum block Markdown learner-facing", async () => {
-    const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
+    const workbook = await loadWorkbook(REAL_WORKBOOK_ROOT);
     const offenders = workbook.chapters.flatMap((chapter) =>
       chapter.lesson.blocks
         .filter((block) => exposesAuthorDirection(block.markdown))
@@ -432,7 +434,7 @@ describe("workbook lesson contract", () => {
   });
 
   it("begins lesson 005 with a Part 2 entry checkpoint", async () => {
-    const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
+    const workbook = await loadWorkbook(REAL_WORKBOOK_ROOT);
     const lesson005 = workbook.chapters.find(
       (chapter) => chapter.id === "005-join-them-into-a-line");
     const first = lesson005?.lesson.blocks[0];
@@ -442,7 +444,7 @@ describe("workbook lesson contract", () => {
   });
 
   it("ends lesson 013 with a capstone closure", async () => {
-    const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
+    const workbook = await loadWorkbook(REAL_WORKBOOK_ROOT);
     const lesson013 = workbook.chapters.find(
       (chapter) => chapter.id === "013-oversee-the-orchestrator");
     const blocks = lesson013?.lesson.blocks ?? [];
@@ -458,7 +460,7 @@ describe("workbook lesson contract", () => {
     // canonical "one or more assembly lines and their orchestrator(s)" definition
     // that docs/GLOSSARY.md and lesson 010 use. Pin the exact canonical phrase here
     // so a future edit cannot drift from it again.
-    const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
+    const workbook = await loadWorkbook(REAL_WORKBOOK_ROOT);
     const lesson013 = workbook.chapters.find(
       (chapter) => chapter.id === "013-oversee-the-orchestrator");
     const keyConcept = lesson013?.lesson.blocks.find((block) => block.id === "key-concept");
@@ -468,7 +470,7 @@ describe("workbook lesson contract", () => {
   });
 
   it("keeps every real block free of stale non-.tmp events paths", async () => {
-    const workbook = await loadWorkbook(resolve(import.meta.dirname, "../.."));
+    const workbook = await loadWorkbook(REAL_WORKBOOK_ROOT);
     const stalePath = /factory\/refactor\/events\b|"\$line"\/events\b/;
     const offenders = workbook.chapters.flatMap((chapter) =>
       chapter.lesson.blocks

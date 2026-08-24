@@ -110,7 +110,7 @@ describe("coachingSystemPrompt", () => {
     // prints nothing, which reads as a broken lesson rather than a wrong window.
     const prompt = coachingSystemPrompt(lesson);
 
-    expect(prompt).toContain("second terminal at the repository root");
+    expect(prompt).toContain("second terminal at the tutorial root");
     expect(prompt).toContain("Name which terminal each command belongs in");
   });
 

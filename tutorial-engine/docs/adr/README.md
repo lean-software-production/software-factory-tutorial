@@ -30,3 +30,4 @@ Update the index below whenever you create a record or change its status.
 | [0006](0006-project-workbook-tutor-history-by-role-and-compaction-scope.md) | accepted | Project workbook tutor history by role and compaction scope |
 | [0007](0007-model-every-progression-unit-as-a-workbook-block.md) | accepted | Model every progression unit as a workbook block |
 | [0008](0008-separate-work-acceptance-from-block-completion.md) | accepted | Separate work acceptance from block completion |
+| [0009](0009-separate-authored-content-from-session-local-learner-state.md) | accepted | Separate authored content from session-local learner state |

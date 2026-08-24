@@ -15,6 +15,20 @@ import type { AuditEvent } from "../protocol/events.js";
 
 export type AuditSink = (event: AuditEvent) => void;
 
+export interface WorkspaceToolBoundary {
+  readonly root: string;
+  resolve(rawPath: string, forWrite?: boolean): Promise<{ absolute: string; relative: string }>;
+  readFile(path: string): Promise<Buffer>;
+  access(path: string): Promise<void>;
+  writeFile(path: string, content: string): Promise<void>;
+  mkdir(path: string): Promise<void>;
+  move(path: string, destination: string): Promise<{ from: string; to: string }>;
+  isDirectory(path: string): Promise<boolean>;
+  stat(path: string): Promise<Awaited<ReturnType<typeof stat>>>;
+  readdir(path: string): Promise<string[]>;
+  exists(path: string): Promise<boolean>;
+}
+
 /**
  * Resolves every path through the real workspace root. This is deliberately a
  * filesystem boundary, not a prompt convention: absolute paths, `..`, and
@@ -109,7 +123,7 @@ function pathArguments(name: string, params: Record<string, unknown>): string[] 
   return typeof params.path === "string" ? [params.path] : ["."];
 }
 
-function audited(definition: ToolDefinition<any, any, any>, boundary: WorkspaceBoundary, sink: AuditSink, mutation: boolean): ToolDefinition<any, any, any> {
+function audited(definition: ToolDefinition<any, any, any>, boundary: WorkspaceToolBoundary, sink: AuditSink, mutation: boolean): ToolDefinition<any, any, any> {
   const execute = definition.execute;
   return {
     ...definition,
@@ -135,7 +149,7 @@ function audited(definition: ToolDefinition<any, any, any>, boundary: WorkspaceB
 }
 
 /** Built-in file tools with their names retained, so they replace Pi's defaults. */
-export function createWorkspaceTools(workspace: string, boundary: WorkspaceBoundary, sink: AuditSink): ToolDefinition<any, any, any>[] {
+export function createWorkspaceTools(workspace: string, boundary: WorkspaceToolBoundary, sink: AuditSink): ToolDefinition<any, any, any>[] {
   // Pi resolves relative tool paths before invoking our operations. Its cwd
   // must therefore have the same spelling as the boundary root: on macOS,
   // /var and /private/var name the same directory but only the latter is the

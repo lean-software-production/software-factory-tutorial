@@ -25,8 +25,8 @@ export interface V2Scenario {
 }
 
 const lessonId = "001-live-session";
-export const exactCommand = "mkdir -p .tmp && printf 'command block complete\\n' > .tmp/evaluator-command.txt && cat .tmp/evaluator-command.txt";
-export const clueCommand = "mkdir -p .tmp && printf 'clue block complete\\n' > .tmp/evaluator-clue.txt && cat .tmp/evaluator-clue.txt";
+export const exactCommand = "mkdir -p factory/.tmp && printf 'command block complete\\n' > factory/.tmp/evaluator-command.txt && cat factory/.tmp/evaluator-command.txt";
+export const clueCommand = "mkdir -p factory/.tmp && printf 'clue block complete\\n' > factory/.tmp/evaluator-clue.txt && cat factory/.tmp/evaluator-clue.txt";
 export const insufficientEditorDraft = "This is a vague draft.";
 export const satisfactoryEditorDraft = "editor-artifacts/evaluator-editor.txt: editor practice draft is ready for promotion.\n";
 
@@ -147,8 +147,9 @@ export function deterministicV2Gate(scenario: V2Scenario, trace: V2SessionTrace)
 export async function runV2ScenarioSession(options: { scenario: V2Scenario; workspace: EvaluationWorkspace; serverUrl: string; trace: V2SessionTrace }): Promise<V2SessionTrace> {
   const driver = createV2WorkbookDriver({ serverUrl: options.serverUrl, trace: options.trace });
   await driveV2Scenario(driver, options.scenario);
-  options.trace.events = await readWorkbookEvents(options.workspace.root);
-  options.trace.artifacts = await snapshotArtifacts(options.workspace.root);
+  const session = options.workspace.latestSession();
+  options.trace.events = await readWorkbookEvents(session.sessionRoot);
+  options.trace.artifacts = await snapshotArtifacts(session.workspaceRoot);
   return options.trace;
 }
 
@@ -174,7 +175,7 @@ function gateExactCommandSuccess(trace: V2SessionTrace): V2GateResult {
     exactCommandInput(trace),
     terminalOutput("exact-command", "command block complete", trace),
     observedAndCompleted("exact-command", trace),
-    artifactEquals(".tmp/evaluator-command.txt", "command block complete\n", trace)
+    artifactEquals("factory/.tmp/evaluator-command.txt", "command block complete\n", trace)
   ]);
 }
 
@@ -204,7 +205,7 @@ function gateClueOnlyTask(trace: V2SessionTrace): V2GateResult {
     learnerChoseClueCommand(trace),
     terminalOutput("clue-only", "clue block complete", trace),
     observedAndCompleted("clue-only", trace),
-    artifactEquals(".tmp/evaluator-clue.txt", "clue block complete\n", trace)
+    artifactEquals("factory/.tmp/evaluator-clue.txt", "clue block complete\n", trace)
   ]);
 }
 
@@ -245,8 +246,8 @@ function gateTransitionCompletion(trace: V2SessionTrace): V2GateResult {
       passed: completedProjection,
       detail: completedProjection ? "Public projection marks the evaluator lesson complete." : "No public projection marks the evaluator lesson complete."
     },
-    artifactEquals(".tmp/evaluator-command.txt", "command block complete\n", trace),
-    artifactEquals(".tmp/evaluator-clue.txt", "clue block complete\n", trace)
+    artifactEquals("factory/.tmp/evaluator-command.txt", "command block complete\n", trace),
+    artifactEquals("factory/.tmp/evaluator-clue.txt", "clue block complete\n", trace)
   ]);
 }
 
@@ -300,13 +301,13 @@ function exactCommandInput(trace: V2SessionTrace): V2GateAssertion {
 
 function learnerChoseClueCommand(trace: V2SessionTrace): V2GateAssertion {
   const input = trace.terminalTranscript.find((entry) => matchBlockId(entry.blockId, "clue-only") && entry.direction === "input")?.text.trim() ?? "";
-  const passed = input.length > 0 && input !== exactCommand && /evaluator-clue\.txt/.test(input);
+  const passed = input.length > 0 && input !== exactCommand && /factory\/\.tmp\/evaluator-clue\.txt/.test(input);
   return { name: "clue-only learner command", passed, detail: input || "No clue-only input was recorded." };
 }
 
 function clueOnlyPublicPrompt(trace: V2SessionTrace): V2GateAssertion {
   const prompt = trace.publicStates.map((state) => publicBlockMarkdown(state.state, "clue-only")).find((text) => text.length > 0) ?? "";
-  const passed = prompt.includes("evaluator-clue.txt") && !/```sh\s+command|This is private tutor guidance|Do not reveal an exact command/i.test(prompt);
+  const passed = prompt.includes("factory/.tmp/evaluator-clue.txt") && !/```sh\s+command|This is private tutor guidance|Do not reveal an exact command/i.test(prompt);
   return { name: "clue-only public prompt", passed, detail: passed ? "Public clue-only prompt has clues and no insertable command." : "Public clue-only prompt is missing clues or exposes an insertable/private command." };
 }
 
