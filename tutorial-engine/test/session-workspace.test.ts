@@ -150,6 +150,17 @@ describe("SessionWorkspaceManager", () => {
     await expect((await SessionWorkspaceManager.create(symlinkedFile)).createSession({ id: "symlinked-file" })).rejects.toThrow(/symlinked content/i);
   });
 
+  it("rejects a pre-existing .tutorial symlink before creating a session", async () => {
+    const contentRoot = await contentFixture();
+    const manager = await SessionWorkspaceManager.create(contentRoot);
+    const outside = await mkdtemp(join(tmpdir(), "session-state-outside-")); roots.push(outside);
+
+    await symlink(outside, join(manager.contentRoot, ".tutorial"));
+
+    await expect(manager.createSession({ id: "escaped-create" })).rejects.toThrow(/state directory.*symlink/i);
+    await expect(lstat(join(outside, "escaped-create"))).rejects.toThrow();
+  });
+
   it("rejects reopened session paths that have been replaced with escaping symlinks", async () => {
     const contentRoot = await contentFixture();
     const manager = await SessionWorkspaceManager.create(contentRoot);

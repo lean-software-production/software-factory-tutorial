@@ -69,6 +69,24 @@ async function requireDirectoryInside(path: string, label: string, root: string)
   if (!inside(root, realDirectory)) throw new SessionWorkspaceError(`${label} must stay inside ${basename(root)}.`);
 }
 
+async function ensureSessionStateDirectory(contentRoot: string): Promise<string> {
+  const stateRoot = resolve(contentRoot, SESSION_STATE_DIRECTORY);
+  try {
+    const info = await lstat(stateRoot);
+    if (info.isSymbolicLink()) throw new SessionWorkspaceError(`Tutorial state directory must be a real directory, not a symlink: ${stateRoot}`);
+    if (!info.isDirectory()) throw new SessionWorkspaceError(`Tutorial state directory must be a directory: ${stateRoot}`);
+  } catch (error) {
+    if (error instanceof SessionWorkspaceError) throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") throw error;
+    await mkdir(stateRoot);
+  }
+
+  const realStateRoot = await realpath(stateRoot);
+  if (!inside(contentRoot, realStateRoot)) throw new SessionWorkspaceError("Tutorial state directory must stay inside the content root.");
+  return stateRoot;
+}
+
 async function copyAuthoredDirectory(source: string, destination: string, contentRoot: string): Promise<void> {
   const realSource = await realpath(source);
   if (!inside(contentRoot, realSource)) throw new SessionWorkspaceError(`Refusing to materialize a path outside the content root: ${source}`);
@@ -143,6 +161,7 @@ export class SessionWorkspaceManager {
   async createSession(options: CreateTutorialSessionOptions = {}): Promise<TutorialSessionPaths> {
     const sessionId = options.id === undefined ? createSessionId(options) : validateSessionId(options.id);
     const paths = this.pathsFor(sessionId);
+    await ensureSessionStateDirectory(this.contentRoot);
     if (await pathExists(paths.sessionRoot)) throw new SessionWorkspaceError(`Session '${sessionId}' already exists.`);
 
     await mkdir(paths.workspaceRoot, { recursive: true });
