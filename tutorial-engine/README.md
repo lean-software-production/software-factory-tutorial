@@ -4,13 +4,16 @@ A local, browser-led tutorial runner. It embeds `@earendil-works/pi-coding-agent
 
 ## Run a tutorial
 
-Point the engine at a tutorial directory:
+Point the engine at a tutorial directory. In this repository, the authored learner workspace is
+`../tutorial` from the engine package:
 
 ```sh
 cd tutorial-engine
 npm install
-npm run dev -- ..
+npm run dev -- ../tutorial
 ```
+
+From the repository root, `npm run tutorial` is the convenience launcher for the same target.
 
 Add `--no-open` to suppress browser launch, or `--port 4310` to choose a port. The server binds only to `127.0.0.1`. Pi credentials remain in the server process; the browser has no filesystem or provider-credential access.
 
@@ -20,8 +23,8 @@ Keep the launching terminal open. It prints timestamped startup, browser, Pi, to
 
 A tutorial needs no engine configuration file. The engine infers it from the directory:
 
-- the first `#` heading in `README.md` is the title and the README is the whole-exercise orientation;
-- `docs/specs/README.md` is the lesson ledger;
+- the first `#` heading in the target's `README.md` is the title and the README is the whole-exercise orientation;
+- the target's `docs/specs/README.md` is the lesson ledger;
 - the first `Todo` row is the current lesson;
 - the linked spec tells the tutor what to teach.
 

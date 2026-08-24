@@ -10,7 +10,7 @@ tutor: |-
 
 ## Checks
 
-From the repository root, start the line and watcher in the background, then steer the active run:
+From the tutorial root, start the line and watcher in the background, then steer the active run:
 
 ```sh
 ./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &

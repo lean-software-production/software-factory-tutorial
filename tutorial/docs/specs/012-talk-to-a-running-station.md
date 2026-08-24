@@ -112,7 +112,7 @@ Build this lesson in this order. Complete each small step before moving to the n
          else empty end'
    ```
 
-6. **Steer a run.** Three terminals, all at the repository root. Run the line in the first, watch it in
+6. **Steer a run.** Three terminals, all at the tutorial root. Run the line in the first, watch it in
    the second, and in the third, while the doer is working:
 
    ```sh
@@ -148,7 +148,7 @@ has been shell all the way down. Mention it as the thing to reach for outside a 
 
 ## Checks
 
-From the repository root, in three terminals:
+From the tutorial root, in three terminals:
 
 ```sh
 ./factory/refactor/run.sh

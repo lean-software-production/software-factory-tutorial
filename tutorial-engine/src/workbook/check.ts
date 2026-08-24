@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 
 // This file lives at tutorial-engine/src/workbook/check.ts; the default workbook
-// is authored in the repository's tutorial/ workspace. Resolving that target
+// is authored in the repository's tutorial/ root. Resolving that target
 // from this file's own location (rather than from `process.cwd()`) means
 // `check:workbook` finds workbook.md no matter which directory `npm run` was
 // invoked from, including from the tutorial-engine workspace itself.

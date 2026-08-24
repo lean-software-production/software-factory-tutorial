@@ -115,7 +115,7 @@ only as good as the inspector. Prefer taking the tool away.
 
 ## Checks
 
-From the repository root, run a doer turn and then a validation turn:
+From the tutorial root, run a doer turn and then a validation turn:
 
 ```sh
 ./factory/refactor/do.sh

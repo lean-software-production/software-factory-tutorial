@@ -11,7 +11,7 @@ carrying every failed attempt from completed blocks forever. It also needs fast,
 beside an active terminal or editor.
 
 This iteration repairs the conversational-timeline regressions and implements the tutor roles adopted
-in [ADR 0005](../../tutorial-engine/docs/adr/0005-use-a-main-tutor-with-on-demand-block-tutors.md).
+in [ADR 0005](../../../tutorial-engine/docs/adr/0005-use-a-main-tutor-with-on-demand-block-tutors.md).
 
 ## Goals
 

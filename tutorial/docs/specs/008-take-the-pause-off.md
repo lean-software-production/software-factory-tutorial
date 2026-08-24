@@ -87,7 +87,7 @@ Build this lesson in this order. Complete each small step before moving to the n
 
 ## Checks
 
-From the repository root:
+From the tutorial root:
 
 ```sh
 ./factory/refactor/run.sh

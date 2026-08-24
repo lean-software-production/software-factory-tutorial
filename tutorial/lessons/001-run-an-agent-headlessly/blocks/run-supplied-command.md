@@ -12,7 +12,7 @@ tutor: |-
 
 ## Run the supplied headless command
 
-Run this command from the repository root:
+Run this command from the tutorial root:
 
 ```sh command
 echo "Describe what this calculator does, in three sentences." \

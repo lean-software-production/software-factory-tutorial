@@ -6,7 +6,7 @@ type: narrative
 
 Pi is the default doer, but the boundary is not tied to Pi. Claude Code and Codex can also act as
 the doer when configured for non-interactive use. Read the same prompt, run the chosen CLI from
-`calculator/`, and give it only the access you intend. From the repository root, for example:
+`calculator/`, and give it only the access you intend. From the tutorial root, for example:
 
 ```sh
 prompt=$(<factory/refactor.md)

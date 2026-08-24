@@ -113,7 +113,7 @@ Work in this order. Complete each small step before moving to the next one:
          else empty end'
    ```
 
-6. **Steer a run.** Start the line and watcher in the background from the repository root. Then,
+6. **Steer a run.** Start the line and watcher in the background from the tutorial root. Then,
    while the doer is working, send these messages:
 
    ```sh

@@ -10,7 +10,7 @@ tutor: |-
 
 ## Checks
 
-From the repository root:
+From the tutorial root:
 
 ```sh
 ./factory/refactor/run.sh

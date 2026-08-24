@@ -10,7 +10,7 @@ tutor: |-
 
 ## Checks
 
-From the repository root, make the new script executable and run it:
+From the tutorial root, make the new script executable and run it:
 
 ```sh
 chmod +x factory/refactor/run.sh

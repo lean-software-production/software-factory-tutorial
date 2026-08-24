@@ -10,7 +10,7 @@ tutor: |-
 
 ## Checks
 
-From the repository root in the embedded terminal, start the line as a background job and run the
+From the tutorial root in the embedded terminal, start the line as a background job and run the
 watcher in the foreground:
 
 ```sh

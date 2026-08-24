@@ -57,7 +57,7 @@ Work in this order. Complete each small step before moving to the next one:
    This is the first time the line has run into a limit that belongs to the model rather than to the
    shell, and it will not be the last. A record that does not fit is a record nobody can ask about.
 
-3. **Ask it something `jq` cannot answer.** From the repository root:
+3. **Ask it something `jq` cannot answer.** From the tutorial root:
 
    ```sh
    ./factory/ask.sh refactor "Did this run make progress, or did it keep changing the same code?"

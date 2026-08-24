@@ -14,7 +14,7 @@ tutor: |-
 Part 2 assumes a doer and a validator are already sitting in `factory/`, whichever way they got
 there.
 
-Check now, from the repository root:
+Check now, from the tutorial root:
 
 ```sh
 ls factory/ factory/.tmp/

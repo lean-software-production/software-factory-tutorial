@@ -73,7 +73,7 @@ not assume another CLI's default sandbox or permission model provides that bound
 
 ## Checks
 
-From the repository root, make the new script executable and run a doer turn followed by a
+From the tutorial root, make the new script executable and run a doer turn followed by a
 validation turn:
 
 ```sh

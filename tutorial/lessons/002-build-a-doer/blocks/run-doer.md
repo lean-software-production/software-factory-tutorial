@@ -1,7 +1,7 @@
 ---
 type: terminal-practice
 tutor: |-
-  Have the learner run the displayed commands from the repository root. Success means
+  Have the learner run the displayed commands from the tutorial root. Success means
   factory/refactor-do.sh becomes executable and one doer turn starts through
   ./factory/refactor-do.sh. The script should announce the quality baseline phase before announcing
   the doer phase. If the run
@@ -11,7 +11,7 @@ tutor: |-
 
 ## Run the doer
 
-From the repository root, make the script executable and run one doer turn:
+From the tutorial root, make the script executable and run one doer turn:
 
 ```sh
 chmod +x factory/refactor-do.sh

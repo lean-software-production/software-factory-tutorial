@@ -1,5 +1,20 @@
 # Software factory tutorial
 
+## Start here
+
+- The repository root is the developer workspace: npm orchestration, setup scripts, evals, and the
+  tutorial engine live here.
+- The learner workspace is [`tutorial/`](tutorial/). Its [`README`](tutorial/README.md),
+  `workbook.md`, `parts/`, `lessons/`, `docs/specs/`, `docs/seeds/`, `factory/`, and
+  `calculator/` move together. Learner shell commands run from the tutorial root.
+- The root `npm run tutorial` command is only a convenience launcher. It starts
+  `tutorial-engine/` against `tutorial/`; it does not make the repository root the learner
+  workspace.
+- Engine documentation starts in [`tutorial-engine/README.md`](tutorial-engine/README.md); durable
+  engine architecture decisions live under [`tutorial-engine/docs/adr/`](tutorial-engine/docs/adr/).
+- Historical plans live under `docs/plans/`, `docs/superpowers/plans/`, and
+  `tutorial-engine/docs/plans/`. Do not rewrite their old paths to look current.
+
 ## Agent workflow
 
 For implementation work, always use `superpowers:subagent-driven-development`. Work autonomously
@@ -19,9 +34,9 @@ This convention does not apply to the tutorial curriculum or lesson specificatio
 
 ## Writing lesson specifications
 
-Lessons live in `docs/specs/NNN-*.md` and are read by two audiences: the coach agent, which
-paraphrases them for the learner, and whoever maintains the curriculum. A specification that reads
-well but describes the mechanism loosely produces a lesson explanation that is confidently wrong,
+Lessons live in `tutorial/docs/specs/NNN-*.md` and are read by two audiences: the coach agent,
+which paraphrases them for the learner, and whoever maintains the curriculum. A specification that
+reads well but describes the mechanism loosely produces a lesson explanation that is confidently wrong,
 because the coach paraphrases faithfully.
 
 **Name the mechanism, not a picture of it.** Every claim about what the line does should survive being
@@ -40,8 +55,9 @@ Concretely, when writing a lesson's **Key concept**:
   mechanism and its reason: *X does this, because Y can no longer do that.*
 - **Say why, not just what.** A boundary lesson should name the capability that was removed and the
   consequence that follows, so the learner can predict the behaviour rather than recall a slogan.
-- **Use [`docs/GLOSSARY.md`](docs/GLOSSARY.md), and only what is already defined.** It lists every
-  term the tutorial teaches and the lesson that introduces it, along with the words this tutorial
+- **Use [`tutorial/docs/GLOSSARY.md`](tutorial/docs/GLOSSARY.md), and only what is already
+  defined.** It lists every term the tutorial teaches and the lesson that introduces it, along with
+  the words this tutorial
   deliberately does not use. Introducing a fresh noun for an already-named thing reads as a new
   concept. A later lesson's vocabulary belongs to that lesson, so check what a term's lesson number
   is before reaching for it. A new term means a new row there.
@@ -51,20 +67,22 @@ The `## What this costs` section exists to state a trade honestly. Do not soften
 both halves — the guarantee and the limitation — should be stated plainly enough that a learner could
 argue with them.
 
-## Tutor state belongs in .tutorial/.tmp/, never in the curriculum
+## Tutor state belongs in tutorial/.tutorial/.tmp/, never in the curriculum
 
-`docs/specs/README.md` lists the lessons and nothing about any particular learner. The generic tutor
-keeps its transcript and progress in `.tutorial/.tmp/`, not in a curriculum working directory. Writing
-progress back into the ledger would hand everyone who clones the tutorial a copy that claims to be part
-finished, so the ledger's rows carry a specification link and a goal, and no status.
+`tutorial/docs/specs/README.md` lists the lessons and nothing about any particular learner. The
+generic tutor keeps its transcript and progress in `tutorial/.tutorial/.tmp/`, not in a curriculum
+working directory. Writing progress back into the ledger would hand everyone who clones the tutorial
+a copy that claims to be part finished, so the ledger's rows carry a specification link and a goal,
+and no status.
 
-`factory/` sorts into three kinds, and the split is what `.gitignore` encodes:
+Inside `tutorial/`, `factory/` sorts into three kinds, and the split is what `.gitignore` encodes:
 
 - **The learner's line** — every `.sh` and `.md` they write — is **tracked**, so their own work
   survives a mistake and can be committed if they want it kept.
 - **Everything else** goes in a `.tmp/` beside the script that writes it, and one rule —
-  `factory/**/.tmp/` — ignores the evidence, findings, baselines, commit messages and iteration records
-  a run regenerates. Generic tutor state is separately ignored under `.tutorial/`. Committing either
+  `tutorial/factory/**/.tmp/` — ignores the evidence, findings, baselines, commit messages and
+  iteration records a run regenerates. Generic tutor state is separately ignored under
+  `tutorial/.tutorial/`. Committing either
   would churn the history every run.
 
 So a lesson that writes anything a run recreates writes it to `.tmp/`, whatever its name or format.
@@ -74,8 +92,9 @@ writes there needs `mkdir -p .tmp` after its `cd`: this curriculum's reset clear
 
 ## The line commits to a branch of its own, one per session
 
-From lesson 007 the line commits to the calculator, and from 008 it does so unattended. `calculator/`
-has no repository of its own, so those commits land in the learner's clone of the tutorial. The engine
+From lesson 007 the line commits to the calculator, and from 008 it does so unattended.
+`tutorial/calculator/` has no repository of its own, so those commits land in the learner's clone of
+the tutorial. The engine
 switches to `factory-line-<date>-<time>` when a session starts (`ensureLineBranch`), which keeps the
 branch they cloned pullable and makes a run easy to throw away.
 
@@ -86,9 +105,10 @@ repository still gets a working tutorial.
 
 ## Changing a Part 1 lesson means changing the Part 2 seed
 
-`docs/seeds/part-2/` holds what lessons 002 to 004 leave in `factory/`, so a learner who chooses
-"Start at Part 2" finds what lesson 005 expects to move. Change what those lessons have the learner
-write, and change the seed to match — the two are the same artefact taught two ways.
+`tutorial/docs/seeds/part-2/` holds what lessons 002 to 004 leave in `tutorial/factory/`, so a
+learner who chooses "Start at Part 2" finds what lesson 005 expects to move. Change what those
+lessons have the learner write, and change the seed to match — the two are the same artefact taught
+two ways.
 
 `seed.test.ts` reads lesson 005's `mv` commands and fails if the seed does not supply every source
 path they name. That catches a renamed file, not a rewritten one, so the content is still yours to

@@ -32,19 +32,21 @@ the first success criterion on every verdict the tutorial teaches you to trust. 
 Node releases are Current rather than LTS, and that is where such warnings appear; this
 tutorial is tested on 24.x. Node 24 bundles npm 11, so a current Node gets you both.
 
-From the repository root:
+First install and check the shared tooling from the repository root:
 
 ```sh
 npm install
 npm run setup
 ```
 
-The lessons call `pi` directly, so it has to be on your `PATH`. `npm install` already
-fetched the version this repository pins, so exporting npm's local binary directory is
-enough; install it globally if you would rather:
+The lessons themselves run from this `tutorial/` directory, where `factory/` and
+`calculator/` are siblings. The lessons call `pi` directly, so it has to be on your
+`PATH`. `npm install` already fetched the version this repository pins. If you are in
+the tutorial root, exporting the repository's local binary directory is enough; install
+Pi globally if you would rather:
 
 ```sh
-export PATH="$PWD/node_modules/.bin:$PATH"
+export PATH="$PWD/../node_modules/.bin:$PATH"
 ```
 
 `npm run setup` checks that Pi has an authenticated model for the web tutor. If it reports that Pi needs authentication, run `pi`, enter `/login`, and choose a provider. Pi keeps those credentials in its user-level configuration; this repository does not store them.
@@ -86,12 +88,14 @@ values fall back to that same Pi choice.
 
 ## Start the tutorial
 
+From the repository root, use the retained convenience launcher:
+
 ```sh
 npm run tutorial
 ```
 
-The command opens the local tutor in your browser. It listens on loopback only; if no
-browser opens, visit the printed address yourself.
+It starts the tutor against this `tutorial/` workspace and opens it in your browser. It
+listens on loopback only; if no browser opens, visit the printed address yourself.
 
 To reach the tutor from another machine — for example through a proxy that serves it under
 a subfolder, such as the EnsembleWorks canvas dev-server control at `/dev/4310/` — pick the
@@ -106,7 +110,8 @@ trust.
 
 ## Check the workbook
 
-Before starting the tutor, check the authored workbook without opening a browser or starting a server:
+Before starting the tutor, check the authored workbook from the repository root without opening a
+browser or starting a server:
 
 ```sh
 npm run --workspace=tutorial-engine check:workbook
@@ -115,7 +120,7 @@ npm run --workspace=tutorial-engine check:workbook
 This uses the same loader as the tutor. It checks lesson and optional-part structure, manifests,
 blocks, and lesson references, then prints the workbook's lesson and part counts.
 
-Leave it running and open a second terminal at the repository root. Stay there: every command the lessons give you is written to run from the root, and the scripts you build take their paths relative to it. If you put `pi` on your `PATH` with the `export` above rather than installing it globally, repeat that export in this terminal too — from lesson 002 the scripts you write call `pi` themselves.
+Leave the tutor running and open a second terminal at the tutorial root. Stay there: every command the lessons give you is written to run from the tutorial root, and the scripts you build take their paths relative to it. If you put `pi` on your `PATH` with the `export` above rather than installing it globally, repeat that export in this terminal too — from lesson 002 the scripts you write call `pi` themselves.
 
 The files you write by hand all live under `factory/`, which is where the tutor looks for your work. Edit them with your usual editor as the tutor instructs, then go back to the tutor for the next step or for feedback. Once you have created `factory/refactor-do.sh` in lesson 002, run it directly:
 
@@ -128,7 +133,7 @@ Lesson 005 moves the whole line into `factory/refactor/`, and from then on you r
 
 ## Where to begin, and how to resume
 
-The first time you run `npm run tutorial`, it asks where to start. Start at the beginning to build everything yourself. Start at Part 2 to skip the first four lessons: it copies the files those lessons build into `factory/` and opens the assembly line, so you get Part 2 without having written Part 1 by hand.
+The first time you run the root `npm run tutorial` launcher, it asks where to start. Start at the beginning to build everything yourself. Start at Part 2 to skip the first four lessons: it copies the files those lessons build into `factory/` and opens the assembly line, so you get Part 2 without having written Part 1 by hand.
 
 After that, running it again offers to resume as well. Resume keeps your factory files and asks a fresh tutor process to inspect them before continuing. The other two options delete everything in `factory/` first.
 
@@ -138,4 +143,4 @@ Each session moves you onto a branch of its own, named `factory-line-` and the d
 
 ## Inspiration
 
-This independent TypeScript kata was inspired by Chelsea Troy's natural-language calculator exercise. See [`ATTRIBUTION.md`](ATTRIBUTION.md).
+This independent TypeScript kata was inspired by Chelsea Troy's natural-language calculator exercise. See [`calculator/ATTRIBUTION.md`](calculator/ATTRIBUTION.md).

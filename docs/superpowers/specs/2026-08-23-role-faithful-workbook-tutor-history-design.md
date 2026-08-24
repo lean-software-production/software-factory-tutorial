@@ -16,7 +16,7 @@ also treats course material as generic injected context rather than as the assis
 learner saw.
 
 This design refines the event-log decision in
-[ADR 0005](../../tutorial-engine/docs/adr/0005-use-a-main-tutor-with-on-demand-block-tutors.md).
+[ADR 0005](../../../tutorial-engine/docs/adr/0005-use-a-main-tutor-with-on-demand-block-tutors.md).
 
 ## Goals
 

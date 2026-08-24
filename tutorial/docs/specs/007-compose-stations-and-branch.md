@@ -183,7 +183,7 @@ Three things, none of which needed a lesson of its own:
 
 ## Checks
 
-From the repository root:
+From the tutorial root:
 
 ```sh
 ./factory/refactor/run.sh

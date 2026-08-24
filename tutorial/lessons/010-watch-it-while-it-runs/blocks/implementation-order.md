@@ -41,7 +41,7 @@ Work in this order. Complete each small step before moving to the next one:
    line
    that nobody has built.
 
-2. **Watch a run.** Use the embedded terminal as one shell session at the repository root. Start
+2. **Watch a run.** Use the embedded terminal as one shell session at the tutorial root. Start
    the line as a background job, saving its unreadable JSON firehose to a regenerated file:
 
    ```sh
