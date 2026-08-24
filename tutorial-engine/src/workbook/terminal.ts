@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import * as pty from "node-pty";
 import type { TutorialLogger } from "../runtime-log.js";
 import { createTutorialLogger } from "../runtime-log.js";
@@ -34,6 +34,11 @@ const PI_PREFLIGHT = [
 const DEFAULT_WRITABLE_WORKSPACE_PATHS = ["factory", "calculator", ".tmp", ".tutorial/.tmp", ".git"] as const;
 const DEFAULT_WRITABLE_SCRATCH_DIRECTORIES = [".tmp", ".tutorial/.tmp"] as const;
 const DEFAULT_READONLY_DEPENDENCY_PATHS = ["node_modules", "package.json", "package-lock.json"] as const;
+const DEPENDENCY_DIRECTORY_PLACEHOLDER = ".workbook-terminal-mount-target";
+const DEPENDENCY_FILE_PLACEHOLDERS: Record<string, string> = {
+  "package.json": "{\n  \"__workbookTerminalMountTargetPlaceholder\": true\n}\n",
+  "package-lock.json": "{\n  \"lockfileVersion\": 3,\n  \"__workbookTerminalMountTargetPlaceholder\": true\n}\n"
+};
 export type TerminalPtyFactory = (options: TerminalPtyOptions) => TerminalPty;
 export interface DockerRunArgumentsOptions { workspace: string; name: string; apiKey: string; writableWorkspacePaths?: readonly string[]; dependencyRoot?: string; readonlyDependencyPaths?: readonly string[]; }
 
@@ -113,13 +118,32 @@ function prepareDefaultWritableWorkspaceDirectories(workspace: string): void {
   for (const child of DEFAULT_WRITABLE_SCRATCH_DIRECTORIES) mkdirSync(resolve(workspace, child), { recursive: true });
 }
 
+function assertSafeMountChild(child: string): void {
+  const segments = child.split(/[\\/]+/);
+  if (!child || isAbsolute(child) || segments.some((segment) => !segment || segment === "..")) throw new Error(`Refusing unsafe mount path: ${child}`);
+}
+
+function insideRoot(root: string, candidate: string): boolean {
+  const inside = relative(root, candidate);
+  return inside === "" || (inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside));
+}
+
+function safeChildPath(root: string, child: string, label: string): string {
+  assertSafeMountChild(child);
+  const resolvedRoot = resolve(root);
+  const realRoot = realpathSync(resolvedRoot);
+  const candidate = resolve(resolvedRoot, child);
+  const candidateUnderRealRoot = resolve(realRoot, child);
+  if (insideRoot(realRoot, candidateUnderRealRoot)) return candidate;
+  throw new Error(`Refusing to mount ${child} because it resolves outside the ${label}.`);
+}
+
 function safeExistingChildForMount(root: string, child: string, label: string): string | undefined {
-  const candidate = resolve(root, child);
+  const candidate = safeChildPath(root, child, label);
   if (!existsSync(candidate)) return undefined;
   const realRoot = realpathSync(root);
   const realCandidate = realpathSync(candidate);
-  const inside = relative(realRoot, realCandidate);
-  if (inside === "" || (inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside))) return candidate;
+  if (insideRoot(realRoot, realCandidate)) return candidate;
   throw new Error(`Refusing to mount ${child} because it resolves outside the ${label}.`);
 }
 
@@ -127,11 +151,47 @@ function workspaceChildForMount(workspace: string, child: string): string | unde
   return safeExistingChildForMount(workspace, child, "workbook workspace");
 }
 
+function dependencyFilePlaceholder(child: string): string { return DEPENDENCY_FILE_PLACEHOLDERS[child] ?? "workbook terminal dependency mount target placeholder\n"; }
+
+function dependencyMountTargetIsPlaceholder(target: string, child: string, source: string): boolean {
+  const targetInfo = statSync(target);
+  const sourceInfo = statSync(source);
+  if (sourceInfo.isDirectory()) {
+    if (!targetInfo.isDirectory()) return false;
+    const entries = readdirSync(target);
+    return entries.length === 1 && entries[0] === DEPENDENCY_DIRECTORY_PLACEHOLDER && statSync(resolve(target, DEPENDENCY_DIRECTORY_PLACEHOLDER)).isFile();
+  }
+  if (sourceInfo.isFile()) return targetInfo.isFile() && readFileSync(target, "utf8") === dependencyFilePlaceholder(child);
+  return false;
+}
+
+function prepareDependencyMountTarget(workspace: string, target: string, child: string, source: string): void {
+  const sourceInfo = statSync(source);
+  const realWorkspace = realpathSync(workspace);
+  const parent = dirname(target);
+  mkdirSync(parent, { recursive: true });
+  if (!insideRoot(realWorkspace, realpathSync(parent))) throw new Error(`Refusing to create ${child} because its parent resolves outside the workbook workspace.`);
+  if (sourceInfo.isDirectory()) {
+    mkdirSync(target);
+    writeFileSync(resolve(target, DEPENDENCY_DIRECTORY_PLACEHOLDER), "", { flag: "wx" });
+    return;
+  }
+  if (sourceInfo.isFile()) {
+    writeFileSync(target, dependencyFilePlaceholder(child), { flag: "wx" });
+  }
+}
+
 function dependencyChildForMount(dependencyRoot: string | undefined, workspace: string, child: string): string | undefined {
   if (!dependencyRoot) return undefined;
   if (child === ".git" || child.startsWith(`.git/`)) throw new Error("Refusing to mount repository Git metadata as a dependency.");
-  if (existsSync(resolve(workspace, child))) return undefined;
-  return safeExistingChildForMount(dependencyRoot, child, "dependency root");
+  const source = safeExistingChildForMount(dependencyRoot, child, "dependency root");
+  if (!source) return undefined;
+  const sourceInfo = statSync(source);
+  if (!sourceInfo.isDirectory() && !sourceInfo.isFile()) return undefined;
+  const target = safeChildPath(workspace, child, "workbook workspace");
+  if (existsSync(target)) return dependencyMountTargetIsPlaceholder(target, child, source) ? source : undefined;
+  prepareDependencyMountTarget(workspace, target, child, source);
+  return source;
 }
 
 export function dockerRunArguments(options: DockerRunArgumentsOptions): string[] {

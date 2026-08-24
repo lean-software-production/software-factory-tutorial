@@ -42,6 +42,8 @@ function setup(submitAttempt: SubmitAttempt = vi.fn(async () => undefined), debo
   return { manager, ptys, setActive: (next: any) => { active = next; }, submitAttempt };
 }
 
+const redactingFakeDocker = "#!/bin/sh\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    OPENCODE_API_KEY=*) printf '%s\\n' 'OPENCODE_API_KEY=<redacted>' >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\" ;;\n    *) printf '%s\\n' \"$arg\" >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\" ;;\n  esac\ndone\nprintf '%s\\n' --- >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\"\n";
+
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -69,12 +71,12 @@ describe("WorkbookTerminalManager", () => {
     await writeFile(resolve(dependencyRoot, "package.json"), "{}\n", "utf8");
     await mkdir(resolve(dependencyRoot, ".git"));
 
-    const args = dockerRunArguments({ workspace, dependencyRoot, name: "workbook-terminal-test", apiKey: "test-opencode-key" });
+    const args = dockerRunArguments({ workspace, dependencyRoot, name: "workbook-terminal-test", apiKey: "<redacted>" });
     const mounts = args.filter((arg) => arg.startsWith("type=bind"));
 
     expect(args).toContain("--read-only");
-    expect(args).toContain("--env");
-    expect(args).toContain("OPENCODE_API_KEY=test-opencode-key");
+    const envIndex = args.indexOf("--env");
+    expect(args[envIndex + 1]).toMatch(/^OPENCODE_API_KEY=.+/);
     expect(args).toContain("--tmpfs");
     expect(args.some((arg) => /^\/home\/learner\/\.pi\/agent:uid=.+,gid=.+,mode=0700$/.test(arg))).toBe(true);
     expect(mounts).toContain(`type=bind,src=${workspace},dst=/workspace,readonly`);
@@ -106,13 +108,13 @@ describe("WorkbookTerminalManager", () => {
     tempDirs.push(directory, workspace);
     const capture = join(directory, "docker-args");
     const docker = join(directory, "docker");
-    await writeFile(docker, "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\"\nprintf '%s\\n' --- >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\"\n");
+    await writeFile(docker, redactingFakeDocker);
     await chmod(docker, 0o755);
     const previousPath = process.env.PATH;
     const previousKey = process.env.OPENCODE_API_KEY;
     const previousCapture = process.env.WORKBOOK_TERMINAL_DOCKER_ARGS;
     process.env.PATH = `${directory}:${previousPath}`;
-    process.env.OPENCODE_API_KEY = "test-opencode-key";
+    process.env.OPENCODE_API_KEY = "<redacted>";
     process.env.WORKBOOK_TERMINAL_DOCKER_ARGS = capture;
     try {
       assertDockerTerminalReady(workspace);
@@ -128,19 +130,75 @@ describe("WorkbookTerminalManager", () => {
     }
   });
 
+  it("prepares dependency mount targets for a new minimal workspace before Docker preflight and later launches", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "workbook-fake-docker-"));
+    const workspace = await mkdtemp(join(tmpdir(), "workbook-terminal-workspace-"));
+    const dependencyRoot = await mkdtemp(join(tmpdir(), "workbook-terminal-deps-"));
+    tempDirs.push(directory, workspace, dependencyRoot);
+    await mkdir(resolve(dependencyRoot, "node_modules/.bin"), { recursive: true });
+    await writeFile(resolve(dependencyRoot, "package.json"), "{}\n", "utf8");
+    await writeFile(resolve(dependencyRoot, "package-lock.json"), "{}\n", "utf8");
+    const capture = join(directory, "docker-args");
+    const docker = join(directory, "docker");
+    await writeFile(docker, redactingFakeDocker);
+    await chmod(docker, 0o755);
+    const previousPath = process.env.PATH;
+    const previousKey = process.env.OPENCODE_API_KEY;
+    const previousCapture = process.env.WORKBOOK_TERMINAL_DOCKER_ARGS;
+    process.env.PATH = `${directory}:${previousPath}`;
+    process.env.OPENCODE_API_KEY = "<redacted>";
+    process.env.WORKBOOK_TERMINAL_DOCKER_ARGS = capture;
+    try {
+      assertDockerTerminalReady({ workspace, dependencyRoot });
+      expect((await stat(resolve(workspace, "node_modules"))).isDirectory()).toBe(true);
+      expect((await stat(resolve(workspace, "package.json"))).isFile()).toBe(true);
+      expect((await stat(resolve(workspace, "package-lock.json"))).isFile()).toBe(true);
+
+      const launchArgs = dockerRunArguments({ workspace, dependencyRoot, name: "workbook-terminal-test", apiKey: "<redacted>" });
+      const mounts = launchArgs.filter((arg) => arg.startsWith("type=bind"));
+      expect(launchArgs).toContain("--read-only");
+      expect(mounts).toContain(`type=bind,src=${workspace},dst=/workspace,readonly`);
+      expect(mounts).toContain(`type=bind,src=${resolve(dependencyRoot, "node_modules")},dst=/workspace/node_modules,readonly`);
+      expect(mounts).toContain(`type=bind,src=${resolve(dependencyRoot, "package.json")},dst=/workspace/package.json,readonly`);
+      expect(mounts).toContain(`type=bind,src=${resolve(dependencyRoot, "package-lock.json")},dst=/workspace/package-lock.json,readonly`);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+      if (previousKey === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = previousKey;
+      if (previousCapture === undefined) delete process.env.WORKBOOK_TERMINAL_DOCKER_ARGS; else process.env.WORKBOOK_TERMINAL_DOCKER_ARGS = previousCapture;
+    }
+  });
+
+  it("does not replace dependency paths that already exist in the workspace", async () => {
+    const workspace = await mkdtemp(resolve(tmpdir(), "workbook-terminal-workspace-"));
+    const dependencyRoot = await mkdtemp(resolve(tmpdir(), "workbook-terminal-deps-"));
+    tempDirs.push(workspace, dependencyRoot);
+    await mkdir(resolve(workspace, "node_modules/local"), { recursive: true });
+    await writeFile(resolve(workspace, "package.json"), "{\"name\":\"local\"}\n", "utf8");
+    await mkdir(resolve(dependencyRoot, "node_modules/.bin"), { recursive: true });
+    await writeFile(resolve(dependencyRoot, "package.json"), "{\"name\":\"deps\"}\n", "utf8");
+
+    const args = dockerRunArguments({ workspace, dependencyRoot, name: "workbook-terminal-test", apiKey: "<redacted>" });
+    const mounts = args.filter((arg) => arg.startsWith("type=bind"));
+
+    expect(mounts).not.toContain(`type=bind,src=${resolve(dependencyRoot, "node_modules")},dst=/workspace/node_modules,readonly`);
+    expect(mounts).not.toContain(`type=bind,src=${resolve(dependencyRoot, "package.json")},dst=/workspace/package.json,readonly`);
+    expect(await readFile(resolve(workspace, "package.json"), "utf8")).toBe("{\"name\":\"local\"}\n");
+    expect((await stat(resolve(workspace, "node_modules/local"))).isDirectory()).toBe(true);
+  });
+
   it("preflights Pi authentication in the same isolated container it will run", async () => {
     const directory = await mkdtemp(join(tmpdir(), "workbook-fake-docker-"));
     const workspace = await mkdtemp(join(tmpdir(), "workbook-terminal-workspace-"));
     tempDirs.push(directory, workspace);
     const capture = join(directory, "docker-args");
     const docker = join(directory, "docker");
-    await writeFile(docker, "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\"\nprintf '%s\\n' --- >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\"\n");
+    await writeFile(docker, redactingFakeDocker);
     await chmod(docker, 0o755);
     const previousPath = process.env.PATH;
     const previousKey = process.env.OPENCODE_API_KEY;
     const previousCapture = process.env.WORKBOOK_TERMINAL_DOCKER_ARGS;
     process.env.PATH = `${directory}:${previousPath}`;
-    process.env.OPENCODE_API_KEY = "test-opencode-key";
+    process.env.OPENCODE_API_KEY = "<redacted>";
     process.env.WORKBOOK_TERMINAL_DOCKER_ARGS = capture;
     try {
       assertDockerTerminalReady(workspace);
@@ -166,7 +224,7 @@ describe("WorkbookTerminalManager", () => {
     const previousPath = process.env.PATH;
     const previousKey = process.env.OPENCODE_API_KEY;
     process.env.PATH = `${directory}:${previousPath}`;
-    process.env.OPENCODE_API_KEY = "test-opencode-key";
+    process.env.OPENCODE_API_KEY = "<redacted>";
     try {
       expect(() => assertDockerTerminalReady(workspace)).toThrow(/could not authenticate pi/i);
     } finally {
