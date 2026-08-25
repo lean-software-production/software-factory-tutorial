@@ -517,7 +517,7 @@ describe("workbook lesson UI", () => {
     expect(markup).toContain("Edit the answer");
     expect(markup).toContain("factory/answer.md");
     expect(markup).toContain("editor-surface");
-    expect(markup).toContain("role=\"status\"");
+    expect(markup).toContain("editor-feedback-overlay");
     expect(markup).toMatch(/editing|review/i);
     expect(markup).not.toContain("Private editor rubric");
     expect(markup).not.toContain("Save");
@@ -556,7 +556,8 @@ describe("workbook lesson UI", () => {
     expect(inactiveMarkup).toContain("Edit the answer");
     expect(inactiveMarkup).toContain("factory/answer.md");
     expect(inactiveMarkup).not.toContain("editor-surface");
-    expect(inactiveMarkup).not.toContain("role=\"status\"");
+    expect(inactiveMarkup).not.toContain("editor-live-surface");
+    expect(inactiveMarkup).not.toContain("editor-feedback-overlay");
     expect(inactiveMarkup).not.toMatch(/Editing —|Reviewing your latest revision/);
 
     expect(completedMarkup).toContain("factory/answer.md");
@@ -644,7 +645,7 @@ describe("workbook lesson UI", () => {
     expect(markup).toContain("data-activity-type=\"editor-practice\"");
     expect(markup).toContain("factory/answer.md");
     expect(markup).toContain("editor-surface");
-    expect(markup).toContain("role=\"status\"");
+    expect(markup).toContain("editor-feedback-overlay");
     expect(markup).not.toContain("Get a hint");
     expect(markup).not.toContain("Edit the answer");
     expect(markup).not.toContain("Update the answer file");

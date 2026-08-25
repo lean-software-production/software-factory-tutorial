@@ -122,6 +122,23 @@ describe("workbook fixed conversation layout", () => {
     expect(feedbackPanel).not.toContain("blur");
   });
 
+  it("attaches editor feedback to the editor bottom the same way the terminal does", () => {
+    const editorSurface = declarationsFor(".editor-live-surface");
+    const editorWithFeedback = declarationsFor(".editor-live-surface.has-feedback .editor-surface");
+    const feedbackPanel = declarationsFor(".editor-feedback-overlay");
+
+    expect(editorSurface).toContain("position: relative");
+    expect(editorWithFeedback).toContain("border-bottom: 0");
+    expect(editorWithFeedback).toContain("border-radius: 9px 9px 0 0");
+    expect(feedbackPanel).toContain("margin: 0 0 12px");
+    expect(feedbackPanel).toContain("border-radius: 0 0 9px 9px");
+    // The green advice palette means accepted; feedback asks for a revision, so both practice
+    // blocks use the same informational treatment.
+    expect(feedbackPanel).not.toContain("var(--green-pale)");
+    expect(workbookStyles).not.toContain(".editor-status");
+    expect(feedbackPanel).not.toContain("position: absolute");
+  });
+
   it("does not make reflections a sticky work surface", () => {
     const reflectionProgress: Progress = {
       ...progress,

@@ -505,13 +505,16 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh, showAuthored
     };
   }, [block.id, canEdit, refresh]);
 
-  const status = editorStatusText(state, completed);
+  // One channel, as the terminal has: whatever the learner most needs to read sits welded to the
+  // bottom of the work surface. Feedback outranks the running status, which outranks nothing.
+  const liveFeedback = localError ?? state?.checkpoint?.feedback ?? editorStatusText(state, completed);
   return <section id={blockElementId(lessonId, block.id)} className={`work-block editor-practice ${state?.active ? "is-active" : ""}`}>
     {showAuthoredContent && <><p className="section-label">Practice · embedded editor</p><h2>{block.title}</h2><Markdown>{block.markdown}</Markdown></>}
     <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
-    {canEdit && <div className="editor-status" role="status" aria-live="polite">{localError ?? status}</div>}
-    {canEdit && state?.checkpoint?.feedback && <aside className="advice editor-feedback" aria-live="polite"><b>Inline feedback:</b> {state.checkpoint.feedback}</aside>}
-    {canEdit && <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />}
+    {canEdit && <div className={`editor-live-surface${liveFeedback ? " has-feedback" : ""}`}>
+      <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />
+      {liveFeedback && <aside className="live-block-feedback editor-feedback-overlay" aria-live="polite"><Markdown>{liveFeedback}</Markdown></aside>}
+    </div>}
     {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : completed ? <aside className="success-checkpoint editor-unlocked" aria-live="polite">
       <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Unlocked</p><h3>Accepted revision unlocked the next step.</h3><p>{state?.checkpoint?.successMessage || "The latest accepted editor draft was written to the target file."}</p></div>
     </aside> : !canEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}

@@ -46,19 +46,23 @@ const lesson = {
   blocks: [
     { id: "orientation", type: "narrative", title: "Orientation", markdown: paragraphs(6, "Orientation") },
     { id: "practice", type: "terminal-practice", title: "Practice", markdown: "Run this:\n\n```sh\necho affordance\n```" },
+    { id: "editing", type: "editor-practice", title: "Editing", markdown: "Write the answer.", path: "factory/answer.md" },
   ],
 };
 
-type Stage = "intro" | "orientation" | "practice";
+type Stage = "intro" | "orientation" | "practice" | "editing";
 let sequence = 0;
 const authored = (lessonId: string, blockId: string, text: string) => ({
   type: "message" as const, id: `record-${blockId}`, sequence: sequence++, at: "2026-01-01T00:00:00.000Z",
   lessonId, blockId, role: "assistant" as const, source: "authored" as const, presentation: "course" as const, text,
 });
 
+const FEEDBACK = "Name the acceptance marker in the answer, then pause for another review.";
+
 function state(stage: Stage) {
   const past = stage !== "intro";
   const practising = stage === "practice";
+  const editing = stage === "editing";
   return {
     workbook: { title: "Affordance workbook" },
     introduction: "Introduction to the affordance workbook.",
@@ -68,21 +72,25 @@ function state(stage: Stage) {
       ...(past ? [
         authored(lesson.id, "orientation", `## Orientation\n\n${paragraphs(6, "Orientation")}`),
         authored(lesson.id, "practice", "## Practice\n\nRun this:\n\n```sh\necho affordance\n```"),
+        authored(lesson.id, "editing", "## Editing\n\nWrite the answer."),
       ] : []),
     ],
     // The runway is the spacer that makes the successor reachable: without it the page cannot
     // scroll far enough for the next block to cross the reading line.
-    readyBlockIds: past && !practising ? ["practice"] : [],
+    readyBlockIds: past && !practising && !editing ? ["practice"] : practising ? ["editing"] : [],
     chapters: [{ id: lesson.id, title: lesson.title, part: "Part 1", partMarkdown: "# Part 1", partNumber: 1, lessonNumber: 1, lesson: past ? lesson : undefined }],
     progress: {
       activeLessonId: past ? lesson.id : "workbook--introduction",
-      activeBlockId: practising ? "practice" : past ? "orientation" : "workbook--introduction",
+      activeBlockId: editing ? "editing" : practising ? "practice" : past ? "orientation" : "workbook--introduction",
       completedLessons: [],
       blocks: [
-        { id: "orientation", type: "narrative", ready: true, active: past && !practising, completed: practising, verified: false, emerged: past },
+        { id: "orientation", type: "narrative", ready: true, active: past && !practising && !editing, completed: practising || editing, verified: false, emerged: past },
         // Ready while orientation is active: the reading line watches the ready successor, and
         // completes the active block when that successor crosses it.
-        { id: "practice", type: "terminal-practice", ready: past, active: practising, completed: false, verified: false, emerged: practising },
+        { id: "practice", type: "terminal-practice", ready: past, active: practising, completed: editing, verified: editing, emerged: practising || editing },
+        { id: "editing", type: "editor-practice", ready: practising || editing, active: editing, completed: false, verified: false, emerged: editing,
+          editorStatus: editing ? "feedback" : undefined, revision: 1, draftText: "A first draft of the answer.",
+          checkpoint: editing ? { status: "feedback", feedback: FEEDBACK, evidence: { kind: "editor", text: "A first draft of the answer." } } : undefined },
       ],
       reflections: {},
       reflectionConversations: {},
@@ -165,6 +173,7 @@ async function main(): Promise<void> {
       completions.push(blockId);
       if (blockId === "workbook--introduction") stage = "orientation";
       if (blockId === "orientation") stage = "practice";
+      if (blockId === "practice") stage = "editing";
       return sendJson(response, state(stage));
     }
     if (url.pathname.startsWith("/api/")) { response.writeHead(404).end(); return; }
@@ -208,72 +217,114 @@ async function main(): Promise<void> {
     check(completions.includes("orientation"), "reading line: crossing the line did not post complete-block for orientation");
 
     // ---- Affordance 2: the activity band expands as it rises ---------------------------------
-    // Without promotion there is no band to measure; report that once rather than timing out on
-    // every locator below it.
-    if (promoted) {
-    const layout = await page.evaluate(() => {
-      const band = document.querySelector(".current-activity-band") as HTMLElement;
-      let top = 0; let current: HTMLElement | null = band;
-      while (current) { top += current.offsetTop; current = current.offsetParent as HTMLElement | null; }
-      return { bandDocumentTop: top };
-    });
-    const measure = async () => page.evaluate(() => {
-      const band = document.querySelector(".current-activity-band") as HTMLElement | null;
-      const main = document.querySelector("main") as HTMLElement | null;
-      const work = band?.querySelector(".work-block")?.getBoundingClientRect();
-      if (!band || !main || !work) return null;
-      const mainRect = main.getBoundingClientRect();
-      return {
-        expand: Number(getComputedStyle(band).getPropertyValue("--activity-expand")) || 0,
-        width: Math.round(work.width), left: Math.round(work.left),
-        mainLeft: Math.round(mainRect.left), mainWidth: Math.round(mainRect.width),
+    // Both practice blocks ride the same band, so the same measurements must hold for each.
+    const validateBand = async (label: string) => {
+      const layout = await page.evaluate(() => {
+        const band = document.querySelector(".current-activity-band") as HTMLElement;
+        let top = 0; let current: HTMLElement | null = band;
+        while (current) { top += current.offsetTop; current = current.offsetParent as HTMLElement | null; }
+        return { bandDocumentTop: top };
+      });
+      const measure = async () => page.evaluate(() => {
+        const band = document.querySelector(".current-activity-band") as HTMLElement | null;
+        const main = document.querySelector("main") as HTMLElement | null;
+        const work = band?.querySelector(".work-block")?.getBoundingClientRect();
+        if (!band || !main || !work) return null;
+        const mainRect = main.getBoundingClientRect();
+        return {
+          expand: Number(getComputedStyle(band).getPropertyValue("--activity-expand")) || 0,
+          width: Math.round(work.width), left: Math.round(work.left),
+          mainLeft: Math.round(mainRect.left), mainWidth: Math.round(mainRect.width),
+        };
+      });
+      const at = async (naturalTop: number) => {
+        await page.evaluate((target) => window.scrollTo(0, target), layout.bandDocumentTop - naturalTop);
+        await page.waitForTimeout(150);
+        const sample = await measure();
+        if (!sample) failures.push(`${label} band: could not measure the band at naturalTop ${naturalTop}`);
+        return sample;
       };
-    });
-    const at = async (naturalTop: number) => {
-      await page.evaluate((target) => window.scrollTo(0, target), layout.bandDocumentTop - naturalTop);
-      await page.waitForTimeout(150);
-      const sample = await measure();
-      if (!sample) { failures.push(`activity band: could not measure the band at naturalTop ${naturalTop}`); }
-      return sample;
+
+      const rest = await at(320);
+      const rising = [await at(160), await at(100), await at(40)];
+      const full = await at(0);
+
+      check(Boolean(rest && full && rising.every(Boolean)), `${label} band: could not measure the band at every sample point`);
+      if (rest && full && rising.every(Boolean)) {
+        const series = [rest, ...rising as NonNullable<typeof rest>[], full];
+        check(rest.expand === 0, `${label} band: expected no expansion at rest, measured --activity-expand ${rest.expand}`);
+        check(full.expand === 1, `${label} band: expected full expansion at the top, measured --activity-expand ${full.expand}`);
+        for (let index = 1; index < series.length; index++) {
+          check(series[index].width > series[index - 1].width, `${label} band: width did not grow between samples ${index - 1} and ${index} (${series[index - 1].width} then ${series[index].width})`);
+          check(series[index].left < series[index - 1].left, `${label} band: band did not widen leftwards between samples ${index - 1} and ${index}`);
+        }
+        // At rest it sits inline; fully expanded it fills main minus the 24px canvas inset.
+        expectClose(full.left, full.mainLeft + 24, 1, `${label} band: expanded left edge`);
+        expectClose(full.width, full.mainWidth - 48, 2, `${label} band: expanded width`);
+        expectClose(full.left + full.width / 2, full.mainLeft + full.mainWidth / 2, 2, `${label} band: expanded centre`);
+        for (const sample of series) {
+          check(sample.left >= sample.mainLeft - 1, `${label} band: overflowed the left edge of main (${sample.left} < ${sample.mainLeft})`);
+          check(sample.left + sample.width <= sample.mainLeft + sample.mainWidth + 1, `${label} band: overflowed the right edge of main`);
+        }
+        // Scrolling back must undo it, not leave the band stuck wide.
+        const returned = await at(320);
+        if (returned) {
+          check(returned.expand === 0, `${label} band: expansion did not reverse on scroll back (--activity-expand ${returned.expand})`);
+          expectClose(returned.width, rest.width, 1, `${label} band: width did not return to its inline size`);
+        }
+      }
+
+      // Shoot the whole page, not just the band: the affordance is how wide the band sits relative
+      // to the column around it, which a crop of the band's own interior cannot show. Both work
+      // surfaces are masked — xterm's canvas and CodeMirror's caret and selection do not reproduce
+      // between runs — which leaves the band's own chrome, including its welded feedback.
+      const masked = page.locator(".embedded-terminal, .cm-editor");
+      await at(320);
+      await compareGolden(page, `${label}-band-at-rest`, await page.screenshot({ mask: [masked] }));
+      await at(0);
+      await compareGolden(page, `${label}-band-expanded`, await page.screenshot({ mask: [masked] }));
     };
 
-    const rest = await at(320);
-    const rising = [await at(160), await at(100), await at(40)];
-    const full = await at(0);
+    if (promoted) await validateBand("terminal");
 
-    check(Boolean(rest && full && rising.every(Boolean)), "activity band: could not measure the band at every sample point");
-    if (rest && full && rising.every(Boolean)) {
-      const series = [rest, ...rising as NonNullable<typeof rest>[], full];
-      check(rest.expand === 0, `activity band: expected no expansion at rest, measured --activity-expand ${rest.expand}`);
-      check(full.expand === 1, `activity band: expected full expansion at the top, measured --activity-expand ${full.expand}`);
-      for (let index = 1; index < series.length; index++) {
-        check(series[index].width > series[index - 1].width, `activity band: width did not grow between samples ${index - 1} and ${index} (${series[index - 1].width} then ${series[index].width})`);
-        check(series[index].left < series[index - 1].left, `activity band: band did not widen leftwards between samples ${index - 1} and ${index}`);
-      }
-      // At rest it sits inline; fully expanded it fills main minus the 24px canvas inset.
-      expectClose(full.left, full.mainLeft + 24, 1, "activity band: expanded left edge");
-      expectClose(full.width, full.mainWidth - 48, 2, "activity band: expanded width");
-      expectClose(full.left + full.width / 2, full.mainLeft + full.mainWidth / 2, 2, "activity band: expanded centre");
-      for (const sample of series) {
-        check(sample.left >= sample.mainLeft - 1, `activity band: overflowed the left edge of main (${sample.left} < ${sample.mainLeft})`);
-        check(sample.left + sample.width <= sample.mainLeft + sample.mainWidth + 1, "activity band: overflowed the right edge of main");
-      }
-      // Scrolling back must undo it, not leave the band stuck wide.
-      const returned = await at(320);
-      if (returned) {
-        check(returned.expand === 0, `activity band: expansion did not reverse on scroll back (--activity-expand ${returned.expand})`);
-        expectClose(returned.width, rest.width, 1, "activity band: width did not return to its inline size");
-      }
-    }
+    // ---- Affordance 4: the editor rides the same band, and wears the same feedback ------------
+    if (promoted) {
+      // Promote the same way a learner does: scroll the next block past the reading line.
+      const editingTop = await page.evaluate(() => {
+        const element = document.getElementById("editing");
+        return element ? element.getBoundingClientRect().top + window.scrollY : null;
+      });
+      await page.evaluate((target) => window.scrollTo(0, target), (editingTop ?? 0) - 60);
+      const editorReached = await page.waitForFunction(() => document.querySelector('.current-activity-band[data-activity-type="editor-practice"]') !== null, undefined, { timeout: 10_000 })
+        .then(() => true)
+        .catch(() => { failures.push("editor band: the editor block never became the active practice surface"); return false; });
 
-    // Shoot the whole page, not just the band: the affordance is how wide the band sits relative
-    // to the column around it, which a crop of the band's own interior cannot show. The terminal
-    // is masked because xterm's canvas is not reproducible between runs.
-    const terminal = page.locator(".embedded-terminal");
-    await at(320);
-    await compareGolden(page, "activity-band-at-rest", await page.screenshot({ mask: [terminal] }));
-    await at(0);
-    await compareGolden(page, "activity-band-expanded", await page.screenshot({ mask: [terminal] }));
+      if (editorReached) {
+        await validateBand("editor");
+        const editorMarkup = await page.evaluate(() => {
+          const band = document.querySelector(".current-activity-band") as HTMLElement | null;
+          const overlay = band?.querySelector(".editor-feedback-overlay") as HTMLElement | null;
+          const surface = band?.querySelector(".editor-surface") as HTMLElement | null;
+          if (!band || !overlay || !surface) return null;
+          const overlayRect = overlay.getBoundingClientRect();
+          const surfaceRect = surface.getBoundingClientRect();
+          return {
+            weldedBelow: Math.round(overlayRect.top - surfaceRect.bottom),
+            sameWidth: Math.round(overlayRect.width - surfaceRect.width),
+            background: getComputedStyle(overlay).backgroundColor,
+            usesLiveBlockFeedback: overlay.classList.contains("live-block-feedback"),
+            statusStrip: Boolean(band.querySelector(".editor-status")),
+          };
+        });
+        check(Boolean(editorMarkup), "editor feedback: could not measure the editor's feedback overlay");
+        if (editorMarkup) {
+          // The terminal welds its feedback to the bottom of its surface; the editor now does too.
+          expectClose(editorMarkup.weldedBelow, 0, 1, "editor feedback: gap between the editor surface and its feedback");
+          expectClose(editorMarkup.sameWidth, 0, 1, "editor feedback: overlay width differs from the editor surface");
+          check(editorMarkup.usesLiveBlockFeedback, "editor feedback: does not use the shared live-block-feedback treatment");
+          check(!editorMarkup.statusStrip, "editor feedback: the separate status strip is still rendered alongside the feedback");
+        }
+      }
     }
 
     // ---- Affordance 3: the composer grows with the draft, then caps and scrolls ---------------
