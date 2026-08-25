@@ -129,6 +129,9 @@ function timelineMessageBlockKind(loaded: LoadedWorkbook, record: TimelineMessag
 }
 function publicTimelineRecord(record: WorkbookTimelineRecord, loaded?: LoadedWorkbook): PublicTimelineRecord | undefined {
   if (record.type === "message") {
+    // Every review is logged, but a practice block shows only its latest feedback, beside the
+    // work surface. Letting these into the conversation would replay the whole review history as
+    // chat, so they are dropped here and reach the learner through the block's checkpoint instead.
     if (loaded && record.source === "main_tutor" && record.presentation === "review") {
       const kind = timelineMessageBlockKind(loaded, record);
       if (kind === "terminal-practice" || kind === "editor-practice") return undefined;
@@ -288,7 +291,7 @@ async function publicState(loaded: LoadedWorkbook, learnerWorkspace: string, rec
     const withCheckpoint = checkpoint ? { ...base, checkpoint } : base;
     if (authored.type === "terminal-practice") return { ...withCheckpoint, verified: currentAttempt?.status === "accepted", revision: currentAttempt?.version, terminalHtml: currentAttempt?.evidence.kind === "terminal" && currentAttempt.status === "accepted" ? currentAttempt.evidence.terminalHtml : undefined };
     if (authored.type === "editor-practice" && active && !completed) {
-      if (currentAttempt?.evidence.kind === "editor") return { ...withCheckpoint, revision: currentAttempt.version, draftText: currentAttempt.evidence.text, editorStatus: checkpoint?.status === "reviewing" ? "reviewing" : checkpoint?.status === "feedback" ? "feedback" : checkpoint?.status === "accepted" ? "unlocked" : "editing", feedback: checkpoint?.feedback };
+      if (currentAttempt?.evidence.kind === "editor") return { ...withCheckpoint, revision: currentAttempt.version, draftText: currentAttempt.evidence.text, editorStatus: checkpoint?.status === "reviewing" ? "reviewing" : checkpoint?.status === "feedback" ? "feedback" : checkpoint?.status === "accepted" ? "unlocked" : "editing" };
       return { ...withCheckpoint, revision: 0, draftText: await readTargetDraftText(learnerWorkspace, authored).catch(() => ""), editorStatus: "editing" };
     }
     if (authored.type === "editor-practice" && currentAttempt?.status === "accepted") return { ...withCheckpoint, revision: currentAttempt.version, editorStatus: "unlocked" };
@@ -535,15 +538,16 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         }
         const accepted = await attempts.acceptCurrent(current.id, message);
         if (!accepted) return;
-        if (accepted.evidence.kind === "reflection") await appendReviewMessage(accepted, message);
+        await appendReviewMessage(accepted, message);
         await appendAcceptedCheckpoint(accepted);
         await recordWorkAccepted(active);
         return;
       }
 
       const feedback = await attempts.markFeedback(current.id, message);
-      if (feedback?.evidence.kind === "reflection") await appendReviewMessage(feedback, feedback.feedback ?? message);
-      else if (feedback) await refreshBlockBriefing(active, feedback.id, { silentFailure: true });
+      if (!feedback) return;
+      await appendReviewMessage(feedback, feedback.feedback ?? message);
+      if (feedback.evidence.kind !== "reflection") await refreshBlockBriefing(active, feedback.id, { silentFailure: true });
     });
     trackFinalizer(finalizer);
   };

@@ -524,30 +524,32 @@ describe("workbook lesson UI", () => {
     expect(markup).not.toContain("Review");
   });
 
-  it("shows editor feedback once when the checkpoint and the block both carry it", () => {
-    // The public state projects the same review under checkpoint.feedback and a sibling feedback
-    // field. They are one message to the learner, so the block coalesces them into a single aside;
-    // rendering both would show the same sentence twice.
+  it("shows the checkpoint feedback once, and not as a conversation message", () => {
+    // Every review is logged, but a practice block displays only its latest feedback, beside the
+    // work surface. It reaches the block through the checkpoint alone, so a second render site
+    // would show the learner the same sentence twice.
     const feedback = "Name the acceptance marker and explain why it belongs there.";
     const markup = html(createElement(BlockView, {
       block: editorBlock,
-      progress: activeEditorProgress({ editorStatus: "feedback", feedback, checkpoint: { status: "feedback", feedback } } as any),
+      progress: activeEditorProgress({ editorStatus: "feedback", checkpoint: { status: "feedback", feedback } } as any),
       refresh: vi.fn()
     }));
 
     expect(markup).toContain(feedback);
     expect(markup.split(feedback).length - 1).toBe(1);
+    expect(markup).toContain("editor-feedback");
+    expect(markup).not.toContain("conversation-entry");
   });
 
   it("does not render live editor-practice surface or status for inactive and completed blocks", () => {
     const inactiveMarkup = html(createElement(BlockView, {
       block: editorBlock,
-      progress: activeEditorProgress({ ready: false, active: false, completed: false, editorStatus: undefined, feedback: "Hold this feedback until the block is active." } as any),
+      progress: activeEditorProgress({ ready: false, active: false, completed: false, editorStatus: undefined, checkpoint: { status: "feedback", feedback: "Hold this feedback until the block is active." } } as any),
       refresh: vi.fn()
     }));
     const completedMarkup = html(createElement(BlockView, {
       block: editorBlock,
-      progress: activeEditorProgress({ active: false, completed: true, editorStatus: "unlocked", feedback: "Approved: the answer is accepted." } as any),
+      progress: activeEditorProgress({ active: false, completed: true, editorStatus: "unlocked" } as any),
       refresh: vi.fn()
     }));
 
@@ -559,7 +561,7 @@ describe("workbook lesson UI", () => {
 
     expect(completedMarkup).toContain("factory/answer.md");
     expect(completedMarkup).toContain("Accepted revision unlocked the next step.");
-    expect(completedMarkup).toContain("Approved: the answer is accepted.");
+    expect(completedMarkup).toContain("The latest accepted editor draft was written to the target file.");
     expect(completedMarkup).not.toContain("editor-surface");
     expect(completedMarkup).not.toContain("role=\"status\"");
     expect(completedMarkup).not.toMatch(/Editing —|Reviewing your latest revision/);

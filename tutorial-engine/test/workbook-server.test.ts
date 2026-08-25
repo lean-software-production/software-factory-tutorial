@@ -894,6 +894,34 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("logs every practice review but keeps it out of the conversation", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty();
+    const tutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      { outcome: "feedback", message: "Run the supplied command, not your own." },
+      { outcome: "accepted", message: "Terminal accepted." }
+    );
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, mainTutor: tutor, blockTutor: new FakeBlockTutor() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      await submitTerminalAttempt(server.url, "lesson--001-first--run-supplied-command");
+      const reviewed = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.status === "feedback", "terminal feedback");
+
+      // The event log keeps the whole review history for the block.
+      const logged = (await privateTimeline(dir)).filter((record): record is TimelineMessage => record.type === "message" && record.source === "main_tutor" && record.presentation === "review");
+      expect(logged.map((record) => record.text)).toContain("Run the supplied command, not your own.");
+
+      // The learner sees the latest one beside the terminal, through the checkpoint...
+      expect(block(reviewed, "lesson--001-first--run-supplied-command")?.checkpoint).toMatchObject({ status: "feedback", feedback: "Run the supplied command, not your own." });
+      // ...and never as a conversation message, which would replay the review history as chat.
+      expect(reviewed.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("submits terminal and reflection evidence through the common attempt reviewer", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty();
