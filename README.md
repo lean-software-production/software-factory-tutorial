@@ -21,6 +21,7 @@ npm install                 # install root, engine, and calculator workspaces
 npm run setup               # check Node, npm, Pi, and configured tutor models
 npm run tutorial            # create a fresh learner session and launch the workbook engine
 npm run tutorial -- --session <id>  # reopen an explicit session ID
+npm run tutorial:workbook   # launch the workbook with the trusted root node_modules runtime profile
 npm run --workspace=tutorial-engine check:workbook
 ```
 
@@ -33,6 +34,8 @@ npm run --workspace=tutorial/calculator test
 npm run check:eval
 npm run test:eval
 ```
+
+`npm run tutorial:workbook` is the root trusted-profile launcher for the embedded workbook terminal. It computes the repository root itself and supplies exactly one read-only runtime mount: root `node_modules/` at session workspace `node_modules/`. Authored workbook content and CLI arguments cannot choose host source paths; package manifests and lockfiles are not mounted.
 
 `npm run check` runs the full deterministic root check. `npm run eval` is the explicit live evaluator command and may spend model tokens.
 

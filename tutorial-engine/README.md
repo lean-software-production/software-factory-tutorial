@@ -15,9 +15,11 @@ npm run dev:workbook -- ../tutorial
 ```
 
 From the repository root, `npm run tutorial` is the convenience launcher for the same workbook
-entry point. A plain launch creates a fresh session and prints its ID and workspace path. Reopen a
-specific session with `npm run tutorial -- --session <id>`; legacy `.tutorial/.tmp` state is not
-resumed.
+entry point. `npm run tutorial:workbook` uses the root trusted Node runtime profile for the embedded
+terminal: it mounts only the repository-root `node_modules/` directory read-only at workspace
+`node_modules/`, and it never mounts `package.json` or lockfiles. A plain launch creates a fresh
+session and prints its ID and workspace path. Reopen a specific session with
+`npm run tutorial -- --session <id>`; legacy `.tutorial/.tmp` state is not resumed.
 
 Add `--no-open` to suppress browser launch, or `--port 4310` to choose a port. The server binds only to `127.0.0.1`. Pi credentials remain in the server process; the browser has no filesystem or provider-credential access.
 

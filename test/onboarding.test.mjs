@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkPiAuthentication, describeBlockTutorModel, describeDoerModel, describeTutorModel, modelReport } from "../scripts/setup.mjs";
 import { tutorialArguments } from "../scripts/tutorial.mjs";
+import { trustedNodeRuntimeProvision, tutorialWorkbookArguments } from "../scripts/tutorial-workbook.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const tutorialRoot = resolve(repositoryRoot, "tutorial");
@@ -27,6 +28,17 @@ describe("tutorial launcher", () => {
     assert.deepEqual(tutorialArguments(["--session", "lesson-007"]), [
       "run", "--workspace=tutorial-engine", "dev:workbook", "--", tutorialRoot, "--session", "lesson-007"
     ]);
+  });
+
+  it("launches the workbook with a trusted root node_modules runtime profile", () => {
+    assert.deepEqual(tutorialWorkbookArguments(["--port", "4310", "--no-open"]), [
+      tutorialRoot, "--port", "4310", "--no-open"
+    ]);
+    assert.deepEqual(trustedNodeRuntimeProvision(repositoryRoot), {
+      mounts: [
+        { source: resolve(repositoryRoot, "node_modules"), target: "node_modules", readonly: true }
+      ]
+    });
   });
 });
 
