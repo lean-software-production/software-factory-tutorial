@@ -230,7 +230,9 @@ describe("v2 workbook driver", () => {
       expect(workbookTutor.reviews).toHaveLength(1);
       expect(workbookTutor.reviews[0]).toMatchObject({ privateGuidance: expect.stringContaining("Private editor criterion"), attempt: { evidence: { kind: "editor", text: "This is a vague draft." } } });
       expect(JSON.stringify(trace)).not.toContain("Private editor criterion");
-      expect(JSON.stringify(trace)).toContain('"source":"main_tutor"');
+      // An editor-practice block reaches the learner through its checkpoint feedback, asserted
+      // above; the main tutor's review is no longer appended as a timeline message for editor
+      // evidence. That the learner sees it exactly once is covered by workbook-ui.test.tsx.
     } finally {
       await server.close();
     }

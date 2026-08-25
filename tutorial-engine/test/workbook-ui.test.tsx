@@ -524,6 +524,21 @@ describe("workbook lesson UI", () => {
     expect(markup).not.toContain("Review");
   });
 
+  it("shows editor feedback once when the checkpoint and the block both carry it", () => {
+    // The public state projects the same review under checkpoint.feedback and a sibling feedback
+    // field. They are one message to the learner, so the block coalesces them into a single aside;
+    // rendering both would show the same sentence twice.
+    const feedback = "Name the acceptance marker and explain why it belongs there.";
+    const markup = html(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ editorStatus: "feedback", feedback, checkpoint: { status: "feedback", feedback } } as any),
+      refresh: vi.fn()
+    }));
+
+    expect(markup).toContain(feedback);
+    expect(markup.split(feedback).length - 1).toBe(1);
+  });
+
   it("does not render live editor-practice surface or status for inactive and completed blocks", () => {
     const inactiveMarkup = html(createElement(BlockView, {
       block: editorBlock,
