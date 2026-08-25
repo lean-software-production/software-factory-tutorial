@@ -146,6 +146,33 @@ describe("SessionWorkspaceManager", () => {
     expect(await git(workspaceRoot, "status", "--porcelain")).toBe("");
   });
 
+  it("materializes trusted runtime provision mount targets as empty ignored directories", async () => {
+    const contentRoot = await contentFixture();
+    const runtimeSource = await mkdtemp(join(tmpdir(), "session-runtime-source-")); roots.push(runtimeSource);
+    await write(join(runtimeSource, "tool.txt"), "host runtime source\n");
+
+    const session = await (await SessionWorkspaceManager.create(contentRoot)).createSession({
+      id: "runtime-ready",
+      runtimeProvision: { mounts: [{ source: runtimeSource, target: "runtime-tools", readonly: true }] },
+    });
+
+    expect(session.runtimeProvision?.workspaceMountTargets).toEqual(["runtime-tools"]);
+    expect(await readdir(join(session.workspaceRoot, "runtime-tools"))).toEqual([]);
+    expect(await readFile(join(session.workspaceRoot, ".gitignore"), "utf8")).toBe("factory/**/.tmp/\nruntime-tools/\n");
+    expect(await git(session.workspaceRoot, "check-ignore", "runtime-tools/generated.txt")).toBe("runtime-tools/generated.txt");
+    expect(await git(session.workspaceRoot, "status", "--porcelain")).toBe("");
+  });
+
+  it("rejects runtime provision targets that collide with materialized workspace content", async () => {
+    const contentRoot = await contentFixture();
+    const runtimeSource = await mkdtemp(join(tmpdir(), "session-runtime-source-")); roots.push(runtimeSource);
+
+    await expect((await SessionWorkspaceManager.create(contentRoot)).createSession({
+      id: "runtime-collides",
+      runtimeProvision: { mounts: [{ source: runtimeSource, target: "calculator/src", readonly: true }] },
+    })).rejects.toThrow(/must be empty|must be a directory/i);
+  });
+
   it("rejects missing content directories and materialized paths that leave the content root", async () => {
     const missingFactory = await contentFixture();
     await rm(join(missingFactory, "factory"), { recursive: true, force: true });

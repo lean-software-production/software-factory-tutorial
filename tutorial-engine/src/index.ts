@@ -18,3 +18,5 @@ export {
   validateSessionId,
 } from "./session-workspace.js";
 export type { CreateTutorialSessionOptions, TutorialSessionPaths } from "./session-workspace.js";
+export { NO_RUNTIME_PROVISION, assertSafeWorkspaceMountTarget, trustRuntimeProvision } from "./workbook/runtime-provision.js";
+export type { RuntimeProvisionInput, RuntimeProvisionMountDeclaration, RuntimeProvisionProfile, SafeWorkspaceRelativePath, TrustedRuntimeMount, TrustedRuntimeProvision } from "./workbook/runtime-provision.js";

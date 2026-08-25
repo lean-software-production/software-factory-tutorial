@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertDockerTerminalReady, dockerContainerUser, dockerExecArguments, dockerRunArguments, WorkbookTerminalManager, type SubmitAttempt, type TerminalClient, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
+import { trustRuntimeProvision } from "../src/workbook/runtime-provision.js";
 
 class FakePty implements TerminalPty {
   writes: string[] = [];
@@ -57,7 +58,7 @@ describe("WorkbookTerminalManager", () => {
     expect(dockerContainerUser()).toBe(`${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`);
   });
 
-  it("mounts only learner work roots read-write and supplies Pi with the API key", async () => {
+  it("mounts no external runtime paths by default while keeping learner work roots writable", async () => {
     const workspace = await mkdtemp(resolve(tmpdir(), "workbook-terminal-mounts-"));
     tempDirs.push(workspace);
     await mkdir(resolve(workspace, "factory/refactor/.tmp"), { recursive: true });
@@ -65,13 +66,8 @@ describe("WorkbookTerminalManager", () => {
     await mkdir(resolve(workspace, ".tmp"));
     await mkdir(resolve(workspace, ".tutorial/.tmp"), { recursive: true });
     await mkdir(resolve(workspace, ".git"));
-    const dependencyRoot = await mkdtemp(resolve(tmpdir(), "workbook-terminal-deps-"));
-    tempDirs.push(dependencyRoot);
-    await mkdir(resolve(dependencyRoot, "node_modules/.bin"), { recursive: true });
-    await writeFile(resolve(dependencyRoot, "package.json"), "{}\n", "utf8");
-    await mkdir(resolve(dependencyRoot, ".git"));
 
-    const args = dockerRunArguments({ workspace, dependencyRoot, name: "workbook-terminal-test", apiKey: "<redacted>" });
+    const args = dockerRunArguments({ workspace, name: "workbook-terminal-test", apiKey: "<redacted>" });
     const mounts = args.filter((arg) => arg.startsWith("type=bind"));
 
     expect(args).toContain("--read-only");
@@ -85,11 +81,24 @@ describe("WorkbookTerminalManager", () => {
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, ".tmp")},dst=/workspace/.tmp`);
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, ".tutorial/.tmp")},dst=/workspace/.tutorial/.tmp`);
     expect(mounts).toContain(`type=bind,src=${resolve(workspace, ".git")},dst=/workspace/.git`);
-    expect(mounts).toContain(`type=bind,src=${resolve(dependencyRoot, "node_modules")},dst=/workspace/node_modules,readonly`);
-    expect(mounts).toContain(`type=bind,src=${resolve(dependencyRoot, "package.json")},dst=/workspace/package.json,readonly`);
-    expect(mounts).not.toContain(`type=bind,src=${resolve(dependencyRoot, ".git")},dst=/workspace/.git,readonly`);
     expect(mounts).not.toContain(expect.stringContaining("auth.json"));
     expect(mounts).not.toContain(`type=bind,src=${workspace},dst=/workspace`);
+    expect(mounts.filter((mount) => mount.endsWith(",readonly"))).toEqual([`type=bind,src=${workspace},dst=/workspace,readonly`]);
+  });
+
+  it("mounts trusted runtime provision sources read-only at safe workspace targets", async () => {
+    const workspace = await mkdtemp(resolve(tmpdir(), "workbook-terminal-workspace-"));
+    const runtimeSource = await mkdtemp(resolve(tmpdir(), "workbook-runtime-source-"));
+    tempDirs.push(workspace, runtimeSource);
+    await mkdir(resolve(workspace, "runtime-tools"));
+    const runtimeProvision = trustRuntimeProvision({ mounts: [{ source: runtimeSource, target: "runtime-tools", readonly: true }] });
+
+    const args = dockerRunArguments({ workspace, runtimeProvision, name: "workbook-terminal-test", apiKey: "<redacted>" });
+    const mounts = args.filter((arg) => arg.startsWith("type=bind"));
+
+    const runtimeHostSource = runtimeProvision.mounts[0]!.hostSource;
+    expect(mounts).toContain(`type=bind,src=${runtimeHostSource},dst=/workspace/runtime-tools,readonly`);
+    expect(mounts).not.toContain(`type=bind,src=${runtimeHostSource},dst=/workspace/runtime-tools`);
   });
 
   it("rejects terminal preflight before Docker work when OPENCODE_API_KEY is absent", () => {
@@ -130,14 +139,12 @@ describe("WorkbookTerminalManager", () => {
     }
   });
 
-  it("prepares dependency mount targets for a new minimal workspace before Docker preflight and later launches", async () => {
+  it("passes trusted runtime provision through Docker preflight without creating target directories", async () => {
     const directory = await mkdtemp(join(tmpdir(), "workbook-fake-docker-"));
     const workspace = await mkdtemp(join(tmpdir(), "workbook-terminal-workspace-"));
-    const dependencyRoot = await mkdtemp(join(tmpdir(), "workbook-terminal-deps-"));
-    tempDirs.push(directory, workspace, dependencyRoot);
-    await mkdir(resolve(dependencyRoot, "node_modules/.bin"), { recursive: true });
-    await writeFile(resolve(dependencyRoot, "package.json"), "{}\n", "utf8");
-    await writeFile(resolve(dependencyRoot, "package-lock.json"), "{}\n", "utf8");
+    const runtimeSource = await mkdtemp(join(tmpdir(), "workbook-runtime-source-"));
+    tempDirs.push(directory, workspace, runtimeSource);
+    const runtimeProvision = trustRuntimeProvision({ mounts: [{ source: runtimeSource, target: "runtime-tools", readonly: true }] });
     const capture = join(directory, "docker-args");
     const docker = join(directory, "docker");
     await writeFile(docker, redactingFakeDocker);
@@ -149,18 +156,10 @@ describe("WorkbookTerminalManager", () => {
     process.env.OPENCODE_API_KEY = "<redacted>";
     process.env.WORKBOOK_TERMINAL_DOCKER_ARGS = capture;
     try {
-      assertDockerTerminalReady({ workspace, dependencyRoot });
-      expect((await stat(resolve(workspace, "node_modules"))).isDirectory()).toBe(true);
-      expect((await stat(resolve(workspace, "package.json"))).isFile()).toBe(true);
-      expect((await stat(resolve(workspace, "package-lock.json"))).isFile()).toBe(true);
-
-      const launchArgs = dockerRunArguments({ workspace, dependencyRoot, name: "workbook-terminal-test", apiKey: "<redacted>" });
-      const mounts = launchArgs.filter((arg) => arg.startsWith("type=bind"));
-      expect(launchArgs).toContain("--read-only");
-      expect(mounts).toContain(`type=bind,src=${workspace},dst=/workspace,readonly`);
-      expect(mounts).toContain(`type=bind,src=${resolve(dependencyRoot, "node_modules")},dst=/workspace/node_modules,readonly`);
-      expect(mounts).toContain(`type=bind,src=${resolve(dependencyRoot, "package.json")},dst=/workspace/package.json,readonly`);
-      expect(mounts).toContain(`type=bind,src=${resolve(dependencyRoot, "package-lock.json")},dst=/workspace/package-lock.json,readonly`);
+      assertDockerTerminalReady({ workspace, runtimeProvision });
+      await expect(stat(resolve(workspace, "runtime-tools"))).rejects.toThrow();
+      const args = await readFile(capture, "utf8");
+      expect(args).toContain(`type=bind,src=${runtimeProvision.mounts[0]!.hostSource},dst=/workspace/runtime-tools,readonly`);
     } finally {
       if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
       if (previousKey === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = previousKey;
@@ -168,22 +167,22 @@ describe("WorkbookTerminalManager", () => {
     }
   });
 
-  it("does not replace dependency paths that already exist in the workspace", async () => {
-    const workspace = await mkdtemp(resolve(tmpdir(), "workbook-terminal-workspace-"));
-    const dependencyRoot = await mkdtemp(resolve(tmpdir(), "workbook-terminal-deps-"));
-    tempDirs.push(workspace, dependencyRoot);
-    await mkdir(resolve(workspace, "node_modules/local"), { recursive: true });
-    await writeFile(resolve(workspace, "package.json"), "{\"name\":\"local\"}\n", "utf8");
-    await mkdir(resolve(dependencyRoot, "node_modules/.bin"), { recursive: true });
-    await writeFile(resolve(dependencyRoot, "package.json"), "{\"name\":\"deps\"}\n", "utf8");
+  it("rejects unsafe or writable runtime provision declarations before Docker arguments are built", async () => {
+    const runtimeSource = await mkdtemp(resolve(tmpdir(), "workbook-runtime-source-"));
+    tempDirs.push(runtimeSource);
 
-    const args = dockerRunArguments({ workspace, dependencyRoot, name: "workbook-terminal-test", apiKey: "<redacted>" });
-    const mounts = args.filter((arg) => arg.startsWith("type=bind"));
-
-    expect(mounts).not.toContain(`type=bind,src=${resolve(dependencyRoot, "node_modules")},dst=/workspace/node_modules,readonly`);
-    expect(mounts).not.toContain(`type=bind,src=${resolve(dependencyRoot, "package.json")},dst=/workspace/package.json,readonly`);
-    expect(await readFile(resolve(workspace, "package.json"), "utf8")).toBe("{\"name\":\"local\"}\n");
-    expect((await stat(resolve(workspace, "node_modules/local"))).isDirectory()).toBe(true);
+    for (const target of ["/absolute", "../escape", "safe/../escape", "safe//empty", ".", ".git/hooks"]) {
+      expect(() => trustRuntimeProvision({ mounts: [{ source: runtimeSource, target, readonly: true }] })).toThrow(/runtime mount target|git metadata/i);
+    }
+    expect(() => trustRuntimeProvision({ mounts: [{ source: runtimeSource, target: "safe", readonly: false as true }] })).toThrow(/read-only/i);
+    expect(() => trustRuntimeProvision({ mounts: [
+      { source: runtimeSource, target: "safe", readonly: true },
+      { source: runtimeSource, target: "safe", readonly: true },
+    ] })).toThrow(/duplicate/i);
+    expect(() => trustRuntimeProvision({ mounts: [
+      { source: runtimeSource, target: "safe", readonly: true },
+      { source: runtimeSource, target: "safe/nested", readonly: true },
+    ] })).toThrow(/conflicting/i);
   });
 
   it("preflights Pi authentication in the same isolated container it will run", async () => {

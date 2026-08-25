@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { access, readFile, realpath, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { dirname, extname, resolve, sep } from "node:path";
+import { extname, resolve, sep } from "node:path";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { LOOPBACK_HOST } from "../server/local-server.js";
 import type { TutorialLogger } from "../runtime-log.js";
@@ -11,6 +11,7 @@ import { project, type BlockProgress } from "./events.js";
 import { INTRODUCTION_BLOCK_ID, INTRODUCTION_LESSON_ID, LESSON_FRAME_BLOCK_ID, PART_BLOCK_ID, authoredBlockText, authoredIntroductionText, authoredLessonFrameText, authoredPartText, partLessonId } from "./pi-history.js";
 import { WORKBOOK_COMPLETE_ANCHOR_ID, WORKBOOK_INTRODUCTION_BLOCK_ID, blockText, buildWorkbookBlockStream, declaredBlockId, declaredSourceFromBlockId, successorAnchor, type AnchorId, type BlockId, type DeclaredWorkbookBlock, type OrderedWorkbookBlock } from "./workbook-blocks.js";
 import { assertDockerTerminalReady, createDockerPty, requireOpenCodeApiKey, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalPtyFactory } from "./terminal.js";
+import { NO_RUNTIME_PROVISION, trustRuntimeProvision, type RuntimeProvisionProfile, type TrustedRuntimeProvision } from "./runtime-provision.js";
 import { submitReflectionAttempt } from "./reflection.js";
 import { promoteCurrentEditorAttempt, resolveEditorTarget } from "./editor.js";
 import { AttemptStore, type Attempt, type AttemptEvidence } from "./attempts.js";
@@ -26,8 +27,8 @@ const MAX_MESSAGE_BYTES = 4_000;
 const REVIEW_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please try another attempt in a moment.";
 const TUTOR_UNAVAILABLE = "The tutor is temporarily unavailable. Please retry.";
 
-export interface WorkbookRuntimeDescriptor { contentRoot: string; sessionRoot: string; workspaceRoot: string; dependencyRoot?: string; }
-export interface WorkbookServerOptions { target: string; webRoot: string; session?: WorkbookRuntimeDescriptor; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; mainTutor?: MainWorkbookTutor; blockTutor?: WorkbookBlockTutor; }
+export interface WorkbookRuntimeDescriptor { contentRoot: string; sessionRoot: string; workspaceRoot: string; runtimeProvision?: TrustedRuntimeProvision; }
+export interface WorkbookServerOptions { target: string; webRoot: string; session?: WorkbookRuntimeDescriptor; runtimeProvision?: RuntimeProvisionProfile; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; mainTutor?: MainWorkbookTutor; blockTutor?: WorkbookBlockTutor; }
 export interface StartedWorkbookServer { url: string; port: number; host: string; close(): Promise<void>; }
 
 type PublicCheckpoint = {
@@ -169,11 +170,8 @@ async function resolveRuntime(options: WorkbookServerOptions): Promise<Required<
   const contentRoot = await requireDirectoryRoot(options.session?.contentRoot ?? options.target, "Workbook content root");
   const sessionRoot = options.session ? await requireDirectoryRoot(options.session.sessionRoot, "Workbook session root") : resolve(tutorialStatePath(options.target));
   const workspaceRoot = await requireDirectoryRoot(options.session?.workspaceRoot ?? options.target, "Workbook workspace root");
-  const defaultDependencyRoot = resolve(contentRoot, "..");
-  const dependencyRoot = options.session?.dependencyRoot === undefined
-    ? await requireDirectoryRoot(defaultDependencyRoot, "Workbook dependency root").catch(() => dirname(contentRoot))
-    : await requireDirectoryRoot(options.session.dependencyRoot, "Workbook dependency root");
-  return { contentRoot, sessionRoot, workspaceRoot, dependencyRoot };
+  const runtimeProvision = options.session?.runtimeProvision ?? (options.runtimeProvision ? trustRuntimeProvision(options.runtimeProvision) : NO_RUNTIME_PROVISION);
+  return { contentRoot, sessionRoot, workspaceRoot, runtimeProvision };
 }
 
 function canonicalCompletedId(record: WorkbookTimelineRecord): BlockId | undefined {
@@ -322,7 +320,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const embeddedTerminalEnabled = options.embeddedTerminal ?? true;
   const host = options.host ?? LOOPBACK_HOST;
   if (embeddedTerminalEnabled && !isLoopbackHost(host)) throw new Error("The embedded terminal can only be enabled on a loopback host; it exposes an isolated container shell.");
-  if (embeddedTerminalEnabled) { requireOpenCodeApiKey(); if (!options.terminalPtyFactory) assertDockerTerminalReady({ workspace: learnerWorkspace, dependencyRoot: runtime.dependencyRoot }); }
+  if (embeddedTerminalEnabled) { requireOpenCodeApiKey(); if (!options.terminalPtyFactory) assertDockerTerminalReady({ workspace: learnerWorkspace, runtimeProvision: runtime.runtimeProvision }); }
 
   const timeline = new WorkbookTimeline({ stateRoot: runtime.sessionRoot });
   const attempts = new AttemptStore({ stateRoot: runtime.sessionRoot });
@@ -564,7 +562,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     const active = activeDeclaredBlock();
     return active?.block.type === "terminal-practice" ? { lessonId: active.lessonId, blockId: active.id, command: active.block.markdown, context: active.block.markdown, expectedObservation: active.block.tutor } : undefined;
   };
-  const terminal = embeddedTerminalEnabled ? new WorkbookTerminalManager({ workspace: learnerWorkspace, dependencyRoot: runtime.dependencyRoot, getActiveBlock: activeObservedBlock, submitAttempt: async (input) => { await submitAttempt(input); }, ptyFactory: options.terminalPtyFactory ?? createDockerPty, debounceMs: options.terminalDebounceMs, logger: log }) : undefined;
+  const terminal = embeddedTerminalEnabled ? new WorkbookTerminalManager({ workspace: learnerWorkspace, runtimeProvision: runtime.runtimeProvision, getActiveBlock: activeObservedBlock, submitAttempt: async (input) => { await submitAttempt(input); }, ptyFactory: options.terminalPtyFactory ?? createDockerPty, debounceMs: options.terminalDebounceMs, logger: log }) : undefined;
 
   const appendHintForActiveBlock = async (blockId: string, requestId: string): Promise<"ok" | "inactive"> => {
     const active = activeDeclaredBlock();

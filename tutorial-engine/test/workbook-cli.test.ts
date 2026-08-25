@@ -70,6 +70,30 @@ describe("workbook CLI", () => {
     expect(startServer.mock.calls[0]![0]).not.toHaveProperty("terminalObserver");
   });
 
+  it("trusts an injected runtime provision profile at the launch boundary", async () => {
+    const runtimeSource = await mkdtemp(join(tmpdir(), "workbook-cli-runtime-source-")); roots.push(runtimeSource);
+    const startServer = vi.fn(async () => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
+    const resolveSession = vi.fn(async (_target: string, _sessionId: string | undefined, runtimeProvision: any) => ({
+      ...sessionFixture("session-20260824-120000-a1b2c3d4"),
+      runtimeProvision,
+    }));
+
+    await runWorkbookCli(["/tmp/workbook", "--no-open"], {
+      startServer,
+      resolveSession,
+      runtimeProvision: { mounts: [{ source: runtimeSource, target: "runtime-tools", readonly: true }] },
+      installSignalHandlers: false,
+      packageDirectory: "/pkg",
+      logger: { info: vi.fn() },
+      writeLine: () => undefined,
+    });
+
+    expect(resolveSession).toHaveBeenCalledWith("/tmp/workbook", undefined, expect.objectContaining({ workspaceMountTargets: ["runtime-tools"] }));
+    expect(startServer.mock.calls[0]![0].session?.runtimeProvision?.mounts).toEqual([
+      expect.objectContaining({ hostSource: expect.stringContaining("workbook-cli-runtime-source-"), workspaceTarget: "runtime-tools", readonly: true }),
+    ]);
+  });
+
   it("passes an explicit --session ID through to reopening and prints the reopened workspace", async () => {
     const startServer = vi.fn(async () => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
     const resolveSession = vi.fn(async () => sessionFixture("lesson-007"));

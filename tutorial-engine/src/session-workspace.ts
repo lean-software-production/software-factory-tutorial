@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { randomBytes as defaultRandomBytes } from "node:crypto";
 import { copyFile, lstat, mkdir, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { NO_RUNTIME_PROVISION, trustRuntimeProvision, type RuntimeProvisionInput, type SafeWorkspaceRelativePath, type TrustedRuntimeProvision } from "./workbook/runtime-provision.js";
 
 const run = promisify(execFile);
 
@@ -12,7 +13,7 @@ export const MATERIALIZED_WORKSPACE_DIRECTORIES = ["calculator", "factory"] as c
 export const SAFE_SESSION_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 
 const SESSION_ID_MAX_LENGTH = 64;
-const SESSION_GITIGNORE = "factory/**/.tmp/\n";
+const SESSION_GITIGNORE_LINES = ["factory/**/.tmp/"] as const;
 
 export class SessionWorkspaceError extends Error {}
 
@@ -21,12 +22,14 @@ export interface TutorialSessionPaths {
   sessionId: string;
   sessionRoot: string;
   workspaceRoot: string;
+  runtimeProvision?: TrustedRuntimeProvision;
 }
 
 export interface CreateTutorialSessionOptions {
   id?: string;
   now?: Date;
   randomBytes?: (size: number) => Buffer;
+  runtimeProvision?: RuntimeProvisionInput;
 }
 
 function pad(value: number): string { return String(value).padStart(2, "0"); }
@@ -119,8 +122,33 @@ async function git(workspaceRoot: string, ...args: string[]): Promise<string> {
   return result.stdout;
 }
 
-async function initializeLocalRepository(workspaceRoot: string): Promise<void> {
-  await writeFile(resolve(workspaceRoot, ".gitignore"), SESSION_GITIGNORE, "utf8");
+function sessionGitignore(runtimeTargets: readonly SafeWorkspaceRelativePath[]): string {
+  return [...SESSION_GITIGNORE_LINES, ...runtimeTargets.map((target) => `${target}/`)].join("\n") + "\n";
+}
+
+async function ensureEmptyWorkspaceDirectory(workspaceRoot: string, target: SafeWorkspaceRelativePath): Promise<void> {
+  const realWorkspace = await realpath(workspaceRoot);
+  const destination = resolve(workspaceRoot, target);
+  const parent = resolve(dirname(destination));
+  await mkdir(parent, { recursive: true });
+  const realParent = await realpath(parent);
+  if (!inside(realWorkspace, realParent)) throw new SessionWorkspaceError(`Runtime mount target must stay inside the learner workspace: ${target}`);
+
+  try {
+    const info = await lstat(destination);
+    if (info.isSymbolicLink()) throw new SessionWorkspaceError(`Runtime mount target must be a real directory, not a symlink: ${target}`);
+    if (!info.isDirectory()) throw new SessionWorkspaceError(`Runtime mount target must be a directory: ${target}`);
+    if ((await readdir(destination)).length > 0) throw new SessionWorkspaceError(`Runtime mount target must be empty: ${target}`);
+  } catch (error) {
+    if (error instanceof SessionWorkspaceError) throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") throw error;
+    await mkdir(destination);
+  }
+}
+
+async function initializeLocalRepository(workspaceRoot: string, runtimeTargets: readonly SafeWorkspaceRelativePath[] = []): Promise<void> {
+  await writeFile(resolve(workspaceRoot, ".gitignore"), sessionGitignore(runtimeTargets), "utf8");
   await git(workspaceRoot, "init", "-q", "-b", "main");
   await git(workspaceRoot, "config", "user.email", "learner@example.invalid");
   await git(workspaceRoot, "config", "user.name", "Tutorial Learner");
@@ -161,6 +189,7 @@ export class SessionWorkspaceManager {
   }
 
   async createSession(options: CreateTutorialSessionOptions = {}): Promise<TutorialSessionPaths> {
+    const runtimeProvision = options.runtimeProvision ? trustRuntimeProvision(options.runtimeProvision) : NO_RUNTIME_PROVISION;
     const sessionId = options.id === undefined ? createSessionId(options) : validateSessionId(options.id);
     const paths = this.pathsFor(sessionId);
     await ensureSessionStateDirectory(this.contentRoot);
@@ -171,12 +200,13 @@ export class SessionWorkspaceManager {
       for (const directory of MATERIALIZED_WORKSPACE_DIRECTORIES) {
         await copyAuthoredDirectory(resolve(this.contentRoot, directory), resolve(paths.workspaceRoot, directory), this.contentRoot);
       }
-      await initializeLocalRepository(paths.workspaceRoot);
+      for (const target of runtimeProvision.workspaceMountTargets) await ensureEmptyWorkspaceDirectory(paths.workspaceRoot, target);
+      await initializeLocalRepository(paths.workspaceRoot, runtimeProvision.workspaceMountTargets);
     } catch (error) {
       await rm(paths.sessionRoot, { recursive: true, force: true });
       throw error;
     }
-    return paths;
+    return runtimeProvision.workspaceMountTargets.length ? { ...paths, runtimeProvision } : paths;
   }
 
   async reopenSession(sessionId: string): Promise<TutorialSessionPaths> {

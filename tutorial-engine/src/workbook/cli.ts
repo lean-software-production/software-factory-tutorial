@@ -7,6 +7,7 @@ import { ArgumentError, parseArguments, USAGE } from "../cli-arguments.js";
 import { createTutorialLogger, defaultTutorialLogPath, type TutorialLogger } from "../runtime-log.js";
 import { SessionWorkspaceError, SessionWorkspaceManager, type TutorialSessionPaths } from "../session-workspace.js";
 import { startWorkbookServer, type StartedWorkbookServer, type WorkbookServerOptions } from "./server.js";
+import { trustRuntimeProvision, type RuntimeProvisionProfile, type TrustedRuntimeProvision } from "./runtime-provision.js";
 
 type BrowserCommand = (url: string) => { command: string; args: string[] };
 type BrowserSpawner = typeof spawn;
@@ -14,10 +15,11 @@ type SignalInstaller = Pick<NodeJS.Process, "once">;
 
 export interface WorkbookCliDependencies {
   startServer?: (options: WorkbookServerOptions) => Promise<StartedWorkbookServer>;
-  resolveSession?: (target: string, sessionId?: string) => Promise<TutorialSessionPaths>;
+  resolveSession?: (target: string, sessionId?: string, runtimeProvision?: TrustedRuntimeProvision) => Promise<TutorialSessionPaths>;
   browserCommand?: BrowserCommand;
   spawnBrowser?: BrowserSpawner;
   packageDirectory?: string;
+  runtimeProvision?: RuntimeProvisionProfile;
   logger?: TutorialLogger;
   writeLine?: (message: string) => void;
   signalTarget?: SignalInstaller;
@@ -25,9 +27,11 @@ export interface WorkbookCliDependencies {
   exit?: (code?: number) => never | void;
 }
 
-async function resolveWorkbookSession(target: string, sessionId?: string): Promise<TutorialSessionPaths> {
+async function resolveWorkbookSession(target: string, sessionId?: string, runtimeProvision?: TrustedRuntimeProvision): Promise<TutorialSessionPaths> {
   const manager = await SessionWorkspaceManager.create(target);
-  return sessionId ? manager.reopenSession(sessionId) : manager.createSession();
+  if (!sessionId) return manager.createSession(runtimeProvision ? { runtimeProvision } : undefined);
+  const paths = await manager.reopenSession(sessionId);
+  return runtimeProvision && runtimeProvision.workspaceMountTargets.length ? { ...paths, runtimeProvision } : paths;
 }
 
 function sessionLaunchLines(session: TutorialSessionPaths, reopened: boolean): string[] {
@@ -47,7 +51,11 @@ export async function runWorkbookCli(argv: readonly string[], dependencies: Work
   const log = dependencies.logger ?? createTutorialLogger({ filePath: defaultTutorialLogPath().replace("tutorial-engine", "workbook-tutor") });
   const packageDirectory = dependencies.packageDirectory ?? resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const startServer = dependencies.startServer ?? startWorkbookServer;
-  const session = await (dependencies.resolveSession ?? resolveWorkbookSession)(parsed.options.target, parsed.options.session);
+  const runtimeProvision = dependencies.runtimeProvision ? trustRuntimeProvision(dependencies.runtimeProvision) : undefined;
+  const resolveSession = dependencies.resolveSession ?? resolveWorkbookSession;
+  const session = runtimeProvision
+    ? await resolveSession(parsed.options.target, parsed.options.session, runtimeProvision)
+    : await resolveSession(parsed.options.target, parsed.options.session);
   for (const line of sessionLaunchLines(session, parsed.options.session !== undefined)) writeLine(line);
   const server = await startServer({ target: session.contentRoot, session, port: parsed.options.port, host: parsed.options.host, webRoot: resolve(packageDirectory, "dist/web-workbook"), logger: log, embeddedTerminal: true });
   if (!parsed.options.noOpen) {
