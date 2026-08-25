@@ -11,20 +11,14 @@ import { createV2WorkbookDriver, V2WorkbookDriver } from "../v2/driver.js";
 import { clueCommand, exactCommand, satisfactoryEditorDraft } from "../v2/scenarios.js";
 import { createEmptyV2SessionTrace, readWorkbookEvents } from "../v2/session.js";
 import { createEvaluationWorkspace, type CreateEvaluationWorkspaceOptions } from "../v2/workspace.js";
+import { RecordingBlockTutor, RecordingMainTutor, type ReviewInput } from "../../tutorial-engine/test/support/fake-tutors.js";
 
-type DriverMainTutorContract = Pick<NonNullable<WorkbookServerOptions["mainTutor"]>, "restore" | "reply" | "prepareBlockBriefing" | "review" | "summarizeBlock" | "summarizeLesson" | "dispose">;
+class DriverFakeMainTutor extends RecordingMainTutor {
+  protected override defaultReply = "Tutor reply that asks one public follow-up.";
+  protected override blockSummaryFor = () => "Completed block summary.";
+  protected override lessonSummaryFor = () => "Completed lesson summary.";
 
-class DriverFakeMainTutor implements DriverMainTutorContract {
-  readonly reviews: Array<MainTutorContext & TutorReview & { readiness?: BlockTutorReadiness }> = [];
-  readonly restores: MainTutorContext[] = [];
-  readonly replies: Array<MainTutorContext & { learnerMessage: TimelineMessage }> = [];
-  readonly briefings: Array<MainTutorContext & { lessonId: string; blockId: string }> = [];
-  readonly blockSummaries: Array<MainTutorContext & { lessonId: string; blockId: string; coveredThroughId: string }> = [];
-  readonly lessonSummaries: Array<MainTutorContext & { lessonId: string; coveredThroughId: string }> = [];
-  disposed = false;
-
-  async review(input: MainTutorContext & TutorReview & { readiness?: BlockTutorReadiness }): Promise<TutorDecision> {
-    this.reviews.push(input);
+  protected override async decide(input: ReviewInput): Promise<TutorDecision> {
     const { evidence } = input.attempt;
     if (evidence.kind === "editor") {
       if (evidence.text.includes("editor-artifacts/evaluator-editor.txt") && evidence.text.includes("ready for promotion")) return { outcome: "accepted", message: "Editor artifact accepted for promotion." };
@@ -37,40 +31,11 @@ class DriverFakeMainTutor implements DriverMainTutorContract {
     }
     return { outcome: "feedback", message: "Tutor reply that asks one public follow-up." };
   }
-
-  async restore(input: MainTutorContext): Promise<void> { this.restores.push(input); }
-  async reply(input: MainTutorContext & { learnerMessage: TimelineMessage }): Promise<string> {
-    this.replies.push(input);
-    return "Tutor reply that asks one public follow-up.";
-  }
-  async prepareBlockBriefing(input: MainTutorContext & { lessonId: string; blockId: string }): Promise<string> {
-    this.briefings.push(input);
-    return `Private briefing for ${input.blockId}.`;
-  }
-  async summarizeBlock(input: MainTutorContext & { lessonId: string; blockId: string; coveredThroughId: string }): Promise<string> {
-    this.blockSummaries.push(input);
-    return "Completed block summary.";
-  }
-  async summarizeLesson(input: MainTutorContext & { lessonId: string; coveredThroughId: string }): Promise<string> {
-    this.lessonSummaries.push(input);
-    return "Completed lesson summary.";
-  }
-  dispose(): void { this.disposed = true; }
 }
 
-class DriverFakeBlockTutor implements WorkbookBlockTutor {
-  readonly hints: Array<{ context: ActiveBlockContext; briefing: string }> = [];
-  readonly assessments: Array<Parameters<WorkbookBlockTutor["assess"]>[0]> = [];
-
-  async hint(input: { context: ActiveBlockContext; briefing: string }): Promise<string> {
-    this.hints.push(input);
-    return "Compare the current evidence with the displayed block goal.";
-  }
-
-  async assess(input: Parameters<WorkbookBlockTutor["assess"]>[0]): Promise<Awaited<ReturnType<WorkbookBlockTutor["assess"]>>> {
-    this.assessments.push(input);
-    return { readiness: "likely_ready", text: "The attempt is ready for main-tutor judgment." };
-  }
+class DriverFakeBlockTutor extends RecordingBlockTutor {
+  protected override defaultHint = "Compare the current evidence with the displayed block goal.";
+  protected override defaultReadiness = { readiness: "likely_ready" as const, text: "The attempt is ready for main-tutor judgment." };
 }
 
 class DriverFakePty implements TerminalPty {

@@ -18,6 +18,8 @@ const VISUAL_SURFACE = [
   "tutorial-engine/web-workbook/",
   "tutorial-engine/test/visual-affordances.mts",
   "tutorial-engine/test/visual/",
+  "tutorial-engine/test/fixtures/visual-workbook/",
+  "tutorial-engine/test/support/fake-tutors.ts",
   "scripts/check-visual.mjs",
 ];
 

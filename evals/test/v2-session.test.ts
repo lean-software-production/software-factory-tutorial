@@ -4,20 +4,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkbook } from "../../tutorial-engine/src/workbook/load.js";
 import type { WorkbookServerOptions } from "../../tutorial-engine/src/workbook/server.js";
 import type { TutorDecision } from "../../tutorial-engine/src/workbook/tutor.js";
+import { RecordingMainTutor } from "../../tutorial-engine/test/support/fake-tutors.js";
 import { createEmptyV2SessionTrace, readWorkbookEvents, recordPublicState, snapshotArtifacts } from "../v2/session.js";
 import { createEvaluationWorkspace } from "../v2/workspace.js";
 
 const tempRoots: string[] = [];
-type SessionMainTutorContract = Pick<NonNullable<WorkbookServerOptions["mainTutor"]>, "restore" | "reply" | "prepareBlockBriefing" | "review" | "summarizeBlock" | "summarizeLesson" | "dispose">;
-
-class SessionFakeMainTutor implements SessionMainTutorContract {
-  async restore(): Promise<void> {}
-  async reply(): Promise<string> { return "Public fake tutor reply."; }
-  async prepareBlockBriefing(): Promise<string> { return "Public fake block briefing."; }
-  async review(): Promise<TutorDecision> { return { outcome: "working" }; }
-  async summarizeBlock(): Promise<string> { return "Public fake block summary."; }
-  async summarizeLesson(): Promise<string> { return "Public fake lesson summary."; }
-  dispose(): void {}
+class SessionFakeMainTutor extends RecordingMainTutor {
+  protected override defaultReply = "Public fake tutor reply.";
+  protected override briefingFor = () => "Public fake block briefing.";
+  protected override blockSummaryFor = () => "Public fake block summary.";
+  protected override lessonSummaryFor = () => "Public fake lesson summary.";
+  protected override async decide(): Promise<TutorDecision> { return { outcome: "working" }; }
 }
 
 afterEach(async () => {

@@ -7,25 +7,45 @@
  * matching, a later rule wins, or the scroll listener never fires. This harness serves the built
  * workbook UI to Chromium and measures what a learner would actually see.
  *
+ * It runs the real workbook server against the fixture workbook in test/fixtures/visual-workbook,
+ * copied to a temporary directory, with a tutor that answers from a queue instead of a model. The
+ * state the browser renders is therefore the server's own projection: a fixture that drifted from
+ * what the server emits could otherwise keep these checks passing against a fiction.
+ *
  * Screenshots are approval tests. Each one is compared against its .approved.png; a mismatch
  * writes the .received.png beside it and fails, so the two can be opened side by side. Approve a
  * deliberate change with `npm run approve:visual`, which renames received over approved.
  *
  *   npx tsx test/visual-affordances.mts    validate
  */
-import { createReadStream } from "node:fs";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
-import { extname, resolve } from "node:path";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+import { startWorkbookServer } from "../src/workbook/server.js";
+import type { TerminalPty } from "../src/workbook/terminal.js";
+import { QueuedMainTutor, TerminalCoachBlockTutor } from "./support/fake-tutors.js";
 
 const webRoot = resolve(import.meta.dirname, "../dist/web-workbook");
+const fixtureRoot = resolve(import.meta.dirname, "fixtures/visual-workbook");
 const approvalRoot = resolve(import.meta.dirname, "visual");
-const mime: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" };
 
 /** A differing pixel must differ by more than this per channel; antialiasing moves by less. */
 const CHANNEL_TOLERANCE = 12;
-/** Share of pixels allowed to differ before a golden master counts as changed. */
+/** Share of pixels allowed to differ before an approved screenshot counts as changed. */
 const PIXEL_BUDGET = 0.005;
+
+/** The tutor's verdict on the first editor draft, which the welded feedback panel then shows. */
+const EDITOR_FEEDBACK = "Name the acceptance marker in the answer, then pause for another review.";
+
+/** The terminal never runs anything here; it only has to exist and echo. */
+class EchoPty implements TerminalPty {
+  #data?: (data: string) => void;
+  write(data: string): void { this.#data?.(`\r\nran:${data}`); }
+  resize(): void {}
+  kill(): void {}
+  onData(callback: (data: string) => void): void { this.#data = callback; }
+  onExit(): void {}
+}
 
 const failures: string[] = [];
 function check(condition: boolean, description: string): void {
@@ -33,76 +53,6 @@ function check(condition: boolean, description: string): void {
 }
 function expectClose(actual: number, expected: number, slack: number, description: string): void {
   check(Math.abs(actual - expected) <= slack, `${description}: expected ~${expected} (±${slack}), measured ${actual}`);
-}
-
-const paragraphs = (count: number, word: string) =>
-  Array.from({ length: count }, (_, index) => `${word} paragraph ${index + 1}. ${"Filler prose to make the page scroll. ".repeat(6)}`).join("\n\n");
-
-const lesson = {
-  id: "01-visual/01-affordances",
-  title: "Affordance lesson",
-  dek: "A lesson tall enough to scroll.",
-  durationMinutes: 5,
-  outcomes: ["Exercise the scroll-driven affordances."],
-  blocks: [
-    { id: "orientation", type: "narrative", title: "Orientation", markdown: paragraphs(6, "Orientation") },
-    { id: "practice", type: "terminal-practice", title: "Practice", markdown: "Run this:\n\n```sh\necho affordance\n```" },
-    { id: "editing", type: "editor-practice", title: "Editing", markdown: "Write the answer.", path: "factory/answer.md" },
-  ],
-};
-
-type Stage = "intro" | "orientation" | "practice" | "editing";
-let sequence = 0;
-const authored = (lessonId: string, blockId: string, text: string) => ({
-  type: "message" as const, id: `record-${blockId}`, sequence: sequence++, at: "2026-01-01T00:00:00.000Z",
-  lessonId, blockId, role: "assistant" as const, source: "authored" as const, presentation: "course" as const, text,
-});
-
-const FEEDBACK = "Name the acceptance marker in the answer, then pause for another review.";
-
-function state(stage: Stage) {
-  const past = stage !== "intro";
-  const practising = stage === "practice";
-  const editing = stage === "editing";
-  return {
-    workbook: { title: "Affordance workbook" },
-    introduction: "Introduction to the affordance workbook.",
-    introductionComplete: past,
-    timeline: [
-      authored("workbook--introduction", "workbook--introduction", "# Affordance workbook\n\nIntroduction to the affordance workbook."),
-      ...(past ? [
-        authored(lesson.id, "orientation", `## Orientation\n\n${paragraphs(6, "Orientation")}`),
-        authored(lesson.id, "practice", "## Practice\n\nRun this:\n\n```sh\necho affordance\n```"),
-        authored(lesson.id, "editing", "## Editing\n\nWrite the answer."),
-      ] : []),
-    ],
-    // The runway is the spacer that makes the successor reachable: without it the page cannot
-    // scroll far enough for the next block to cross the reading line.
-    readyBlockIds: past && !practising && !editing ? ["practice"] : practising ? ["editing"] : [],
-    chapters: [{ id: lesson.id, title: lesson.title, part: "Part 1", partMarkdown: "# Part 1", partNumber: 1, lessonNumber: 1, lesson: past ? lesson : undefined }],
-    progress: {
-      activeLessonId: past ? lesson.id : "workbook--introduction",
-      activeBlockId: editing ? "editing" : practising ? "practice" : past ? "orientation" : "workbook--introduction",
-      completedLessons: [],
-      blocks: [
-        { id: "orientation", type: "narrative", ready: true, active: past && !practising && !editing, completed: practising || editing, verified: false, emerged: past },
-        // Ready while orientation is active: the reading line watches the ready successor, and
-        // completes the active block when that successor crosses it.
-        { id: "practice", type: "terminal-practice", ready: past, active: practising, completed: editing, verified: editing, emerged: practising || editing },
-        { id: "editing", type: "editor-practice", ready: practising || editing, active: editing, completed: false, verified: false, emerged: editing,
-          editorStatus: editing ? "feedback" : undefined, revision: 1, draftText: "A first draft of the answer.",
-          checkpoint: editing ? { status: "feedback", feedback: FEEDBACK, evidence: { kind: "editor", text: "A first draft of the answer." } } : undefined },
-      ],
-      reflections: {},
-      reflectionConversations: {},
-    },
-    adapter: { modelBackedHelp: false, note: "Visual harness server." },
-  };
-}
-
-function sendJson(response: ServerResponse, body: unknown): void {
-  response.writeHead(200, { "Content-Type": "application/json" });
-  response.end(JSON.stringify(body));
 }
 
 /**
@@ -160,67 +110,84 @@ async function approve(page: any, name: string, shot: Buffer): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  try { await access(resolve(webRoot, "index.html")); }
+  try { await readFile(resolve(webRoot, "index.html")); }
   catch { throw new Error("Build the workbook UI first: npm run --workspace=tutorial-engine build:web:workbook"); }
   const moduleName = "playwright";
   let playwright: { chromium: { launch(options?: unknown): Promise<any> } };
   try { playwright = await import(moduleName) as typeof playwright; }
   catch { throw new Error("Visual validation needs Playwright. Install it with `npm install --no-save -D playwright`, then `npx playwright install chromium`."); }
 
-  let stage: Stage = "intro";
-  const completions: string[] = [];
-  const server = createServer(async (request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (request.method === "GET" && url.pathname === "/api/workbook/state") return sendJson(response, state(stage));
-    if (request.method === "POST" && url.pathname === "/api/workbook/introduction") { stage = "orientation"; return sendJson(response, state(stage)); }
-    if (request.method === "POST" && url.pathname === "/api/workbook/complete-block") {
-      let body = ""; for await (const chunk of request) body += String(chunk);
-      const blockId = (JSON.parse(body || "{}") as { blockId?: string }).blockId ?? "";
-      completions.push(blockId);
-      if (blockId === "workbook--introduction") stage = "orientation";
-      if (blockId === "orientation") stage = "practice";
-      if (blockId === "practice") stage = "editing";
-      return sendJson(response, state(stage));
-    }
-    if (url.pathname.startsWith("/api/")) { response.writeHead(404).end(); return; }
-    const candidate = resolve(webRoot, `.${url.pathname === "/" ? "/index.html" : url.pathname}`);
-    if (!candidate.startsWith(webRoot)) { response.writeHead(403).end(); return; }
-    try { await access(candidate); } catch { response.writeHead(404).end(); return; }
-    response.writeHead(200, { "Content-Type": mime[extname(candidate)] ?? "application/octet-stream" });
-    createReadStream(candidate).pipe(response);
-  });
-  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Could not start the visual harness server.");
+  // The embedded terminal refuses to start without a key. Nothing here reaches a model — the
+  // tutors are fakes and the pty only echoes — so a placeholder is what the engine's own server
+  // tests use too.
+  process.env.OPENCODE_API_KEY ??= "visual-affordances-fixture-key";
 
+  // Copy the fixture so the server's own writes never touch the committed workbook.
+  const workspace = await mkdtemp(resolve(tmpdir(), "visual-affordances-"));
+  await cp(fixtureRoot, workspace, { recursive: true });
+  await mkdir(resolve(workspace, "factory"), { recursive: true });
+  await writeFile(resolve(workspace, "factory/answer.md"), "A first draft of the answer.\n");
+
+  // The first editor draft draws feedback, which is what the welded panel has to show; the second
+  // is accepted, which is how the terminal block becomes the active surface.
+  const mainTutor = new QueuedMainTutor(
+    { outcome: "feedback", message: EDITOR_FEEDBACK },
+    { outcome: "accepted", message: "Editor draft accepted." },
+  );
+  const server = await startWorkbookServer({
+    target: workspace,
+    webRoot,
+    port: 0,
+    mainTutor,
+    blockTutor: new TerminalCoachBlockTutor(),
+    terminalPtyFactory: () => new EchoPty(),
+    terminalDebounceMs: 1,
+  });
   const browser = await playwright.chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, reducedMotion: "reduce" });
     // tsx compiles with esbuild's keepNames, which references a __name helper. Functions handed to
     // page.evaluate are serialized without it, so provide it inside the page.
     await page.addInitScript(() => { (globalThis as unknown as { __name: unknown }).__name = (value: unknown) => value; });
-    await page.goto(`http://127.0.0.1:${address.port}`);
+    await page.goto(server.url);
     // Golden masters compare pixels, so nothing may still be easing when the shot is taken.
     await page.addStyleTag({ content: "*, *::before, *::after { transition: none !important; animation: none !important; caret-color: transparent !important; }" });
-    await page.getByRole("heading", { name: "Affordance workbook" }).waitFor();
-    await page.getByRole("button", { name: "Ready to continue" }).click();
-    await page.getByRole("heading", { name: "Orientation" }).waitFor();
+    // Walk the authored preamble with the Continue control, but only until the block after
+    // orientation has been revealed. Clicking past that would promote by button and never exercise
+    // the reading line, which is the affordance under test.
+    const successorSelector = 'section[id$="--editing"]';
+    for (let step = 0; step < 6; step++) {
+      if (await page.locator(successorSelector).count() > 0) break;
+      const button = page.locator("button").filter({ hasText: /^Continue/ }).first();
+      if (await button.count() === 0) break;
+      await button.click({ force: true });
+      await page.waitForTimeout(500);
+    }
+    check(await page.locator(successorSelector).count() > 0, "reading line: the successor block was never revealed by the Continue control");
 
     // ---- Affordance 1: the reading line promotes the block it passes -------------------------
+    // Completion is read back from the server rather than from a counter in this file, so the
+    // assertion is about what was actually recorded.
+    // The server records canonical ids (lesson--001-affordances--orientation), not the authored
+    // block name, so match on the suffix or the assertion can never be true.
+    const orientationCompleted = async (): Promise<boolean> =>
+      page.evaluate(async () => ((await (await fetch("api/workbook/state")).json()).progress.completedBlocks ?? [])
+        .some((id: string) => id.endsWith("--orientation")));
+
     await page.evaluate(() => window.scrollTo(0, 0));
-    check(!completions.includes("orientation"), "reading line: orientation completed before it reached the reading line");
+    check(!(await orientationCompleted()), "reading line: orientation completed before it reached the reading line");
     // The observer watches the ready successor, not the active block: when the successor's top
     // crosses READING_LINE_TOP_PX (120), the block the learner has scrolled past is completed.
-    const successorTop = await page.evaluate(() => {
-      const element = document.getElementById("practice");
+    const successorTop = await page.evaluate((selector) => {
+      const element = document.querySelector(selector);
       return element ? element.getBoundingClientRect().top + window.scrollY : null;
-    });
-    check(successorTop !== null, "reading line: no #practice successor element to scroll past the line");
+    }, successorSelector);
+    check(successorTop !== null, "reading line: no successor element to scroll past the line");
     await page.evaluate((target) => window.scrollTo(0, target), (successorTop ?? 0) - 60);
     const promoted = await page.waitForFunction(() => Boolean(document.querySelector(".current-activity-band")), undefined, { timeout: 10_000 })
       .then(() => true)
-      .catch(() => { failures.push("reading line: scrolling the successor past the line did not promote the practice block"); return false; });
-    check(completions.includes("orientation"), "reading line: crossing the line did not post complete-block for orientation");
+      .catch(() => { failures.push("reading line: scrolling the successor past the line did not promote the block behind it"); return false; });
+    check(await orientationCompleted(), "reading line: crossing the line did not complete the orientation block");
 
     // ---- Affordance 2: the activity band expands as it rises ---------------------------------
     // Both practice blocks ride the same band, so the same measurements must hold for each.
@@ -301,21 +268,17 @@ async function main(): Promise<void> {
       await approve(page, `${label}-band-expanded`, await shoot());
     };
 
-    if (promoted) await validateBand("terminal");
-
     // ---- Affordance 4: the editor rides the same band, and wears the same feedback ------------
     if (promoted) {
-      // Promote the same way a learner does: scroll the next block past the reading line.
-      const editingTop = await page.evaluate(() => {
-        const element = document.getElementById("editing");
-        return element ? element.getBoundingClientRect().top + window.scrollY : null;
-      });
-      await page.evaluate((target) => window.scrollTo(0, target), (editingTop ?? 0) - 60);
       const editorReached = await page.waitForFunction(() => document.querySelector('.current-activity-band[data-activity-type="editor-practice"]') !== null, undefined, { timeout: 10_000 })
         .then(() => true)
         .catch(() => { failures.push("editor band: the editor block never became the active practice surface"); return false; });
 
       if (editorReached) {
+        // Draw the tutor's first queued verdict, so the welded panel has feedback to show.
+        await page.locator(".cm-content").fill("A first draft of the answer.");
+        await page.waitForFunction(() => Boolean(document.querySelector(".editor-feedback-overlay")?.textContent?.includes("acceptance marker")), undefined, { timeout: 15_000 })
+          .catch(() => failures.push("editor feedback: the tutor's review never reached the editor's feedback panel"));
         await validateBand("editor");
         const editorMarkup = await page.evaluate(() => {
           const band = document.querySelector(".current-activity-band") as HTMLElement | null;
@@ -339,6 +302,25 @@ async function main(): Promise<void> {
           expectClose(editorMarkup.sameWidth, 0, 1, "editor feedback: overlay width differs from the editor surface");
           check(editorMarkup.usesLiveBlockFeedback, "editor feedback: does not use the shared live-block-feedback treatment");
           check(!editorMarkup.statusStrip, "editor feedback: the separate status strip is still rendered alongside the feedback");
+        }
+
+        // The terminal is the block after the editor, so reaching it means getting a draft
+        // accepted — the tutor's second queued verdict — and continuing.
+        await page.locator(".cm-content").fill("A second draft naming the acceptance marker.");
+        // The band unmounts once its checkpoint is accepted, so wait on the server's own state
+        // rather than on anything the band renders.
+        const accepted = await page.waitForFunction(async () => {
+          const next = await (await fetch("api/workbook/state")).json();
+          return next.progress.blocks.some((block: any) => block.id.endsWith("--editing") && block.checkpoint?.status === "accepted");
+        }, undefined, { timeout: 15_000 })
+          .then(() => true)
+          .catch(() => { failures.push("terminal band: the editor draft was never accepted, so the terminal block was never reached"); return false; });
+        if (accepted) {
+          await page.locator("button").filter({ hasText: /^Continue/ }).first().click({ force: true });
+          const terminalReached = await page.waitForFunction(() => document.querySelector('.current-activity-band[data-activity-type="terminal-practice"]') !== null, undefined, { timeout: 10_000 })
+            .then(() => true)
+            .catch(() => { failures.push("terminal band: the terminal block never became the active practice surface"); return false; });
+          if (terminalReached) await validateBand("terminal");
         }
       }
     }
@@ -368,7 +350,8 @@ async function main(): Promise<void> {
     await approve(page, "composer-capped", await composer.screenshot());
   } finally {
     await browser.close();
-    await new Promise<void>((done, fail) => server.close((error) => error ? fail(error) : done()));
+    await server.close();
+    await rm(workspace, { recursive: true, force: true });
   }
 
   if (failures.length) {

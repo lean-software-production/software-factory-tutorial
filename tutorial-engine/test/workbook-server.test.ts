@@ -13,6 +13,7 @@ import type { ActiveBlockContext } from "../src/workbook/pi-history.js";
 import type { TerminalCoachAssessment, WorkbookBlockTutor } from "../src/workbook/block-tutor.js";
 import type { MainTutorContext, MainWorkbookTutor, TutorDecision, TutorReview } from "../src/workbook/tutor.js";
 import type { BlockTutorReadiness, TimelineMessage, WorkbookTimelineRecord } from "../src/workbook/timeline.js";
+import { QueuedMainTutor as FakeMainTutor, RecordingBlockTutor as FakeBlockTutor, TerminalCoachBlockTutor as FastFakeBlockTutor, type QueuedDecision, type QueuedReadiness } from "./support/fake-tutors.js";
 
 let dirs: string[] = [];
 
@@ -97,81 +98,6 @@ class ServerFakePty implements TerminalPty {
   kill(): void {}
   onData(callback: (data: string) => void): void { this.data = callback; }
   onExit(callback: (event: { exitCode: number }) => void): void { this.exit = callback; }
-}
-
-type QueuedDecision = TutorDecision | Error | Promise<TutorDecision> | ((review: MainTutorContext & TutorReview & { readiness?: BlockTutorReadiness }) => TutorDecision | Promise<TutorDecision>);
-type QueuedReadiness = Awaited<ReturnType<WorkbookBlockTutor["assess"]>> | Error | Promise<Awaited<ReturnType<WorkbookBlockTutor["assess"]>>>;
-
-class FakeMainTutor implements MainWorkbookTutor {
-  reviews: Array<MainTutorContext & TutorReview & { readiness?: BlockTutorReadiness }> = [];
-  restores: MainTutorContext[] = [];
-  replies: Array<MainTutorContext & { learnerMessage: TimelineMessage }> = [];
-  briefings: Array<MainTutorContext & { lessonId: string; blockId: string }> = [];
-  blockSummaries: Array<MainTutorContext & { lessonId: string; blockId: string; coveredThroughId: string }> = [];
-  lessonSummaries: Array<MainTutorContext & { lessonId: string; coveredThroughId: string }> = [];
-  disposed = false;
-  queue: QueuedDecision[] = [];
-  replyQueue: Array<string | Error | Promise<string>> = [];
-  briefingQueue: Array<string | Error | Promise<string>> = [];
-  constructor(...queue: QueuedDecision[]) { this.queue = queue; }
-  async restore(input: MainTutorContext): Promise<void> { this.restores.push(input); }
-  async reply(input: MainTutorContext & { learnerMessage: TimelineMessage }): Promise<string> {
-    this.replies.push(input);
-    const next = this.replyQueue.shift() ?? "Try the workspace-relative path.";
-    if (next instanceof Error) throw next;
-    return next;
-  }
-  async prepareBlockBriefing(input: MainTutorContext & { lessonId: string; blockId: string }): Promise<string> {
-    this.briefings.push(input);
-    const next = this.briefingQueue.shift() ?? `Private briefing for ${input.blockId}.`;
-    if (next instanceof Error) throw next;
-    return next;
-  }
-  async review(input: MainTutorContext & TutorReview & { readiness?: BlockTutorReadiness }): Promise<TutorDecision> {
-    this.reviews.push(input);
-    const next = this.queue.shift() ?? { outcome: "feedback", message: "Keep going." };
-    if (next instanceof Error) throw next;
-    return typeof next === "function" ? next(input) : next;
-  }
-  async summarizeBlock(input: MainTutorContext & { lessonId: string; blockId: string; coveredThroughId: string }): Promise<string> {
-    this.blockSummaries.push(input);
-    return `Summary of ${input.blockId}.`;
-  }
-  async summarizeLesson(input: MainTutorContext & { lessonId: string; coveredThroughId: string }): Promise<string> {
-    this.lessonSummaries.push(input);
-    return `Summary of ${input.lessonId}.`;
-  }
-  dispose(): void { this.disposed = true; }
-}
-
-class FakeBlockTutor implements WorkbookBlockTutor {
-  hints: Array<{ context: ActiveBlockContext; briefing: string }> = [];
-  assessments: Array<{ context: ActiveBlockContext; attempt: Attempt }> = [];
-  hintQueue: Array<string | Error | Promise<string>> = [];
-  readinessQueue: QueuedReadiness[] = [];
-  async hint(input: { context: ActiveBlockContext; briefing: string }): Promise<string> {
-    this.hints.push(input);
-    const next = this.hintQueue.shift() ?? "Look at the current draft and compare it with the block goal.";
-    if (next instanceof Error) throw next;
-    return next;
-  }
-  async assess(input: { context: ActiveBlockContext; attempt: Attempt }): Promise<{ readiness: "likely_ready" | "still_working"; text: string }> {
-    this.assessments.push(input);
-    const next = this.readinessQueue.shift() ?? { readiness: "still_working" as const, text: "The attempt still needs main-tutor judgment." };
-    if (next instanceof Error) throw next;
-    return next;
-  }
-}
-
-class FastFakeBlockTutor extends FakeBlockTutor {
-  terminalAssessments: Array<{ context: ActiveBlockContext; attempt: Attempt }> = [];
-  terminalQueue: Array<TerminalCoachAssessment | Error | Promise<TerminalCoachAssessment>> = [];
-  async assessTerminal(input: { context: ActiveBlockContext; attempt: Attempt }): Promise<TerminalCoachAssessment> {
-    this.terminalAssessments.push(input);
-    const next = this.terminalQueue.shift() ?? { outcome: "likely_ready" as const, text: "Ready for main review." };
-    if (next instanceof Error) throw next;
-    return next;
-  }
 }
 
 function deferred<T>() {
