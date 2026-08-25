@@ -4,10 +4,10 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { Markdown } from "../../web/src/markdown";
+import { Markdown } from "../../web/src/markdown.js";
 import { lessonElementId } from "../../src/workbook/lesson-links.js";
-import { ActivityBand } from "./activity-band";
-import { TimelineThread, type PublicTimelineRecord } from "./timeline-thread";
+import { ActivityBand } from "./activity-band.js";
+import { TimelineThread, type PublicTimelineRecord } from "./timeline-thread.js";
 
 export type WorkbookBlockType = "narrative" | "terminal-practice" | "editor-practice" | "reflection" | "lesson-transition";
 type BlockBase = { id: string; title: string; markdown: string; label?: string };
@@ -684,7 +684,8 @@ function continueLabelFor(state: State, blockId: string): string | undefined {
 
 function CompletionPanel({ state, onRetry }: { state: State; onRetry(failureId: string): Promise<void> }) {
   if (!state.completion?.complete) return null;
-  const failures = state.timeline?.filter((record) => record.type === "tutor_failed" && record.blockId === "workbook--complete") ?? [];
+  const failures = state.timeline?.filter((record): record is Extract<PublicTimelineRecord, { type: "tutor_failed" }> =>
+    record.type === "tutor_failed" && record.blockId === "workbook--complete") ?? [];
   return <section id={state.completion.anchorId} className="workbook-completion-panel work-block" tabIndex={-1} aria-live="polite">
     <p className="section-label">Workbook complete</p>
     <h1>You finished the workbook.</h1>
@@ -817,7 +818,7 @@ export function App() {
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
       {hasTimeline ? <>
-        <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion} inputDisabled={reflectionComposerDisabled} renderContinuation={renderTimelineContinuation} readyBlockIds={stableRunwayIds} activeSurface={activeChapter && activeBlock ? <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
+        <TimelineThread records={state.timeline ?? []} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion} inputDisabled={reflectionComposerDisabled} renderContinuation={renderTimelineContinuation} readyBlockIds={stableRunwayIds} activeSurface={activeChapter && activeBlock ? <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
       </> : <>
         <WorkbookIntroduction state={state} refresh={setState} />
         {emerged.map((chapter, index) => <React.Fragment key={chapter.id}>{(index === 0 || chapter.part !== emerged[index - 1]!.part) && <PartChapter chapter={chapter} />}<LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}

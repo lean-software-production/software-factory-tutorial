@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Markdown } from "../../web/src/markdown";
+import { Markdown } from "../../web/src/markdown.js";
 
 type TimelineMessageRecord = { type: "message"; id: string; sequence: number; at: string; lessonId: string; blockId: string; role: "assistant" | "user"; source: "authored" | "learner" | "main_tutor" | "block_tutor" | "tutor"; presentation: "course" | "chat" | "hint" | "review"; text: string; blockInView?: string };
 export type PublicTimelineRecord =
@@ -99,7 +99,8 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     const nodes: React.ReactNode[] = [];
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index];
-      if (record?.type === "message" && record.presentation === "course" && record.source === "authored") {
+      if (!record) continue;
+      if (record.type === "message" && record.presentation === "course" && record.source === "authored") {
         const following: TimelineThreadRecord[] = [];
         let nextIndex = index + 1;
         while (nextIndex < records.length) {

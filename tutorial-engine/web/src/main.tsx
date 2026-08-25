@@ -114,7 +114,7 @@ function App() {
     source.onmessage = ({ data }) => {
       const event = parseTutorialEvent(data) as WireEvent;
       if (event.type === "progress") { setProgress(event.progress); return; }
-      if (event.type === "snapshot") { setTitle(event.title); setState(event.runState); setActivity(event.activity); setEvents(event.events.reduce(applyEvent, [])); setValidationCommands(event.validationCommands); setProgress(event.progress); setSession(event.session); return; }
+      if (event.type === "snapshot") { setTitle(event.title); setState(event.runState); setActivity(event.activity); setEvents(event.events.reduce<Event[]>(applyEvent, [])); setValidationCommands(event.validationCommands); setProgress(event.progress); setSession(event.session); return; }
       if (event.type === "run-state") setState(event.state);
       if (event.type === "activity") { setActivity(event.text); return; }
       if (event.type === "session-state") { setSession(event.session); return; }
