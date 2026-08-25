@@ -13,8 +13,9 @@ tutorial/.tutorial/
 # Existing checkouts may still have pre-migration learner-local state at the root.
 factory/**/.tmp/
 .tutorial/
-# The visual check writes each run's screenshots beside the harness; only the golden masters
-# under tutorial-engine/test/visual/ are kept.
+# Screenshots are approval tests: the .approved.png beside each case is committed, and a failing
+# run leaves a .received.png next to it to be compared and then approved or discarded.
+tutorial-engine/test/visual/*.received.png
 tutorial-engine/test/.tmp/
 .superpowers/
 .pi/git/

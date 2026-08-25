@@ -7,18 +7,19 @@
  * matching, a later rule wins, or the scroll listener never fires. This harness serves the built
  * workbook UI to Chromium and measures what a learner would actually see.
  *
- *   npx tsx test/visual-affordances.mts             validate
- *   npx tsx test/visual-affordances.mts --update    rewrite the golden masters
+ * Screenshots are approval tests. Each one is compared against its .approved.png; a mismatch
+ * writes the .received.png beside it and fails, so the two can be opened side by side. Approve a
+ * deliberate change with `npm run approve:visual`, which renames received over approved.
+ *
+ *   npx tsx test/visual-affordances.mts    validate
  */
 import { createReadStream } from "node:fs";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { extname, resolve } from "node:path";
 
 const webRoot = resolve(import.meta.dirname, "../dist/web-workbook");
-const baselineRoot = resolve(import.meta.dirname, "visual/baselines");
-const outputRoot = resolve(import.meta.dirname, ".tmp/visual");
-const updating = process.argv.includes("--update");
+const approvalRoot = resolve(import.meta.dirname, "visual");
 const mime: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" };
 
 /** A differing pixel must differ by more than this per channel; antialiasing moves by less. */
@@ -105,23 +106,27 @@ function sendJson(response: ServerResponse, body: unknown): void {
 }
 
 /**
- * Compare in the browser we already have running, so validating a golden master needs no image
- * dependency: both PNGs go onto canvases and the pixel arrays are differenced.
+ * Compare in the browser we already have running, so an approval test needs no image dependency:
+ * both PNGs go onto canvases and the pixel arrays are differenced.
+ *
+ * On a mismatch the received file is left on disk next to the approved one, which is what makes
+ * the pair openable in a diff tool. On a match it is removed, so a stale received file always
+ * means "this one is waiting on you".
  */
-async function compareGolden(page: any, name: string, shot: Buffer): Promise<void> {
-  await mkdir(outputRoot, { recursive: true });
-  await writeFile(resolve(outputRoot, `${name}.png`), shot);
-  const baselinePath = resolve(baselineRoot, `${name}.png`);
-  if (updating) {
-    await mkdir(baselineRoot, { recursive: true });
-    await writeFile(baselinePath, shot);
-    console.log(`  updated golden master ${name}.png`);
-    return;
-  }
-  let baseline: Buffer;
-  try { baseline = await readFile(baselinePath); }
+async function approve(page: any, name: string, shot: Buffer): Promise<void> {
+  await mkdir(approvalRoot, { recursive: true });
+  const approvedPath = resolve(approvalRoot, `${name}.approved.png`);
+  const receivedPath = resolve(approvalRoot, `${name}.received.png`);
+  const reject = async (message: string) => {
+    await writeFile(receivedPath, shot);
+    failures.push(message);
+  };
+  const accept = async () => { await rm(receivedPath, { force: true }); };
+
+  let approved: Buffer;
+  try { approved = await readFile(approvedPath); }
   catch {
-    failures.push(`${name}: no golden master yet — review test/.tmp/visual/${name}.png, then re-run with --update`);
+    await reject(`${name}: nothing approved yet — review test/visual/${name}.received.png, then run \`npm run approve:visual\``);
     return;
   }
   const verdict = await page.evaluate(async ([a, b, tolerance]: [string, string, number]) => {
@@ -147,10 +152,11 @@ async function compareGolden(page: any, name: string, shot: Buffer): Promise<voi
         || Math.abs(left[index + 2] - right[index + 2]) > tolerance) differing++;
     }
     return { sizeMismatch: undefined, ratio: differing / (left.length / 4) };
-  }, [baseline.toString("base64"), shot.toString("base64"), CHANNEL_TOLERANCE]);
+  }, [approved.toString("base64"), shot.toString("base64"), CHANNEL_TOLERANCE]);
 
-  if (verdict.sizeMismatch) failures.push(`${name}: screenshot is ${verdict.sizeMismatch}. Compare test/.tmp/visual/${name}.png`);
-  else if (verdict.ratio > PIXEL_BUDGET) failures.push(`${name}: ${(verdict.ratio * 100).toFixed(2)}% of pixels changed (budget ${(PIXEL_BUDGET * 100).toFixed(2)}%). Compare test/.tmp/visual/${name}.png, then re-run with --update to accept`);
+  if (verdict.sizeMismatch) await reject(`${name}: received ${verdict.sizeMismatch}. Compare test/visual/${name}.received.png with ${name}.approved.png`);
+  else if (verdict.ratio > PIXEL_BUDGET) await reject(`${name}: ${(verdict.ratio * 100).toFixed(2)}% of pixels differ (budget ${(PIXEL_BUDGET * 100).toFixed(2)}%). Compare test/visual/${name}.received.png with ${name}.approved.png, then \`npm run approve:visual\` to accept`);
+  else await accept();
 }
 
 async function main(): Promise<void> {
@@ -279,10 +285,20 @@ async function main(): Promise<void> {
       // surfaces are masked — xterm's canvas and CodeMirror's caret and selection do not reproduce
       // between runs — which leaves the band's own chrome, including its welded feedback.
       const masked = page.locator(".embedded-terminal, .cm-editor");
+      // The band focuses its work surface when it scrolls into view, and :focus-within paints a
+      // ring. Whether that has landed by the time the shot is taken depends on how the scroll
+      // crossed the observer's margin, so settle on the unfocused state rather than approving a
+      // ring that comes and goes. The auto-focus itself stays uncovered: asserting it here failed
+      // two runs in three, because jumping the scroll position skips the crossing it waits for.
+      const shoot = async () => {
+        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.());
+        await page.waitForTimeout(80);
+        return page.screenshot({ mask: [masked] });
+      };
       await at(320);
-      await compareGolden(page, `${label}-band-at-rest`, await page.screenshot({ mask: [masked] }));
+      await approve(page, `${label}-band-at-rest`, await shoot());
       await at(0);
-      await compareGolden(page, `${label}-band-expanded`, await page.screenshot({ mask: [masked] }));
+      await approve(page, `${label}-band-expanded`, await shoot());
     };
 
     if (promoted) await validateBand("terminal");
@@ -349,7 +365,7 @@ async function main(): Promise<void> {
       check(overflowing.overflowY === "auto", `composer: expected overflowY auto once capped, measured ${overflowing.overflowY}`);
       check(oneLine.overflowY !== "auto", `composer: expected no scrollbar at one line, measured overflowY ${oneLine.overflowY}`);
     }
-    await compareGolden(page, "composer-capped", await composer.screenshot());
+    await approve(page, "composer-capped", await composer.screenshot());
   } finally {
     await browser.close();
     await new Promise<void>((done, fail) => server.close((error) => error ? fail(error) : done()));
@@ -361,9 +377,7 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  console.log(updating
-    ? "Visual affordance golden masters updated."
-    : "Visual affordance validation passed: reading-line promotion, activity band expansion, composer auto-resize.");
+  console.log("Visual affordance validation passed: reading-line promotion, activity band expansion, composer auto-resize.");
 }
 
 main().catch((error) => { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; });

@@ -22,7 +22,8 @@
     "eval": "npm run --workspace=tutorial-engine build && tsx evals/run.ts",
     "check": "npm run test:onboarding && npm run check:eval && npm run test:eval && npm run --workspace=tutorial-engine check && npm run --workspace=tutorial/calculator test && npm run check:visual",
     "tutorial:workbook": "node scripts/tutorial-workbook.mjs",
-    "check:visual": "node scripts/check-visual.mjs"
+    "check:visual": "node scripts/check-visual.mjs",
+    "approve:visual": "node scripts/approve-visual.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.0"
