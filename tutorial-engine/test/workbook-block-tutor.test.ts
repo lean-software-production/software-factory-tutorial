@@ -126,14 +126,14 @@ describe("FastWorkbookBlockTutor", () => {
     await expect(tutor.hint({ context, briefing: "Second private briefing." })).resolves.toBe("Try naming which command ability was removed.");
 
     expect(sessions).toHaveLength(2);
-    expect(sessions[0].disposed).toBe(true);
-    expect(sessions[1].disposed).toBe(true);
-    expect(sessions[0].request.tools).toEqual(["read", "grep", "find", "ls"]);
-    expect(sessions[0].request.customTools.map((tool: any) => tool.name).sort()).toEqual(["find", "grep", "ls", "read"]);
-    expect(sessions[0].request.systemPrompt).toContain("private briefing");
-    expect(sessions[0].prompts[0]).toContain("Watch for the learner naming shell execution as removed.");
-    expect(sessions[0].prompts[0]).toContain("\"authorGuidance\": \"Accept only if the learner names the removed shell capability.\"");
-    expect(sessions[0].prompts[0]).toContain("\"attempts\"");
+    expect(sessions[0]!.disposed).toBe(true);
+    expect(sessions[1]!.disposed).toBe(true);
+    expect(sessions[0]!.request.tools).toEqual(["read", "grep", "find", "ls"]);
+    expect(sessions[0]!.request.customTools.map((tool: any) => tool.name).sort()).toEqual(["find", "grep", "ls", "read"]);
+    expect(sessions[0]!.request.systemPrompt).toContain("private briefing");
+    expect(sessions[0]!.prompts[0]).toContain("Watch for the learner naming shell execution as removed.");
+    expect(sessions[0]!.prompts[0]).toContain("\"authorGuidance\": \"Accept only if the learner names the removed shell capability.\"");
+    expect(sessions[0]!.prompts[0]).toContain("\"attempts\"");
   });
 
   it("rejects a blank hint", async () => {
@@ -195,7 +195,7 @@ describe("FastWorkbookBlockTutor", () => {
 
     await tutor.hint({ context: activeContext(), briefing: "Private guidance." });
 
-    const tools = new Map(requests[0].customTools.map((tool: any) => [tool.name, tool]));
+    const tools = new Map(requests[0]!.customTools.map((tool: any) => [tool.name, tool]));
     expect([...tools.keys()].sort()).toEqual(["find", "grep", "ls", "read"]);
     expect(tools.has("write")).toBe(false);
     expect(tools.has("edit")).toBe(false);
@@ -227,7 +227,7 @@ describe("FastWorkbookBlockTutor", () => {
 
     await tutor.hint({ context: activeContext(), briefing: "Private guidance." });
 
-    const tools = new Map(requests[0].customTools.map((tool: any) => [tool.name, tool]));
+    const tools = new Map(requests[0]!.customTools.map((tool: any) => [tool.name, tool]));
     await expect((tools.get("read") as any).execute("read-authored", { path: "lessons/001/blocks/step.md" }, undefined, undefined, undefined))
       .resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("authored lesson text") }] });
     await expect((tools.get("read") as any).execute("read-learner", { path: "factory/answer.md" }, undefined, undefined, undefined))
@@ -266,7 +266,7 @@ describe("FastWorkbookBlockTutor", () => {
 
     await tutor.hint({ context: activeContext(), briefing: "Private guidance." });
 
-    const tools = new Map(requests[0].customTools.map((tool: any) => [tool.name, tool]));
+    const tools = new Map(requests[0]!.customTools.map((tool: any) => [tool.name, tool]));
     await expect((tools.get("read") as any).execute("read-learner", { path: "factory/answer.md" }, undefined, undefined, undefined))
       .resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("learner visible answer") }] });
     for (const privatePath of [
@@ -331,10 +331,10 @@ describe("FastWorkbookBlockTutor", () => {
 
     await expect(tutor.assessTerminal!({ context: activeContext([terminalAttempt]), attempt: terminalAttempt })).resolves.toEqual({ outcome: "feedback", text: "Use the command from the block, then run it again." });
 
-    expect(requests[0].tools).toEqual(["read", "grep", "find", "ls", "report_terminal_attempt"]);
-    expect(requests[0].customTools.map((tool: any) => tool.name).sort()).toEqual(["find", "grep", "ls", "read", "report_terminal_attempt"]);
-    expect(requests[0].customTools.map((tool: any) => tool.name)).not.toContain("accept_current_attempt");
-    expect(requests[0].customTools.map((tool: any) => tool.name)).not.toContain("mark_attempt_still_working");
+    expect(requests[0]!.tools).toEqual(["read", "grep", "find", "ls", "report_terminal_attempt"]);
+    expect(requests[0]!.customTools.map((tool: any) => tool.name).sort()).toEqual(["find", "grep", "ls", "read", "report_terminal_attempt"]);
+    expect(requests[0]!.customTools.map((tool: any) => tool.name)).not.toContain("accept_current_attempt");
+    expect(requests[0]!.customTools.map((tool: any) => tool.name)).not.toContain("mark_attempt_still_working");
   });
 
   it("reports attempt readiness only through report_attempt_readiness", async () => {
@@ -356,10 +356,10 @@ describe("FastWorkbookBlockTutor", () => {
       text: "This likely covers the block."
     });
 
-    expect(requests[0].tools).toEqual(["read", "grep", "find", "ls", "report_attempt_readiness"]);
-    expect(requests[0].customTools.map((tool: any) => tool.name).sort()).toEqual(["find", "grep", "ls", "read", "report_attempt_readiness"]);
-    expect(requests[0].customTools.map((tool: any) => tool.name)).not.toContain("accept_current_attempt");
-    expect(requests[0].customTools.map((tool: any) => tool.name)).not.toContain("mark_attempt_still_working");
+    expect(requests[0]!.tools).toEqual(["read", "grep", "find", "ls", "report_attempt_readiness"]);
+    expect(requests[0]!.customTools.map((tool: any) => tool.name).sort()).toEqual(["find", "grep", "ls", "read", "report_attempt_readiness"]);
+    expect(requests[0]!.customTools.map((tool: any) => tool.name)).not.toContain("accept_current_attempt");
+    expect(requests[0]!.customTools.map((tool: any) => tool.name)).not.toContain("mark_attempt_still_working");
   });
 
   it("rejects readiness values outside the block-tutor signal vocabulary", async () => {

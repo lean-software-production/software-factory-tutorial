@@ -135,7 +135,7 @@ async function startDriver(options: CreateEvaluationWorkspaceOptions = {}) {
   const server = await workspace.startServer({
     terminalPtyFactory: () => pty,
     terminalDebounceMs: 1,
-    mainTutor: workbookTutor as unknown as NonNullable<WorkbookServerOptions["mainTutor"]>,
+    mainTutor: workbookTutor,
     blockTutor
   });
   const trace = createEmptyV2SessionTrace("driver-test");

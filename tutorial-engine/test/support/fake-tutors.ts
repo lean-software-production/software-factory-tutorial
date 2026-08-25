@@ -9,15 +9,7 @@ import type { Attempt } from "../../src/workbook/attempts.js";
 import type { TerminalCoachAssessment, WorkbookBlockTutor } from "../../src/workbook/block-tutor.js";
 import type { ActiveBlockContext } from "../../src/workbook/pi-history.js";
 import type { BlockTutorReadiness, TimelineMessage } from "../../src/workbook/timeline.js";
-import type { WorkbookServerOptions } from "../../src/workbook/server.js";
-import type { MainTutorContext, TutorDecision, TutorReview } from "../../src/workbook/tutor.js";
-
-/**
- * MainWorkbookTutor is a class, so `implements` would demand its private members. The server only
- * ever calls these methods, so that is the contract a fake has to satisfy.
- */
-export type MainTutorContract = Pick<NonNullable<WorkbookServerOptions["mainTutor"]>,
-  "restore" | "reply" | "prepareBlockBriefing" | "review" | "summarizeBlock" | "summarizeLesson" | "dispose">;
+import type { MainTutorContext, MainWorkbookTutor, TutorDecision, TutorReview } from "../../src/workbook/tutor.js";
 
 export type ReviewInput = MainTutorContext & TutorReview & { readiness?: BlockTutorReadiness };
 export type BlockReadiness = Awaited<ReturnType<WorkbookBlockTutor["assess"]>>;
@@ -30,7 +22,7 @@ function unwrap<T>(next: T | Error): T {
 }
 
 /** Records every call and answers with canned text. Override `decide` to choose review outcomes. */
-export class RecordingMainTutor implements MainTutorContract {
+export class RecordingMainTutor implements MainWorkbookTutor {
   readonly reviews: ReviewInput[] = [];
   readonly restores: MainTutorContext[] = [];
   readonly replies: Array<MainTutorContext & { learnerMessage: TimelineMessage }> = [];

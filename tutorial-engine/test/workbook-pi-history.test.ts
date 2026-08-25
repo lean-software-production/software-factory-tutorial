@@ -124,7 +124,7 @@ describe("workbook Pi history", () => {
   });
 
   it("formats the title and markdown the learner sees for authored history", () => {
-    expect(authoredBlockText({ id: "write", type: "narrative", title: "Write it", markdown: "Use `.tmp`." }))
+    expect(authoredBlockText({ title: "Write it", markdown: "Use `.tmp`." }))
       .toBe("## Write it\n\nUse `.tmp`.");
   });
 

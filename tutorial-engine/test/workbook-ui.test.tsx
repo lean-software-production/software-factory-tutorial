@@ -60,7 +60,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
-import { AcceptanceConfetti, App, BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Chapter, type Progress } from "../web-workbook/src/workbook-ui.js";
+import { AcceptanceConfetti, App, BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress } from "../web-workbook/src/workbook-ui.js";
 import { lessonAnchorHref, lessonElementId } from "../src/workbook/lesson-links.js";
 
 const progress: Progress = {
@@ -77,16 +77,26 @@ const progress: Progress = {
   reflectionConversations: {},
 };
 
-const lesson = {
+/**
+ * Attaches the private tutor text a block carries on the server. publicBlock() strips it before any
+ * block reaches the browser, and EditorPracticeBlock types it `never`, so this shape cannot arrive
+ * over the API. The fixtures build it on purpose: the leak assertions below need something that
+ * could leak, and they prove the view would not render it even if handed some.
+ */
+function withPrivateTutorText<T extends Block>(block: T, tutor: string): T {
+  return { ...block, tutor } as T;
+}
+
+const lesson: Lesson = {
   id: "part/lesson-one",
   title: "Markdown Lesson",
   dek: "Dek paragraph.",
   durationMinutes: 14,
   outcomes: ["Run the supplied command.", "Explain what changed."],
   blocks: [
-    { id: "orientation", type: "narrative", title: "Orientation", markdown: "Read **carefully**.\n\n- One\n- Two", tutor: "private narrative note" },
-    { id: "practice", type: "terminal-practice", title: "Practice", markdown: "Run this:\n\n```sh command\necho hi \\\n  | cat\n```", tutor: "private practice guidance" },
-    { id: "reflect", type: "reflection", title: "Reflect", markdown: "Why did it work?", tutor: "private reflection prompt" },
+    withPrivateTutorText({ id: "orientation", type: "narrative", title: "Orientation", markdown: "Read **carefully**.\n\n- One\n- Two" }, "private narrative note"),
+    withPrivateTutorText({ id: "practice", type: "terminal-practice", title: "Practice", markdown: "Run this:\n\n```sh command\necho hi \\\n  | cat\n```" }, "private practice guidance"),
+    withPrivateTutorText({ id: "reflect", type: "reflection", title: "Reflect", markdown: "Why did it work?" }, "private reflection prompt"),
     { id: "transition", type: "lesson-transition", title: "Next", markdown: "Continue to **lesson two**." },
   ],
 };
@@ -116,14 +126,13 @@ function progressWithActiveDuplicate(blockId: string): Progress {
   };
 }
 
-const editorBlock = {
+const editorBlock = withPrivateTutorText<EditorPracticeBlock>({
   id: "edit-answer",
   type: "editor-practice",
   title: "Edit the answer",
   markdown: "Update the answer file so it contains the acceptance marker.",
   path: "factory/answer.md",
-  tutor: "Private editor rubric: require the acceptance marker."
-} as any;
+}, "Private editor rubric: require the acceptance marker.");
 
 function activeEditorProgress(overrides: Partial<Progress["blocks"][number]> = {}): Progress {
   return {
@@ -163,8 +172,10 @@ async function mount(element: ReturnType<typeof createElement>, stubExtraGlobals
   vi.stubGlobal("window", dom.window as any);
   vi.stubGlobal("document", dom.window.document as any);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  if (!("attachEvent" in dom.window.HTMLElement.prototype)) dom.window.HTMLElement.prototype.attachEvent = () => {};
-  if (!("detachEvent" in dom.window.HTMLElement.prototype)) dom.window.HTMLElement.prototype.detachEvent = () => {};
+  // Legacy IE handlers, absent from jsdom and from the DOM lib, that a dependency probes for.
+  const legacyPrototype = dom.window.HTMLElement.prototype as unknown as Record<string, () => void>;
+  if (!("attachEvent" in legacyPrototype)) legacyPrototype.attachEvent = () => {};
+  if (!("detachEvent" in legacyPrototype)) legacyPrototype.detachEvent = () => {};
   stubExtraGlobals?.(dom.window);
   const container = dom.window.document.getElementById("root")!;
   mountedRoot = createRoot(container);
@@ -584,8 +595,8 @@ describe("workbook lesson UI", () => {
     expect(editorMarkup).not.toContain("editor-surface");
 
     const terminalMarkup = html(createElement(BlockView, {
-      block: lesson.blocks[1],
-      progress: activeBlockProgress(lesson.blocks[1], {
+      block: lesson.blocks[1]!,
+      progress: activeBlockProgress(lesson.blocks[1]!, {
         checkpoint: { status: "accepted", successMessage: "Tutor accepted the terminal result.", evidence: { kind: "terminal", terminalHtml: "<pre class=\"frozen-terminal-output\">terminal transcript</pre>" } }
       } as any),
       refresh: vi.fn()
@@ -597,8 +608,8 @@ describe("workbook lesson UI", () => {
     expect(terminalMarkup).not.toContain("Embedded terminal");
 
     const reflectionMarkup = html(createElement(BlockView, {
-      block: lesson.blocks[2],
-      progress: activeBlockProgress(lesson.blocks[2], {
+      block: lesson.blocks[2]!,
+      progress: activeBlockProgress(lesson.blocks[2]!, {
         checkpoint: { status: "accepted", successMessage: "Tutor accepted the reflection.", evidence: { kind: "reflection", conversation: [{ role: "learner", text: "My answer" }, { role: "tutor", text: "Tutor note" }] } }
       } as any),
       refresh: vi.fn()
@@ -611,7 +622,7 @@ describe("workbook lesson UI", () => {
   });
 
   it("renders a compact terminal activity without duplicating authored content", () => {
-    const terminalBlock = lesson.blocks[1];
+    const terminalBlock = lesson.blocks[1]!;
     const markup = html(createElement(ActivityBand, {
       lessonId: lesson.id,
       activeBlock: terminalBlock,
@@ -680,8 +691,8 @@ describe("workbook lesson UI", () => {
   });
 
   it("does not show checkpoint Continue for nonaccepted evaluated blocks", () => {
-    const terminalMarkup = html(createElement(BlockView, { block: lesson.blocks[1], progress: activeBlockProgress(lesson.blocks[1]), refresh: vi.fn() }));
-    const reflectionMarkup = html(createElement(BlockView, { block: lesson.blocks[2], progress: activeBlockProgress(lesson.blocks[2]), refresh: vi.fn() }));
+    const terminalMarkup = html(createElement(BlockView, { block: lesson.blocks[1]!, progress: activeBlockProgress(lesson.blocks[1]!), refresh: vi.fn() }));
+    const reflectionMarkup = html(createElement(BlockView, { block: lesson.blocks[2]!, progress: activeBlockProgress(lesson.blocks[2]!), refresh: vi.fn() }));
     const editorMarkup = html(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ checkpoint: { status: "feedback", feedback: "Try again.", evidence: { kind: "editor", text: "draft" } } } as any), refresh: vi.fn() }));
 
     expect(terminalMarkup).not.toContain("success-checkpoint");
@@ -745,7 +756,7 @@ describe("workbook lesson UI", () => {
   it("debounces editor-practice edits and posts only the latest text at the next revision", async () => {
     vi.useFakeTimers();
     const refresh = vi.fn();
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ progress: activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any) }) }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => ({ progress: activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any) }) }));
     vi.stubGlobal("fetch", fetchMock);
     const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0 }), refresh }));
     const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']");
@@ -766,9 +777,9 @@ describe("workbook lesson UI", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/workbook/editor");
-    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST", headers: { "Content-Type": "application/json" } });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ blockId: "edit-answer", revision: 1, text: "second draft" });
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/workbook/editor");
+    expect(fetchMock.mock.calls[0]![1]).toMatchObject({ method: "POST", headers: { "Content-Type": "application/json" } });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ blockId: "edit-answer", revision: 1, text: "second draft" });
   });
 
   it("preserves editor focus while refreshed state arrives", async () => {
@@ -787,7 +798,7 @@ describe("workbook lesson UI", () => {
 
   it("continues submitting after a refreshed draft recreates the editor", async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ progress: activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "waiting" } as any) }) }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => ({ progress: activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "waiting" } as any) }) }));
     vi.stubGlobal("fetch", fetchMock);
     const refresh = vi.fn();
     const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: "" } as any), refresh }));
@@ -805,14 +816,14 @@ describe("workbook lesson UI", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ blockId: "edit-answer", revision: 2, text: "second draft" });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ blockId: "edit-answer", revision: 2, text: "second draft" });
   });
 
   it("polls public state while an editor review is in flight and refreshes on completion", async () => {
     vi.useFakeTimers();
     const unlockedState = { progress: activeEditorProgress({ active: false, completed: true, revision: 1, editorStatus: "unlocked", feedback: "Accepted." } as any) };
     const refresh = vi.fn();
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => unlockedState }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => unlockedState }));
     vi.stubGlobal("fetch", fetchMock);
 
     await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any), refresh }));
@@ -834,7 +845,7 @@ describe("workbook lesson UI", () => {
 
   it("stops editor review polling when the active editor unmounts", async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ progress: activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any) }) }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => ({ progress: activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any) }) }));
     vi.stubGlobal("fetch", fetchMock);
 
     await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any), refresh: vi.fn() }));
@@ -868,50 +879,50 @@ describe("workbook lesson UI", () => {
   });
 
   it("shows continuation controls and page breaks only for active narrative and transition blocks", () => {
-    const activeNarrative = html(createElement(BlockView, { block: lesson.blocks[0], progress, refresh: vi.fn() }));
+    const activeNarrative = html(createElement(BlockView, { block: lesson.blocks[0]!, progress, refresh: vi.fn() }));
     expect(activeNarrative).toContain("Continue");
     expect(activeNarrative).toContain('class="continuation-page-break"');
     expect(activeNarrative).not.toContain('block-end-sentinel');
 
     const activeTransitionProgress = { ...progress, activeBlockId: "transition", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "transition", ready: true, emerged: true })) };
-    const activeTransition = html(createElement(BlockView, { block: lesson.blocks[3], progress: activeTransitionProgress, refresh: vi.fn() }));
+    const activeTransition = html(createElement(BlockView, { block: lesson.blocks[3]!, progress: activeTransitionProgress, refresh: vi.fn() }));
     expect(activeTransition).toContain("Continue");
     expect(activeTransition).toContain('class="continuation-page-break"');
     expect(activeTransition).not.toContain('block-end-sentinel');
 
     const activeTerminalProgress = { ...progress, activeBlockId: "practice", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "practice", ready: true, emerged: true })) };
-    const activeTerminal = html(createElement(BlockView, { block: lesson.blocks[1], progress: activeTerminalProgress, refresh: vi.fn() }));
+    const activeTerminal = html(createElement(BlockView, { block: lesson.blocks[1]!, progress: activeTerminalProgress, refresh: vi.fn() }));
     expect(activeTerminal).not.toContain('class="continuation-page-break"');
     expect(activeTerminal).not.toContain('block-end-sentinel');
 
     const activeReflectionProgress = { ...progress, activeBlockId: "reflect", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "reflect", ready: true, emerged: true })) };
-    const activeReflection = html(createElement(BlockView, { block: lesson.blocks[2], progress: activeReflectionProgress, refresh: vi.fn() }));
+    const activeReflection = html(createElement(BlockView, { block: lesson.blocks[2]!, progress: activeReflectionProgress, refresh: vi.fn() }));
     expect(activeReflection).not.toContain('class="continuation-page-break"');
     expect(activeReflection).not.toContain('block-end-sentinel');
   });
 
   it("keeps the embedded terminal as the only terminal path and extracts only authored command fences", () => {
     const activeTerminalProgress = { ...progress, activeBlockId: "practice", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "practice", ready: true, emerged: true })) };
-    const withCommand = html(createElement(BlockView, { block: lesson.blocks[1], progress: activeTerminalProgress, refresh: vi.fn() }));
+    const withCommand = html(createElement(BlockView, { block: lesson.blocks[1]!, progress: activeTerminalProgress, refresh: vi.fn() }));
     expect(withCommand).toContain("terminal-connection-status");
     expect(withCommand).not.toContain("Use your own terminal");
     expect(withCommand).not.toContain("fallback");
     expect(withCommand).not.toContain("Insert command");
 
-    const scriptSnippetBlock = { ...lesson.blocks[1], markdown: "Create this script:\n\n```sh\n#!/usr/bin/env bash\necho script body\n```" };
+    const scriptSnippetBlock = { ...lesson.blocks[1]!, markdown: "Create this script:\n\n```sh\n#!/usr/bin/env bash\necho script body\n```" };
     const withSnippet = html(createElement(BlockView, { block: scriptSnippetBlock, progress: activeTerminalProgress, refresh: vi.fn() }));
     expect(withSnippet).toContain("terminal-connection-status");
 
-    const clueOnlyBlock = { ...lesson.blocks[1], markdown: "Try the command you just edited, then compare its output." };
+    const clueOnlyBlock = { ...lesson.blocks[1]!, markdown: "Try the command you just edited, then compare its output." };
     const withoutCommand = html(createElement(BlockView, { block: clueOnlyBlock, progress: activeTerminalProgress, refresh: vi.fn() }));
     expect(withoutCommand).toContain("terminal-connection-status");
   });
 
   it("renders terminal feedback as Markdown for inline code and fenced shell blocks", () => {
-    const terminalProgress = activeBlockProgress(lesson.blocks[1], {
+    const terminalProgress = activeBlockProgress(lesson.blocks[1]!, {
       checkpoint: { status: "feedback", feedback: "Run `npm test` again.\n\n```sh\nnpm test -- --runInBand\n```" }
     } as any);
-    const markup = html(createElement(BlockView, { block: lesson.blocks[1], progress: terminalProgress, refresh: vi.fn() }));
+    const markup = html(createElement(BlockView, { block: lesson.blocks[1]!, progress: terminalProgress, refresh: vi.fn() }));
 
     expect(markup).toContain('aria-live="polite"');
     expect(markup).toContain('class="markdown"');
@@ -988,7 +999,7 @@ describe("workbook lesson UI", () => {
     ];
     const appProgress: Progress = { ...progress, activeLessonId: partALessonOne.id, completedLessons: [] };
     const state = { workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: true, chapters, progress: appProgress, adapter: {} };
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
     vi.stubGlobal("fetch", fetchMock);
 
     const container = await mount(createElement(App), stubAppShellGlobals);
@@ -1010,7 +1021,7 @@ describe("workbook lesson UI", () => {
   });
 
   it("links lesson outlines to lesson-scoped safe block DOM ids", () => {
-    const unsafeLesson = { ...lesson, id: "part two/lesson#two", blocks: [{ ...lesson.blocks[0], id: "repeat block?" }] };
+    const unsafeLesson = { ...lesson, id: "part two/lesson#two", blocks: [{ ...lesson.blocks[0]!, id: "repeat block?" }] };
     const chapters: Chapter[] = [{ id: unsafeLesson.id, title: "Unsafe", part: "Part Two", partMarkdown: "", partNumber: 2, lessonNumber: 1, lesson: unsafeLesson }];
     const railProgress = { ...progress, activeLessonId: unsafeLesson.id, activeBlockId: "repeat block?", blocks: [{ id: "repeat block?", type: "narrative", ready: true, active: true, completed: false, verified: false, emerged: true }] };
     const railMarkup = html(createElement(LessonRail, { title: "Workbook", chapters, progress: railProgress, viewedLessonId: unsafeLesson.id, setViewedLesson: vi.fn() }));
@@ -1025,7 +1036,7 @@ describe("workbook lesson UI", () => {
 
   it("renders resolved lesson reference links and the lesson header using the shared lesson anchor helper", () => {
     const targetId = "part/lesson-one";
-    const referencedBlock = { ...lesson.blocks[0], markdown: `See [Lesson 1: Markdown Lesson](${lessonAnchorHref(targetId)}) for background.` };
+    const referencedBlock = { ...lesson.blocks[0]!, markdown: `See [Lesson 1: Markdown Lesson](${lessonAnchorHref(targetId)}) for background.` };
     const referencedChapter = chapter({ lesson: { ...lesson, blocks: [referencedBlock] } });
 
     const markup = html(createElement(LessonView, { chapter: referencedChapter, progress, refresh: vi.fn() }));
@@ -1471,7 +1482,7 @@ describe("workbook lesson UI", () => {
     expect(railMarkup).not.toContain('href="#part--validation-loop"');
 
     const state = { workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: false, chapters, progress: readyProgress, adapter: {}, revealedBlockIds: ["workbook--introduction"], renderedBlockIds: ["workbook--introduction", "part--validation-loop"], timeline: [] } as any;
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
     vi.stubGlobal("fetch", fetchMock);
     const container = await mount(createElement(App), (win) => {
       stubAppShellGlobals(win);
@@ -1520,7 +1531,7 @@ describe("workbook lesson UI", () => {
   });
 
   it("renders conversational intro, part, lesson frame, and block content only in the timeline", async () => {
-    const conversationalLesson = { ...lesson, dek: "TIMELINE_ONLY_DEK", outcomes: ["TIMELINE_ONLY_OUTCOME"], blocks: [{ ...lesson.blocks[0], markdown: "Block body duplicated only if document blocks render." }] };
+    const conversationalLesson = { ...lesson, dek: "TIMELINE_ONLY_DEK", outcomes: ["TIMELINE_ONLY_OUTCOME"], blocks: [{ ...lesson.blocks[0]!, markdown: "Block body duplicated only if document blocks render." }] };
     const state = {
       workbook: { title: "Workbook" },
       introduction: "TIMELINE_ONLY_INTRO",
@@ -1535,7 +1546,7 @@ describe("workbook lesson UI", () => {
         { type: "message", id: "block", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: lesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nBlock body duplicated only if document blocks render." },
       ]
     } as any;
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
     vi.stubGlobal("fetch", fetchMock);
 
     const container = await mount(createElement(App), stubAppShellGlobals);
@@ -1605,7 +1616,7 @@ describe("workbook lesson UI", () => {
       adapter: {},
       timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nAuthored Orientation note." }]
     } as any;
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
     vi.stubGlobal("fetch", fetchMock);
 
     const container = await mount(createElement(App), stubAppShellGlobals);
@@ -1634,7 +1645,7 @@ describe("workbook lesson UI", () => {
       adapter: {},
       timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: secondLesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nSecond lesson note." }]
     } as any;
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
     vi.stubGlobal("fetch", fetchMock);
 
     const container = await mount(createElement(App), stubAppShellGlobals);
@@ -1718,7 +1729,7 @@ describe("workbook lesson UI", () => {
       emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
     }
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    const terminalProgress = activeBlockProgress(lesson.blocks[1]);
+    const terminalProgress = activeBlockProgress(lesson.blocks[1]!);
     const state = {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
@@ -1772,11 +1783,11 @@ describe("workbook lesson UI", () => {
       emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
     }
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    const terminalProgress = activeBlockProgress(lesson.blocks[1], {
+    const terminalProgress = activeBlockProgress(lesson.blocks[1]!, {
       checkpoint: { status: "feedback", feedback: "Persisted checkpoint feedback." }
     } as any);
     const container = await mount(createElement(BlockView, {
-      block: lesson.blocks[1], progress: terminalProgress, refresh: vi.fn()
+      block: lesson.blocks[1]!, progress: terminalProgress, refresh: vi.fn()
     }), (win) => {
       vi.stubGlobal("location", win.location);
       vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
@@ -1827,15 +1838,15 @@ describe("workbook lesson UI", () => {
       emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
     }
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    const initialProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "reviewing" } } as any);
-    const feedbackProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "feedback", feedback: "The persisted review completed." } } as any);
+    const initialProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "reviewing" } } as any);
+    const feedbackProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "feedback", feedback: "The persisted review completed." } } as any);
     const timeline = [
       { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "practice", role: "assistant", source: "authored", presentation: "course", text: "## Practice\n\nRun the authored command." },
       { type: "tutor_failed", id: "readiness-failed", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "practice", failureId: "failure-1", operation: "block-readiness", publicMessage: "Readiness tutor is unavailable; continue with the exercise." },
     ];
     const initialState = { workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: true, chapters: [chapter()], progress: initialProgress, adapter: {}, timeline } as any;
     const feedbackState = { ...initialState, progress: feedbackProgress } as any;
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => fetchMock.mock.calls.length === 1 ? initialState : feedbackState }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => fetchMock.mock.calls.length === 1 ? initialState : feedbackState }));
     vi.stubGlobal("fetch", fetchMock);
 
     const container = await mount(createElement(App), (win) => { stubAppShellGlobals(win); vi.stubGlobal("location", win.location); });
@@ -1868,14 +1879,14 @@ describe("workbook lesson UI", () => {
       emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
     }
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    const initialProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "reviewing" } } as any);
-    const feedbackProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "feedback", feedback: "The command failed because the file path is wrong." } } as any);
+    const initialProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "reviewing" } } as any);
+    const feedbackProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "feedback", feedback: "The command failed because the file path is wrong." } } as any);
     const feedbackState = { progress: feedbackProgress } as any;
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => feedbackState }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => feedbackState }));
     vi.stubGlobal("fetch", fetchMock);
     function Harness() {
       const [current, setCurrent] = useState(initialProgress);
-      return createElement(BlockView, { block: lesson.blocks[1], progress: current, refresh: (next: any) => setCurrent(next.progress) });
+      return createElement(BlockView, { block: lesson.blocks[1]!, progress: current, refresh: (next: any) => setCurrent(next.progress) });
     }
     const container = await mount(createElement(Harness), (win) => {
       vi.stubGlobal("location", win.location);
@@ -1912,13 +1923,13 @@ describe("workbook lesson UI", () => {
       emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
     }
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    const reviewingProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "reviewing" } } as any);
-    const feedbackProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "feedback", feedback: "Delayed main-tutor feedback." } } as any);
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ progress: fetchMock.mock.calls.length <= 120 ? reviewingProgress : feedbackProgress }) }));
+    const reviewingProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "reviewing" } } as any);
+    const feedbackProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "feedback", feedback: "Delayed main-tutor feedback." } } as any);
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => ({ progress: fetchMock.mock.calls.length <= 120 ? reviewingProgress : feedbackProgress }) }));
     vi.stubGlobal("fetch", fetchMock);
     function Harness() {
       const [current, setCurrent] = useState(reviewingProgress);
-      return createElement(BlockView, { block: lesson.blocks[1], progress: current, refresh: (next: any) => setCurrent(next.progress) });
+      return createElement(BlockView, { block: lesson.blocks[1]!, progress: current, refresh: (next: any) => setCurrent(next.progress) });
     }
     const container = await mount(createElement(Harness), (win) => {
       vi.stubGlobal("location", win.location);
@@ -1961,12 +1972,12 @@ describe("workbook lesson UI", () => {
       emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
     }
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    const initialProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "reviewing" } } as any);
-    const workingProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "working" } } as any);
+    const initialProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "reviewing" } } as any);
+    const workingProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "working" } } as any);
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ progress: workingProgress }) })));
     function Harness() {
       const [current, setCurrent] = useState(initialProgress);
-      return createElement(BlockView, { block: lesson.blocks[1], progress: current, refresh: (next: any) => setCurrent(next.progress) });
+      return createElement(BlockView, { block: lesson.blocks[1]!, progress: current, refresh: (next: any) => setCurrent(next.progress) });
     }
     const container = await mount(createElement(Harness), (win) => {
       vi.stubGlobal("location", win.location);
@@ -1985,7 +1996,7 @@ describe("workbook lesson UI", () => {
   });
 
   it.each([
-    ["terminal", lesson.blocks[1], activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "accepted", successMessage: "Terminal accepted.", evidence: { kind: "terminal", terminalHtml: "<pre class=\"frozen-terminal-output\">terminal transcript</pre>" } } } as any), "Terminal accepted."],
+    ["terminal", lesson.blocks[1]!, activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "accepted", successMessage: "Terminal accepted.", evidence: { kind: "terminal", terminalHtml: "<pre class=\"frozen-terminal-output\">terminal transcript</pre>" } } } as any), "Terminal accepted."],
     ["editor", editorBlock, activeEditorProgress({ editorStatus: undefined, checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted answer text" } } } as any), "Editor accepted."]
   ])("renders only the timeline continuation for accepted %s practice in timeline mode", async (_kind, block, acceptedProgress, acceptedText) => {
     const state = {
@@ -2032,7 +2043,7 @@ describe("workbook lesson UI", () => {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
       introductionComplete: true,
-      chapters: [chapter({ lesson: { ...lesson, blocks: [lesson.blocks[2]] } as any })],
+      chapters: [chapter({ lesson: { ...lesson, blocks: [lesson.blocks[2]!] } as any })],
       progress: reflectionProgress,
       adapter: {},
       timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "authored", presentation: "course", text: "## Reflect\n\nWhat changed?" }]
@@ -2068,7 +2079,7 @@ describe("workbook lesson UI", () => {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
       introductionComplete: true,
-      chapters: [chapter({ lesson: { ...lesson, blocks: [lesson.blocks[2]] } as any })],
+      chapters: [chapter({ lesson: { ...lesson, blocks: [lesson.blocks[2]!] } as any })],
       progress: reflectionProgress,
       adapter: {},
       timeline: [
@@ -2109,7 +2120,7 @@ describe("workbook lesson UI", () => {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
       introductionComplete: true,
-      chapters: [chapter({ lesson: { ...lesson, blocks: [lesson.blocks[2]] } as any })],
+      chapters: [chapter({ lesson: { ...lesson, blocks: [lesson.blocks[2]!] } as any })],
       progress: reflectionProgress,
       adapter: {},
       timeline: [
@@ -2140,7 +2151,7 @@ describe("workbook lesson UI", () => {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
       introductionComplete: true,
-      chapters: [chapter({ lesson: { ...lesson, blocks: [lesson.blocks[2]] } as any })],
+      chapters: [chapter({ lesson: { ...lesson, blocks: [lesson.blocks[2]!] } as any })],
       progress: reflectionProgress,
       adapter: {},
       timeline: [

@@ -6,7 +6,7 @@
  */
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, resolve } from "node:path";
 
 const webRoot = resolve(import.meta.dirname, "../dist/web-workbook");
@@ -63,7 +63,7 @@ function sendJson(response: ServerResponse, body: unknown): void {
   response.end(JSON.stringify(body));
 }
 
-async function readJson(request: Parameters<Parameters<typeof createServer>[0]>[0]): Promise<unknown> {
+async function readJson(request: IncomingMessage): Promise<unknown> {
   let body = "";
   for await (const chunk of request) body += String(chunk);
   return JSON.parse(body || "{}");

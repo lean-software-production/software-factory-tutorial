@@ -259,7 +259,7 @@ describe("WorkbookTerminalManager", () => {
 
   it("submits paused bounded transcripts and frozen terminal HTML as attempt evidence", async () => {
     vi.useFakeTimers();
-    const submitAttempt = vi.fn(async () => undefined);
+    const submitAttempt = vi.fn<SubmitAttempt>(async () => undefined);
     const { manager, ptys } = setup(submitAttempt, 20, 80);
     const client = new FakeClient();
     manager.attach(client);
@@ -275,8 +275,11 @@ describe("WorkbookTerminalManager", () => {
       privateGuidance: "tests pass",
       evidence: { kind: "terminal", terminalHtml: expect.stringContaining("&lt;tag&gt; short output") }
     });
-    expect(submitAttempt.mock.calls[0]![0].evidence.transcript.length).toBeLessThanOrEqual(80);
-    expect(submitAttempt.mock.calls[0]![0].evidence.terminalHtml).not.toContain("\u001b[");
+    // toMatchObject above does not narrow the evidence union for the checker, so narrow it here.
+    const evidence = submitAttempt.mock.calls[0]![0].evidence;
+    if (evidence.kind !== "terminal") throw new Error(`Expected terminal evidence, got ${evidence.kind}.`);
+    expect(evidence.transcript.length).toBeLessThanOrEqual(80);
+    expect(evidence.terminalHtml).not.toContain("\u001b[");
     expect(client.messages.at(-1)).toMatchObject({ type: "attempt-status", blockId: "practice", status: "submitted" });
   });
 
@@ -293,7 +296,7 @@ describe("WorkbookTerminalManager", () => {
 
   it("does not submit attempts for inactive or non-observed blocks", async () => {
     vi.useFakeTimers();
-    const submitAttempt = vi.fn(async () => undefined);
+    const submitAttempt = vi.fn<SubmitAttempt>(async () => undefined);
     const { manager, ptys, setActive } = setup(submitAttempt, 5);
     setActive(undefined);
     manager.attach(new FakeClient());

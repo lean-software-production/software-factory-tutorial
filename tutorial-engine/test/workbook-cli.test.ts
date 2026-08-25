@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runWorkbookCli } from "../src/workbook/cli.js";
+import type { WorkbookServerOptions } from "../src/workbook/server.js";
 import { SessionWorkspaceManager, type TutorialSessionPaths } from "../src/session-workspace.js";
 
 const roots: string[] = [];
@@ -37,7 +38,7 @@ function sessionFixture(id: string): TutorialSessionPaths {
 describe("workbook CLI", () => {
   it("starts the normal launch path with the embedded terminal enabled", async () => {
     const close = vi.fn(async () => {});
-    const startServer = vi.fn(async () => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close }));
+    const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close }));
 
     const resolveSession = vi.fn(async () => sessionFixture("session-20260824-120000-a1b2c3d4"));
     const lines: string[] = [];
@@ -47,7 +48,7 @@ describe("workbook CLI", () => {
       resolveSession,
       installSignalHandlers: false,
       packageDirectory: "/pkg",
-      logger: { info: vi.fn() },
+      logger: { info: vi.fn(), error: vi.fn() },
       writeLine: (line) => lines.push(line),
     });
 
@@ -72,7 +73,7 @@ describe("workbook CLI", () => {
 
   it("trusts an injected runtime provision profile at the launch boundary", async () => {
     const runtimeSource = await mkdtemp(join(tmpdir(), "workbook-cli-runtime-source-")); roots.push(runtimeSource);
-    const startServer = vi.fn(async () => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
+    const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
     const resolveSession = vi.fn(async (_target: string, _sessionId: string | undefined, runtimeProvision: any) => ({
       ...sessionFixture("session-20260824-120000-a1b2c3d4"),
       runtimeProvision,
@@ -84,7 +85,7 @@ describe("workbook CLI", () => {
       runtimeProvision: { mounts: [{ source: runtimeSource, target: "runtime-tools", readonly: true }] },
       installSignalHandlers: false,
       packageDirectory: "/pkg",
-      logger: { info: vi.fn() },
+      logger: { info: vi.fn(), error: vi.fn() },
       writeLine: () => undefined,
     });
 
@@ -95,7 +96,7 @@ describe("workbook CLI", () => {
   });
 
   it("passes an explicit --session ID through to reopening and prints the reopened workspace", async () => {
-    const startServer = vi.fn(async () => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
+    const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
     const resolveSession = vi.fn(async () => sessionFixture("lesson-007"));
     const lines: string[] = [];
 
@@ -104,7 +105,7 @@ describe("workbook CLI", () => {
       resolveSession,
       installSignalHandlers: false,
       packageDirectory: "/pkg",
-      logger: { info: vi.fn() },
+      logger: { info: vi.fn(), error: vi.fn() },
       writeLine: (line) => lines.push(line),
     });
 
@@ -122,14 +123,14 @@ describe("workbook CLI", () => {
     const manager = await SessionWorkspaceManager.create(contentRoot);
     const existing = await manager.createSession({ id: "resume-me" });
     await write(resolve(existing.workspaceRoot, "factory/resume-note.md"), "keep this session-local file\n");
-    const startServer = vi.fn(async () => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
+    const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
     const lines: string[] = [];
 
     await runWorkbookCli([contentRoot, "--session", "resume-me", "--no-open"], {
       startServer,
       installSignalHandlers: false,
       packageDirectory: "/pkg",
-      logger: { info: vi.fn() },
+      logger: { info: vi.fn(), error: vi.fn() },
       writeLine: (line) => lines.push(line),
     });
 
@@ -143,28 +144,31 @@ describe("workbook CLI", () => {
   it("materializes a fresh default session and ignores legacy .tutorial/.tmp state", async () => {
     const contentRoot = await contentFixture();
     await write(join(contentRoot, ".tutorial/.tmp/workbook/events.jsonl"), "legacy state stays put\n");
-    const startServer = vi.fn(async () => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
+    const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
     const lines: string[] = [];
 
     await runWorkbookCli([contentRoot, "--no-open"], {
       startServer,
       installSignalHandlers: false,
       packageDirectory: "/pkg",
-      logger: { info: vi.fn() },
+      logger: { info: vi.fn(), error: vi.fn() },
       writeLine: (line) => lines.push(line),
     });
 
     const options = startServer.mock.calls[0]![0];
+    // The CLI passes the resolved TutorialSessionPaths; WorkbookServerOptions declares only the
+    // runtime fields the server itself needs, which do not include the session id the CLI reports.
+    const session = options.session as TutorialSessionPaths;
     const canonicalContentRoot = await realpath(contentRoot);
     expect(options.target).toBe(canonicalContentRoot);
     expect(options.session?.contentRoot).toBe(canonicalContentRoot);
-    expect(options.session?.sessionId).toMatch(/^session-\d{8}-\d{6}-[a-f0-9]{8}$/);
-    expect(options.session?.workspaceRoot).toBe(resolve(canonicalContentRoot, ".tutorial", options.session!.sessionId, "workspace"));
-    await expect(readFile(resolve(options.session!.workspaceRoot, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
-    await expect(readFile(resolve(options.session!.workspaceRoot, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
-    await expect(stat(resolve(options.session!.workspaceRoot, ".git"))).resolves.toBeDefined();
+    expect(session.sessionId).toMatch(/^session-\d{8}-\d{6}-[a-f0-9]{8}$/);
+    expect(options.session?.workspaceRoot).toBe(resolve(canonicalContentRoot, ".tutorial", session.sessionId, "workspace"));
+    await expect(readFile(resolve(session.workspaceRoot, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
+    await expect(readFile(resolve(session.workspaceRoot, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
+    await expect(stat(resolve(session.workspaceRoot, ".git"))).resolves.toBeDefined();
     await expect(readFile(resolve(contentRoot, ".tutorial/.tmp/workbook/events.jsonl"), "utf8")).resolves.toBe("legacy state stays put\n");
-    expect(lines[0]).toBe(`Created tutorial session: ${options.session!.sessionId}`);
-    expect(lines).toContain(`Learner workspace: ${options.session!.workspaceRoot}`);
+    expect(lines[0]).toBe(`Created tutorial session: ${session.sessionId}`);
+    expect(lines).toContain(`Learner workspace: ${session.workspaceRoot}`);
   });
 });

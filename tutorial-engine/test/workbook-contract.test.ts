@@ -231,7 +231,7 @@ describe("workbook lesson contract", () => {
       const dir = await flatFixture(manifest);
       if (label !== "missing part" && label !== "malformed part") await writePartDocument(dir, "part-one");
       const message = await messageFrom(loadWorkbook(dir));
-      expect(message, label).toMatch(new RegExp(label === "missing part" ? "missing" : label === "omitted" ? "omit" : label.split(" ")[0], "i"));
+      expect(message, label).toMatch(new RegExp(label === "missing part" ? "missing" : label === "omitted" ? "omit" : label.split(" ")[0]!, "i"));
     }
   });
 

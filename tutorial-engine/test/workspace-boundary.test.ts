@@ -3,6 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createWorkspaceTools, WorkspaceBoundary } from "../src/agent/workspace-boundary.js";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+/**
+ * The tools under test never read the extension context, but the tool contract requires one. A
+ * single named stand-in keeps that fact stated once rather than cast at every call site.
+ */
+const noExtensionContext = undefined as unknown as ExtensionContext;
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -39,7 +46,7 @@ describe("WorkspaceBoundary", () => {
     const tools = createWorkspaceTools(root, boundary, (event) => audits.push(event));
     const move = tools.find((tool) => tool.name === "move")!;
 
-    await expect(move.execute("move-1", { path: "inside/file.txt", destination: "line/moved.txt" }, undefined, undefined, undefined))
+    await expect(move.execute("move-1", { path: "inside/file.txt", destination: "line/moved.txt" }, undefined, undefined, noExtensionContext))
       .resolves.toMatchObject({ content: [{ type: "text", text: "Moved inside/file.txt to line/moved.txt" }] });
     await expect(boundary.readFile("line/moved.txt")).resolves.toEqual(Buffer.from("safe"));
     await expect(boundary.exists("inside/file.txt")).resolves.toBe(false);
@@ -54,10 +61,10 @@ describe("WorkspaceBoundary", () => {
     const tools = createWorkspaceTools(root, boundary, (event) => audits.push(event));
     const move = tools.find((tool) => tool.name === "move")!;
 
-    await expect(move.execute("out", { path: "inside/file.txt", destination: "../stolen.txt" }, undefined, undefined, undefined)).rejects.toThrow("outside");
-    await expect(move.execute("symlinked-out", { path: "inside/file.txt", destination: "escape/stolen.txt" }, undefined, undefined, undefined)).rejects.toThrow("outside");
+    await expect(move.execute("out", { path: "inside/file.txt", destination: "../stolen.txt" }, undefined, undefined, noExtensionContext)).rejects.toThrow("outside");
+    await expect(move.execute("symlinked-out", { path: "inside/file.txt", destination: "escape/stolen.txt" }, undefined, undefined, noExtensionContext)).rejects.toThrow("outside");
     // A move relocates; it must not become a way to destroy a file.
-    await expect(move.execute("occupied", { path: "inside/file.txt", destination: "README.md" }, undefined, undefined, undefined)).rejects.toThrow("already exists");
+    await expect(move.execute("occupied", { path: "inside/file.txt", destination: "README.md" }, undefined, undefined, noExtensionContext)).rejects.toThrow("already exists");
     await expect(boundary.readFile("README.md")).resolves.toEqual(Buffer.from("safe workspace"));
     await expect(boundary.exists("inside/file.txt")).resolves.toBe(true);
     expect(audits.map((event) => event.outcome)).toEqual(["rejected", "rejected", "error"]);
@@ -76,10 +83,10 @@ describe("WorkspaceBoundary", () => {
     const read = tools.find((tool) => tool.name === "read")!;
     const ls = tools.find((tool) => tool.name === "ls")!;
 
-    await expect(read.execute("read-alias", { path: "README.md" }, undefined, undefined, undefined)).resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("safe workspace") }] });
-    await expect(ls.execute("ls-alias", {}, undefined, undefined, undefined)).resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("README.md") }] });
-    await expect(read.execute("read-escape", { path: "../secret.txt" }, undefined, undefined, undefined)).rejects.toThrow("outside");
-    await expect(read.execute("read-symlink-escape", { path: "escape/secret.txt" }, undefined, undefined, undefined)).rejects.toThrow("outside");
+    await expect(read.execute("read-alias", { path: "README.md" }, undefined, undefined, noExtensionContext)).resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("safe workspace") }] });
+    await expect(ls.execute("ls-alias", {}, undefined, undefined, noExtensionContext)).resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("README.md") }] });
+    await expect(read.execute("read-escape", { path: "../secret.txt" }, undefined, undefined, noExtensionContext)).rejects.toThrow("outside");
+    await expect(read.execute("read-symlink-escape", { path: "escape/secret.txt" }, undefined, undefined, noExtensionContext)).rejects.toThrow("outside");
     expect(audits.map((event) => event.outcome)).toEqual(["ok", "ok", "rejected", "rejected"]);
   });
 });

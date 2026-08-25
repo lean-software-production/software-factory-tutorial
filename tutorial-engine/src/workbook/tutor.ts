@@ -272,7 +272,13 @@ export interface MainWorkbookTutorOptions {
   sessionFactory?: WorkbookTutorSessionFactory;
 }
 
-export class MainWorkbookTutor {
+/**
+ * The model-backed tutor. Named apart from the MainWorkbookTutor interface above on purpose: a class
+ * sharing that name merges with it, and the merged type carries these private fields, so the server
+ * option would demand this implementation rather than the contract. FastWorkbookBlockTutor sits the
+ * same way beside WorkbookBlockTutor.
+ */
+export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
   readonly workspace: string;
   readonly #log: TutorialLogger;
   readonly #sessionFactory: WorkbookTutorSessionFactory;
@@ -474,4 +480,4 @@ function activeAttemptIds(serializedContext: string): string[] {
 }
 
 export type RestrictedWorkbookTutorOptions = MainWorkbookTutorOptions;
-export { MainWorkbookTutor as RestrictedWorkbookTutor };
+export { DefaultMainWorkbookTutor as RestrictedWorkbookTutor };

@@ -160,7 +160,7 @@ async function timelineSnapshot(serverUrl: string): Promise<any[]> {
   }
   const match = text.match(/event: timeline\ndata: (.*)\n\n/s);
   if (!match) throw new Error(`Timeline stream did not include an initial event: ${text}`);
-  return JSON.parse(match[1]);
+  return JSON.parse(match[1]!);
 }
 async function privateTimeline(workspace: string): Promise<WorkbookTimelineRecord[]> {
   const text = await readFile(tutorialStatePath(workspace, "workbook", "events.jsonl"), "utf8");
@@ -236,7 +236,7 @@ describe("workbook browser API", () => {
       await expect(readFile(resolve(dir, "factory/answer.md"), "utf8")).resolves.toBe("authored answer\n");
       await expect(readFile(resolve(session.workspaceRoot, "factory/answer.md"), "utf8")).resolves.toBe("learner answer with factory acceptance marker");
       await expect(readFile(tutorialSessionStatePath(session.sessionRoot, "workbook/events.jsonl"), "utf8")).resolves.toContain("session_started");
-      await expect(readFile(tutorialSessionStatePath(session.sessionRoot, "workbook/attempts/by-id", tutor.reviews[0].attempt.id + ".json"), "utf8")).resolves.toContain(tutor.reviews[0].attempt.id);
+      await expect(readFile(tutorialSessionStatePath(session.sessionRoot, "workbook/attempts/by-id", tutor.reviews[0]!.attempt.id + ".json"), "utf8")).resolves.toContain(tutor.reviews[0]!.attempt.id);
       await expect(access(tutorialStatePath(dir, "workbook", "events.jsonl"))).rejects.toThrow();
     } finally { await server.close(); }
   });
@@ -323,8 +323,8 @@ describe("workbook browser API", () => {
       expect(restored.timeline).toEqual(persistedTimeline!);
       expect(restored.introductionComplete).toBe(false);
       expect(secondTutor.restores).toHaveLength(1);
-      expect(secondTutor.restores[0].activeContext).toBeUndefined();
-      expect(secondTutor.restores[0].records.filter((record) => record.type === "message")).toEqual(persistedTimeline!.filter((record) => record.type === "message"));
+      expect(secondTutor.restores[0]!.activeContext).toBeUndefined();
+      expect(secondTutor.restores[0]!.records.filter((record) => record.type === "message")).toEqual(persistedTimeline!.filter((record) => record.type === "message"));
       expect((await postMessage(secondServer.url, { blockId: "workbook--introduction", text: "Still before the first block?" })).status).toBe(202);
     } finally { await secondServer.close(); }
   });
@@ -574,7 +574,7 @@ describe("workbook browser API", () => {
       expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "almost" })).status).toBe(202);
       const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "feedback" && mainTutor.briefings.some((briefing) => briefing.activeContext?.attempts.some((attempt) => attempt.status === "feedback")), "main tutor editor feedback briefing refresh");
       expect(blockTutor.terminalAssessments).toHaveLength(0);
-      expect(mainTutor.reviews[0].readiness).toBeUndefined();
+      expect(mainTutor.reviews[0]!.readiness).toBeUndefined();
       expect(block(feedback, "lesson--001-first--edit-answer")?.checkpoint?.feedback).toBe("Add the exact marker before this can continue.");
       expect(mainTutor.briefings.at(-1)).toMatchObject({ lessonId: "001-first", blockId: "lesson--001-first--edit-answer", activeContext: { attempts: [expect.objectContaining({ status: "feedback", feedback: "Add the exact marker before this can continue.", evidence: { kind: "editor", text: "almost" } })] } });
       expect(feedback.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
@@ -597,7 +597,7 @@ describe("workbook browser API", () => {
       await submitTerminalAttempt(server.url, "lesson--001-first--run-supplied-command");
       const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.status === "feedback" && mainTutor.reviews.length === 2 && mainTutor.briefings.some((briefing) => briefing.blockId === "lesson--001-first--run-supplied-command" && briefing.activeContext?.attempts.some((attempt) => attempt.status === "feedback")), "main review after fast coach failure");
       expect(blockTutor.terminalAssessments).toHaveLength(1);
-      expect(mainTutor.reviews[1].readiness).toBeUndefined();
+      expect(mainTutor.reviews[1]!.readiness).toBeUndefined();
       expect(block(feedback, "lesson--001-first--run-supplied-command")?.checkpoint?.feedback).toBe("Main tutor can still judge this terminal output.");
       expect(mainTutor.briefings.at(-1)).toMatchObject({ lessonId: "001-first", blockId: "lesson--001-first--run-supplied-command", activeContext: { attempts: [expect.objectContaining({ status: "feedback", feedback: "Main tutor can still judge this terminal output.", evidence: expect.objectContaining({ kind: "terminal", terminalHtml: expect.stringContaining("ran:run lesson--001-first--run-supplied-command") }) })] } });
       expect(feedback.timeline.filter((record: any) => record.type === "tutor_failed" && record.operation === "readiness")).toEqual([]);
@@ -687,7 +687,7 @@ describe("workbook browser API", () => {
     const secondServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: secondMainTutor, blockTutor: secondBlockTutor });
     try {
       await waitForWorkbookState(secondServer.url, () => secondMainTutor.restores.length === 1 && secondMainTutor.reviews.length === 1, "restored active attempt requeued");
-      expect(secondMainTutor.restores[0].activeContext).toMatchObject({ blockId: "lesson--001-first--edit-answer", attempts: [{ evidence: { kind: "editor", text: "draft before restart" } }] });
+      expect(secondMainTutor.restores[0]!.activeContext).toMatchObject({ blockId: "lesson--001-first--edit-answer", attempts: [{ evidence: { kind: "editor", text: "draft before restart" } }] });
       expect((await postHint(secondServer.url, { blockId: "lesson--001-first--edit-answer" })).status).toBe(202);
       expect(secondBlockTutor.hints[0]).toMatchObject({ briefing: "Persisted private briefing.", context: { blockId: "lesson--001-first--edit-answer", attempts: [{ evidence: { kind: "editor", text: "draft before restart" } }] } });
       const visible = await state(secondServer.url);
@@ -717,7 +717,7 @@ describe("workbook browser API", () => {
     try {
       expect((await state(secondServer.url)).timeline).toEqual(persisted!);
       expect(secondTutor.restores).toHaveLength(1);
-      expect(secondTutor.restores[0].records.filter((record) => record.type === "message" || record.type === "tutor_failed")).toEqual(persisted!);
+      expect(secondTutor.restores[0]!.records.filter((record) => record.type === "message" || record.type === "tutor_failed")).toEqual(persisted!);
     } finally { await secondServer.close(); }
   });
 
@@ -981,7 +981,7 @@ describe("workbook browser API", () => {
       expect(followUp.status).toBe(202);
       const feedbackState = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--reflection")?.checkpoint?.status === "feedback", "reflection follow-up feedback");
       expect(tutor.reviews).toHaveLength(5);
-      expect(tutor.reviews[4].attempt.evidence).toMatchObject({ kind: "reflection", response: "The validator cannot run commands.", conversation: [{ role: "learner", text: "It was headless." }] });
+      expect(tutor.reviews[4]!.attempt.evidence).toMatchObject({ kind: "reflection", response: "The validator cannot run commands.", conversation: [{ role: "learner", text: "It was headless." }] });
       expect(block(feedbackState, "lesson--001-first--reflection")?.checkpoint?.feedback).toBe("Now name the exact boundary.");
     } finally { await server.close(); }
   });
@@ -1002,7 +1002,7 @@ describe("workbook browser API", () => {
     try {
       const acceptedState = await waitForWorkbookState(secondServer.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted", "restart requeue acceptance");
       expect(secondTutor.reviews).toHaveLength(1);
-      expect(secondTutor.reviews[0].attempt.evidence).toMatchObject({ kind: "editor", text: "saved before restart" });
+      expect(secondTutor.reviews[0]!.attempt.evidence).toMatchObject({ kind: "editor", text: "saved before restart" });
       expect(block(acceptedState, "lesson--001-first--edit-answer")?.checkpoint?.successMessage).toBe("Accepted after restart.");
     } finally { await secondServer.close(); }
   });
@@ -1071,7 +1071,7 @@ describe("workbook browser API", () => {
       const accepted = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.status === "accepted", "terminal accepted by main after fast signal");
       expect(blockTutor.terminalAssessments).toHaveLength(1);
       expect(tutor.reviews).toHaveLength(2);
-      expect(tutor.reviews[1].readiness).toMatchObject({ readiness: outcome, text: "Looks ready for main review." });
+      expect(tutor.reviews[1]!.readiness).toMatchObject({ readiness: outcome, text: "Looks ready for main review." });
       expect(block(accepted, "lesson--001-first--run-supplied-command")?.checkpoint?.successMessage).toBe("Terminal accepted by main.");
       expect(accepted.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
     } finally { await server.close(); }

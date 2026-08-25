@@ -89,7 +89,13 @@ function successorFromState(state: State, completedBlockId: string): string | un
 }
 function progressFor(progress: Progress, id: string) { return progress.blocks.find((block) => block.id === id); }
 function domSafe(value: string) { return value.replace(/[^A-Za-z0-9_-]+/g, "-"); }
-export function scrollActiveLessonIntoView(doc: Pick<Document, "getElementById">, activeLessonId: string) { doc.getElementById(lessonElementId(activeLessonId))?.scrollIntoView({ behavior: "smooth", block: "start" }); }
+/**
+ * All this needs is a lookup that yields something scrollable. A real Document satisfies it, and so
+ * can a test double, without having to be a whole HTMLElement.
+ */
+type ScrollTargetLookup = { getElementById(elementId: string): { scrollIntoView(options?: ScrollIntoViewOptions): void } | null };
+
+export function scrollActiveLessonIntoView(doc: ScrollTargetLookup, activeLessonId: string) { doc.getElementById(lessonElementId(activeLessonId))?.scrollIntoView({ behavior: "smooth", block: "start" }); }
 let suppressPassiveHistoryUntil = 0;
 let passiveAnchorScrollSuppression: { anchorId: string; until: number } | undefined;
 function replaceUrlAnchor(anchorId: string) {

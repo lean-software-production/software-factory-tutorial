@@ -58,8 +58,17 @@ function timestamp(second: number): string {
   return `2026-08-22T00:00:${String(second).padStart(2, "0")}.000Z`;
 }
 
-function record<T extends Omit<WorkbookTimelineRecord, "id" | "sequence" | "at">>(id: string, sequence: number, value: T): WorkbookTimelineRecord {
-  return { ...value, id, sequence, at: timestamp(sequence) } as WorkbookTimelineRecord;
+/**
+ * Omit does not distribute over a union, so Omit<WorkbookTimelineRecord, …> would collapse to the
+ * keys every record shares and the result would widen to the whole union. Distributing it keeps the
+ * specific record type, which is what callers passing a message then rely on.
+ */
+type TimelineRecordDraft = WorkbookTimelineRecord extends infer Member
+  ? (Member extends WorkbookTimelineRecord ? Omit<Member, "id" | "sequence" | "at"> : never)
+  : never;
+
+function record<T extends TimelineRecordDraft>(id: string, sequence: number, value: T): T & { id: string; sequence: number; at: string } {
+  return { ...value, id, sequence, at: timestamp(sequence) };
 }
 
 beforeEach(() => {
@@ -76,7 +85,7 @@ afterEach(() => {
 describe("MainWorkbookTutor model selection", () => {
   it("resolves TUTOR_MODEL and passes model and thinking level to the Pi session", async () => {
     process.env.TUTOR_MODEL = "provider/main-model:high";
-    const { MainWorkbookTutor } = await import("../src/workbook/tutor.js");
+    const { DefaultMainWorkbookTutor: MainWorkbookTutor } = await import("../src/workbook/tutor.js");
     const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", log: { info() {}, error() {} } });
 
     await expect(tutor.reply({ records: [], learnerMessage: { type: "message", id: "learner", sequence: 1, at: "2026-08-22T00:00:00.000Z", lessonId: "lesson", blockId: "block", role: "user", source: "learner", presentation: "chat", text: "Which model?" } as any })).resolves.toBe("Model-backed reply.");
@@ -91,7 +100,7 @@ describe("MainWorkbookTutor model selection", () => {
 
   it("reconstructs assistant history with Pi's selected default model when TUTOR_MODEL is unset", async () => {
     delete process.env.TUTOR_MODEL;
-    const { MainWorkbookTutor } = await import("../src/workbook/tutor.js");
+    const { DefaultMainWorkbookTutor: MainWorkbookTutor } = await import("../src/workbook/tutor.js");
     const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", log: { info() {}, error() {} } });
     const records: WorkbookTimelineRecord[] = [
       record("active-authored", 1, { type: "message", lessonId: "lesson", blockId: "one", role: "assistant", source: "authored", presentation: "course", text: "## Active block" }),
@@ -115,7 +124,7 @@ describe("MainWorkbookTutor model selection", () => {
   it("reconstructs assistant history with Pi's selected default model when TUTOR_MODEL is invalid", async () => {
     process.env.TUTOR_MODEL = "provider/missing-model";
     pi.resolveCliModel.mockReturnValueOnce({ error: "no match" });
-    const { MainWorkbookTutor } = await import("../src/workbook/tutor.js");
+    const { DefaultMainWorkbookTutor: MainWorkbookTutor } = await import("../src/workbook/tutor.js");
     const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", log: { info() {}, error() {} } });
     const records: WorkbookTimelineRecord[] = [
       record("active-authored", 1, { type: "message", lessonId: "lesson", blockId: "one", role: "assistant", source: "authored", presentation: "course", text: "## Active block" }),
@@ -137,7 +146,7 @@ describe("MainWorkbookTutor model selection", () => {
 
   it("reconstructs projected workbook history as native Pi messages with assistant metadata", async () => {
     process.env.TUTOR_MODEL = "provider/main-model:high";
-    const { MainWorkbookTutor } = await import("../src/workbook/tutor.js");
+    const { DefaultMainWorkbookTutor: MainWorkbookTutor } = await import("../src/workbook/tutor.js");
     const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", log: { info() {}, error() {} } });
     const records: WorkbookTimelineRecord[] = [
       record("block-one-start", 1, { type: "message", lessonId: "lesson", blockId: "one", role: "assistant", source: "authored", presentation: "course", text: "Completed block text." }),

@@ -63,7 +63,7 @@ describe("v2 public session trace", () => {
     tempRoots.push(workspace.repositoryRoot);
     const server = await workspace.startServer({
       embeddedTerminal: false,
-      mainTutor: new SessionFakeMainTutor() as unknown as NonNullable<WorkbookServerOptions["mainTutor"]>,
+      mainTutor: new SessionFakeMainTutor(),
       blockTutor: { hint: async () => "Hint.", assess: async () => ({ readiness: "still_working" as const, text: "Still working." }) }
     });
     try {
@@ -115,7 +115,7 @@ describe("v2 public session trace", () => {
   it("rejects private tutor text in workbook events before they enter the trace", async () => {
     const workspace = await createEvaluationWorkspace();
     tempRoots.push(workspace.repositoryRoot);
-    const server = await workspace.startServer({ embeddedTerminal: false, mainTutor: new SessionFakeMainTutor() as unknown as NonNullable<WorkbookServerOptions["mainTutor"]> });
+    const server = await workspace.startServer({ embeddedTerminal: false, mainTutor: new SessionFakeMainTutor() });
     await server.close();
     const { sessionRoot } = workspace.latestSession();
     await mkdir(resolve(sessionRoot, "workbook"), { recursive: true });
@@ -139,7 +139,7 @@ describe("v2 public session trace", () => {
     const trace = createEmptyV2SessionTrace("artifacts");
     const workspace = await createEvaluationWorkspace();
     tempRoots.push(workspace.repositoryRoot);
-    const server = await workspace.startServer({ embeddedTerminal: false, mainTutor: new SessionFakeMainTutor() as unknown as NonNullable<WorkbookServerOptions["mainTutor"]> });
+    const server = await workspace.startServer({ embeddedTerminal: false, mainTutor: new SessionFakeMainTutor() });
     await server.close();
     const { workspaceRoot } = workspace.latestSession();
     await mkdir(resolve(workspaceRoot, "factory/.tmp"), { recursive: true });

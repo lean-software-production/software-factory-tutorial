@@ -7,6 +7,13 @@ import { createTutorialTools } from "../src/agent/tutorial-tools.js";
 import { WorkspaceBoundary } from "../src/agent/workspace-boundary.js";
 import type { TutorialEvent } from "../src/protocol/events.js";
 import { ValidationRunner } from "../src/validation/runner.js";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+/**
+ * The tools under test never read the extension context, but the tool contract requires one. A
+ * single named stand-in keeps that fact stated once rather than cast at every call site.
+ */
+const noExtensionContext = undefined as unknown as ExtensionContext;
 
 const ledger = [
   "# Lessons",
@@ -45,7 +52,7 @@ describe("complete_lesson", () => {
   it("records the lesson in factory/ and publishes the advanced outline", async () => {
     const { workspace, events, tool } = await harness();
 
-    await tool.execute("call-1", {}, new AbortController().signal, undefined);
+    await tool.execute("call-1", {}, new AbortController().signal, undefined, noExtensionContext);
 
     expect(JSON.parse(await readFile(join(workspace, ".tutorial/.tmp/tutorial-progress.json"), "utf8")))
       .toEqual({ completed: ["001"], skipped: [] });
@@ -59,7 +66,7 @@ describe("complete_lesson", () => {
   it("leaves the ledger exactly as it shipped, so a clone starts at lesson one", async () => {
     const { workspace, tool } = await harness();
 
-    await tool.execute("call-1", {}, new AbortController().signal, undefined);
+    await tool.execute("call-1", {}, new AbortController().signal, undefined, noExtensionContext);
 
     // The curriculum is version-controlled and the same for everyone; only
     // factory/ knows how far this learner has got.
@@ -69,7 +76,7 @@ describe("complete_lesson", () => {
   it("records the write in the audit trail as a mutation", async () => {
     const { events, tool } = await harness();
 
-    await tool.execute("call-1", {}, new AbortController().signal, undefined);
+    await tool.execute("call-1", {}, new AbortController().signal, undefined, noExtensionContext);
 
     const audit = events.find((event) => event.type === "audit");
     expect(audit).toMatchObject({ tool: "complete_lesson", mutation: true, outcome: "ok", paths: [".tutorial/.tmp/tutorial-progress.json"] });
@@ -79,9 +86,9 @@ describe("complete_lesson", () => {
     const { workspace, events, tool } = await harness();
     const signal = new AbortController().signal;
 
-    await tool.execute("call-1", {}, signal, undefined);
-    await tool.execute("call-2", {}, signal, undefined);
-    const extra = await tool.execute("call-3", {}, signal, undefined);
+    await tool.execute("call-1", {}, signal, undefined, noExtensionContext);
+    await tool.execute("call-2", {}, signal, undefined, noExtensionContext);
+    const extra = await tool.execute("call-3", {}, signal, undefined, noExtensionContext);
 
     // Nothing left to advance: no duplicate id is recorded, and no outline
     // event is sent that would move the highlight past the end.

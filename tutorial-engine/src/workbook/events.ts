@@ -131,4 +131,11 @@ export class WorkbookEventStore {
   }
 }
 
-export const nowEvent = <T extends Omit<WorkbookEvent, "at">>(event: T): T & { at: string } => ({ ...event, at: new Date().toISOString() });
+/**
+ * Omit does not distribute over a union: Omit<WorkbookEvent, "at"> collapses to the keys every
+ * member shares, so the constraint could not guide inference and per-variant fields widened —
+ * `kind: "editor"` became `kind: string`, which no member accepts. Distribute it explicitly.
+ */
+type WorkbookEventDraft = WorkbookEvent extends infer Member ? (Member extends WorkbookEvent ? Omit<Member, "at"> : never) : never;
+
+export const nowEvent = <T extends WorkbookEventDraft>(event: T): T & { at: string } => ({ ...event, at: new Date().toISOString() });

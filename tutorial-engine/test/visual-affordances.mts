@@ -97,9 +97,9 @@ async function approve(page: any, name: string, shot: Buffer): Promise<void> {
     const [left, right] = [pixels(expected), pixels(actual)];
     let differing = 0;
     for (let index = 0; index < left.length; index += 4) {
-      if (Math.abs(left[index] - right[index]) > tolerance
-        || Math.abs(left[index + 1] - right[index + 1]) > tolerance
-        || Math.abs(left[index + 2] - right[index + 2]) > tolerance) differing++;
+      if (Math.abs(left[index]! - right[index]!) > tolerance
+        || Math.abs(left[index + 1]! - right[index + 1]!) > tolerance
+        || Math.abs(left[index + 2]! - right[index + 2]!) > tolerance) differing++;
     }
     return { sizeMismatch: undefined, ratio: differing / (left.length / 4) };
   }, [approved.toString("base64"), shot.toString("base64"), CHANNEL_TOLERANCE]);
@@ -178,12 +178,12 @@ async function main(): Promise<void> {
     check(!(await orientationCompleted()), "reading line: orientation completed before it reached the reading line");
     // The observer watches the ready successor, not the active block: when the successor's top
     // crosses READING_LINE_TOP_PX (120), the block the learner has scrolled past is completed.
-    const successorTop = await page.evaluate((selector) => {
+    const successorTop = await page.evaluate((selector: string) => {
       const element = document.querySelector(selector);
       return element ? element.getBoundingClientRect().top + window.scrollY : null;
     }, successorSelector);
     check(successorTop !== null, "reading line: no successor element to scroll past the line");
-    await page.evaluate((target) => window.scrollTo(0, target), (successorTop ?? 0) - 60);
+    await page.evaluate((target: number) => window.scrollTo(0, target), (successorTop ?? 0) - 60);
     const promoted = await page.waitForFunction(() => Boolean(document.querySelector(".current-activity-band")), undefined, { timeout: 10_000 })
       .then(() => true)
       .catch(() => { failures.push("reading line: scrolling the successor past the line did not promote the block behind it"); return false; });
@@ -211,7 +211,7 @@ async function main(): Promise<void> {
         };
       });
       const at = async (naturalTop: number) => {
-        await page.evaluate((target) => window.scrollTo(0, target), layout.bandDocumentTop - naturalTop);
+        await page.evaluate((target: number) => window.scrollTo(0, target), layout.bandDocumentTop - naturalTop);
         await page.waitForTimeout(150);
         const sample = await measure();
         if (!sample) failures.push(`${label} band: could not measure the band at naturalTop ${naturalTop}`);

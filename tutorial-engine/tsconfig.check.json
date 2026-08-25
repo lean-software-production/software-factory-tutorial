@@ -1,11 +1,11 @@
 {
-  "//": "Type-checks what tsconfig.json cannot. That one is a build config, pinned to rootDir src and emitting declarations, so it can only cover the server tree; vite builds the browser tree without type-checking it at all. web/src is not here yet: it reduces a snapshot's events as display events, while protocol/events.ts types that field as the whole TutorialEvent union, and narrowing it is a protocol decision rather than a config one.",
+  "//": "Type-checks what tsconfig.json cannot. That one is a build config, pinned to rootDir src and emitting declarations, so it can only cover the server tree; vite builds the browser tree without type-checking it at all. web/src stays out: it is the retiring v1 UI, and it reduces a snapshot's events as display events, while protocol/events.ts types that field as the whole TutorialEvent union, and narrowing it is a protocol decision rather than a config one.",
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
     "jsx": "react-jsx"
   },
-  "include": ["src/**/*.ts", "web-workbook/src/**/*.ts", "web-workbook/src/**/*.tsx", "web-workbook/src/**/*.d.ts"],
+  "include": ["src/**/*.ts", "test/**/*.ts", "test/**/*.tsx", "test/**/*.mts", "web-workbook/src/**/*.ts", "web-workbook/src/**/*.tsx", "web-workbook/src/**/*.d.ts"],
   "exclude": ["dist"]
 }
