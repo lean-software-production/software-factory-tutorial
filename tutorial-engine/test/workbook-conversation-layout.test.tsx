@@ -139,6 +139,19 @@ describe("workbook fixed conversation layout", () => {
     expect(feedbackPanel).not.toContain("position: absolute");
   });
 
+  it("drops the editor's own card inside the band, where the terminal has none", () => {
+    // Outside the band the card gives the editor an identity. Inside it the authored content is
+    // suppressed, so the card is chrome the terminal does not draw around the same activity.
+    const inBandEditor = declarationsFor(".current-activity-band > .editor-practice");
+
+    expect(inBandEditor).toContain("padding: 0");
+    expect(inBandEditor).toContain("border: 0");
+    expect(inBandEditor).toContain("box-shadow: none");
+    expect(inBandEditor).toContain("outline: 0");
+    // The card itself still exists for the inline rendering.
+    expect(declarationsFor(".editor-practice")).toContain("padding: 31px");
+  });
+
   it("does not make reflections a sticky work surface", () => {
     const reflectionProgress: Progress = {
       ...progress,
