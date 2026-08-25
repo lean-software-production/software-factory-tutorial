@@ -29,9 +29,12 @@ ARG ADRGEN_VERSION=0.4.1-beta
 # -----------------------------------------------------------------------------
 # The base image already ships git, curl and the vscode user; xz-utils is what
 # the Node tarball needs and ca-certificates keeps the download verifiable.
+# node-pty, which the engine uses to run a lesson's terminal, ships no prebuilt
+# binary for Node 24, so npm builds it from source here: node-gyp needs python3
+# and a C++ toolchain, and without them `npm install` fails outright.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    ca-certificates curl xz-utils \
+    ca-certificates curl xz-utils python3 build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
