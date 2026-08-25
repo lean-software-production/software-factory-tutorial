@@ -65,13 +65,11 @@ export function CodeBlock({ source, language, className, children }: CodeBlockPr
     }
   }
 
+  const copyTitle = copyStatus === "copied" ? "Code copied" : copyStatus === "failed" ? "Copy failed" : "Copy code";
   return <div className={wrapsLines(language) ? "code-block wrap" : "code-block"}>
-    <div className="code-block-toolbar">
-      {language && <span className="code-language">{language}</span>}
-      <button className="copy-code" type="button" onClick={() => void copy()} aria-label="Copy code">
-        {copyStatus === "copied" ? "Copied" : copyStatus === "failed" ? "Copy failed" : "Copy"}
-      </button>
-    </div>
+    <button className="copy-code" type="button" onClick={() => void copy()} aria-label="Copy code" title={copyTitle}>
+      <span aria-hidden="true">⧉</span>
+    </button>
     <pre><code className={className}>{children ?? source}</code></pre>
     {copyStatus !== "idle" && <p className={copyStatus === "failed" ? "copy-status" : "visually-hidden"} role="status" aria-live="polite">{copyStatus === "copied" ? "Code copied to clipboard." : "Could not copy; select the code and copy it manually."}</p>}
   </div>;

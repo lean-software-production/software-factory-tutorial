@@ -33,10 +33,13 @@ describe("Markdown", () => {
       source: "const answer: number = 42;"
     }));
 
-    expect(markup).toContain('class="code-language">typescript</span>');
+    expect(markup).not.toContain("code-block-toolbar");
+    expect(markup).not.toContain("code-language");
     expect(markup).toContain('class="hljs language-typescript"');
     expect(markup).toContain('class="hljs-keyword">const</span>');
-    expect(markup).toContain(">Copy</button>");
+    expect(markup).toContain('aria-label="Copy code"');
+    expect(markup).toContain('title="Copy code"');
+    expect(markup).not.toContain(">Copy</button>");
   });
 
   it("wraps prose excerpts so a long line cannot widen the page", () => {
@@ -79,8 +82,13 @@ describe("the transcript's layout", () => {
     expect(declarations("main > *, .transcript > *, header > *")).toContain("min-width: 0");
   });
 
-  it("keeps an overflow rule on the two things a long line arrives in", () => {
+  it("keeps code blocks readable with an overlaid icon-only copy control", () => {
     expect(declarations(".markdown")).toContain("overflow-x: auto");
+    expect(declarations(".code-block")).toContain("position: relative");
+    expect(declarations(".copy-code")).toContain("position: absolute");
+    expect(declarations(".copy-code")).toContain("right: 9px");
+    expect(declarations(".code-block pre")).toContain("font-size: 1rem");
     expect(declarations(".code-block.wrap pre")).toContain("white-space: pre-wrap");
+    expect(styles).not.toContain("code-block-toolbar");
   });
 });

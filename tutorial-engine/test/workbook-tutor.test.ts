@@ -24,9 +24,9 @@ import type { ActiveBlockContext } from "../src/workbook/pi-history.js";
 import { MainWorkbookTutor, type WorkbookTutorSession, type WorkbookTutorSessionFactoryRequest } from "../src/workbook/tutor.js";
 import type { TimelineMessage, WorkbookTimelineRecord } from "../src/workbook/timeline.js";
 
-function attempt(id: string, kind: Attempt["evidence"]["kind"] = "editor"): Attempt {
+function attempt(id: string, kind: Attempt["evidence"]["kind"] = "editor", transcript = "npm test\nPASS"): Attempt {
   const evidence: Attempt["evidence"] = kind === "terminal"
-    ? { kind, transcript: "npm test\nPASS", terminalHtml: "<pre>PASS</pre>" }
+    ? { kind, transcript, terminalHtml: `<pre>${transcript}</pre>` }
     : kind === "reflection"
       ? { kind, response: "I learned the doer is bounded.", conversation: [] }
       : { kind, text: "answer" };
@@ -277,7 +277,13 @@ describe("MainWorkbookTutor", () => {
       await (requests[0].customTools[1] as any).execute("tool-call", {});
       return "";
     });
-    await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-3", "terminal"), privateGuidance: "Accept only complete terminal evidence." })).resolves.toEqual({ outcome: "working" });
+    await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-3", "terminal", "[LEARNER INPUT]\nnpm test\r\n[TERMINAL OUTPUT]\nRunning tests…"), privateGuidance: "Accept only complete terminal evidence." })).resolves.toEqual({ outcome: "working" });
+
+    sessions[0].promptResponses.push(async () => {
+      await (requests[0].customTools[1] as any).execute("tool-call", {});
+      return "";
+    });
+    await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-terminal-wrong", "terminal", "[LEARNER INPUT]\nwrong-command\r\n[TERMINAL OUTPUT]\nwrong-command: command not found"), privateGuidance: "Accept only complete terminal evidence." })).resolves.toEqual({ outcome: "feedback", message: "That terminal output shows a visible error or wrong result. Read the message, adjust the command, and try again." });
 
     sessions[0].promptResponses.push(async () => {
       await (requests[0].customTools[1] as any).execute("tool-call", {});

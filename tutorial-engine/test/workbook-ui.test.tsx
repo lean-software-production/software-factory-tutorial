@@ -1,5 +1,5 @@
 import { JSDOM } from "jsdom";
-import { act, createElement } from "react";
+import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -59,7 +59,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 });
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
-import { ActivityBand } from "../web-workbook/src/activity-band.js";
+import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
 import { AcceptanceConfetti, App, BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Chapter, type Progress } from "../web-workbook/src/workbook-ui.js";
 import { lessonAnchorHref, lessonElementId } from "../src/workbook/lesson-links.js";
 
@@ -603,6 +603,7 @@ describe("workbook lesson UI", () => {
 
     expect(markup).toContain("current-activity-band");
     expect(markup).toContain("data-activity-type=\"terminal-practice\"");
+    expect(markup).toContain("data-activity-layout=\"scroll-linked\"");
     expect(markup).toContain('class="terminal-connection-status"');
     expect(markup).toContain('aria-label="Terminal disconnected"');
     expect(markup).not.toContain("Terminal practice");
@@ -630,6 +631,34 @@ describe("workbook lesson UI", () => {
     expect(markup).not.toContain("Get a hint");
     expect(markup).not.toContain("Edit the answer");
     expect(markup).not.toContain("Update the answer file");
+  });
+
+  it("calculates left-aligned start, balanced growth, and full centered canvas geometry", () => {
+    const mainRect = { left: 265, width: 1000 };
+    const inlineRect = { left: 365, width: 720 };
+    const inlineCenter = inlineRect.left + inlineRect.width / 2;
+    const canvasCenter = mainRect.left + mainRect.width / 2;
+    const inset = 24;
+
+    const atStart = activityGeometryFor({ mainRect, inlineRect, progress: 0 });
+    const atMiddle = activityGeometryFor({ mainRect, inlineRect, progress: 0.5 });
+    const atFull = activityGeometryFor({ mainRect, inlineRect, progress: 1 });
+    const reversed = activityGeometryFor({ mainRect, inlineRect, progress: 0.25 });
+
+    expect(atStart).toMatchObject({ left: inlineRect.left, width: inlineRect.width, top: 0 });
+    expect(atStart.left + atStart.width / 2).toBe(inlineCenter);
+
+    expect(atMiddle).toMatchObject({ left: 327, width: 836, top: 12 });
+    expect(atMiddle.left).toBeLessThan(inlineRect.left);
+    expect(atMiddle.left + atMiddle.width).toBeGreaterThan(inlineRect.left + inlineRect.width);
+    expect(atMiddle.left + atMiddle.width / 2).toBe((inlineCenter + canvasCenter) / 2);
+
+    expect(atFull).toMatchObject({ left: mainRect.left + inset, width: mainRect.width - inset * 2, top: inset });
+    expect(atFull.left + atFull.width).toBe(mainRect.left + mainRect.width - inset);
+    expect(atFull.left + atFull.width / 2).toBe(canvasCenter);
+
+    expect(reversed).toMatchObject({ left: 346, width: 778, top: 6 });
+    expect(reversed.left + reversed.width / 2).toBe(inlineCenter + (canvasCenter - inlineCenter) * 0.25);
   });
 
   it("does not show checkpoint Continue for nonaccepted evaluated blocks", () => {
@@ -858,6 +887,22 @@ describe("workbook lesson UI", () => {
     const clueOnlyBlock = { ...lesson.blocks[1], markdown: "Try the command you just edited, then compare its output." };
     const withoutCommand = html(createElement(BlockView, { block: clueOnlyBlock, progress: activeTerminalProgress, refresh: vi.fn() }));
     expect(withoutCommand).toContain("terminal-connection-status");
+  });
+
+  it("renders terminal feedback as Markdown for inline code and fenced shell blocks", () => {
+    const terminalProgress = activeBlockProgress(lesson.blocks[1], {
+      checkpoint: { status: "feedback", feedback: "Run `npm test` again.\n\n```sh\nnpm test -- --runInBand\n```" }
+    } as any);
+    const markup = html(createElement(BlockView, { block: lesson.blocks[1], progress: terminalProgress, refresh: vi.fn() }));
+
+    expect(markup).toContain('aria-live="polite"');
+    expect(markup).toContain('class="markdown"');
+    expect(markup).toContain("<code>npm test</code>");
+    expect(markup).toContain('class="code-block');
+    expect(markup).toContain("language-sh");
+    expect(markup).toContain("-- --runInBand");
+    expect(markup).not.toContain("```sh");
+    expect(markup).not.toContain("`npm test`");
   });
 
   it("renders no part grouping in the rail when chapters have no part", () => {
@@ -1722,12 +1767,20 @@ describe("workbook lesson UI", () => {
     const socket = FakeWebSocket.instances[0]!;
 
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
-    expect(container.textContent).toContain("Tutor feedback: Persisted checkpoint feedback.");
+    expect(container.querySelectorAll(".terminal-feedback-overlay")).toHaveLength(1);
+    expect(container.querySelector(".terminal-live-surface.has-feedback")).toBeTruthy();
+    expect(container.querySelector(".terminal-feedback-overlay")?.textContent).toContain("Persisted checkpoint feedback.");
+    expect(container.textContent).not.toContain("Terminal feedback:");
 
     await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "observer-status", blockId: "practice", status: "running" }) }); });
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
     expect(container.textContent).toContain("Running — waiting for terminal output…");
     expect(container.textContent).not.toContain("Persisted checkpoint feedback.");
+
+    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "observer-status", blockId: "practice", status: "checking" }) }); });
+    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
+    expect(container.textContent).toContain("Checking…");
+    expect(container.textContent).not.toContain("Running — waiting for terminal output…");
 
     await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "advice", blockId: "practice", message: "Observer advice." }) }); });
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
@@ -1738,6 +1791,179 @@ describe("workbook lesson UI", () => {
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
     expect(container.textContent).toContain("Terminal observer error.");
     expect(container.textContent).not.toContain("Observer advice.");
+  });
+
+  it("polls a persisted reviewing terminal checkpoint on the real activity band and shows server feedback", async () => {
+    vi.useFakeTimers();
+    class FakeWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.OPEN;
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      constructor(_url: string) { FakeWebSocket.instances.push(this); }
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      send() {}
+      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
+      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const initialProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "reviewing" } } as any);
+    const feedbackProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "feedback", feedback: "The persisted review completed." } } as any);
+    const timeline = [
+      { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "practice", role: "assistant", source: "authored", presentation: "course", text: "## Practice\n\nRun the authored command." },
+      { type: "tutor_failed", id: "readiness-failed", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "practice", failureId: "failure-1", operation: "block-readiness", publicMessage: "Readiness tutor is unavailable; continue with the exercise." },
+    ];
+    const initialState = { workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: true, chapters: [chapter()], progress: initialProgress, adapter: {}, timeline } as any;
+    const feedbackState = { ...initialState, progress: feedbackProgress } as any;
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => fetchMock.mock.calls.length === 1 ? initialState : feedbackState }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), (win) => { stubAppShellGlobals(win); vi.stubGlobal("location", win.location); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(container.querySelector(".current-activity-band .terminal-feedback-overlay")?.textContent).toContain("Checking…");
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("api/workbook/state"))).toHaveLength(2);
+    expect(container.querySelector(".current-activity-band .terminal-feedback-overlay")?.textContent).toContain("The persisted review completed.");
+    expect(container.textContent).not.toContain("Terminal feedback:");
+    expect(container.textContent).not.toContain("Checking…");
+  });
+
+  it("polls submitted terminal reviews and shows asynchronous server feedback in the overlay", async () => {
+    vi.useFakeTimers();
+    class FakeWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.OPEN;
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      constructor(_url: string) { FakeWebSocket.instances.push(this); }
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      send() {}
+      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
+      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const initialProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "reviewing" } } as any);
+    const feedbackProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "feedback", feedback: "The command failed because the file path is wrong." } } as any);
+    const feedbackState = { progress: feedbackProgress } as any;
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => feedbackState }));
+    vi.stubGlobal("fetch", fetchMock);
+    function Harness() {
+      const [current, setCurrent] = useState(initialProgress);
+      return createElement(BlockView, { block: lesson.blocks[1], progress: current, refresh: (next: any) => setCurrent(next.progress) });
+    }
+    const container = await mount(createElement(Harness), (win) => {
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
+    });
+    const socket = FakeWebSocket.instances[0]!;
+
+    await act(async () => {
+      socket.emit("message", { data: JSON.stringify({ type: "attempt-status", blockId: "practice", status: "submitted" }) });
+    });
+    expect(container.querySelector(".terminal-feedback-overlay")?.textContent).toContain("Checking…");
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".terminal-feedback-overlay")?.textContent).toContain("The command failed because the file path is wrong.");
+    expect(container.textContent).not.toContain("Terminal feedback:");
+    expect(container.textContent).not.toContain("Checking…");
+  });
+
+  it("keeps one terminal review poll alive beyond the fast window until feedback arrives", async () => {
+    vi.useFakeTimers();
+    class FakeWebSocket {
+      static OPEN = 1;
+      static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.OPEN;
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      constructor(_url: string) { FakeWebSocket.instances.push(this); }
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      send() {}
+      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
+      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const reviewingProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "reviewing" } } as any);
+    const feedbackProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "feedback", feedback: "Delayed main-tutor feedback." } } as any);
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ progress: fetchMock.mock.calls.length <= 120 ? reviewingProgress : feedbackProgress }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    function Harness() {
+      const [current, setCurrent] = useState(reviewingProgress);
+      return createElement(BlockView, { block: lesson.blocks[1], progress: current, refresh: (next: any) => setCurrent(next.progress) });
+    }
+    const container = await mount(createElement(Harness), (win) => {
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
+    });
+
+    expect(container.querySelector(".terminal-feedback-overlay")?.textContent).toContain("Checking…");
+    expect(vi.getTimerCount()).toBe(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(120 * 250); });
+
+    expect(fetchMock).toHaveBeenCalledTimes(120);
+    expect(container.querySelector(".terminal-feedback-overlay")?.textContent).toContain("Checking…");
+    expect(vi.getTimerCount()).toBe(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_999); });
+    expect(fetchMock).toHaveBeenCalledTimes(120);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+
+    expect(fetchMock).toHaveBeenCalledTimes(121);
+    expect(container.querySelector(".terminal-feedback-overlay")?.textContent).toContain("Delayed main-tutor feedback.");
+    expect(container.textContent).not.toContain("Terminal feedback:");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps quiet after polling terminal evidence that remains genuinely working", async () => {
+    vi.useFakeTimers();
+    class FakeWebSocket {
+      static OPEN = 1;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.OPEN;
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      constructor(_url: string) { FakeWebSocket.instances.push(this); }
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      send() {}
+      close() { this.emit("close"); }
+      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const initialProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "reviewing" } } as any);
+    const workingProgress = activeBlockProgress(lesson.blocks[1], { checkpoint: { status: "working" } } as any);
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ progress: workingProgress }) })));
+    function Harness() {
+      const [current, setCurrent] = useState(initialProgress);
+      return createElement(BlockView, { block: lesson.blocks[1], progress: current, refresh: (next: any) => setCurrent(next.progress) });
+    }
+    const container = await mount(createElement(Harness), (win) => {
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
+    });
+
+    await act(async () => {
+      FakeWebSocket.instances[0]!.emit("message", { data: JSON.stringify({ type: "attempt-status", blockId: "practice", status: "submitted" }) });
+      await vi.advanceTimersByTimeAsync(250);
+    });
+
+    expect(container.querySelector(".terminal-feedback-overlay")).toBeNull();
+    expect(container.textContent).not.toContain("Keep working");
+    expect(container.textContent).not.toContain("Checking…");
   });
 
   it.each([

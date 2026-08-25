@@ -138,6 +138,10 @@ function canonicalBlockInView(state: State): string | undefined {
   return candidates.at(-1)?.id ?? state.progress.activeBlockId;
 }
 
+const TERMINAL_REVIEW_FAST_POLL_INTERVAL_MS = 250;
+const TERMINAL_REVIEW_FAST_POLLS = 120;
+const TERMINAL_REVIEW_BACKOFF_INTERVAL_MS = 2_000;
+
 const SHELL_FENCE = /^```([^`\n]*)\n([\s\S]*?)^```/gm;
 const SHELL_LANGUAGES = new Set(["sh", "bash", "shell", "zsh", "console"]);
 function shellCommandFrom(markdown: string): string | undefined {
@@ -148,17 +152,79 @@ function shellCommandFrom(markdown: string): string | undefined {
   return undefined;
 }
 
-function EmbeddedTerminal({ block, command, active, completed, verified, refresh, onAdvice, onError, onStatus, onTerminalInsertionChange }: { block: Block; command?: string; active: boolean; completed: boolean; verified: boolean; refresh(state: State): void; onAdvice(message: string): void; onError(message: string): void; onStatus(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+function EmbeddedTerminal({ block, command, active, completed, verified, checkpointStatus, reviewKey, refresh, onAdvice, onError, onStatus, onTerminalInsertionChange }: { block: Block; command?: string; active: boolean; completed: boolean; verified: boolean; checkpointStatus?: PublicCheckpoint["status"]; reviewKey?: number; refresh(state: State): void; onAdvice(message: string): void; onError(message: string): void; onStatus(message: string | undefined): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
   const socket = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const polling = useRef(false);
+  const pollCount = useRef(0);
+  const pollGeneration = useRef(0);
+  const pollingReviewKey = useRef<number | undefined>(undefined);
+
+  const stopReviewPolling = useCallback((clearStatus = true) => {
+    polling.current = false;
+    pollCount.current = 0;
+    pollingReviewKey.current = undefined;
+    pollGeneration.current += 1;
+    if (pollTimer.current) clearTimeout(pollTimer.current);
+    pollTimer.current = undefined;
+    if (clearStatus) onStatus(undefined);
+  }, [onStatus]);
+
+  const scheduleReviewPoll = useCallback((generation: number) => {
+    if (!polling.current || generation !== pollGeneration.current) return;
+    const delay = pollCount.current < TERMINAL_REVIEW_FAST_POLLS ? TERMINAL_REVIEW_FAST_POLL_INTERVAL_MS : TERMINAL_REVIEW_BACKOFF_INTERVAL_MS;
+    pollTimer.current = setTimeout(() => {
+      pollTimer.current = undefined;
+      if (!polling.current || generation !== pollGeneration.current) return;
+      pollCount.current += 1;
+      readWorkbookState().then((next) => {
+        if (!polling.current || generation !== pollGeneration.current) return;
+        const nextProgress = progressFor(next.progress, block.id);
+        const status = nextProgress?.checkpoint?.status;
+        const nextReviewKey = typeof nextProgress?.revision === "number" ? nextProgress.revision : undefined;
+        refresh(next);
+        if (pollingReviewKey.current !== undefined && nextReviewKey !== undefined && nextReviewKey !== pollingReviewKey.current) {
+          stopReviewPolling(false);
+          return;
+        }
+        if (!nextProgress?.active || nextProgress.completed || next.progress.activeBlockId !== block.id || status === "feedback" || status === "accepted" || status === "working") {
+          stopReviewPolling();
+          return;
+        }
+        scheduleReviewPoll(generation);
+      }).catch((error) => {
+        if (!polling.current || generation !== pollGeneration.current) return;
+        console.error(error);
+        scheduleReviewPoll(generation);
+      });
+    }, delay);
+  }, [block.id, refresh, stopReviewPolling]);
+
+  const startReviewPolling = useCallback(() => {
+    if (polling.current) return;
+    polling.current = true;
+    pollCount.current = 0;
+    pollingReviewKey.current = reviewKey;
+    const generation = pollGeneration.current + 1;
+    pollGeneration.current = generation;
+    scheduleReviewPoll(generation);
+  }, [reviewKey, scheduleReviewPoll]);
+
+  useEffect(() => {
+    const shouldPoll = active && !completed && !verified && checkpointStatus === "reviewing";
+    if (shouldPoll) startReviewPolling();
+    else stopReviewPolling(false);
+    return () => stopReviewPolling(false);
+  }, [active, completed, verified, checkpointStatus, reviewKey, startReviewPolling, stopReviewPolling]);
 
   useEffect(() => {
     if (!active || completed || !terminalElement.current) return;
-    const nextTerminal = new Terminal({ cursorBlink: true, convertEol: true, fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', fontSize: 13, theme: { background: "#101820" } });
+    const nextTerminal = new Terminal({ cursorBlink: true, convertEol: true, fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', fontSize: 16, theme: { background: "#101820" } });
     const nextFit = new FitAddon();
     nextTerminal.loadAddon(nextFit);
     nextTerminal.open(terminalElement.current);
@@ -179,9 +245,12 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
       const message = JSON.parse(event.data);
       if (message.type === "output") nextTerminal.write(message.data);
       if (message.type === "advice" && message.blockId === block.id) onAdvice(message.message);
-      if (message.type === "observer-error" && message.blockId === block.id) onError(message.message);
-      if (message.type === "observer-status" && message.blockId === block.id) onStatus(message.status === "running" ? "Running — waiting for terminal output…" : message.status === "checking" ? "Checking the terminal output…" : "Keep going; the expected result is not visible yet.");
-      if (message.type === "verified-complete" && message.blockId === block.id) refresh(message.state);
+      if ((message.type === "observer-status" || message.type === "attempt-status") && message.blockId === block.id) {
+        onStatus(message.status === "running" ? "Running — waiting for terminal output…" : message.status === "checking" || message.status === "submitted" ? "Checking…" : "Keep going; the expected result is not visible yet.");
+        if (message.status === "submitted") startReviewPolling();
+      }
+      if ((message.type === "observer-error" || message.type === "attempt-error") && message.blockId === block.id) onError(message.message);
+      if (message.type === "verified-complete" && message.blockId === block.id) { stopReviewPolling(); refresh(message.state); }
       if (message.type === "busy") onError(message.message);
       if (message.type === "terminal-error") onError(message.message);
       if (message.type === "exit") onStatus("The embedded shell exited. Refresh the page to start a new one.");
@@ -190,6 +259,7 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
     ws.addEventListener("error", () => { setConnected(false); onError("Embedded terminal connection failed. Refresh the page and try again."); });
     addEventListener("resize", sendResize);
     return () => {
+      stopReviewPolling(false);
       removeEventListener("resize", sendResize);
       dataDisposable.dispose();
       ws.close();
@@ -199,7 +269,7 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
       socket.current = null;
       setConnected(false);
     };
-  }, [active, completed, verified, block.id, refresh, onAdvice, onError, onStatus]);
+  }, [active, completed, verified, block.id, refresh, onAdvice, onError, onStatus, startReviewPolling, stopReviewPolling]);
 
   const insertCommand = useCallback(() => {
     if (!command) return;
@@ -320,17 +390,21 @@ function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = 
   const checkpoint = state?.checkpoint;
   const persistedFeedback = !accepted && checkpoint
     ? checkpoint.status === "feedback"
-      ? `Tutor feedback: ${checkpoint.feedback ?? "Keep going and try again."}`
+      ? checkpoint.feedback ?? "Keep going and try again."
       : checkpoint.status === "reviewing"
-        ? "Reviewing your latest attempt…"
-        : "Keep working — the tutor will review your evidence when you pause."
+        ? "Checking…"
+        : undefined
     : undefined;
   const liveFeedback = observerFeedback ?? observerStatus ?? persistedFeedback;
+  const showLiveTerminal = !state?.verified && !state?.completed;
   useEffect(() => { setObserverFeedback(undefined); setObserverStatus(undefined); }, [block.id, state?.completed, state?.checkpoint?.status]);
   return <section id={blockElementId(lessonId, block.id)} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
     {showAuthoredContent && <><p className="section-label">Practice · embedded terminal</p><h2>{block.title}</h2><Markdown>{block.markdown}</Markdown></>}
-    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : !state?.completed && <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={false} refresh={refresh} onAdvice={setObserverFeedback} onError={setObserverFeedback} onStatus={setObserverStatus} onTerminalInsertionChange={onTerminalInsertionChange} />}
-    {!accepted && liveFeedback && <aside className="live-block-feedback" aria-live="polite">{liveFeedback}</aside>}
+    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : showLiveTerminal && <div className={`terminal-live-surface${liveFeedback ? " has-feedback" : ""}`}>
+      <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={false} checkpointStatus={state?.checkpoint?.status} reviewKey={state?.revision} refresh={refresh} onAdvice={setObserverFeedback} onError={setObserverFeedback} onStatus={setObserverStatus} onTerminalInsertionChange={onTerminalInsertionChange} />
+      {liveFeedback && <aside className="live-block-feedback terminal-feedback-overlay" aria-live="polite"><Markdown>{liveFeedback}</Markdown></aside>}
+    </div>}
+    {!accepted && liveFeedback && !showLiveTerminal && <aside className="live-block-feedback" aria-live="polite"><Markdown>{liveFeedback}</Markdown></aside>}
   </section>;
 }
 

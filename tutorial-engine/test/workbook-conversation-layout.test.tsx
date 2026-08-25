@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -29,6 +31,15 @@ const progress: Progress = {
   reflectionConversations: {}
 };
 
+const workbookStyles = readFileSync(fileURLToPath(new URL("../web-workbook/src/styles.css", import.meta.url)), "utf8");
+const workbookUiSource = readFileSync(fileURLToPath(new URL("../web-workbook/src/workbook-ui.tsx", import.meta.url)), "utf8");
+
+function declarationsFor(selector: string, occurrence: "first" | "last" = "first") {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = [...workbookStyles.matchAll(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, "g"))];
+  return (occurrence === "last" ? matches.at(-1) : matches[0])?.[1] ?? "";
+}
+
 describe("workbook fixed conversation layout", () => {
   it("places the live terminal/editor activity before the fixed composer thread without a hint control", () => {
     const markup = renderToStaticMarkup(createElement("main", null,
@@ -43,11 +54,72 @@ describe("workbook fixed conversation layout", () => {
     ));
 
     expect(markup).toContain('class="current-activity-band"');
+    expect(markup).toContain('data-activity-layout="scroll-linked"');
     expect(markup).not.toContain("Get a hint");
     expect(markup.indexOf("current-activity-band")).toBeLessThan(markup.indexOf("timeline-thread"));
     expect(markup).toContain('class="timeline-thread has-fixed-composer"');
     expect(markup).toContain('class="timeline-input fixed-composer"');
     expect(markup).toContain("Message the tutor");
+  });
+
+  it("uses measured CSS variables instead of binary width or viewport centering hacks", () => {
+    const inlineBand = (workbookStyles.match(/\.current-activity-band\s*\{[^}]*--activity-expand[^}]*\}/)?.[0] ?? "").split("{")[1] ?? "";
+    const visualWorkBlock = declarationsFor(".current-activity-band > .work-block");
+    const activityBandRules = workbookStyles.match(/\.current-activity-band[^{}]*\{[^}]*\}/g) ?? [];
+
+    expect(inlineBand).toContain("--activity-expand: 0");
+    expect(inlineBand).toContain("--activity-expanded-width: var(--activity-inline-width)");
+    expect(inlineBand).toContain("width: var(--activity-inline-width)");
+    expect(inlineBand).toContain("top: var(--activity-top)");
+    expect(visualWorkBlock).toContain("position: relative");
+    expect(visualWorkBlock).toContain("left: var(--activity-left-offset)");
+    expect(visualWorkBlock).toContain("width: var(--activity-width)");
+    expect(inlineBand).toContain("padding: 0");
+    expect(inlineBand).toContain("border: 0");
+    expect(workbookStyles).not.toContain('data-activity-layout="expanded"');
+    expect(activityBandRules.join("\n")).not.toContain("margin-left");
+    expect(activityBandRules.join("\n")).not.toContain("transform");
+  });
+
+  it("uses larger readable code and terminal font sizes without a code header row", () => {
+    const codeBlock = declarationsFor(".code-block");
+    const copyButton = declarationsFor(".copy-code");
+    const codePre = declarationsFor(".code-block pre");
+    const terminalElement = declarationsFor(".embedded-terminal");
+
+    expect(workbookUiSource).toContain("fontSize: 16");
+    expect(codeBlock).toContain("position: relative");
+    expect(copyButton).toContain("position: absolute");
+    expect(copyButton).toContain("right: 9px");
+    expect(codePre).toContain("font: 1rem/1.65");
+    expect(terminalElement).toContain("height: 180px");
+    expect(terminalElement).toContain("padding: 6px 6px 18px");
+    expect(terminalElement).toContain("overflow: hidden");
+    expect(workbookStyles).not.toContain("code-block-toolbar");
+    expect(workbookStyles).not.toContain("code-language");
+  });
+
+  it("visually attaches terminal feedback to the terminal bottom instead of overlaying output", () => {
+    const terminalSurface = declarationsFor(".terminal-live-surface");
+    const terminalWithFeedback = declarationsFor(".terminal-live-surface.has-feedback .embedded-terminal-panel");
+    const feedbackPanel = declarationsFor(".terminal-feedback-overlay");
+    const feedbackMarkdownBody = declarationsFor(".live-block-feedback .markdown p, .live-block-feedback .markdown ul, .live-block-feedback .markdown ol");
+    const feedbackMarkdownTail = declarationsFor(".live-block-feedback .markdown > :last-child");
+
+    expect(terminalSurface).toContain("position: relative");
+    expect(terminalWithFeedback).toContain("border-bottom: 0");
+    expect(terminalWithFeedback).toContain("border-radius: 9px 9px 0 0");
+    expect(feedbackPanel).toContain("margin: 0 0 12px");
+    expect(feedbackPanel).toContain("border-radius: 0 0 9px 9px");
+    expect(feedbackMarkdownBody).toContain("font: inherit");
+    expect(feedbackMarkdownTail).toContain("margin-bottom: 0");
+    expect(feedbackPanel).not.toContain("position: absolute");
+    expect(feedbackPanel).not.toContain("bottom:");
+    expect(feedbackPanel).not.toContain("left:");
+    expect(feedbackPanel).not.toContain("max-height");
+    expect(feedbackPanel).not.toContain("overflow");
+    expect(feedbackPanel).not.toContain("backdrop-filter");
+    expect(feedbackPanel).not.toContain("blur");
   });
 
   it("does not make reflections a sticky work surface", () => {

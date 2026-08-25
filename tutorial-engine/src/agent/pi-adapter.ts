@@ -63,9 +63,14 @@ export function resolveTutorModel(modelRuntime: ModelRuntime, requested: string 
   return resolveConfiguredTutorModel(modelRuntime, requested, TUTOR_MODEL_ENV);
 }
 
-/** Resolve the fast block tutor's model, falling back to Pi's ordinary default when unset or unusable. */
+/** Resolve the fast block tutor's model. Unlike the main tutor, it is disabled unless explicitly configured and authenticated. */
 export function resolveBlockTutorModel(modelRuntime: ModelRuntime, requested: string | undefined): TutorModelChoice {
-  return resolveConfiguredTutorModel(modelRuntime, requested, BLOCK_TUTOR_MODEL_ENV);
+  const wanted = requested?.trim();
+  if (!wanted) throw new Error(`${BLOCK_TUTOR_MODEL_ENV} must be set to enable the fast block tutor.`);
+  const resolved = resolveCliModel({ cliModel: wanted, modelRuntime });
+  if (!resolved.model) throw new Error(`${BLOCK_TUTOR_MODEL_ENV}=\"${wanted}\" did not match a model (${resolved.error ?? "no match"}); fast block tutor disabled.`);
+  if (!modelRuntime.hasConfiguredAuth(resolved.model.provider)) throw new Error(`${BLOCK_TUTOR_MODEL_ENV}=\"${wanted}\" matched ${resolved.model.provider}/${resolved.model.id}, which has no configured auth; fast block tutor disabled.`);
+  return { model: resolved.model, thinkingLevel: resolved.thinkingLevel, warning: resolved.warning };
 }
 
 /** Log operational identifiers, but never tool content or learner chat text. */

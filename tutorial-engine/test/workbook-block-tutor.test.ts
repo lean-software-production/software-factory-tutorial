@@ -5,17 +5,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const piSessions = vi.hoisted(() => [] as any[]);
 const createAgentSession = vi.hoisted(() => vi.fn(async () => ({ session: piSessions.shift() })));
+const resolveCliModel = vi.hoisted(() => vi.fn(() => ({ model: { api: "test-api", provider: "test", id: "block" } })));
+const hasConfiguredAuth = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
   return {
     ...actual,
     DefaultResourceLoader: class { async reload() {} },
-    ModelRuntime: { create: vi.fn(async () => ({})) },
+    ModelRuntime: { create: vi.fn(async () => ({ hasConfiguredAuth })) },
     SessionManager: { inMemory: vi.fn(() => ({})) },
     SettingsManager: { inMemory: vi.fn((settings) => settings) },
     createAgentSession,
-    getAgentDir: vi.fn(() => "/tmp/pi-agent")
+    getAgentDir: vi.fn(() => "/tmp/pi-agent"),
+    resolveCliModel
   };
 });
 import type { Attempt } from "../src/workbook/attempts.js";
@@ -23,7 +26,15 @@ import type { ActiveBlockContext } from "../src/workbook/pi-history.js";
 import { FastWorkbookBlockTutor, type WorkbookBlockTutorSession, type WorkbookBlockTutorSessionFactoryRequest } from "../src/workbook/block-tutor.js";
 
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+const originalBlockTutorModel = process.env.BLOCK_TUTOR_MODEL;
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  vi.clearAllMocks();
+  resolveCliModel.mockReturnValue({ model: { api: "test-api", provider: "test", id: "block" } });
+  hasConfiguredAuth.mockReturnValue(true);
+  if (originalBlockTutorModel === undefined) delete process.env.BLOCK_TUTOR_MODEL;
+  else process.env.BLOCK_TUTOR_MODEL = originalBlockTutorModel;
+});
 
 function attempt(id = "attempt-1", kind: Attempt["evidence"]["kind"] = "editor"): Attempt {
   const evidence: Attempt["evidence"] = kind === "terminal"
@@ -72,8 +83,9 @@ async function workspaceFixture() {
 }
 
 describe("FastWorkbookBlockTutor", () => {
-  it("retries a terminal provider error through the default Pi session before returning a hint", async () => {
+  it("retries a terminal provider error through the configured fast block-tutor model before returning a hint", async () => {
     const workspace = await workspaceFixture();
+    process.env.BLOCK_TUTOR_MODEL = "test/block";
     vi.useFakeTimers();
     const listeners = new Set<(event: any) => void>();
     let firstPrompt!: () => void;
@@ -277,6 +289,52 @@ describe("FastWorkbookBlockTutor", () => {
     expect(grepRoot.content[0].text).toBe("No matches found");
     expect(grepRoot.content[0].text).not.toContain("PRIVATE_ATTEMPT_SECRET");
     expect(grepRoot.content[0].text).not.toContain("OTHER_SESSION_SECRET");
+  });
+
+  it("disables the Pi-backed fast coach instead of falling back when BLOCK_TUTOR_MODEL is unset", async () => {
+    const workspace = await workspaceFixture();
+    delete process.env.BLOCK_TUTOR_MODEL;
+    const tutor = new FastWorkbookBlockTutor({ workspace, log: { info() {}, error() {} } });
+
+    await expect(tutor.assessTerminal!({ context: activeContext([attempt("terminal-unset", "terminal")]), attempt: attempt("terminal-unset", "terminal") })).rejects.toThrow(/BLOCK_TUTOR_MODEL.*set/i);
+
+    expect(createAgentSession).not.toHaveBeenCalled();
+    expect(resolveCliModel).not.toHaveBeenCalled();
+  });
+
+  it("disables the Pi-backed fast coach instead of falling back when BLOCK_TUTOR_MODEL has no configured auth", async () => {
+    const workspace = await workspaceFixture();
+    process.env.BLOCK_TUTOR_MODEL = "test/block";
+    hasConfiguredAuth.mockReturnValue(false);
+    const tutor = new FastWorkbookBlockTutor({ workspace, log: { info() {}, error() {} } });
+
+    await expect(tutor.assessTerminal!({ context: activeContext([attempt("terminal-unauth", "terminal")]), attempt: attempt("terminal-unauth", "terminal") })).rejects.toThrow(/no configured auth/i);
+
+    expect(resolveCliModel).toHaveBeenCalledWith({ cliModel: "test/block", modelRuntime: expect.anything() });
+    expect(createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("reports terminal quick-coach correction without readiness or acceptance tools", async () => {
+    const workspace = await workspaceFixture();
+    const requests: WorkbookBlockTutorSessionFactoryRequest[] = [];
+    const terminalAttempt = attempt("terminal-wrong", "terminal");
+    const tutor = new FastWorkbookBlockTutor({ workspace, sessionFactory: async (request) => {
+      requests.push(request);
+      const session = new FakeSession(request);
+      session.response = async () => {
+        const quickCoach = request.customTools.find((tool: any) => tool.name === "report_terminal_attempt") as any;
+        await quickCoach.execute("terminal-tool", { outcome: "feedback", message: "Use the command from the block, then run it again." }, undefined, undefined, undefined);
+        return "";
+      };
+      return session;
+    } });
+
+    await expect(tutor.assessTerminal!({ context: activeContext([terminalAttempt]), attempt: terminalAttempt })).resolves.toEqual({ outcome: "feedback", text: "Use the command from the block, then run it again." });
+
+    expect(requests[0].tools).toEqual(["read", "grep", "find", "ls", "report_terminal_attempt"]);
+    expect(requests[0].customTools.map((tool: any) => tool.name).sort()).toEqual(["find", "grep", "ls", "read", "report_terminal_attempt"]);
+    expect(requests[0].customTools.map((tool: any) => tool.name)).not.toContain("accept_current_attempt");
+    expect(requests[0].customTools.map((tool: any) => tool.name)).not.toContain("mark_attempt_still_working");
   });
 
   it("reports attempt readiness only through report_attempt_readiness", async () => {

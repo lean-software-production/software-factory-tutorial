@@ -70,7 +70,7 @@ export type BlockTutorReadiness = TimelineMetadata & {
   lessonId: string;
   blockId: string;
   attemptId: string;
-  readiness: "likely_ready" | "still_working";
+  readiness: "likely_ready" | "still_working" | "uncertain";
   text: string;
 };
 

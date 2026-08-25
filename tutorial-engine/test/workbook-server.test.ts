@@ -10,7 +10,7 @@ import { startWorkbookServer } from "../src/workbook/server.js";
 import type { TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
 import type { Attempt } from "../src/workbook/attempts.js";
 import type { ActiveBlockContext } from "../src/workbook/pi-history.js";
-import type { WorkbookBlockTutor } from "../src/workbook/block-tutor.js";
+import type { TerminalCoachAssessment, WorkbookBlockTutor } from "../src/workbook/block-tutor.js";
 import type { MainTutorContext, MainWorkbookTutor, TutorDecision, TutorReview } from "../src/workbook/tutor.js";
 import type { BlockTutorReadiness, TimelineMessage, WorkbookTimelineRecord } from "../src/workbook/timeline.js";
 
@@ -158,6 +158,17 @@ class FakeBlockTutor implements WorkbookBlockTutor {
   async assess(input: { context: ActiveBlockContext; attempt: Attempt }): Promise<{ readiness: "likely_ready" | "still_working"; text: string }> {
     this.assessments.push(input);
     const next = this.readinessQueue.shift() ?? { readiness: "still_working" as const, text: "The attempt still needs main-tutor judgment." };
+    if (next instanceof Error) throw next;
+    return next;
+  }
+}
+
+class FastFakeBlockTutor extends FakeBlockTutor {
+  terminalAssessments: Array<{ context: ActiveBlockContext; attempt: Attempt }> = [];
+  terminalQueue: Array<TerminalCoachAssessment | Error | Promise<TerminalCoachAssessment>> = [];
+  async assessTerminal(input: { context: ActiveBlockContext; attempt: Attempt }): Promise<TerminalCoachAssessment> {
+    this.terminalAssessments.push(input);
+    const next = this.terminalQueue.shift() ?? { outcome: "likely_ready" as const, text: "Ready for main review." };
     if (next instanceof Error) throw next;
     return next;
   }
@@ -550,7 +561,8 @@ describe("workbook browser API", () => {
     try {
       await introduceAndOpenEditor(server.url);
       expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "latest draft evidence" })).status).toBe(202);
-      await waitForWorkbookState(server.url, () => blockTutor.assessments.length === 1 && mainTutor.reviews.length === 1, "automatic review recorded");
+      await waitForWorkbookState(server.url, () => mainTutor.reviews.length === 1, "automatic review recorded");
+      expect(blockTutor.assessments).toHaveLength(0);
       const response = await postHint(server.url, { blockId: "lesson--001-first--edit-answer" });
       expect(response.status).toBe(202);
       const hinted = await response.json() as any;
@@ -626,35 +638,61 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("accepts or feeds back only from the main tutor despite block-tutor readiness", async () => {
+  it("keeps editor automatic review on the main tutor without timeline duplication", async () => {
     const dir = await fixture();
     const mainTutor = new FakeMainTutor({ outcome: "feedback", message: "Add the exact marker before this can continue." });
-    const blockTutor = new FakeBlockTutor();
-    blockTutor.readinessQueue.push({ readiness: "likely_ready", text: "This looks ready for main review." });
+    const blockTutor = new FastFakeBlockTutor();
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor, blockTutor });
     try {
       await introduceAndOpenEditor(server.url);
       expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "almost" })).status).toBe(202);
-      const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "feedback", "main tutor feedback after likely ready");
-      expect(mainTutor.reviews[0].readiness).toMatchObject({ readiness: "likely_ready", text: "This looks ready for main review." });
+      const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "feedback" && mainTutor.briefings.some((briefing) => briefing.activeContext?.attempts.some((attempt) => attempt.status === "feedback")), "main tutor editor feedback briefing refresh");
+      expect(blockTutor.terminalAssessments).toHaveLength(0);
+      expect(mainTutor.reviews[0].readiness).toBeUndefined();
       expect(block(feedback, "lesson--001-first--edit-answer")?.checkpoint?.feedback).toBe("Add the exact marker before this can continue.");
-      expect(feedback.timeline.some((record: any) => record.type === "attempt_accepted")).toBe(false);
+      expect(mainTutor.briefings.at(-1)).toMatchObject({ lessonId: "001-first", blockId: "lesson--001-first--edit-answer", activeContext: { attempts: [expect.objectContaining({ status: "feedback", feedback: "Add the exact marker before this can continue.", evidence: { kind: "editor", text: "almost" } })] } });
+      expect(feedback.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
     } finally { await server.close(); }
   });
 
-  it("still asks the main tutor to review when block-tutor readiness fails", async () => {
+  it("silently falls back to main terminal review when fast coach throws", async () => {
     const dir = await fixture();
-    const mainTutor = new FakeMainTutor({ outcome: "feedback", message: "Main tutor can still judge this draft." });
-    const blockTutor = new FakeBlockTutor();
-    blockTutor.readinessQueue.push(new Error("invalid readiness payload"));
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor, blockTutor });
+    const pty = new ServerFakePty();
+    const mainTutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      { outcome: "feedback", message: "Main tutor can still judge this terminal output." }
+    );
+    const blockTutor = new FastFakeBlockTutor();
+    blockTutor.terminalQueue.push(new Error("BLOCK_TUTOR_MODEL auth failed"));
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, mainTutor, blockTutor });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, mainTutor);
+      await submitTerminalAttempt(server.url, "lesson--001-first--run-supplied-command");
+      const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.status === "feedback" && mainTutor.reviews.length === 2 && mainTutor.briefings.some((briefing) => briefing.blockId === "lesson--001-first--run-supplied-command" && briefing.activeContext?.attempts.some((attempt) => attempt.status === "feedback")), "main review after fast coach failure");
+      expect(blockTutor.terminalAssessments).toHaveLength(1);
+      expect(mainTutor.reviews[1].readiness).toBeUndefined();
+      expect(block(feedback, "lesson--001-first--run-supplied-command")?.checkpoint?.feedback).toBe("Main tutor can still judge this terminal output.");
+      expect(mainTutor.briefings.at(-1)).toMatchObject({ lessonId: "001-first", blockId: "lesson--001-first--run-supplied-command", activeContext: { attempts: [expect.objectContaining({ status: "feedback", feedback: "Main tutor can still judge this terminal output.", evidence: expect.objectContaining({ kind: "terminal", terminalHtml: expect.stringContaining("ran:run lesson--001-first--run-supplied-command") }) })] } });
+      expect(feedback.timeline.filter((record: any) => record.type === "tutor_failed" && record.operation === "readiness")).toEqual([]);
+      expect(JSON.stringify(feedback.timeline)).not.toContain("BLOCK_TUTOR_MODEL auth failed");
+      expect(feedback.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
+    } finally { await server.close(); }
+  });
+
+  it("keeps post-review briefing refresh failures out of the public timeline", async () => {
+    const dir = await fixture();
+    const mainTutor = new FakeMainTutor({ outcome: "feedback", message: "Use the exact marker." });
+    mainTutor.briefingQueue.push("Initial private briefing.", new Error("briefing provider unavailable after review"));
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor, blockTutor: new FakeBlockTutor() });
     try {
       await introduceAndOpenEditor(server.url);
       expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "almost" })).status).toBe(202);
-      const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "feedback" && mainTutor.reviews.length === 1, "main review after readiness failure");
-      expect(mainTutor.reviews[0].readiness).toBeUndefined();
-      expect(block(feedback, "lesson--001-first--edit-answer")?.checkpoint?.feedback).toBe("Main tutor can still judge this draft.");
-      expect(feedback.timeline.filter((record: any) => record.type === "tutor_failed" && record.operation === "readiness")).toHaveLength(1);
+      const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "feedback" && mainTutor.briefings.length >= 2, "silent failed post-review briefing refresh");
+      expect(block(feedback, "lesson--001-first--edit-answer")?.checkpoint?.feedback).toBe("Use the exact marker.");
+      expect(feedback.timeline.filter((record: any) => record.type === "tutor_failed" && record.operation === "briefing")).toEqual([]);
+      expect(feedback.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
+      expect(JSON.stringify(feedback.timeline)).not.toContain("briefing provider unavailable after review");
     } finally { await server.close(); }
   });
 
@@ -821,9 +859,9 @@ describe("workbook browser API", () => {
         type: "block_summarized", lessonId: "001-first", blockId: "lesson--001-first--edit-answer"
       }));
       expect(publicState.timeline).toEqual(expect.arrayContaining([
-        expect.objectContaining({ type: "message", source: "authored", blockId: "lesson--001-first--edit-answer" }),
-        expect.objectContaining({ type: "message", source: "main_tutor" })
+        expect.objectContaining({ type: "message", source: "authored", blockId: "lesson--001-first--edit-answer" })
       ]));
+      expect(publicState.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
       expect(publicState.timeline.some((record: any) => record.type === "block_summarized")).toBe(false);
       expect(JSON.stringify(continued)).not.toContain("attemptId");
       expect(JSON.stringify(continued)).not.toContain("privateGuidance");
@@ -1039,6 +1077,49 @@ describe("workbook browser API", () => {
       expect(block(failed, "lesson--001-first--edit-answer")?.checkpoint?.feedback).toMatch(/temporarily unavailable|try again/i);
       expect(failed.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
       expect(failed.timeline.at(-1)).toMatchObject({ type: "tutor_failed", operation: "review" });
+    } finally { await server.close(); }
+  });
+
+  it("persists fast terminal correction without accepting, main review, or timeline review", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty();
+    const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const blockTutor = new FastFakeBlockTutor();
+    blockTutor.terminalQueue.push({ outcome: "feedback", text: "The terminal output shows the command failed; fix the path and try again." });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, mainTutor: tutor, blockTutor });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      await submitTerminalAttempt(server.url, "lesson--001-first--run-supplied-command");
+      const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.status === "feedback", "fast terminal feedback");
+      expect(blockTutor.terminalAssessments).toHaveLength(1);
+      expect(tutor.reviews).toHaveLength(1);
+      expect(block(feedback, "lesson--001-first--run-supplied-command")?.checkpoint?.feedback).toBe("The terminal output shows the command failed; fix the path and try again.");
+      expect(block(feedback, "lesson--001-first--run-supplied-command")?.verified).toBe(false);
+      expect(feedback.timeline.filter((record: any) => record.type === "message" && record.presentation === "review")).toEqual([]);
+    } finally { await server.close(); }
+  });
+
+  it.each(["likely_ready", "uncertain"] as const)("sends %s terminal attempts to the main tutor, which alone accepts without timeline duplication", async (outcome) => {
+    const dir = await fixture();
+    const pty = new ServerFakePty();
+    const tutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      { outcome: "accepted", message: "Terminal accepted by main." }
+    );
+    const blockTutor = new FastFakeBlockTutor();
+    blockTutor.terminalQueue.push({ outcome, text: "Looks ready for main review." });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, mainTutor: tutor, blockTutor });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      await submitTerminalAttempt(server.url, "lesson--001-first--run-supplied-command");
+      const accepted = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.status === "accepted", "terminal accepted by main after fast signal");
+      expect(blockTutor.terminalAssessments).toHaveLength(1);
+      expect(tutor.reviews).toHaveLength(2);
+      expect(tutor.reviews[1].readiness).toMatchObject({ readiness: outcome, text: "Looks ready for main review." });
+      expect(block(accepted, "lesson--001-first--run-supplied-command")?.checkpoint?.successMessage).toBe("Terminal accepted by main.");
+      expect(accepted.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
     } finally { await server.close(); }
   });
 
