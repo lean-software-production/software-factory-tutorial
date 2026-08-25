@@ -13,9 +13,8 @@
     "tutorial-engine"
   ],
   "scripts": {
-    "start": "npm run tutorial",
+    "start": "npm run tutorial:workbook",
     "setup": "node scripts/setup.mjs",
-    "tutorial": "node scripts/tutorial.mjs",
     "test:onboarding": "node --test test/onboarding.test.mjs",
     "test:eval": "vitest run --root . --exclude '.worktrees/**' ./evals/test/*.test.ts",
     "check:eval": "tsc -p evals/tsconfig.json",

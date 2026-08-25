@@ -39,13 +39,13 @@ function runNpmScript(script) {
   return true;
 }
 
-function buildWorkbookRuntime({ includeWeb }) {
-  return runNpmScript("build:server") && (!includeWeb || runNpmScript("build:web:workbook"));
+function buildWorkbookRuntime() {
+  return runNpmScript("build");
 }
 
 export async function main(argumentsForEngine = process.argv.slice(2)) {
   if (wantsHelp(argumentsForEngine)) { console.log(WORKBOOK_USAGE); return undefined; }
-  if (!buildWorkbookRuntime({ includeWeb: true })) return undefined;
+  if (!buildWorkbookRuntime()) return undefined;
   const { runWorkbookCli } = await import(pathToFileURL(resolve(tutorialEngineDirectory, "dist/workbook/cli.js")).href);
   return runWorkbookCli(tutorialWorkbookArguments(argumentsForEngine), {
     packageDirectory: tutorialEngineDirectory,

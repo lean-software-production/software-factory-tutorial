@@ -11,9 +11,15 @@ import {
   type ToolDefinition
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { AuditEvent } from "../protocol/events.js";
+export type WorkspaceAuditEvent = {
+  tool: string;
+  paths: string[];
+  mutation: boolean;
+  outcome: "ok" | "error" | "rejected";
+  message?: string;
+};
 
-export type AuditSink = (event: AuditEvent) => void;
+export type AuditSink = (event: WorkspaceAuditEvent) => void;
 
 export interface WorkspaceToolBoundary {
   readonly root: string;

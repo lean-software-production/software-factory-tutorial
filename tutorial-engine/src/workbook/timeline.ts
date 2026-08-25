@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { tutorialSessionStatePath, tutorialStatePath } from "../tutorial-state.js";
+import { tutorialSessionStatePath, tutorialStatePath } from "./tutorial-state.js";
 import type { AttemptKind } from "./attempts.js";
 
 export type TimelineMetadata = { id: string; sequence: number; at: string };

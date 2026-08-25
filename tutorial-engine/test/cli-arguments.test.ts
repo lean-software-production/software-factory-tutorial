@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ArgumentError, parseArguments } from "../src/cli-arguments.js";
+import { ArgumentError, parseArguments } from "../src/workbook/cli-arguments.js";
 
 function run(argv: string[]) {
   const parsed = parseArguments(argv);

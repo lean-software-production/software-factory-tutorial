@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Markdown } from "../../web/src/markdown.js";
+import { Markdown } from "./markdown.js";
 
 type TimelineMessageRecord = { type: "message"; id: string; sequence: number; at: string; lessonId: string; blockId: string; role: "assistant" | "user"; source: "authored" | "learner" | "main_tutor" | "block_tutor" | "tutor"; presentation: "course" | "chat" | "hint" | "review"; text: string; blockInView?: string };
 export type PublicTimelineRecord =

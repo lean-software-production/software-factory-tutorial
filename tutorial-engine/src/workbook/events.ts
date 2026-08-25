@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { tutorialStatePath } from "../tutorial-state.js";
+import { tutorialStatePath } from "./tutorial-state.js";
 import type { WorkbookLesson } from "./contract.js";
 import type { AttemptKind } from "./attempts.js";
 import type { WorkbookTimelineRecord } from "./timeline.js";

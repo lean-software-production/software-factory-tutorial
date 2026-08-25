@@ -4,14 +4,8 @@
   "description": "A local browser-led refactoring tutorial engine powered by Pi's SDK",
   "license": "MIT",
   "type": "module",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
-  },
   "bin": {
-    "tutorial-engine": "./dist/cli.js"
+    "tutorial-engine": "./dist/workbook/cli.js"
   },
   "files": [
     "dist",
@@ -21,11 +15,8 @@
     "node": ">=24.2.0 <25"
   },
   "scripts": {
-    "dev": "npm run build:web && tsx src/cli.ts",
-    "build": "npm run build:server && npm run build:web && npm run build:web:workbook",
-    "build:server": "tsc -p tsconfig.json",
-    "build:web": "vite build",
-    "start": "node dist/cli.js",
+    "build": "rm -rf dist && tsc -p tsconfig.json && npm run build:web:workbook",
+    "start": "node dist/workbook/cli.js",
     "test": "vitest run --root .",
     "browser:smoke": "tsx test/browser-smoke.mts",
     "check": "tsc --noEmit && tsc -p tsconfig.check.json && npm run test",
@@ -46,7 +37,6 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "highlight.js": "^11.11.1",
-    "mermaid": "^11.12.2",
     "node-pty": "^1.1.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

@@ -1,11 +1,12 @@
 # Tutorial engine
 
-A local, browser-led tutorial runner. It embeds `@earendil-works/pi-coding-agent` directly as a TypeScript SDK; it does not start Pi’s CLI or RPC mode.
+The workbook is the tutorial engine's only browser interface. It embeds
+`@earendil-works/pi-coding-agent` as a TypeScript SDK; it does not start Pi's CLI or RPC mode.
 
 What it is for, and the students, authors and facilitators it serves, is in
 [`docs/vision.md`](docs/vision.md).
 
-## Run a tutorial
+## Run a workbook
 
 Point the workbook engine at an authored tutorial directory. In this repository, that content
 template is `../tutorial` from the engine package; learner edits happen in a session workspace
@@ -17,12 +18,12 @@ npm install
 npm run dev:workbook -- ../tutorial
 ```
 
-From the repository root, `npm run tutorial` is the convenience launcher for the same workbook
-entry point. `npm run tutorial:workbook` uses the root trusted Node runtime profile for the embedded
-terminal: it mounts only the repository-root `node_modules/` directory read-only at workspace
+From the repository root, `npm run tutorial:workbook` is the named launcher for the workbook;
+`npm start` is its alias. It uses the root trusted Node runtime profile for the embedded terminal:
+it mounts only the repository-root `node_modules/` directory read-only at workspace
 `node_modules/`, and it never mounts `package.json` or lockfiles. A plain launch creates a fresh
 session and prints its ID and workspace path. Reopen a specific session with
-`npm run tutorial -- --session <id>`; legacy `.tutorial/.tmp` state is not resumed.
+`npm run tutorial:workbook -- --session <id>`; browser-tutor `.tutorial/.tmp` state is not resumed.
 
 Add `--no-open` to suppress browser launch, or `--port 4310` to choose a port. The server binds only to `127.0.0.1`. Pi credentials remain in the server process; the browser has no filesystem or provider-credential access.
 

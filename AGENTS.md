@@ -10,9 +10,9 @@
 - Each learner session has a private workspace at `tutorial/.tutorial/<session-id>/workspace/`.
   Learner shell commands, edits, and commits happen there, not in the authored template and not in
   the repository root.
-- The root `npm run tutorial` command is a convenience launcher. By default it creates a fresh
-  session and prints the session ID and workspace path. `npm run tutorial -- --session <id>` is the
-  only way to reopen that ID; legacy `tutorial/.tutorial/.tmp` state is not resumed.
+- The root `npm run tutorial:workbook` command launches the workbook. By default it creates a fresh
+  session and prints the session ID and workspace path. `npm run tutorial:workbook -- --session <id>`
+  is the only way to reopen that ID; browser-tutor state is not resumed.
 - Engine documentation starts in [`tutorial-engine/README.md`](tutorial-engine/README.md); durable
   engine architecture decisions live under [`tutorial-engine/docs/adr/`](tutorial-engine/docs/adr/).
 - Historical plans live under `docs/plans/`, `docs/superpowers/plans/`, and
@@ -73,7 +73,7 @@ argue with them.
 ## Session state belongs under tutorial/.tutorial/<id>/, never in the curriculum
 
 `tutorial/docs/specs/README.md` lists the lessons and nothing about any particular learner. The
-workbook tutor keeps its transcript, progress, attempts, and learner workspace under
+workbook tutor keeps its event log, attempts, and learner workspace under
 `tutorial/.tutorial/<session-id>/`, not in the authored curriculum. Writing progress back into the
 ledger would hand everyone who clones the tutorial a copy that claims to be part finished, so the
 ledger's rows carry a specification link and a goal, and no status.
@@ -92,8 +92,8 @@ So a lesson that writes anything a run recreates writes it to `.tmp/`, whatever 
 Scripts `cd "$(dirname "$0")"` before doing anything, so the path is just `.tmp/evidence.txt`, and a
 learner who builds a second line gets the same rule without a second `.gitignore` entry. A script that
 writes there needs `mkdir -p .tmp` after its `cd`: this curriculum's reset clears its learner work.
-Existing ignored legacy state under `tutorial/.tutorial/.tmp/` may remain on disk but is not resumed
-by the launcher.
+Existing ignored browser-tutor state under `tutorial/.tutorial/.tmp/` may remain on disk but is not
+resumed or migrated by the launcher.
 
 ## The line commits to the session-local repository
 

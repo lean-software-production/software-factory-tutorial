@@ -2,7 +2,7 @@ import type { Dirent } from "node:fs";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
-import { tutorialSessionStatePath, tutorialStatePath } from "../tutorial-state.js";
+import { tutorialSessionStatePath, tutorialStatePath } from "./tutorial-state.js";
 import type { ReflectionTurn } from "./events.js";
 
 export type AttemptKind = "editor" | "terminal" | "reflection";

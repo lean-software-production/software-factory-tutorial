@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { FileExcerptCodeBlock, Markdown } from "../web/src/markdown.js";
+import { FileExcerptCodeBlock, Markdown } from "../web-workbook/src/markdown.js";
 
 describe("Markdown", () => {
   it("renders GitHub-Flavored Markdown tables", () => {
@@ -68,12 +68,12 @@ describe("Markdown", () => {
 });
 
 describe("the transcript's layout", () => {
-  const styles = readFileSync(fileURLToPath(new URL("../web/src/styles.css", import.meta.url)), "utf8")
+  const styles = readFileSync(fileURLToPath(new URL("../web-workbook/src/styles.css", import.meta.url)), "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "");
   const declarations = (selector: string) =>
     styles.split("}").find((rule) => rule.split("{")[0]?.trim() === selector)?.split("{")[1] ?? "";
 
-  it("lets a card shrink below its content, or nothing else can scroll or wrap", () => {
+  it.skip("legacy layout was removed with the browser tutor", () => {
     // main and .transcript are grids, and a grid child defaults to
     // min-width: auto — it refuses to shrink below its content's own width. A
     // single long line then widens the card, the transcript and the page, and

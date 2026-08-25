@@ -4,7 +4,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { Markdown } from "../../web/src/markdown.js";
+import { Markdown } from "./markdown.js";
 import { lessonElementId } from "../../src/workbook/lesson-links.js";
 import { ActivityBand } from "./activity-band.js";
 import { TimelineThread, type PublicTimelineRecord } from "./timeline-thread.js";

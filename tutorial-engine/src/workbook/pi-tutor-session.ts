@@ -1,4 +1,4 @@
-import type { TutorialLogger } from "../runtime-log.js";
+import type { TutorialLogger } from "./runtime-log.js";
 
 export type PiTutorSessionEvent =
   | {

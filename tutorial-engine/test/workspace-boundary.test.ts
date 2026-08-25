@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createWorkspaceTools, WorkspaceBoundary } from "../src/agent/workspace-boundary.js";
+import { createWorkspaceTools, WorkspaceBoundary } from "../src/workbook/workspace-boundary.js";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /**

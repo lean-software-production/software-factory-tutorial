@@ -27,7 +27,7 @@ Then authenticate Pi and start the tutor from the repository root:
 ```sh
 pi          # enter /login and choose a provider
 npm run setup
-npm run tutorial -- --port 4310
+npm run tutorial:workbook -- --port 4310
 ```
 
 The launcher targets the authored `tutorial/` template, then prints a private session workspace path.

@@ -9,8 +9,8 @@ import {
   type ToolDefinition
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { TUTOR_MODEL_ENV, resolveTutorModel, type TutorModelChoice } from "../agent/pi-adapter.js";
-import { createTutorialLogger, type TutorialLogger } from "../runtime-log.js";
+import { TUTOR_MODEL_ENV, resolveTutorModel, type TutorModelChoice } from "./model.js";
+import { createTutorialLogger, type TutorialLogger } from "./runtime-log.js";
 import type { Attempt } from "./attempts.js";
 import { projectMainTutorHistory, type ActiveBlockContext, type MainTutorHistoryProjection } from "./pi-history.js";
 import { createResilientTutorSession } from "./pi-tutor-session.js";
@@ -479,5 +479,3 @@ function activeAttemptIds(serializedContext: string): string[] {
   }
 }
 
-export type RestrictedWorkbookTutorOptions = MainWorkbookTutorOptions;
-export { DefaultMainWorkbookTutor as RestrictedWorkbookTutor };

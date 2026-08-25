@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createTutorialLogger } from "../src/runtime-log.js";
+import { createTutorialLogger } from "../src/workbook/runtime-log.js";
 
 describe("createTutorialLogger", () => {
   it("writes timestamped lifecycle messages to its configured output", () => {

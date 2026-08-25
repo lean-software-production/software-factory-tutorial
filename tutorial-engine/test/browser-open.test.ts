@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { browserCommand } from "../src/browser-open.js";
+import { browserCommand } from "../src/workbook/browser-open.js";
 
 const URL = "http://127.0.0.1:4310";
 

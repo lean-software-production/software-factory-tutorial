@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkbook } from "../src/workbook/load.js";
 import { startWorkbookServer } from "../src/workbook/server.js";
-import { tutorialStatePath } from "../src/tutorial-state.js";
+import { tutorialStatePath } from "../src/workbook/tutorial-state.js";
 import { buildWorkbookBlockStream } from "../src/workbook/workbook-blocks.js";
 
 let dirs: string[] = [];

@@ -11,9 +11,9 @@ import {
 import { access, lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, sep } from "node:path";
 import { Type } from "typebox";
-import { BLOCK_TUTOR_MODEL_ENV, resolveBlockTutorModel } from "../agent/pi-adapter.js";
-import { createWorkspaceTools, WorkspaceBoundary, type WorkspaceToolBoundary } from "../agent/workspace-boundary.js";
-import { createTutorialLogger, type TutorialLogger } from "../runtime-log.js";
+import { BLOCK_TUTOR_MODEL_ENV, resolveBlockTutorModel } from "./model.js";
+import { createWorkspaceTools, WorkspaceBoundary, type WorkspaceToolBoundary } from "./workspace-boundary.js";
+import { createTutorialLogger, type TutorialLogger } from "./runtime-log.js";
 import type { Attempt } from "./attempts.js";
 import type { ActiveBlockContext } from "./pi-history.js";
 import { createResilientTutorSession } from "./pi-tutor-session.js";

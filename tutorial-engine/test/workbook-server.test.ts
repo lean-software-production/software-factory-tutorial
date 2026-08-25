@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { WebSocket } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { tutorialSessionStatePath, tutorialStatePath } from "../src/tutorial-state.js";
+import { tutorialSessionStatePath, tutorialStatePath } from "../src/workbook/tutorial-state.js";
 import { SessionWorkspaceManager } from "../src/session-workspace.js";
 import { startWorkbookServer } from "../src/workbook/server.js";
 import type { TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
