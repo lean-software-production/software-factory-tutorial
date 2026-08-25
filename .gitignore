@@ -13,6 +13,9 @@ tutorial/.tutorial/
 # Existing checkouts may still have pre-migration learner-local state at the root.
 factory/**/.tmp/
 .tutorial/
+# The visual check writes each run's screenshots beside the harness; only the golden masters
+# under tutorial-engine/test/visual/ are kept.
+tutorial-engine/test/.tmp/
 .superpowers/
 .pi/git/
 .pi/settings.json
