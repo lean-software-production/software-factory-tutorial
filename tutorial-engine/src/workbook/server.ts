@@ -128,20 +128,38 @@ function timelineMessageBlockKind(loaded: LoadedWorkbook, record: TimelineMessag
   const block = buildWorkbookBlockStream(loaded).find((candidate) => candidate.id === record.blockId || (source && candidate.origin === "declared" && candidate.lessonId === source.lessonId && candidate.declaredId === source.declaredId));
   return block?.kind;
 }
+function projectedAuthoredMessage(loaded: LoadedWorkbook, record: TimelineMessage): TimelineMessage | undefined {
+  if (record.source !== "authored" || record.presentation !== "course") return record;
+  const block = buildWorkbookBlockStream(loaded).find((candidate) => candidate.id === record.blockId);
+  if (!block) return undefined;
+  const text = blockText(block, loaded.identity.title);
+  return text === record.text ? record : { ...record, text };
+}
+function projectedTimelineRecord(loaded: LoadedWorkbook, record: WorkbookTimelineRecord): WorkbookTimelineRecord | undefined {
+  return record.type === "message" ? projectedAuthoredMessage(loaded, record) : record;
+}
+function projectedTimelineRecords(loaded: LoadedWorkbook, source: readonly WorkbookTimelineRecord[]): WorkbookTimelineRecord[] {
+  return source.flatMap((record) => {
+    const projected = projectedTimelineRecord(loaded, record);
+    return projected ? [projected] : [];
+  });
+}
 function publicTimelineRecord(record: WorkbookTimelineRecord, loaded?: LoadedWorkbook): PublicTimelineRecord | undefined {
-  if (record.type === "message") {
+  const projectedRecord = loaded ? projectedTimelineRecord(loaded, record) : record;
+  if (!projectedRecord) return undefined;
+  if (projectedRecord.type === "message") {
     // Every review is logged, but a practice block shows only its latest feedback, beside the
     // work surface. Letting these into the conversation would replay the whole review history as
     // chat, so they are dropped here and reach the learner through the block's checkpoint instead.
-    if (loaded && record.source === "main_tutor" && record.presentation === "review") {
-      const kind = timelineMessageBlockKind(loaded, record);
+    if (loaded && projectedRecord.source === "main_tutor" && projectedRecord.presentation === "review") {
+      const kind = timelineMessageBlockKind(loaded, projectedRecord);
       if (kind === "terminal-practice" || kind === "editor-practice") return undefined;
     }
-    return record;
+    return projectedRecord;
   }
-  if (record.type !== "tutor_failed") return undefined;
-  const { requestId: _privateRequestId, ...publicFailure } = record;
-  return { ...publicFailure, failureId: record.id };
+  if (projectedRecord.type !== "tutor_failed") return undefined;
+  const { requestId: _privateRequestId, ...publicFailure } = projectedRecord;
+  return { ...publicFailure, failureId: projectedRecord.id };
 }
 function authoredCourseOrder(loaded: LoadedWorkbook, record: PublicTimelineRecord): number | undefined {
   if (record.type !== "message" || record.source !== "authored" || record.presentation !== "course") return undefined;
@@ -157,7 +175,7 @@ function authoredCourseOrder(loaded: LoadedWorkbook, record: PublicTimelineRecor
   return blockIndex >= 0 ? 1_000 + lessonIndex * 1_000 + 200 + blockIndex : undefined;
 }
 function publicTimeline(loaded: LoadedWorkbook, records: readonly WorkbookTimelineRecord[]): PublicTimelineRecord[] {
-  const projected = records.flatMap((record) => { const publicRecord = publicTimelineRecord(record, loaded); return publicRecord ? [publicRecord] : []; });
+  const projected = projectedTimelineRecords(loaded, records).flatMap((record) => { const publicRecord = publicTimelineRecord(record, loaded); return publicRecord ? [publicRecord] : []; });
   const course = projected.map((record) => ({ record, order: authoredCourseOrder(loaded, record) })).filter((entry): entry is { record: PublicTimelineRecord; order: number } => entry.order !== undefined).sort((a, b) => a.order - b.order || a.record.sequence - b.record.sequence);
   const emitted = new Set<string>();
   const output: PublicTimelineRecord[] = [];
@@ -429,11 +447,11 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     const projection = currentWorkbookProjection();
     const active = projection.current;
     const completeStatus = active ? canCompleteBlock(active, projection) : { eligible: false };
-    return { records, activeContext: await activeBlockContext(), completionTool: active && completeStatus.eligible ? { blockId: active.id } : undefined };
+    return { records: projectedTimelineRecords(loaded, records), activeContext: await activeBlockContext(), completionTool: active && completeStatus.eligible ? { blockId: active.id } : undefined };
   };
   const mainContextForTarget = async (_lessonId: string, blockId: string): Promise<MainTutorContext> => {
     const active = activeOrderedBlock();
-    return active?.id === blockId ? mainContext() : { records, activeContext: undefined };
+    return active?.id === blockId ? mainContext() : { records: projectedTimelineRecords(loaded, records), activeContext: undefined };
   };
   const requireTutorText = (text: string, label: TutorFailure["operation"]): string => {
     const trimmed = text.trim();
@@ -584,11 +602,11 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     return reviewing;
   };
   const submitAttempt = (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }): Promise<Attempt> => transact(() => createAttempt(input));
-  const requeueActiveAttempt = async (): Promise<void> => {
+  const requeueActiveAttempt = async (options: { includeFeedback?: boolean } = { includeFeedback: true }): Promise<void> => {
     const active = activeDeclaredBlock();
     if (!active || !isEvaluatedBlock(active.block)) return;
     const current = await attempts.current(active.lessonId, active.id).catch(() => undefined);
-    if (!current || current.status === "accepted" || current.status === "superseded") return;
+    if (!current || current.status === "accepted" || current.status === "superseded" || (!options.includeFeedback && current.status === "feedback")) return;
     const reviewing = await attempts.markReviewing(current.id) ?? current;
     void finishReview(reviewing, active.block.tutor);
   };
@@ -681,14 +699,12 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       reloadGeneration += 1;
       loaded = candidate;
       stream = buildWorkbookBlockStream(loaded);
-      await attempts.resetPresentationState();
-      await timeline.resetWithinRun();
-      records = [];
-      await append({ type: "session_started" });
+      records = await timeline.read();
       await ensureActiveWorkAcceptance();
       try {
         await mainTutor.restore(await mainContext());
         restoringFailed = false;
+        await requeueActiveAttempt({ includeFeedback: false });
       } catch (error) {
         restoringFailed = true;
         log.info(`Workbook tutor restoration after content reload failed: ${error instanceof Error ? error.message : String(error)}`);
