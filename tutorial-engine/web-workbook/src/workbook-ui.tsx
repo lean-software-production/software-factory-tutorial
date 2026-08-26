@@ -716,6 +716,7 @@ export function App() {
   const scrollCompletionPending = useRef(false);
   const previousReadyRunwayIds = useRef<Set<string>>(new Set());
   const preservedRunwayIds = useRef<Set<string>>(new Set());
+  const sseStateRequestSequence = useRef(0);
   const registerTerminalInsertion = useCallback((insertCommand: (() => void) | undefined) => {
     setTerminalInsertion(() => insertCommand);
   }, []);
@@ -724,15 +725,20 @@ export function App() {
   useEffect(() => {
     if (!hasInitialState || typeof EventSource === "undefined") return;
     const events = new EventSource("api/workbook/timeline");
-    events.addEventListener("content-reloaded", () => {
+    const refreshFromSse = (options: { contentReload?: boolean } = {}) => {
+      const requestSequence = ++sseStateRequestSequence.current;
       readWorkbookState().then((next) => {
-        setContentReloadError(undefined);
+        if (requestSequence !== sseStateRequestSequence.current) return;
+        if (options.contentReload) setContentReloadError(undefined);
         setState(next);
       }).catch((error) => {
+        if (requestSequence !== sseStateRequestSequence.current) return;
         console.error(error);
-        setContentReloadError("Workbook content reloaded, but the browser could not fetch the new state yet.");
+        if (options.contentReload) setContentReloadError("Workbook content reloaded, but the browser could not fetch the new state yet.");
       });
-    });
+    };
+    events.addEventListener("record", () => refreshFromSse());
+    events.addEventListener("content-reloaded", () => refreshFromSse({ contentReload: true }));
     events.addEventListener("content-reload-error", (event) => {
       try {
         const payload = JSON.parse((event as MessageEvent).data) as { message?: string };

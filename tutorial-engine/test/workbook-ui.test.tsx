@@ -193,6 +193,25 @@ function stubAppShellGlobals(win: JSDOM["window"]) {
   vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
 }
 
+class FakeEventSource {
+  static instances: FakeEventSource[] = [];
+  readonly listeners = new Map<string, Array<(event: { data: string }) => void>>();
+  readonly url: string;
+  closed = false;
+  constructor(url: string) { this.url = url; FakeEventSource.instances.push(this); }
+  addEventListener(event: string, listener: (event: { data: string }) => void) { (this.listeners.get(event) ?? this.listeners.set(event, []).get(event)!).push(listener); }
+  close() { this.closed = true; }
+  emit(event: string, data: unknown = {}) { for (const listener of this.listeners.get(event) ?? []) listener({ data: JSON.stringify(data) }); }
+  listenerCount(event: string) { return this.listeners.get(event)?.length ?? 0; }
+  static reset() { FakeEventSource.instances = []; }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolver) => { resolve = resolver; });
+  return { promise, resolve };
+}
+
 function scrollPromotionFixture() {
   const initialState = {
     workbook: { title: "Workbook" },
@@ -265,16 +284,7 @@ describe("workbook lesson UI", () => {
   it("refreshes state in place on author hot-reload SSE and preserves the current URL anchor", async () => {
     const { completedState } = scrollPromotionFixture();
     const reloadedState = { ...completedState, workbook: { title: "Reloaded Workbook" }, introduction: "Reloaded intro copy.", timeline: [{ ...completedState.timeline[0], text: "# Reloaded Workbook\n\nReloaded intro copy." }] } as any;
-    class FakeEventSource {
-      static instances: FakeEventSource[] = [];
-      readonly listeners = new Map<string, Array<(event: { data: string }) => void>>();
-      readonly url: string;
-      closed = false;
-      constructor(url: string) { this.url = url; FakeEventSource.instances.push(this); }
-      addEventListener(event: string, listener: (event: { data: string }) => void) { (this.listeners.get(event) ?? this.listeners.set(event, []).get(event)!).push(listener); }
-      close() { this.closed = true; }
-      emit(event: string, data: unknown = {}) { for (const listener of this.listeners.get(event) ?? []) listener({ data: JSON.stringify(data) }); }
-    }
+    FakeEventSource.reset();
     const fetchMock = vi.fn(async (input?: RequestInfo | URL) => ({ ok: true, json: async () => String(input).startsWith("/api/workbook/state") ? reloadedState : completedState }));
     const scrollIntoView = vi.fn();
     const replaceState = vi.fn();
@@ -292,6 +302,9 @@ describe("workbook lesson UI", () => {
     });
     await act(async () => { await Promise.resolve(); });
     expect(FakeEventSource.instances[0]!.url).toBe("api/workbook/timeline");
+    expect(FakeEventSource.instances[0]!.listenerCount("record")).toBe(1);
+    expect(FakeEventSource.instances[0]!.listenerCount("content-reloaded")).toBe(1);
+    expect(FakeEventSource.instances[0]!.listenerCount("content-reload-error")).toBe(1);
     expect(container.textContent).toContain("Workbook");
 
     await act(async () => { FakeEventSource.instances[0]!.emit("content-reload-error", { message: "workbook.md front matter is incomplete" }); });
@@ -307,6 +320,71 @@ describe("workbook lesson UI", () => {
     expect(location.hash).toBe("#part--validation-loop");
     expect(replaceState).not.toHaveBeenCalledWith(null, "", "#workbook--introduction");
     expect(pushState).not.toHaveBeenCalled();
+  });
+
+  it("refreshes authoritative state for public record SSE without letting stale responses win", async () => {
+    FakeEventSource.reset();
+    const reflectionProgress = activeBlockProgress(lesson.blocks[2]!, {
+      checkpoint: { status: "reviewing", evidence: { kind: "reflection", conversation: [{ role: "learner", text: "I would inspect the flow map." }] } }
+    } as any);
+    const initialState = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter()],
+      progress: reflectionProgress,
+      adapter: {},
+      timeline: [
+        { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "authored", presentation: "course", text: "## Reflect\n\nWhy did it work?" },
+        { type: "message", id: "learner", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "reflect", role: "user", source: "learner", presentation: "chat", text: "I would inspect the flow map." },
+      ],
+    } as any;
+    const staleReviewState = {
+      ...initialState,
+      timeline: [...initialState.timeline, { type: "message", id: "stale-review", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "block_tutor", presentation: "review", text: "Older tutor review that must not win." }],
+    } as any;
+    const latestReviewState = {
+      ...initialState,
+      progress: activeBlockProgress(lesson.blocks[2]!, {
+        checkpoint: { status: "accepted", successMessage: "Accepted.", evidence: { kind: "reflection", conversation: [{ role: "learner", text: "I would inspect the flow map." }, { role: "tutor", text: "Final tutor review added asynchronously." }] } }
+      } as any),
+      timeline: [...initialState.timeline, { type: "message", id: "latest-review", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "block_tutor", presentation: "review", text: "Final tutor review added asynchronously." }],
+    } as any;
+    const firstRecordFetch = deferred<any>();
+    const secondRecordFetch = deferred<any>();
+    let stateFetches = 0;
+    const response = (state: any) => ({ ok: true, json: async () => state });
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => {
+      expect(String(input)).toMatch(/api\/workbook\/state$/);
+      stateFetches += 1;
+      if (stateFetches === 1) return response(initialState);
+      if (stateFetches === 2) return firstRecordFetch.promise.then(response);
+      if (stateFetches === 3) return secondRecordFetch.promise.then(response);
+      return response(latestReviewState);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", FakeEventSource as any);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    const events = FakeEventSource.instances[0]!;
+    expect(events.url).toBe("api/workbook/timeline");
+    expect(events.listenerCount("record")).toBe(1);
+    expect(container.textContent).toContain("I would inspect the flow map.");
+    expect(container.textContent).not.toContain("Final tutor review added asynchronously.");
+
+    await act(async () => { events.emit("record", { sequence: 3 }); await Promise.resolve(); });
+    await act(async () => { events.emit("record", { sequence: 4 }); await Promise.resolve(); });
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("api/workbook/state"))).toHaveLength(3);
+
+    await act(async () => { secondRecordFetch.resolve(latestReviewState); await Promise.resolve(); });
+    expect(container.textContent).toContain("Tutor review");
+    expect(container.textContent).toContain("Final tutor review added asynchronously.");
+
+    await act(async () => { firstRecordFetch.resolve(staleReviewState); await Promise.resolve(); });
+    expect(container.textContent).toContain("Final tutor review added asynchronously.");
+    expect(container.textContent).not.toContain("Older tutor review that must not win.");
   });
 
   it("falls back to the active anchor without a modal when the URL anchor is no longer valid", async () => {
