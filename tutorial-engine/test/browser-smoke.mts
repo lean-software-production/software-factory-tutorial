@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * Optional real-browser smoke. It serves the built v2 workbook UI, drives the
+ * Real-browser smoke. It serves the built v2 workbook UI, drives the
  * browser through the current workbook API, and proves that lesson rendering and
  * continuation still work in Chromium.
  */
@@ -72,7 +72,7 @@ async function main(): Promise<void> {
   const moduleName = "playwright";
   let playwright: { chromium: { launch(): Promise<any> } };
   try { playwright = await import(moduleName) as typeof playwright; }
-  catch { throw new Error("Browser smoke is optional. Install its prerequisite with `npm install --no-save -D playwright`, then `npx playwright install chromium`."); }
+  catch { throw new Error("Playwright is missing. Run `npm install`, then `npm run browser:install` from tutorial-engine."); }
 
   let current: "intro" | "lesson" | "practice" = "intro";
   let resolveContinuation!: (body: unknown) => void;

@@ -67,5 +67,20 @@ and transitions.
 ```sh
 npm run build  # compile server and browser client
 npm test       # unit tests
-npm run check  # TypeScript and tests
+npm run check  # TypeScript, unit tests, browser build, and browser smoke
 ```
+
+## Release checks
+
+Playwright is a declared development dependency, but Chromium itself is downloaded separately.
+After `npm install`, provision it once on a development machine:
+
+```sh
+npm run browser:install
+```
+
+`npm run check` is the deterministic package gate: it type-checks the engine and workbook UI, runs
+engine tests, builds the workbook browser bundle, and runs the Chromium smoke test. `prepublishOnly`
+runs `build` then this check, so publishing cannot omit the browser smoke. CI provisions Chromium with
+its Linux dependencies through `npm run browser:install:ci`. Docker terminal-image builds and
+provider-backed evaluations are intentionally separate from this mandatory gate.
