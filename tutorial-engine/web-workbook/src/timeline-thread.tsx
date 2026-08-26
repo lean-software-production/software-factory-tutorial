@@ -106,7 +106,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   const renderConversationRecord = (record: TimelineThreadRecord) => {
     if (record.type === "tutor_failed") return <aside key={record.id} ref={responseEntryRef(record.id)} className="timeline-message tutor failure" aria-live="polite"><b>Tutor unavailable</b><p>{record.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(record.failureId)}>Retry</button></aside>;
     if (record.type !== "message") return null;
-    const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : record.presentation === "hint" ? " hint" : ""}`;
+    const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : ""}`;
     const trackResponse = record.role === "assistant" && !(record.source === "authored" && record.presentation === "course");
     return <article key={record.id} ref={trackResponse ? responseEntryRef(record.id) : undefined} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown source={record.source === "authored" && record.presentation === "course" ? "authored" : "generated"}>{record.text}</Markdown>}</article>;
   };

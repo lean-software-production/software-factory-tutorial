@@ -20,6 +20,8 @@ export interface Attempt {
   evidence: AttemptEvidence;
   status: AttemptStatus;
   feedback?: string;
+  /** Terminal-only coaching state; excluded from Main Tutor context and timeline. */
+  privateQuickFeedback?: boolean;
   successMessage?: string;
 }
 
@@ -144,17 +146,26 @@ export class AttemptStore {
   }
 
   async markWorking(id: string): Promise<Attempt | undefined> {
-    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "working", feedback: undefined }));
+    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "working", feedback: undefined, privateQuickFeedback: undefined }));
+  }
+
+  async markQuickWorking(id: string): Promise<Attempt | undefined> {
+    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "working", feedback: undefined, privateQuickFeedback: true }));
   }
 
   async markFeedback(id: string, message: string): Promise<Attempt | undefined> {
     const feedback = message.trim().slice(0, 1_000) || "The tutor is ready to check your next attempt.";
-    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback }));
+    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback, privateQuickFeedback: undefined }));
+  }
+
+  async markQuickFeedback(id: string, message: string): Promise<Attempt | undefined> {
+    const feedback = message.trim().slice(0, 1_000) || "Check the terminal output and try again.";
+    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback, privateQuickFeedback: true }));
   }
 
   async acceptCurrent(id: string, successMessage: string): Promise<Attempt | undefined> {
     const message = successMessage.trim().slice(0, 1_000) || "Nice work — this attempt is accepted.";
-    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "accepted", feedback: undefined, successMessage: message }));
+    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "accepted", feedback: undefined, privateQuickFeedback: undefined, successMessage: message }));
   }
 
   async resetPresentationState(): Promise<void> {

@@ -346,14 +346,14 @@ describe("workbook lesson UI", () => {
     } as any;
     const staleReviewState = {
       ...initialState,
-      timeline: [...initialState.timeline, { type: "message", id: "stale-review", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "block_tutor", presentation: "review", text: "Older tutor review that must not win." }],
+      timeline: [...initialState.timeline, { type: "message", id: "stale-review", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "main_tutor", presentation: "review", text: "Older tutor review that must not win." }],
     } as any;
     const latestReviewState = {
       ...initialState,
       progress: activeBlockProgress(lesson.blocks[2]!, {
         checkpoint: { status: "accepted", successMessage: "Accepted.", evidence: { kind: "reflection", conversation: [{ role: "learner", text: "I would inspect the flow map." }, { role: "tutor", text: "Final tutor review added asynchronously." }] } }
       } as any),
-      timeline: [...initialState.timeline, { type: "message", id: "latest-review", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "block_tutor", presentation: "review", text: "Final tutor review added asynchronously." }],
+      timeline: [...initialState.timeline, { type: "message", id: "latest-review", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "main_tutor", presentation: "review", text: "Final tutor review added asynchronously." }],
     } as any;
     const firstRecordFetch = deferred<any>();
     const secondRecordFetch = deferred<any>();
@@ -605,7 +605,7 @@ describe("workbook lesson UI", () => {
         { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nAuthored page prose." },
         { type: "message", id: "learner", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "user", source: "learner", presentation: "chat", text: "Learner reply." },
         { type: "message", id: "tutor", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "main_tutor", presentation: "chat", text: "Tutor reply." },
-        { type: "message", id: "hint", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "block_tutor", presentation: "hint", text: "Hint reply." },
+        { type: "message", id: "hint", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "main_tutor", presentation: "review", text: "Tutor review." },
         { type: "message", id: "review", sequence: 5, at: "2026-08-21T00:00:04.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "main_tutor", presentation: "review", text: "Review reply." },
       ] as any
     }));
@@ -619,8 +619,8 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector(".timeline-message.authored")).toBeNull();
     expect(container.querySelector(".timeline-message.learner")?.textContent).toContain("Learner reply.");
     expect(container.querySelector(".timeline-message.tutor:not(.hint):not(.review)")?.textContent).toContain("Tutor reply.");
-    expect(container.querySelector(".timeline-message.tutor.hint")?.textContent).toContain("Hint reply.");
-    expect(container.querySelector(".timeline-message.tutor.review")?.textContent).toContain("Review reply.");
+    expect(container.querySelector(".timeline-message.tutor.review")?.textContent).toContain("Tutor review.");
+    expect(container.querySelector(".timeline-message.tutor.review")?.textContent).toContain("Tutor review.");
   });
 
   it("renders Do it for me only for the active authored terminal record with an insertion callback", () => {

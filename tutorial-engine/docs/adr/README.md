@@ -26,9 +26,10 @@ Update the index below whenever you create a record or change its status.
 | [0002](0002-model-evaluated-learner-work-as-attempts.md) | accepted | Model evaluated learner work as attempts |
 | [0003](0003-use-one-long-running-workbook-tutor-session.md) | superseded | Use one long-running workbook tutor session |
 | [0004](0004-use-the-workbook-event-log-as-canonical-tutor-history.md) | superseded | Use the workbook event log as canonical tutor history |
-| [0005](0005-use-a-main-tutor-with-on-demand-block-tutors.md) | accepted | Use a main tutor with on-demand block tutors |
+| [0005](0005-use-a-main-tutor-with-on-demand-block-tutors.md) | superseded | Use a main tutor with on-demand block tutors |
 | [0006](0006-project-workbook-tutor-history-by-role-and-compaction-scope.md) | accepted | Project workbook tutor history by role and compaction scope |
 | [0007](0007-model-every-progression-unit-as-a-workbook-block.md) | accepted | Model every progression unit as a workbook block |
 | [0008](0008-separate-work-acceptance-from-block-completion.md) | accepted | Separate work acceptance from block completion |
 | [0009](0009-separate-authored-content-from-session-local-learner-state.md) | accepted | Separate authored content from session-local learner state |
 | [0010](0010-use-the-workbook-tutor-as-the-only-tutorial-interface.md) | accepted | Use the workbook tutor as the only tutorial interface |
+| [0011](0011-use-a-terminal-practice-coach-with-main-tutor-authority.md) | accepted | Use a terminal Practice Coach with Main Tutor authority |

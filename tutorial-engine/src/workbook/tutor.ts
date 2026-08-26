@@ -14,8 +14,9 @@ import { createTutorialLogger, type TutorialLogger } from "./runtime-log.js";
 import type { Attempt } from "./attempts.js";
 import { projectMainTutorHistory, type ActiveBlockContext, type MainTutorHistoryProjection } from "./pi-history.js";
 import { createResilientTutorSession } from "./pi-tutor-session.js";
-import type { BlockTutorReadiness, TimelineMessage, WorkbookTimelineRecord } from "./timeline.js";
+import type { TimelineMessage, WorkbookTimelineRecord } from "./timeline.js";
 
+export type PracticeCoachHandoff = { outcome: "ready" | "interesting"; text: string };
 export type TutorReview = { attempt: Attempt; privateGuidance: string };
 export type MainTutorContext = {
   records: readonly WorkbookTimelineRecord[];
@@ -33,7 +34,7 @@ export type TutorReplyResult = string | { outcome: "complete-block"; blockId: st
 export interface MainWorkbookTutor {
   restore(input: MainTutorContext): Promise<void>;
   reply(input: MainTutorContext & { learnerMessage: TimelineMessage }): Promise<TutorReplyResult>;
-  review(input: MainTutorContext & TutorReview & { readiness?: BlockTutorReadiness }): Promise<TutorDecision>;
+  review(input: MainTutorContext & TutorReview & { practiceCoachHandoff?: PracticeCoachHandoff }): Promise<TutorDecision>;
   summarizeBlock(input: MainTutorContext & { lessonId: string; blockId: string; coveredThroughId: string }): Promise<string>;
   summarizeLesson(input: MainTutorContext & { lessonId: string; coveredThroughId: string }): Promise<string>;
   dispose(): void;
@@ -96,7 +97,7 @@ function terminalEvidenceHasVisibleWrongResult(attempt: TutorReview["attempt"]):
 
 const TERMINAL_VISIBLE_WRONG_FEEDBACK = "That terminal output shows a visible error or wrong result. Read the message, adjust the command, and try again.";
 
-function reviewPrompt(input: TutorReview & { readiness?: BlockTutorReadiness }): string {
+function reviewPrompt(input: TutorReview & { practiceCoachHandoff?: PracticeCoachHandoff }): string {
   const incompleteInstruction = input.attempt.evidence.kind === "terminal"
     ? "If the terminal evidence is genuinely still running or too incomplete to judge, call mark_attempt_still_working() with no arguments and produce no public text. If the transcript shows a completed wrong command, shell/program error, failed assertion, or unexpected result, do not call mark_attempt_still_working; return concise learner-visible feedback about what to correct without revealing private guidance."
     : input.attempt.evidence.kind === "reflection"
@@ -106,7 +107,7 @@ function reviewPrompt(input: TutorReview & { readiness?: BlockTutorReadiness }):
 
 Trusted private guidance:
 ${input.privateGuidance}
-${input.readiness ? `\nBlock tutor readiness signal (trusted timeline record):\n${JSON.stringify({ attemptId: input.readiness.attemptId, readiness: input.readiness.readiness, text: input.readiness.text }, null, 2)}\n` : ""}
+${input.practiceCoachHandoff ? `\nPrivate Practice Coach handoff (trusted internal signal):\n${JSON.stringify(input.practiceCoachHandoff, null, 2)}\n` : ""}
 Untrusted learner attempt snapshot (JSON):
 ${JSON.stringify({
   lessonId: input.attempt.lessonId,
@@ -257,8 +258,7 @@ export interface MainWorkbookTutorOptions {
 /**
  * The model-backed tutor. Named apart from the MainWorkbookTutor interface above on purpose: a class
  * sharing that name merges with it, and the merged type carries these private fields, so the server
- * option would demand this implementation rather than the contract. FastWorkbookBlockTutor sits the
- * same way beside WorkbookBlockTutor.
+ * option would demand this implementation rather than the contract.
  */
 export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
   readonly workspace: string;
@@ -301,7 +301,7 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
   }
 
 
-  review(input: MainTutorContext & TutorReview & { readiness?: BlockTutorReadiness }): Promise<TutorDecision> {
+  review(input: MainTutorContext & TutorReview & { practiceCoachHandoff?: PracticeCoachHandoff }): Promise<TutorDecision> {
     return this.#enqueue(async () => {
       const context = input;
       const session = await this.#ensureSession(context);

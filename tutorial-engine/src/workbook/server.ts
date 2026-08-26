@@ -8,7 +8,7 @@ import { createTutorialLogger } from "./runtime-log.js";
 import { createDockerPty, requireOpenCodeApiKey, WorkbookTerminalManager, type TerminalPtyFactory } from "./terminal.js";
 import { NO_RUNTIME_PROVISION, trustRuntimeProvision, type RuntimeProvisionProfile, type TrustedRuntimeProvision } from "./runtime-provision.js";
 import { AttemptStore } from "./attempts.js";
-import { FastWorkbookBlockTutor, type WorkbookBlockTutor } from "./block-tutor.js";
+import { FastPracticeCoach, type PracticeCoach } from "./practice-coach.js";
 import { DefaultMainWorkbookTutor, type MainWorkbookTutor } from "./tutor.js";
 import { WorkbookTimeline } from "./timeline.js";
 import { tutorialStatePath } from "./tutorial-state.js";
@@ -21,7 +21,7 @@ const MAX_BODY_BYTES = 16_384;
 const MAX_MESSAGE_BYTES = 4_000;
 
 export interface WorkbookRuntimeDescriptor { contentRoot: string; sessionRoot: string; workspaceRoot: string; runtimeProvision?: TrustedRuntimeProvision; }
-export interface WorkbookServerOptions { target: string; webRoot: string; session?: WorkbookRuntimeDescriptor; runtimeProvision?: RuntimeProvisionProfile; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; mainTutor?: MainWorkbookTutor; blockTutor?: WorkbookBlockTutor; watchContent?: boolean; contentWatchFactory?: ContentWatchFactory; contentWatchDebounceMs?: number; }
+export interface WorkbookServerOptions { target: string; webRoot: string; session?: WorkbookRuntimeDescriptor; runtimeProvision?: RuntimeProvisionProfile; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; mainTutor?: MainWorkbookTutor; practiceCoach?: PracticeCoach; watchContent?: boolean; contentWatchFactory?: ContentWatchFactory; contentWatchDebounceMs?: number; }
 export interface StartedWorkbookServer { url: string; port: number; host: string; close(): Promise<void>; }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
@@ -88,8 +88,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const timeline = new WorkbookTimeline({ stateRoot: runtime.sessionRoot });
   const attempts = new AttemptStore({ stateRoot: runtime.sessionRoot });
   const mainTutor = options.mainTutor ?? new DefaultMainWorkbookTutor({ workspace: runtime.contentRoot, log });
-  const blockTutor = options.blockTutor ?? new FastWorkbookBlockTutor({ workspace: runtime.workspaceRoot, contentRoot: runtime.contentRoot, log });
-  const workflow = await createWorkbookWorkflow({ contentRoot: runtime.contentRoot, learnerWorkspace: runtime.workspaceRoot, timeline, attempts, mainTutor, blockTutor, log });
+  const practiceCoach = options.practiceCoach ?? new FastPracticeCoach({ workspace: runtime.workspaceRoot, log });
+  const workflow = await createWorkbookWorkflow({ contentRoot: runtime.contentRoot, learnerWorkspace: runtime.workspaceRoot, timeline, attempts, mainTutor, practiceCoach, log });
   await workflow.start();
 
   const terminal = embeddedTerminalEnabled ? new WorkbookTerminalManager({
@@ -147,10 +147,6 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         if (Buffer.byteLength(text, "utf8") > MAX_MESSAGE_BYTES) return sendJson(response, 400, { error: "Message text is too large." });
         return sendJson(response, 202, await workflow.sendMessage({ blockId: typeof body.blockId === "string" ? body.blockId : "", text, blockInView: typeof body.blockInView === "string" ? body.blockInView : undefined }));
       } catch (error) { return sendJson(response, errorStatus(error), { error: errorMessage(error) }); }
-    }
-    if (request.method === "POST" && isRoute(url.pathname, "hints")) {
-      try { const body = await readJson(request); return sendJson(response, 202, await workflow.appendHint(typeof body.blockId === "string" ? body.blockId : "")); }
-      catch (error) { return sendJson(response, errorStatus(error), { error: errorMessage(error) }); }
     }
     if (request.method === "POST" && isRoute(url.pathname, "retry")) {
       try { const body = await readJson(request); return sendJson(response, 202, await workflow.retry(typeof body.failureId === "string" ? body.failureId : "")); }
