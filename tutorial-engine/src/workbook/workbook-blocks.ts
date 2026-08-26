@@ -1,5 +1,12 @@
 import type { LoadedWorkbook, WorkbookChapter } from "./load.js";
-import type { WorkbookBlock, WorkbookBlockType, WorkbookLesson } from "./contract.js";
+import type { WorkbookBlock, WorkbookBlockType } from "./contract.js";
+import {
+  formatDeclaredBlockText,
+  formatHeadingText,
+  formatLessonFrameBody,
+  formatPartPreambleText,
+  formatWorkbookIntroductionText,
+} from "./authored-text.js";
 
 export type BlockId = string;
 export type AnchorId = string;
@@ -76,15 +83,6 @@ export function structuralLessonId(block: Pick<OrderedWorkbookBlock, "id" | "ori
   return block.id;
 }
 
-function lessonFrameMarkdown(lesson: Pick<WorkbookLesson, "dek" | "introduction" | "outcomes">): string {
-  return [
-    lesson.dek,
-    "## What you will learn",
-    lesson.outcomes.map((outcome) => `- ${outcome}`).join("\n"),
-    lesson.introduction.trim(),
-  ].filter((section) => section.trim().length > 0).join("\n\n");
-}
-
 export function buildWorkbookBlockStream(loaded: LoadedWorkbook): OrderedWorkbookBlock[] {
   const stream: OrderedWorkbookBlock[] = [{
     origin: "structural",
@@ -121,7 +119,7 @@ export function buildWorkbookBlockStream(loaded: LoadedWorkbook): OrderedWorkboo
       id: lessonId,
       anchorId: lessonId,
       title: chapter.lesson.title,
-      markdown: lessonFrameMarkdown(chapter.lesson),
+      markdown: formatLessonFrameBody(chapter.lesson),
       lessonId,
       chapter,
     });
@@ -146,10 +144,12 @@ export function buildWorkbookBlockStream(loaded: LoadedWorkbook): OrderedWorkboo
 }
 
 export function blockText(block: OrderedWorkbookBlock, workbookTitle?: string): string {
-  if (block.origin === "declared") return `## ${block.title}\n\n${block.markdown}`;
-  if (block.kind === "workbook-introduction") return `# ${workbookTitle ?? block.title}\n\n${block.markdown}`;
-  if (block.kind === "part-preamble") return block.markdown.trim() ? `# ${block.title}\n\n${block.markdown}` : `# ${block.title}`;
-  return `# ${block.title}\n\n${block.markdown}`;
+  if (block.origin === "declared") return formatDeclaredBlockText(block);
+  if (block.kind === "workbook-introduction") {
+    return formatWorkbookIntroductionText({ title: workbookTitle ?? block.title, markdown: block.markdown });
+  }
+  if (block.kind === "part-preamble") return formatPartPreambleText(block);
+  return formatHeadingText(1, block.title, block.markdown);
 }
 
 export function successorAnchor(stream: readonly OrderedWorkbookBlock[], completedBlockId: BlockId): AnchorId {

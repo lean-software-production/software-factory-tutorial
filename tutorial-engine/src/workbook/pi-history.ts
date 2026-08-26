@@ -1,5 +1,11 @@
 import type { Attempt } from "./attempts.js";
 import type { WorkbookBlock, WorkbookLesson } from "./contract.js";
+import {
+  formatDeclaredBlockText,
+  formatLessonFrameText,
+  formatPartPreambleText,
+  formatWorkbookIntroductionText,
+} from "./authored-text.js";
 import type { BlockSummary, LessonSummary, TimelineMessage, WorkbookTimelineRecord } from "./timeline.js";
 
 export type PiHistorySummary = {
@@ -123,24 +129,17 @@ export function projectMainTutorHistory(records: readonly WorkbookTimelineRecord
 
 /** The exact course text displayed at the top of a workbook block. */
 export function authoredIntroductionText(workbook: { title: string }, introduction: string): string {
-  return `# ${workbook.title}\n\n${introduction}`;
+  return formatWorkbookIntroductionText({ title: workbook.title, markdown: introduction });
 }
 
 export function authoredPartText(part: { title: string; markdown?: string }): string {
-  const body = part.markdown?.trim();
-  return body ? `# ${part.title}\n\n${body}` : `# ${part.title}`;
+  return formatPartPreambleText({ title: part.title, markdown: part.markdown?.trim() });
 }
 
 export function authoredLessonFrameText(lesson: Pick<WorkbookLesson, "title" | "dek" | "introduction" | "outcomes">): string {
-  return [
-    `# ${lesson.title}`,
-    lesson.dek,
-    "## What you will learn",
-    lesson.outcomes.map((outcome) => `- ${outcome}`).join("\n"),
-    lesson.introduction.trim(),
-  ].filter((section) => section.trim().length > 0).join("\n\n");
+  return formatLessonFrameText(lesson);
 }
 
 export function authoredBlockText(block: Pick<WorkbookBlock, "title" | "markdown">): string {
-  return `## ${block.title}\n\n${block.markdown}`;
+  return formatDeclaredBlockText(block);
 }
