@@ -15,7 +15,7 @@ async function fixture() {
   await mkdir(resolve(dir, "lessons/001-first/blocks"), { recursive: true });
   await writeFile(resolve(dir, "workbook.md"), ["---", "parts:", "  - id: validation-loop", "    lessons:", "      - 001-first", "---", "# Demo workbook", "", "Welcome."].join("\n"));
   await writeFile(resolve(dir, "parts/validation-loop.md"), ["---", "---", "# Validation loop", "", "Part preamble."].join("\n"));
-  await writeFile(resolve(dir, "lessons/001-first/lesson.md"), ["---", "durationMinutes: 5", "outcomes:", "  - Know the flow.", "blocks:", "  - orientation", "  - edit-answer", "  - finish", "---", "# Run an agent headlessly", "", "Lesson preamble."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/lesson.md"), ["---", "durationMinutes: 5", "outcomes:", "  - Know the flow.", "blocks:", "  - orientation", "  - edit-answer", "  - finish", "---", "# Run an agent headlessly", "", "Lesson preamble.", "", "Full lesson introduction before declared blocks."].join("\n"));
   await writeFile(resolve(dir, "lessons/001-first/blocks/orientation.md"), ["---", "type: narrative", "---", "## Orientation", "", "Read this."].join("\n"));
   await writeFile(resolve(dir, "lessons/001-first/blocks/edit-answer.md"), ["---", "type: editor-practice", "path: factory/answer.txt", "tutor: Accept any clear answer.", "---", "## Edit answer", "", "Write the answer."].join("\n"));
   await mkdir(resolve(dir, "factory"), { recursive: true });
@@ -30,7 +30,8 @@ afterEach(async () => { await Promise.all(dirs.map((dir) => rm(dir, { recursive:
 describe("workbook block progression", () => {
   it("builds structural and declared blocks with canonical anchors in one stream", async () => {
     const loaded = await loadWorkbook(await fixture());
-    expect(buildWorkbookBlockStream(loaded).map((block) => [block.origin, block.kind, block.id, block.anchorId])).toEqual([
+    const stream = buildWorkbookBlockStream(loaded);
+    expect(stream.map((block) => [block.origin, block.kind, block.id, block.anchorId])).toEqual([
       ["structural", "workbook-introduction", "workbook--introduction", "workbook--introduction"],
       ["structural", "part-preamble", "part--validation-loop", "part--validation-loop"],
       ["structural", "lesson-preamble", "lesson--001-first", "lesson--001-first"],
@@ -38,6 +39,10 @@ describe("workbook block progression", () => {
       ["declared", "editor-practice", "lesson--001-first--edit-answer", "lesson--001-first--edit-answer"],
       ["declared", "lesson-transition", "lesson--001-first--finish", "lesson--001-first--finish"],
     ]);
+    const lessonPreamble = stream.find((block) => block.kind === "lesson-preamble");
+    expect(lessonPreamble?.markdown).toContain("Lesson preamble.\n\n## What you will learn\n\n- Know the flow.\n\nFull lesson introduction before declared blocks.");
+    expect(lessonPreamble?.markdown.split("Full lesson introduction before declared blocks.")).toHaveLength(2);
+    expect(stream.filter((block) => block.title === "Full lesson introduction before declared blocks.")).toEqual([]);
   });
 
   it("completes exact current blocks idempotently and rejects skipping unrevealed blocks", async () => {

@@ -39,14 +39,18 @@ Keep the launching terminal open. It prints timestamped startup, browser, Pi, to
 
 ## Tutorial convention
 
-A tutorial needs no engine configuration file. The engine infers it from the directory:
+A tutorial needs no engine configuration file. The engine infers the workbook from authored
+Markdown under the target directory:
 
-- the first `#` heading in the target's `README.md` is the title and the README is the whole-exercise orientation;
-- the target's `docs/specs/README.md` is the lesson ledger;
-- the first `Todo` row is the current lesson;
-- the linked spec tells the tutor what to teach.
+- `workbook.md` has YAML front matter, exactly one H1 title, and workbook introduction Markdown;
+- optional `parts/<part-id>.md` files have empty front matter, one H1 title, and part preamble Markdown;
+- each `lessons/<lesson-id>/lesson.md` has duration, outcomes, and ordered block ids in front matter;
+- a lesson H1 supplies the title; the first paragraph after it is the compact dek used in summaries and history; any remaining Markdown is the full lesson introduction;
+- each `lessons/<lesson-id>/blocks/<block-id>.md` has one H2 title, block-type front matter, and learner-facing Markdown.
 
-The tutor reads those files, guides one small step at a time, and offers to let the learner make a change or make it for them.
+The workbook renders a lesson's structural preamble as title, dek, outcomes, then full
+introduction before the first declared block. The introduction is not a progressive block,
+anchor, event, or completion gate.
 
 ## Commands
 

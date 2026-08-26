@@ -43,8 +43,8 @@ export function buildLessonCatalog(chapters: readonly LessonReferenceTarget[]): 
 /**
  * Where a reference is being resolved from, and the policy that applies there:
  * `workbook.md` may not reference any lesson; a part's `part.md` may only
- * reference a lesson before that part's first lesson; a lesson's dek or block
- * may only reference a strictly earlier lesson than itself.
+ * reference a lesson before that part's first lesson; a lesson's dek,
+ * introduction, or block may only reference a strictly earlier lesson than itself.
  */
 export type ReferenceContext =
   | { kind: "workbook"; path: string }

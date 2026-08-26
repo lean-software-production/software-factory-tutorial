@@ -15,7 +15,7 @@ function chapter(partNumber: number | undefined): LoadedWorkbook["chapters"][num
     title: "A lesson",
     partNumber,
     lessonNumber: 1,
-    lesson: { id: "lesson", title: "A lesson", dek: "", durationMinutes: 1, outcomes: [], blocks: [] },
+    lesson: { id: "lesson", title: "A lesson", dek: "", introduction: "", durationMinutes: 1, outcomes: [], blocks: [] },
   };
 }
 

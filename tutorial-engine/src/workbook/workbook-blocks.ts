@@ -76,8 +76,13 @@ export function structuralLessonId(block: Pick<OrderedWorkbookBlock, "id" | "ori
   return block.id;
 }
 
-function lessonFrameMarkdown(lesson: Pick<WorkbookLesson, "dek" | "outcomes">): string {
-  return [lesson.dek, "## What you will learn", lesson.outcomes.map((outcome) => `- ${outcome}`).join("\n")].join("\n\n");
+function lessonFrameMarkdown(lesson: Pick<WorkbookLesson, "dek" | "introduction" | "outcomes">): string {
+  return [
+    lesson.dek,
+    "## What you will learn",
+    lesson.outcomes.map((outcome) => `- ${outcome}`).join("\n"),
+    lesson.introduction.trim(),
+  ].filter((section) => section.trim().length > 0).join("\n\n");
 }
 
 export function buildWorkbookBlockStream(loaded: LoadedWorkbook): OrderedWorkbookBlock[] {

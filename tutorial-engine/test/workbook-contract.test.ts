@@ -112,8 +112,8 @@ async function writePartDocument(root: string, id: string, title = "Part One Tit
   await writeFile(resolve(root, "parts", `${id}.md`), ["---", "---", `# ${title}`, "", body].join("\n"));
 }
 
-/** Rewrite the fixture's alpha lesson.md (lessonNumber 2), keeping everything but its dek. */
-function alphaLessonMd(dek: string) {
+/** Rewrite the fixture's alpha lesson.md (lessonNumber 2), keeping everything but its dek/introduction. */
+function alphaLessonMd(dek: string, introduction = "") {
   return [
     "---",
     "durationMinutes: 12",
@@ -130,14 +130,16 @@ function alphaLessonMd(dek: string) {
     "# Synthetic Lesson Title",
     "",
     dek,
+    ...(introduction ? ["", introduction] : []),
   ].join("\n");
 }
 
-/** Rewrite the fixture's beta lesson.md (lessonNumber 1), keeping everything but its dek. */
-function betaLessonMd(dek: string) {
+/** Rewrite the fixture's beta lesson.md (lessonNumber 1), keeping everything but its dek/introduction. */
+function betaLessonMd(dek: string, introduction = "") {
   return [
     "---", "durationMinutes: 5", "outcomes:", "  - Beta outcome.", "blocks:", "  - only", "---",
     "# Beta Lesson Title", "", dek,
+    ...(introduction ? ["", introduction] : []),
   ].join("\n");
 }
 
@@ -159,6 +161,7 @@ describe("workbook lesson contract", () => {
     expect(lesson.id).toBe("02-alpha-part/10-first-lesson");
     expect(lesson.title).toBe("Synthetic Lesson Title");
     expect(lesson.dek).toBe("Synthetic dek paragraph.");
+    expect(lesson.introduction).toBe("");
     expect(lesson.durationMinutes).toBe(12);
     expect(lesson.outcomes).toEqual(["Synthetic outcome one.", "Synthetic outcome two."]);
     expect(lesson.blocks.map((block) => [block.id, block.type, block.title])).toEqual([
@@ -235,22 +238,23 @@ describe("workbook lesson contract", () => {
     }
   });
 
-  it("resolves a canonical lesson reference in a lesson dek and block to a standard Markdown link", async () => {
+  it("resolves a canonical lesson reference in a lesson dek, introduction, and block to a standard Markdown link", async () => {
     const dir = await flatFixture();
     const token = "[[lesson:001-first-lesson]]";
-    await writeFile(resolve(dir, "lessons/002-second-lesson/lesson.md"), betaLessonMd(token));
+    await writeFile(resolve(dir, "lessons/002-second-lesson/lesson.md"), betaLessonMd(token, `Intro refers back to ${token}.`));
     await writeFile(resolve(dir, "lessons/002-second-lesson/blocks/only.md"), introBlockMd(token));
 
     const workbook = await loadWorkbook(dir);
     const chapter = workbook.chapters.find((c) => c.id === "002-second-lesson");
     const expected = "[Lesson 1: First Flat Lesson](#lesson-001-first-lesson)";
     expect(chapter?.lesson.dek).toBe(expected);
+    expect(chapter?.lesson.introduction).toBe(`Intro refers back to ${expected}.`);
     expect(chapter?.lesson.blocks[0]?.markdown).toBe(expected);
   });
 
-  it("rejects an unknown lesson reference, naming its source file and the canonical syntax", async () => {
+  it("rejects an unknown lesson reference in an introduction, naming its source file and the canonical syntax", async () => {
     const dir = await flatFixture();
-    await writeFile(resolve(dir, "lessons/002-second-lesson/lesson.md"), betaLessonMd("[[lesson:999-missing-lesson]]"));
+    await writeFile(resolve(dir, "lessons/002-second-lesson/lesson.md"), betaLessonMd("Second flat dek.", "[[lesson:999-missing-lesson]]"));
     const message = await messageFrom(loadWorkbook(dir));
     expect(message).toMatch(/unknown lesson reference/i);
     expect(message).toContain("lessons/002-second-lesson/lesson.md");
@@ -356,7 +360,8 @@ describe("workbook lesson contract", () => {
     const offenders = workbook.chapters.flatMap((chapter) => {
       const found: string[] = [];
       if (chapter.partMarkdown?.includes("[[lesson:")) found.push(`${chapter.id}/part.md`);
-      if (chapter.lesson.dek.includes("[[lesson:")) found.push(`${chapter.id}/lesson.md`);
+      if (chapter.lesson.dek.includes("[[lesson:")) found.push(`${chapter.id}/lesson.md#dek`);
+      if (chapter.lesson.introduction.includes("[[lesson:")) found.push(`${chapter.id}/lesson.md#introduction`);
       for (const block of chapter.lesson.blocks) if (block.markdown.includes("[[lesson:")) found.push(`${chapter.id}/blocks/${block.id}`);
       return found;
     });
@@ -366,9 +371,11 @@ describe("workbook lesson contract", () => {
   it("loads the real migrated lesson 001 content unchanged", async () => {
     const lessonDir = resolve(REAL_WORKBOOK_ROOT, "lessons/001-run-an-agent-headlessly");
     const lesson = await loadWorkbookLesson(lessonDir, "001-run-an-agent-headlessly");
-    expect(lesson.title).toBe("Run an agent headlessly");
+    expect(lesson.title).toBe("Run a headless agent");
     expect(lesson.durationMinutes).toBe(10);
-    expect(lesson.blocks.map((block) => block.id)).toEqual(["orientation", "run-supplied-command", "change-job", "reflection", "transition"]);
+    expect(lesson.introduction).toContain("An **agent** is a harness with a job to be done.");
+    expect(lesson.introduction).toContain("Claude's docs");
+    expect(lesson.blocks.map((block) => block.id)).toEqual(["run-supplied-command", "change-job", "reflection", "transition"]);
     const practice = lesson.blocks.find((block) => block.id === "run-supplied-command");
     if (practice?.type !== "terminal-practice") throw new Error("run-supplied-command must be terminal-practice");
     expect(practice.tutor.length).toBeGreaterThan(0);
@@ -423,12 +430,14 @@ describe("workbook lesson contract", () => {
     expect(workbook.chapters.every((chapter) => chapter.lesson)).toBe(true);
   });
 
-  it("keeps real curriculum block Markdown learner-facing", async () => {
+  it("keeps real curriculum lesson introductions and block Markdown learner-facing", async () => {
     const workbook = await loadWorkbook(REAL_WORKBOOK_ROOT);
-    const offenders = workbook.chapters.flatMap((chapter) =>
-      chapter.lesson.blocks
+    const offenders = workbook.chapters.flatMap((chapter) => [
+      ...(exposesAuthorDirection(chapter.lesson.introduction) ? [`${chapter.id}/lesson.md#introduction`] : []),
+      ...chapter.lesson.blocks
         .filter((block) => exposesAuthorDirection(block.markdown))
-        .map((block) => `${chapter.id}/blocks/${block.id}`));
+        .map((block) => `${chapter.id}/blocks/${block.id}`),
+    ]);
 
     expect(offenders).toEqual([]);
   });
@@ -522,13 +531,15 @@ describe("workbook lesson contract", () => {
     await expect(loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "id")).rejects.toThrow(/content before the H1 title/i);
   });
 
-  it("rejects extra lesson body content after the dek paragraph", async () => {
+  it("extracts Markdown-rich lesson introduction after the dek paragraph", async () => {
     const dir = await fixture();
-    await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), [
-      "---", "durationMinutes: 12", "outcomes:", "  - X", "blocks:", "  - intro", "---",
-      "# Title", "", "Dek paragraph.", "", "Extra lesson body that belongs in a block.",
-    ].join("\n"));
-    await expect(loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "id")).rejects.toThrow(/extra content after the dek/i);
+    await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), alphaLessonMd(
+      "Dek paragraph.",
+      ["Intro paragraph with **Markdown**.", "", "- Keep this list.", "- And this item.", "", "```sh", "echo hi", "```"].join("\n"),
+    ));
+    const loaded = await loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "id");
+    expect(loaded.dek).toBe("Dek paragraph.");
+    expect(loaded.introduction).toBe("Intro paragraph with **Markdown**.\n\n- Keep this list.\n- And this item.\n\n```sh\necho hi\n```");
   });
 
   it("rejects a block without exactly one H2 title heading", async () => {
@@ -648,11 +659,27 @@ describe("workbook lesson contract", () => {
     expect(() => validatePartManifest({ order: 1 }, "parts/x.md")).toThrow(/unknown front matter field "order"/);
   });
 
+  it("requires an assembled lesson introduction string while allowing it to be empty", () => {
+    expect(validateWorkbookLesson({
+      id: "x", title: "Title", dek: "Dek", introduction: "", durationMinutes: 5, outcomes: ["Outcome."],
+      blocks: [{ id: "a", type: "narrative", title: "A", markdown: "Body" }],
+    }, "lesson").introduction).toBe("");
+    expect(() => validateWorkbookLesson({
+      id: "x", title: "Title", dek: "Dek", durationMinutes: 5, outcomes: ["Outcome."],
+      blocks: [{ id: "a", type: "narrative", title: "A", markdown: "Body" }],
+    }, "lesson")).toThrow(/introduction/);
+    expect(() => validateWorkbookLesson({
+      id: "x", title: "Title", dek: "Dek", introduction: 42, durationMinutes: 5, outcomes: ["Outcome."],
+      blocks: [{ id: "a", type: "narrative", title: "A", markdown: "Body" }],
+    }, "lesson")).toThrow(/introduction/);
+  });
+
   it("reports location-specific errors for a malformed assembled lesson", () => {
     expect(() => validateWorkbookLesson({
       id: "x",
       title: "Title",
       dek: "Dek",
+      introduction: "",
       durationMinutes: 5,
       outcomes: ["Outcome."],
       blocks: [
@@ -665,7 +692,7 @@ describe("workbook lesson contract", () => {
 
   it("rejects an invalid or non-positive duration on the assembled lesson", () => {
     expect(() => validateWorkbookLesson({
-      id: "x", title: "Title", dek: "Dek", durationMinutes: 0, outcomes: ["Outcome."],
+      id: "x", title: "Title", dek: "Dek", introduction: "", durationMinutes: 0, outcomes: ["Outcome."],
       blocks: [{ id: "a", type: "narrative", title: "A", markdown: "Body" }],
     }, "lesson")).toThrow(/durationMinutes/);
   });

@@ -131,8 +131,14 @@ export function authoredPartText(part: { title: string; markdown?: string }): st
   return body ? `# ${part.title}\n\n${body}` : `# ${part.title}`;
 }
 
-export function authoredLessonFrameText(lesson: Pick<WorkbookLesson, "title" | "dek" | "outcomes">): string {
-  return [`# ${lesson.title}`, lesson.dek, "## What you will learn", lesson.outcomes.map((outcome) => `- ${outcome}`).join("\n")].join("\n\n");
+export function authoredLessonFrameText(lesson: Pick<WorkbookLesson, "title" | "dek" | "introduction" | "outcomes">): string {
+  return [
+    `# ${lesson.title}`,
+    lesson.dek,
+    "## What you will learn",
+    lesson.outcomes.map((outcome) => `- ${outcome}`).join("\n"),
+    lesson.introduction.trim(),
+  ].filter((section) => section.trim().length > 0).join("\n\n");
 }
 
 export function authoredBlockText(block: Pick<WorkbookBlock, "title" | "markdown">): string {

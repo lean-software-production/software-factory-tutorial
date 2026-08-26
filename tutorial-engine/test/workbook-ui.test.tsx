@@ -91,6 +91,7 @@ const lesson: Lesson = {
   id: "part/lesson-one",
   title: "Markdown Lesson",
   dek: "Dek paragraph.",
+  introduction: "Full **lesson introduction**.\n\n- First idea\n- Second idea",
   durationMinutes: 14,
   outcomes: ["Run the supplied command.", "Explain what changed."],
   blocks: [
@@ -943,12 +944,16 @@ describe("workbook lesson UI", () => {
     expect(feedbackMarkup).toContain('aria-label="Copy code"');
   });
 
-  it("renders the Markdown manifest lesson header, fixed outcomes section, and ordered Markdown blocks", () => {
+  it("renders the Markdown manifest lesson header, fixed outcomes, introduction, and ordered Markdown blocks", () => {
     const markup = html(createElement(LessonView, { chapter: chapter(), progress, refresh: vi.fn() }));
 
     expect(markup).toContain('<header id="lesson-part-lesson-one"><p class="eyebrow">Lesson 1</p><h1>Markdown Lesson</h1><p class="dek">Dek paragraph.</p><div class="lesson-meta"><span class="chip duration">14 min</span></div></header>');
     expect(markup).toContain("What you will learn");
     expect(markup).toContain("Run the supplied command.");
+    expect(markup).toContain('class="lesson-introduction"');
+    expect(markup).toContain("Full <strong>lesson introduction</strong>.");
+    expect(markup.indexOf("Full <strong>lesson introduction</strong>.")).toBeGreaterThan(markup.indexOf("Run the supplied command."));
+    expect(markup.indexOf("Full <strong>lesson introduction</strong>.")).toBeLessThan(markup.indexOf("Orientation"));
     expect(markup.indexOf("Orientation")).toBeLessThan(markup.indexOf("Practice"));
     expect(markup).toContain("<strong>carefully</strong>");
     expect(markup).toContain("<li>One</li>");
@@ -1609,7 +1614,7 @@ describe("workbook lesson UI", () => {
   });
 
   it("renders conversational intro, part, lesson frame, and block content only in the timeline", async () => {
-    const conversationalLesson = { ...lesson, dek: "TIMELINE_ONLY_DEK", outcomes: ["TIMELINE_ONLY_OUTCOME"], blocks: [{ ...lesson.blocks[0]!, markdown: "Block body duplicated only if document blocks render." }] };
+    const conversationalLesson = { ...lesson, dek: "TIMELINE_ONLY_DEK", introduction: "TIMELINE_ONLY_LESSON_INTRO", outcomes: ["TIMELINE_ONLY_OUTCOME"], blocks: [{ ...lesson.blocks[0]!, markdown: "Block body duplicated only if document blocks render." }] };
     const state = {
       workbook: { title: "Workbook" },
       introduction: "TIMELINE_ONLY_INTRO",
@@ -1620,7 +1625,7 @@ describe("workbook lesson UI", () => {
       timeline: [
         { type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nTIMELINE_ONLY_INTRO" },
         { type: "message", id: "part", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "workbook:part:part-one", blockId: "__part__", role: "assistant", source: "authored", presentation: "course", text: "# Part One\n\nTIMELINE_ONLY_PART_COPY" },
-        { type: "message", id: "frame", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: lesson.id, blockId: "__lesson_frame__", role: "assistant", source: "authored", presentation: "course", text: "# Markdown Lesson\n\nTIMELINE_ONLY_DEK\n\n## What you will learn\n\n- TIMELINE_ONLY_OUTCOME" },
+        { type: "message", id: "frame", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: lesson.id, blockId: "__lesson_frame__", role: "assistant", source: "authored", presentation: "course", text: "# Markdown Lesson\n\nTIMELINE_ONLY_DEK\n\n## What you will learn\n\n- TIMELINE_ONLY_OUTCOME\n\nTIMELINE_ONLY_LESSON_INTRO" },
         { type: "message", id: "block", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: lesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nBlock body duplicated only if document blocks render." },
       ]
     } as any;
@@ -1634,10 +1639,12 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector(".workbook-intro")).toBeNull();
     expect(container.querySelector(".part-chapter")).toBeNull();
     expect(container.querySelector(".opening")).toBeNull();
+    expect(container.querySelector(".lesson-introduction")).toBeNull();
     expect(text.match(/TIMELINE_ONLY_INTRO/g)).toHaveLength(1);
     expect(text.match(/TIMELINE_ONLY_PART_COPY/g)).toHaveLength(1);
     expect(text.match(/TIMELINE_ONLY_DEK/g)).toHaveLength(1);
     expect(text.match(/TIMELINE_ONLY_OUTCOME/g)).toHaveLength(1);
+    expect(text.match(/TIMELINE_ONLY_LESSON_INTRO/g)).toHaveLength(1);
     expect(text.match(/Block body duplicated only if document blocks render\./g)).toHaveLength(1);
   });
 

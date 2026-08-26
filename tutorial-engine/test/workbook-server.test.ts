@@ -62,7 +62,7 @@ async function sessionFixture() {
   return { dir, session };
 }
 
-async function writeLesson(lessonDir: string, title: string, blocks: string[]) {
+async function writeLesson(lessonDir: string, title: string, blocks: string[], introduction = "Fixture lesson introduction.") {
   await writeFile(resolve(lessonDir, "lesson.md"), [
     "---",
     "durationMinutes: 10",
@@ -74,6 +74,7 @@ async function writeLesson(lessonDir: string, title: string, blocks: string[]) {
     `# ${title}`,
     "",
     `${title} dek.`,
+    ...(introduction ? ["", introduction] : []),
   ].join("\n"));
 }
 
@@ -263,19 +264,19 @@ afterEach(async () => {
 });
 
 describe("workbook browser API", () => {
-  it("hot reloads authored Markdown, resets presentation, and retains learner workspace files", async () => {
+  it("hot reloads lesson Markdown, resets presentation, and retains learner workspace files", async () => {
     const { dir, session } = await sessionFixture();
     const fakeWatch = fakeContentWatchFactory();
     await writeFile(resolve(session.workspaceRoot, "factory/sentinel.txt"), "keep me\n", "utf8");
     const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, watchContent: true, contentWatchFactory: fakeWatch.factory, contentWatchDebounceMs: 1, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });
     try {
-      await waitForWatchPath(fakeWatch, resolve(session.contentRoot, "lessons/001-first/blocks"));
+      await waitForWatchPath(fakeWatch, resolve(session.contentRoot, "lessons/001-first"));
       await introduceAndOpenEditor(server.url);
       expect((await state(server.url)).progress.activeBlockId).toBe("lesson--001-first--edit-answer");
 
       const reloaded = nextSseEvent(server.url, "content-reloaded");
-      await writeBlock(resolve(dir, "lessons/001-first"), "orientation", "narrative", "Orientation reloaded", "Edited concept text.");
-      fakeWatch.emit(resolve(session.contentRoot, "lessons/001-first/blocks"), "orientation.md");
+      await writeLesson(resolve(dir, "lessons/001-first"), "First lesson reloaded", ["orientation", "edit-answer", "run-supplied-command", "change-job", "reflection", "transition"], "Reloaded lesson introduction.");
+      fakeWatch.emit(resolve(session.contentRoot, "lessons/001-first"), "lesson.md");
       await reloaded;
 
       const reset = await state(server.url);
@@ -288,8 +289,11 @@ describe("workbook browser API", () => {
       await completeBlock(server.url, "workbook--introduction");
       await continueActive(server.url);
       const opened = await continueActive(server.url).then((response) => response.json() as any);
-      const orientation = opened.state.chapters[0].lesson.blocks.find((candidate: any) => candidate.id === "lesson--001-first--orientation");
-      expect(orientation).toMatchObject({ title: "Orientation reloaded", markdown: "Edited concept text." });
+      expect(opened.state.chapters[0].lesson).toMatchObject({ title: "First lesson reloaded", dek: "First lesson reloaded dek.", introduction: "Reloaded lesson introduction." });
+      const preambleText = opened.state.timeline.find((record: any) => record.type === "message" && record.blockId === "lesson--001-first")?.text;
+      expect(preambleText).toContain("# First lesson reloaded");
+      expect(preambleText).toContain("Reloaded lesson introduction.");
+      expect(preambleText.split("Reloaded lesson introduction.")).toHaveLength(2);
     } finally { await server.close(); }
   });
 

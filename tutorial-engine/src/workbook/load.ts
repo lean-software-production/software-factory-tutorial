@@ -86,15 +86,14 @@ function extractHeading(body: string, level: 1 | 2, location: string): { title: 
   return { title, body: body.slice(end).trim() };
 }
 
-/** The first paragraph after a lesson's H1 is its dek; a lesson has no other authored content. */
-function extractDek(body: string, location: string): string {
+/** The first paragraph after a lesson's H1 is its compact dek; any remaining Markdown is its full introduction. */
+function extractLessonBody(body: string, location: string): { dek: string; introduction: string } {
   const trimmed = body.trim();
   if (!trimmed) throw new Error(`${location} needs a dek: one paragraph of prose after its title heading.`);
   const match = /^([\s\S]+?)(?:\r?\n[ \t]*\r?\n|$)/.exec(trimmed)!;
   const dek = match[1]!.trim();
-  const rest = trimmed.slice(match[0].length).trim();
-  if (rest) throw new Error(`${location} may only contain a title heading and a dek paragraph; found extra content after the dek.`);
-  return dek;
+  const introduction = trimmed.slice(match[0].length).trim();
+  return { dek, introduction };
 }
 
 async function readTitledDocument(path: string, level: 1 | 2): Promise<{ data: Record<string, unknown>; title: string; body: string }> {
@@ -191,7 +190,7 @@ export async function loadWorkbookLesson(lessonDir: string, id: string): Promise
   const { data, body } = await readMarkdown(lessonPath);
   const front = validateLessonFrontMatter(data, lessonPath);
   const { title, body: afterTitle } = extractHeading(body, 1, lessonPath);
-  const dek = extractDek(afterTitle, lessonPath);
+  const { dek, introduction } = extractLessonBody(afterTitle, lessonPath);
 
   const blocksDir = resolve(lessonDir, BLOCKS_DIR);
   let blockFiles: string[] = [];
@@ -203,7 +202,7 @@ export async function loadWorkbookLesson(lessonDir: string, id: string): Promise
   if (unlisted.length) throw new Error(`${lessonPath}: blocks/ contains file(s) not listed in front matter blocks: ${unlisted.join(", ")}.`);
 
   const blocks = await Promise.all(front.blocks.map((blockId) => loadWorkbookBlock(lessonDir, blockId, lessonPath)));
-  return validateWorkbookLesson({ id, title, dek, durationMinutes: front.durationMinutes, outcomes: front.outcomes, blocks }, lessonPath);
+  return validateWorkbookLesson({ id, title, dek, introduction, durationMinutes: front.durationMinutes, outcomes: front.outcomes, blocks }, lessonPath);
 }
 
 interface ChapterDraft extends Omit<WorkbookChapter, "lessonNumber"> {
@@ -249,8 +248,9 @@ async function flatChapterGroups(workspace: string, manifest: WorkbookManifest, 
 
 /**
  * Load every authored document, then resolve every canonical `[[lesson:...]]`
- * reference to standard Markdown. References are only resolvable once every
- * chapter has been discovered and globally numbered, so `loadWorkbookLesson()`
+ * reference in workbook, part, lesson, and block prose to standard Markdown.
+ * References are only resolvable once every chapter has been discovered and
+ * globally numbered, so `loadWorkbookLesson()`
  * stays raw and standalone: resolution happens here, and only here, against a
  * catalog built from the final chapter order.
  */
@@ -291,11 +291,12 @@ export async function loadWorkbook(target: string): Promise<LoadedWorkbook> {
   const chapters: WorkbookChapter[] = drafts.map((chapter) => {
     const context: ReferenceContext = { kind: "lesson", path: chapter.lessonPath, lessonId: chapter.id, lessonNumber: chapter.lessonNumber };
     const dek = resolveLessonReferences(chapter.lesson.dek, catalog, context);
+    const introduction = resolveLessonReferences(chapter.lesson.introduction, catalog, context);
     const blocks = chapter.lesson.blocks.map((block) => {
       const blockPath = resolve(chapter.lessonDir, BLOCKS_DIR, `${block.id}.md`);
       return { ...block, markdown: resolveLessonReferences(block.markdown, catalog, { ...context, path: blockPath }) };
     });
-    const lesson = validateWorkbookLesson({ ...chapter.lesson, dek, blocks }, chapter.lessonPath);
+    const lesson = validateWorkbookLesson({ ...chapter.lesson, dek, introduction, blocks }, chapter.lessonPath);
     return {
       id: chapter.id,
       title: chapter.title,

@@ -17,7 +17,7 @@ export type EditorPracticeBlock = BlockBase & { type: "editor-practice"; path: s
 export type ReflectionBlock = BlockBase & { type: "reflection" };
 export type LessonTransitionBlock = BlockBase & { type: "lesson-transition" };
 export type Block = NarrativeBlock | TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock | LessonTransitionBlock;
-export type Lesson = { id: string; title: string; dek: string; durationMinutes: number; outcomes: string[]; blocks: Block[] };
+export type Lesson = { id: string; title: string; dek: string; introduction: string; durationMinutes: number; outcomes: string[]; blocks: Block[] };
 export type Chapter = { id: string; title: string; partId?: string; part?: string; partMarkdown?: string; partNumber?: number; lessonNumber: number; lesson?: Lesson };
 export type AttemptKind = "editor" | "terminal" | "reflection";
 export type EditorStatus = "editing" | "waiting" | "reviewing" | "feedback" | "unlocked";
@@ -638,6 +638,7 @@ export function LessonView({ chapter, progress, refresh, renderBlocks = true, ch
   return <article data-lesson-id={chapter.id} key={chapter.id} className="chapter">
     <header id={lessonElementId(chapter.id)}><p className="eyebrow">Lesson {chapter.lessonNumber}</p><h1>{chapter.lesson.title}</h1><p className="dek">{chapter.lesson.dek}</p><div className="lesson-meta"><span className="chip duration">{chapter.lesson.durationMinutes} min</span></div></header>
     <section className="opening"><p className="section-label">What you will learn</p><h2>What you will learn</h2><ul className="outcomes">{chapter.lesson.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></section>
+    {chapter.lesson.introduction.trim() && <section className="lesson-introduction"><Markdown source="authored">{chapter.lesson.introduction}</Markdown></section>}
     {renderBlocks && chapter.lesson.blocks.map((block) => <BlockView key={block.id} lessonId={chapter.id} block={block} progress={progress} refresh={refresh} />)}
     {children}
   </article>;

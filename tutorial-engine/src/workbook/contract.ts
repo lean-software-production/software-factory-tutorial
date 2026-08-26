@@ -19,11 +19,12 @@ export interface ReflectionBlock extends WorkbookBlockBase { type: "reflection";
 export interface LessonTransitionBlock extends WorkbookBlockBase { type: "lesson-transition"; }
 export type WorkbookBlock = NarrativeBlock | TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock | LessonTransitionBlock;
 
-/** The assembled lesson: title and dek come from lesson.md's H1 and first paragraph. */
+/** The assembled lesson: title, compact dek, and possibly empty full introduction come from lesson.md. */
 export interface WorkbookLesson {
   id: string;
   title: string;
   dek: string;
+  introduction: string;
   durationMinutes: number;
   outcomes: string[];
   blocks: WorkbookBlock[];
@@ -176,7 +177,7 @@ export function validateBlockFrontMatter(data: unknown, location: string): Block
   };
 }
 
-/** Validate a fully assembled lesson: its resolved title/dek/duration/outcomes and its ordered typed blocks. */
+/** Validate a fully assembled lesson: its resolved title/dek/introduction/duration/outcomes and ordered typed blocks. */
 export function validateWorkbookLesson(value: unknown, location = "lesson"): WorkbookLesson {
   const errors: string[] = [];
   const lesson = value as Partial<WorkbookLesson> | null;
@@ -185,6 +186,7 @@ export function validateWorkbookLesson(value: unknown, location = "lesson"): Wor
   if (!isNonEmptyString(lesson.id)) errors.push(`${location}.id is required`);
   if (!isNonEmptyString(lesson.title)) errors.push(`${location}.title is required`);
   if (!isNonEmptyString(lesson.dek)) errors.push(`${location}.dek is required`);
+  if (typeof lesson.introduction !== "string") errors.push(`${location}.introduction is required and must be a string`);
   if (typeof lesson.durationMinutes !== "number" || !Number.isFinite(lesson.durationMinutes) || lesson.durationMinutes <= 0) errors.push(`${location}.durationMinutes must be a positive number`);
   if (!isStringArray(lesson.outcomes) || lesson.outcomes.length === 0 || lesson.outcomes.some((item) => !isNonEmptyString(item))) errors.push(`${location}.outcomes must be a non-empty list of non-empty strings`);
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authoredBlockText, projectMainTutorHistory, projectPiHistory, type ActiveBlockContext } from "../src/workbook/pi-history.js";
+import { authoredBlockText, authoredLessonFrameText, projectMainTutorHistory, projectPiHistory, type ActiveBlockContext } from "../src/workbook/pi-history.js";
 import type { WorkbookTimelineRecord } from "../src/workbook/timeline.js";
 
 function timestamp(sequence: number): string {
@@ -126,6 +126,18 @@ describe("workbook Pi history", () => {
   it("formats the title and markdown the learner sees for authored history", () => {
     expect(authoredBlockText({ title: "Write it", markdown: "Use `.tmp`." }))
       .toBe("## Write it\n\nUse `.tmp`.");
+    expect(authoredLessonFrameText({
+      title: "Lesson One",
+      dek: "Short dek.",
+      outcomes: ["Outcome one."],
+      introduction: "Full introduction.",
+    })).toBe("# Lesson One\n\nShort dek.\n\n## What you will learn\n\n- Outcome one.\n\nFull introduction.");
+    expect(authoredLessonFrameText({
+      title: "Lesson One",
+      dek: "Short dek.",
+      outcomes: ["Outcome one."],
+      introduction: "",
+    })).toBe("# Lesson One\n\nShort dek.\n\n## What you will learn\n\n- Outcome one.");
   });
 
   it("projects active block context separately from learner-visible history", () => {

@@ -16,6 +16,7 @@ const lesson: WorkbookLesson = {
   id: LESSON_ID,
   title: "Fixture lesson",
   dek: "Fixture dek.",
+  introduction: "Fixture introduction.",
   durationMinutes: 10,
   outcomes: ["Fixture outcome."],
   blocks: [
