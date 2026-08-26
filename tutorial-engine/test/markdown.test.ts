@@ -118,10 +118,10 @@ describe("the transcript's layout", () => {
     expect(styles).not.toContain("code-block-toolbar");
   });
 
-  it("bounds Mermaid diagrams and allows horizontal scrolling", () => {
+  it("bounds Mermaid diagrams within the Markdown column", () => {
     expect(declarations(".mermaid-diagram")).toContain("width: 100%");
     expect(declarations(".mermaid-diagram")).toContain("overflow-x: auto");
-    expect(declarations(".mermaid-diagram svg")).toContain("max-width: none");
+    expect(declarations(".mermaid-diagram svg")).toContain("max-width: 100%");
   });
 });
 
