@@ -91,4 +91,34 @@ describe("TimelineThread", () => {
     expect(markup).toContain("<em>this</em>");
     expect(markup).toContain("<strong>scratch</strong>");
   });
+
+  it("keeps the tutor thinking status visible while an active reflection is reviewing only", () => {
+    const records = [
+      { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson", blockId: "reflect", role: "assistant", source: "authored", presentation: "course", text: "## Reflect\n\nWhy did it work?" },
+      { type: "message", id: "learner", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "reflect", role: "user", source: "learner", presentation: "chat", text: "Because flow is visible." },
+    ] as const;
+    const reviewingMarkup = renderToStaticMarkup(createElement(TimelineThread, {
+      activeLessonId: "lesson",
+      activeBlockId: "reflect",
+      onSend: noopSend,
+      onRetry: noopRetry,
+      activeReflectionReviewing: true,
+      records
+    }));
+    const acceptedMarkup = renderToStaticMarkup(createElement(TimelineThread, {
+      activeLessonId: "lesson",
+      activeBlockId: "reflect",
+      onSend: noopSend,
+      onRetry: noopRetry,
+      activeReflectionReviewing: false,
+      records: [...records, { type: "message", id: "review", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "lesson", blockId: "reflect", role: "assistant", source: "block_tutor", presentation: "review", text: "Accepted." }]
+    }));
+
+    expect(reviewingMarkup).toContain('role="status"');
+    expect(reviewingMarkup).toContain('aria-label="Tutor is thinking"');
+    expect(reviewingMarkup).toContain("Thinking");
+    expect(acceptedMarkup).toContain("Tutor review");
+    expect(acceptedMarkup).not.toContain('class="timeline-message tutor thinking"');
+    expect(acceptedMarkup).not.toContain("Thinking");
+  });
 });
