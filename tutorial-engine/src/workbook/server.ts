@@ -19,6 +19,7 @@ import { tutorialStatePath } from "./tutorial-state.js";
 import { WorkbookTimeline, type BlockTutorReadiness, type TimelineMessage, type TutorFailure, type WorkbookTimelineRecord } from "./timeline.js";
 import { watchWorkbookContent, type ContentWatch, type ContentWatchFactory } from "./content-watch.js";
 import type { EditorPracticeBlock, WorkbookBlock, WorkbookLesson } from "./contract.js";
+import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookLesson, PublicWorkbookOrderedBlock, PublicWorkbookState } from "./public-contract.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
 const MIME_TYPES: Record<string, string> = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json; charset=utf-8" };
@@ -31,33 +32,8 @@ export interface WorkbookRuntimeDescriptor { contentRoot: string; sessionRoot: s
 export interface WorkbookServerOptions { target: string; webRoot: string; session?: WorkbookRuntimeDescriptor; runtimeProvision?: RuntimeProvisionProfile; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; mainTutor?: MainWorkbookTutor; blockTutor?: WorkbookBlockTutor; watchContent?: boolean; contentWatchFactory?: ContentWatchFactory; contentWatchDebounceMs?: number; }
 export interface StartedWorkbookServer { url: string; port: number; host: string; close(): Promise<void>; }
 
-type PublicCheckpoint = {
-  status: "working" | "reviewing" | "feedback" | "accepted";
-  feedback?: string;
-  successMessage?: string;
-  evidence?: { kind: AttemptEvidence["kind"]; text?: string; terminalHtml?: string; conversation?: Array<{ role: "learner" | "tutor"; text: string }> };
-};
-type PublicBlockProgress = {
-  id: string;
-  type: string;
-  emerged: boolean;
-  ready: boolean;
-  active: boolean;
-  completed: boolean;
-  verified: boolean;
-  terminalHtml?: string;
-  checkpoint?: PublicCheckpoint;
-  draftText?: string;
-  revision?: number;
-  editorStatus?: "editing" | "reviewing" | "feedback" | "unlocked";
-};
 type AcceptedCheckpoint = { summary: string; kind: AttemptEvidence["kind"] };
-type PublicTutorFailure = Omit<TutorFailure, "requestId"> & { failureId: string };
-type PublicTimelineRecord = TimelineMessage | PublicTutorFailure;
-type CompleteBlockResult =
-  | { outcome: "completed"; state: Awaited<ReturnType<typeof publicState>>; navigationTarget: AnchorId }
-  | { outcome: "already-completed"; state: Awaited<ReturnType<typeof publicState>> }
-  | { outcome: "rejected"; state: Awaited<ReturnType<typeof publicState>>; reason: "unrevealed" | "not-current" | "ineligible" };
+type CompleteBlockResult = PublicCompleteBlockResult;
 
 type WorkbookProjectionState = {
   stream: OrderedWorkbookBlock[];
@@ -111,8 +87,8 @@ function isEvaluatedBlock(block: WorkbookBlock): block is Extract<WorkbookBlock,
 function evidenceMatchesBlock(evidence: AttemptEvidence, block: WorkbookBlock): boolean { return (evidence.kind === "editor" && block.type === "editor-practice") || (evidence.kind === "terminal" && block.type === "terminal-practice") || (evidence.kind === "reflection" && block.type === "reflection"); }
 function acceptsWorkImmediately(block: OrderedWorkbookBlock): boolean { return block.origin === "structural" || block.kind === "narrative"; }
 
-function publicBlock(block: WorkbookBlock) { const { tutor: _privateTutor, ...visible } = block as WorkbookBlock & { tutor?: string }; return visible; }
-function publicLesson(lesson: WorkbookLesson, blocks: WorkbookBlock[]) { return { ...lesson, blocks: blocks.map(publicBlock) }; }
+function publicBlock(block: WorkbookBlock): PublicWorkbookBlock { const { tutor: _privateTutor, ...visible } = block as WorkbookBlock & { tutor?: string }; return visible; }
+function publicLesson(lesson: WorkbookLesson, blocks: WorkbookBlock[]): PublicWorkbookLesson { return { ...lesson, blocks: blocks.map(publicBlock) }; }
 async function readTargetDraftText(workspace: string, block: EditorPracticeBlock): Promise<string> { try { return await readFile(await resolveEditorTarget(workspace, block.path), "utf8"); } catch (error: any) { if (error?.code === "ENOENT") return ""; throw error; } }
 function publicAttemptEvidence(attempt: Attempt): PublicCheckpoint["evidence"] {
   if (attempt.evidence.kind === "editor") return { kind: "editor", text: attempt.evidence.text };
@@ -275,7 +251,7 @@ function declaredRefForInput(workbookProjection: WorkbookProjectionState, blockI
   return undefined;
 }
 
-function publicOrderedBlock(block: OrderedWorkbookBlock, index: number) {
+function publicOrderedBlock(block: OrderedWorkbookBlock, index: number): PublicWorkbookOrderedBlock {
   return {
     id: block.id,
     anchorId: block.anchorId,
@@ -288,7 +264,7 @@ function publicOrderedBlock(block: OrderedWorkbookBlock, index: number) {
   };
 }
 
-async function publicState(loaded: LoadedWorkbook, learnerWorkspace: string, records: WorkbookTimelineRecord[], attempts: AttemptStore) {
+async function publicState(loaded: LoadedWorkbook, learnerWorkspace: string, records: WorkbookTimelineRecord[], attempts: AttemptStore): Promise<PublicWorkbookState> {
   const stream = buildWorkbookBlockStream(loaded);
   const workbookProjection = projectWorkbookBlocks(stream, records);
   const current = workbookProjection.current;
@@ -303,7 +279,7 @@ async function publicState(loaded: LoadedWorkbook, learnerWorkspace: string, rec
   const completionTimes = new Map<string, string>();
   for (const record of records) if (record.type === "block_completed") completionTimes.set(record.blockId, record.at);
 
-  const blocks = await Promise.all(stream.map(async (ordered): Promise<PublicBlockProgress & { anchorId: string; origin: string; kind: string; title: string; workAccepted: boolean; completedAt?: string }> => {
+  const blocks = await Promise.all(stream.map(async (ordered): Promise<PublicWorkbookBlockProgress> => {
     const completed = workbookProjection.completedBlockIds.has(ordered.id);
     const active = current?.id === ordered.id;
     const ready = workbookProjection.readyBlockIds.has(ordered.id);

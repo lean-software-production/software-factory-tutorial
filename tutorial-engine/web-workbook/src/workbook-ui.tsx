@@ -7,55 +7,51 @@ import { Terminal } from "@xterm/xterm";
 import { Markdown } from "./markdown.js";
 import { lessonElementId } from "../../src/workbook/lesson-links.js";
 import { ActivityBand } from "./activity-band.js";
-import { TimelineThread, type PublicTimelineRecord } from "./timeline-thread.js";
+import { TimelineThread } from "./timeline-thread.js";
+import { isPublicWorkbookState, parsePublicCompleteBlockResult, parsePublicWorkbookState } from "../../src/workbook/public-contract.js";
+import type { PublicAttemptKind, PublicCheckpoint, PublicCompleteBlockResult, PublicEditorStatus, PublicReflectionTurn, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookBlockType, PublicWorkbookChapter, PublicWorkbookLesson, PublicWorkbookProgress, PublicWorkbookState } from "../../src/workbook/public-contract.js";
 
-export type WorkbookBlockType = "narrative" | "terminal-practice" | "editor-practice" | "reflection";
-type BlockBase = { id: string; title: string; markdown: string; label?: string };
-export type NarrativeBlock = BlockBase & { type: "narrative" };
-export type TerminalPracticeBlock = BlockBase & { type: "terminal-practice" };
-export type EditorPracticeBlock = BlockBase & { type: "editor-practice"; path: string; tutor?: never };
-export type ReflectionBlock = BlockBase & { type: "reflection" };
-export type Block = NarrativeBlock | TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock;
-export type Lesson = { id: string; title: string; dek: string; introduction: string; durationMinutes: number; outcomes: string[]; blocks: Block[] };
-export type Chapter = { id: string; title: string; partId?: string; part?: string; partMarkdown?: string; partNumber?: number; lessonNumber: number; lesson?: Lesson };
-export type AttemptKind = "editor" | "terminal" | "reflection";
-export type EditorStatus = "editing" | "waiting" | "reviewing" | "feedback" | "unlocked";
-export type ReflectionTurn = { role: "learner" | "tutor"; text: string };
-export type PublicCheckpoint = {
-  status: "working" | "reviewing" | "feedback" | "accepted";
-  feedback?: string;
-  successMessage?: string;
-  summary?: string;
-  evidence?: { kind: AttemptKind; text?: string; terminalHtml?: string; conversation?: ReflectionTurn[] };
-};
-export type BlockProgress = { id: string; type?: string; ready: boolean; active: boolean; completed: boolean; completedAt?: string; verified: boolean; workAccepted?: boolean; checkpoint?: PublicCheckpoint; terminalHtml?: string; emerged: boolean; revision?: number; draftText?: string; editorStatus?: EditorStatus };
-export type Progress = { activeLessonId: string; activeBlockId: string; activeAnchorId?: string; completedLessons: string[]; completedBlocks?: string[]; workAcceptedBlocks?: string[]; readyBlocks?: string[]; blocks: BlockProgress[]; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]>; canComplete?: { blockId: string; eligible: boolean; reason?: string }; workbookComplete?: boolean };
-type Identity = { title: string };
-export type CompleteBlockResult = { outcome: "completed"; state: State; navigationTarget: string } | { outcome: "already-completed"; state: State } | { outcome: "rejected"; state: State; reason: string };
-export type State = { workbook: Identity; introduction: string; introductionComplete: boolean; chapters: Chapter[]; progress: Progress; adapter: { note?: string; modelBackedHelp?: boolean }; orderedBlocks?: Array<{ id: string; anchorId: string; title: string; origin: string; kind: string; lessonId: string; declaredId?: string }>; revealedBlockIds?: string[]; renderedBlockIds?: string[]; readyBlockIds?: string[]; currentBlock?: { id: string; anchorId: string; title: string; origin: string; kind: string; lessonId: string; workAccepted?: boolean }; completion?: { complete: true; anchorId: string; summary?: string }; timeline?: readonly PublicTimelineRecord[] };
+export type WorkbookBlockType = PublicWorkbookBlockType;
+export type Block = PublicWorkbookBlock;
+export type NarrativeBlock = Extract<Block, { type: "narrative" }>;
+export type TerminalPracticeBlock = Extract<Block, { type: "terminal-practice" }>;
+export type EditorPracticeBlock = Extract<Block, { type: "editor-practice" }>;
+export type ReflectionBlock = Extract<Block, { type: "reflection" }>;
+export type Lesson = PublicWorkbookLesson;
+export type Chapter = PublicWorkbookChapter;
+export type AttemptKind = PublicAttemptKind;
+export type EditorStatus = PublicEditorStatus;
+export type ReflectionTurn = PublicReflectionTurn;
+export type { PublicCheckpoint, PublicTimelineRecord };
+export type BlockProgress = PublicWorkbookBlockProgress;
+export type Progress = PublicWorkbookProgress;
+export type CompleteBlockResult = PublicCompleteBlockResult;
+export type State = PublicWorkbookState;
+
+function parseStateOrCompletion(value: unknown): State | CompleteBlockResult { return isPublicWorkbookState(value) ? value : parsePublicCompleteBlockResult(value); }
 
 async function completeBlockRequest(blockId: string): Promise<CompleteBlockResult> {
   const response = await fetch("api/workbook/complete-block", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId }) });
   if (!response.ok) throw new Error(await response.text());
-  return response.json();
+  return parsePublicCompleteBlockResult(await response.json());
 }
 
 async function completeIntroduction(): Promise<State | CompleteBlockResult> {
   const response = await fetch("api/workbook/introduction", { method: "POST" });
   if (!response.ok) throw new Error(await response.text());
-  return response.json();
+  return parseStateOrCompletion(await response.json());
 }
 
 async function post(blockId: string, body: object): Promise<State | CompleteBlockResult> {
   const response = await fetch("api/workbook/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, ...body }) });
   if (!response.ok) throw new Error(await response.text());
-  return response.json();
+  return parseStateOrCompletion(await response.json());
 }
 
 async function postEditorDraft(blockId: string, revision: number, text: string): Promise<State> {
   const response = await fetch("/api/workbook/editor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision, text }) });
   if (!response.ok) throw new Error(await response.text());
-  return response.json();
+  return parsePublicWorkbookState(await response.json());
 }
 
 const INTRODUCTION_BLOCK_ID = "workbook--introduction";
@@ -70,13 +66,13 @@ async function postTutorMessage(blockId: string, text: string, blockInView?: str
 async function retryTutorOperation(failureId: string): Promise<State> {
   const response = await fetch("/api/workbook/retry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId }) });
   if (!response.ok) throw new Error(await response.text());
-  return response.json();
+  return parsePublicWorkbookState(await response.json());
 }
 
 async function readWorkbookState(): Promise<State> {
   const response = await fetch("/api/workbook/state");
   if (!response.ok) throw new Error(await response.text());
-  return response.json();
+  return parsePublicWorkbookState(await response.json());
 }
 
 function stateFromCompletion(result: State | CompleteBlockResult): State { return "outcome" in result ? result.state : result; }
@@ -720,7 +716,7 @@ export function App() {
   const registerTerminalInsertion = useCallback((insertCommand: (() => void) | undefined) => {
     setTerminalInsertion(() => insertCommand);
   }, []);
-  useEffect(() => { fetch("api/workbook/state").then((response) => response.json()).then((next: State) => setState(next)); }, []);
+  useEffect(() => { readWorkbookState().then(setState).catch((error) => console.error(error)); }, []);
   const hasInitialState = Boolean(state);
   useEffect(() => {
     if (!hasInitialState || typeof EventSource === "undefined") return;
