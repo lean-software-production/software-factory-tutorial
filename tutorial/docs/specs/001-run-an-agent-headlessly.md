@@ -7,14 +7,22 @@ Run one agent, with one job to be done, and no human in its conversation.
 An **agent** is a harness with a job to be done. The harness is ordinary software: it prepares the
 input, calls a model, and handles what comes back. The job to be done is what you hand it.
 
-Pi is a harness. This command gives it a job:
+Pi is a harness. This command gives it a small job directly:
+
+```sh
+pi -p "What is the capital of France?"
+```
+
+The `-p` option supplies the prompt. Pi prints the response and then exits.
+
+This project-specific command gives Pi a job on standard input:
 
 ```sh
 echo "Describe what this calculator does, in three sentences." \
   | (cd calculator && pi --no-session --tools read,grep,find,ls -p)
 ```
 
-Three things in that one line are worth naming.
+Three things in that command are worth naming.
 
 The text on standard input is the **job to be done**. Nothing else tells the agent what you want.
 
@@ -31,9 +39,11 @@ every agent in this tutorial, and each boundary is a deliberate choice.
 
 The learner creates no files in this lesson. Teach it in this order:
 
-1. **Run the command.** From the session workspace, run the command above and read what comes back.
-   The answer is unremarkable; the mechanics are the lesson.
-2. **Change the job.** Have the learner replace the sentence on standard input with a question of
+1. **Run a simple Pi prompt.** Run `pi -p "What is the capital of France?"` and observe that Pi
+   prints an answer and exits. The answer is unremarkable; the mechanics are the lesson.
+2. **Run the project-specific command.** From the session workspace, run the calculator command
+   above and read what comes back.
+3. **Change the job.** Have the learner replace the sentence on standard input with a question of
    their own and run it again. The harness did not change; only the job did. Ask them what would
    happen if a script ran this and walked away — nothing is waiting for a person, which is the
    whole point.
