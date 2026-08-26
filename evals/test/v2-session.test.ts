@@ -63,7 +63,7 @@ describe("v2 public session trace", () => {
     const server = await workspace.startServer({
       embeddedTerminal: false,
       mainTutor: new SessionFakeMainTutor(),
-      blockTutor: { hint: async () => "Hint.", assess: async () => ({ readiness: "still_working" as const, text: "Still working." }) }
+      practiceCoach: { assess: async () => ({ outcome: "ready" as const, text: "Ready for Main Tutor review." }) }
     });
     try {
       let state = await fetch(`${server.url}/api/workbook/state`).then((response) => response.json() as any);

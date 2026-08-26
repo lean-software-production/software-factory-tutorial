@@ -24,10 +24,5 @@ export function resolveTutorModel(modelRuntime: ModelRuntime, requested: string 
 }
 
 export function resolvePracticeCoachModel(modelRuntime: ModelRuntime, requested: string | undefined): TutorModelChoice {
-  const wanted = requested?.trim();
-  if (!wanted) throw new Error(`${PRACTICE_COACH_MODEL_ENV} must be set to enable the Practice Coach.`);
-  const resolved = resolveCliModel({ cliModel: wanted, modelRuntime });
-  if (!resolved.model) throw new Error(`${PRACTICE_COACH_MODEL_ENV}="${wanted}" did not match a model (${resolved.error ?? "no match"}); Practice Coach disabled.`);
-  if (!modelRuntime.hasConfiguredAuth(resolved.model.provider)) throw new Error(`${PRACTICE_COACH_MODEL_ENV}="${wanted}" matched ${resolved.model.provider}/${resolved.model.id}, which has no configured auth; Practice Coach disabled.`);
-  return { model: resolved.model, thinkingLevel: resolved.thinkingLevel, warning: resolved.warning };
+  return resolveConfiguredTutorModel(modelRuntime, requested, PRACTICE_COACH_MODEL_ENV);
 }

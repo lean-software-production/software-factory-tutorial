@@ -1,17 +1,13 @@
 import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { WorkbookBlockTutor } from "../../tutorial-engine/src/workbook/block-tutor.js";
-import type { ActiveBlockContext } from "../../tutorial-engine/src/workbook/pi-history.js";
-import type { WorkbookServerOptions } from "../../tutorial-engine/src/workbook/server.js";
 import type { TerminalPty } from "../../tutorial-engine/src/workbook/terminal.js";
-import type { BlockTutorReadiness, TimelineMessage } from "../../tutorial-engine/src/workbook/timeline.js";
-import type { MainTutorContext, TutorDecision, TutorReview } from "../../tutorial-engine/src/workbook/tutor.js";
+import type { TutorDecision } from "../../tutorial-engine/src/workbook/tutor.js";
 import { createV2WorkbookDriver, V2WorkbookDriver } from "../v2/driver.js";
 import { clueCommand, exactCommand, satisfactoryEditorDraft } from "../v2/scenarios.js";
 import { createEmptyV2SessionTrace, readWorkbookTimeline } from "../v2/session.js";
 import { createEvaluationWorkspace, type CreateEvaluationWorkspaceOptions } from "../v2/workspace.js";
-import { RecordingBlockTutor, RecordingMainTutor, type ReviewInput } from "../../tutorial-engine/test/support/fake-tutors.js";
+import { RecordingPracticeCoach, RecordingMainTutor, type ReviewInput } from "../../tutorial-engine/test/support/fake-tutors.js";
 
 class DriverFakeMainTutor extends RecordingMainTutor {
   protected override defaultReply = "Tutor reply that asks one public follow-up.";
@@ -31,11 +27,6 @@ class DriverFakeMainTutor extends RecordingMainTutor {
     }
     return { outcome: "feedback", message: "Tutor reply that asks one public follow-up." };
   }
-}
-
-class DriverFakeBlockTutor extends RecordingBlockTutor {
-  protected override defaultHint = "Compare the current evidence with the displayed block goal.";
-  protected override defaultReadiness = { readiness: "likely_ready" as const, text: "The attempt is ready for main-tutor judgment." };
 }
 
 class DriverFakePty implements TerminalPty {
@@ -131,12 +122,12 @@ async function startDriver(options: CreateEvaluationWorkspaceOptions = {}) {
   tempRoots.push(workspace.repositoryRoot);
   const pty = new DriverFakePty();
   const workbookTutor = new DriverFakeMainTutor();
-  const blockTutor = new DriverFakeBlockTutor();
+  const practiceCoach = new RecordingPracticeCoach();
   const server = await workspace.startServer({
     terminalPtyFactory: () => pty,
     terminalDebounceMs: 1,
     mainTutor: workbookTutor,
-    blockTutor
+    practiceCoach
   });
   const trace = createEmptyV2SessionTrace("driver-test");
   const driver = createV2WorkbookDriver({ serverUrl: server.url, trace });

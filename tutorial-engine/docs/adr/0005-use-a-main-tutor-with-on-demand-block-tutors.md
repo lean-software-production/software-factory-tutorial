@@ -4,9 +4,11 @@ Date: 2026-08-22
 
 ## Status
 
-accepted
+superseded
 
 Supersedes [4. Use the workbook event log as canonical tutor history](0004-use-the-workbook-event-log-as-canonical-tutor-history.md)
+
+Superseded by [11. Use a terminal Practice Coach with Main Tutor authority](0011-use-a-terminal-practice-coach-with-main-tutor-authority.md)
 
 ## Context
 

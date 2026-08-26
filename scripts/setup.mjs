@@ -11,8 +11,8 @@ export async function checkPiAuthentication(getAvailable) {
  * The tutorial runs three model roles on purpose, and they want different things.
  *
  * The main tutor teaches, so it wants the largest model available; TUTOR_MODEL
- * names it. The fast block helper may use a cheaper read-only model named by
- * BLOCK_TUTOR_MODEL, or leave the choice to Pi. The doer the lessons drive with
+ * names it. The terminal Practice Coach may use a cheaper model named by
+ * PRACTICE_COACH_MODEL. The doer the lessons drive with
  * `pi -p` wants to be cheap and fast, and its mistakes are teaching material, so
  * it follows Pi's ordinary `/model` default. None should silently become another.
  *
@@ -20,7 +20,7 @@ export async function checkPiAuthentication(getAvailable) {
  * real; this mirrors it so `npm run setup` can report what the tutors will do.
  */
 export const TUTOR_MODEL_ENV = "TUTOR_MODEL";
-export const BLOCK_TUTOR_MODEL_ENV = "BLOCK_TUTOR_MODEL";
+export const PRACTICE_COACH_MODEL_ENV = "PRACTICE_COACH_MODEL";
 
 export function describeDoerModel({ defaultProvider, defaultModel, available }) {
   const choices = available.length;
@@ -45,7 +45,7 @@ export function describeTutorModel(input) {
   return describeExplicitModel(input);
 }
 
-export function describeBlockTutorModel(input) {
+export function describePracticeCoachModel(input) {
   return describeExplicitModel(input);
 }
 
@@ -68,14 +68,14 @@ function tutorLine(description, envName) {
   return `Pi chooses, because ${envName} is unset`;
 }
 
-export function modelReport(mainTutor, blockTutor, doer) {
+export function modelReport(mainTutor, practiceCoach, doer) {
   return [
-    `Main tutor model:  ${tutorLine(mainTutor, TUTOR_MODEL_ENV)}`,
-    `Block tutor model: ${tutorLine(blockTutor, BLOCK_TUTOR_MODEL_ENV)}`,
-    `Doer model:        ${doerLine(doer)}`,
+    `Main tutor model:      ${tutorLine(mainTutor, TUTOR_MODEL_ENV)}`,
+    `Practice Coach model:  ${tutorLine(practiceCoach, PRACTICE_COACH_MODEL_ENV)}`,
+    `Doer model:            ${doerLine(doer)}`,
     "",
     `Give the main tutor a capable model by exporting ${TUTOR_MODEL_ENV}=<provider>/<model>; 'pi --list-models' lists what you can name.`,
-    `Optionally give the fast block helper a cheaper model with ${BLOCK_TUTOR_MODEL_ENV}=<provider>/<model>; leave it unset and Pi chooses normally.`,
+    `Give the terminal Practice Coach a faster model with ${PRACTICE_COACH_MODEL_ENV}=<provider>/<model>.`,
     "Choose the doer's model with 'pi', then '/model'. A small, fast one is the point: the lessons teach you to catch its mistakes."
   ];
 }
@@ -97,7 +97,7 @@ async function main() {
   };
   const report = modelReport(
     describeTutorModel({ requested: process.env[TUTOR_MODEL_ENV], resolve: resolveConfigured }),
-    describeBlockTutorModel({ requested: process.env[BLOCK_TUTOR_MODEL_ENV], resolve: resolveConfigured }),
+    describePracticeCoachModel({ requested: process.env[PRACTICE_COACH_MODEL_ENV], resolve: resolveConfigured }),
     describeDoerModel({
       defaultProvider: settings.defaultProvider,
       defaultModel: settings.defaultModel,

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkPiAuthentication, describeBlockTutorModel, describeDoerModel, describeTutorModel, modelReport } from "../scripts/setup.mjs";
+import { checkPiAuthentication, describePracticeCoachModel, describeDoerModel, describeTutorModel, modelReport } from "../scripts/setup.mjs";
 import { trustedNodeRuntimeProvision, tutorialWorkbookArguments } from "../scripts/tutorial-workbook.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -100,28 +100,28 @@ describe("tutor model", () => {
   });
 });
 
-describe("block tutor model", () => {
+describe("Practice Coach model", () => {
   const fast = { provider: "openai", id: "gpt-5.1-mini" };
   const resolveTo = (model, authenticated = true) => () => ({ model, authenticated });
 
-  it("names the model BLOCK_TUTOR_MODEL resolves to", () => {
-    const description = describeBlockTutorModel({ requested: "openai/gpt-5.1-mini", resolve: resolveTo(fast) });
+  it("names the model PRACTICE_COACH_MODEL resolves to", () => {
+    const description = describePracticeCoachModel({ requested: "openai/gpt-5.1-mini", resolve: resolveTo(fast) });
     assert.deepEqual(description, { pinned: true, model: "openai/gpt-5.1-mini" });
   });
 
-  it("leaves the choice to Pi when BLOCK_TUTOR_MODEL is unset or blank", () => {
+  it("leaves the choice to Pi when PRACTICE_COACH_MODEL is unset or blank", () => {
     for (const requested of [undefined, "", "   "]) {
-      assert.deepEqual(describeBlockTutorModel({ requested, resolve: () => assert.fail("must not resolve") }), { pinned: false, reason: "no-default" });
+      assert.deepEqual(describePracticeCoachModel({ requested, resolve: () => assert.fail("must not resolve") }), { pinned: false, reason: "no-default" });
     }
   });
 
-  it("falls back to Pi's default selection when BLOCK_TUTOR_MODEL is invalid or unconfigured", () => {
+  it("falls back to Pi's default selection when PRACTICE_COACH_MODEL is invalid or unconfigured", () => {
     assert.deepEqual(
-      describeBlockTutorModel({ requested: "no-such/model", resolve: resolveTo(undefined) }),
+      describePracticeCoachModel({ requested: "no-such/model", resolve: resolveTo(undefined) }),
       { pinned: false, reason: "no-match", requested: "no-such/model" }
     );
     assert.deepEqual(
-      describeBlockTutorModel({ requested: "fast", resolve: resolveTo(fast, false) }),
+      describePracticeCoachModel({ requested: "fast", resolve: resolveTo(fast, false) }),
       { pinned: false, reason: "not-authenticated", requested: "fast", saved: "openai/gpt-5.1-mini" }
     );
   });
@@ -135,10 +135,10 @@ describe("model report", () => {
       { pinned: true, model: "opencode-go/deepseek-v4-flash" }
     );
     assert.match(report[0], /^Main tutor model: +anthropic\/claude-opus-4-8 \(TUTOR_MODEL\)$/);
-    assert.match(report[1], /^Block tutor model: +openai\/gpt-5.1-mini \(BLOCK_TUTOR_MODEL\)$/);
+    assert.match(report[1], /^Practice Coach model: +openai\/gpt-5.1-mini \(PRACTICE_COACH_MODEL\)$/);
     assert.match(report[2], /^Doer model: +opencode-go\/deepseek-v4-flash$/);
     assert.match(report.join("\n"), /TUTOR_MODEL=/);
-    assert.match(report.join("\n"), /BLOCK_TUTOR_MODEL=/);
+    assert.match(report.join("\n"), /PRACTICE_COACH_MODEL=/);
     assert.match(report.join("\n"), /'\/model'/);
   });
 
@@ -149,10 +149,10 @@ describe("model report", () => {
       { pinned: false, reason: "no-default", choices: 2 }
     );
     assert.match(report[0], /TUTOR_MODEL is unset/);
-    assert.match(report[1], /BLOCK_TUTOR_MODEL is unset/);
+    assert.match(report[1], /PRACTICE_COACH_MODEL is unset/);
     assert.match(report[2], /no default is saved/);
     assert.match(report.join("\n"), /TUTOR_MODEL=/);
-    assert.match(report.join("\n"), /BLOCK_TUTOR_MODEL=/);
+    assert.match(report.join("\n"), /PRACTICE_COACH_MODEL=/);
     assert.match(report.join("\n"), /'\/model'/);
   });
 });
