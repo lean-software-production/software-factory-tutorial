@@ -1,12 +1,12 @@
 ---
 parts:
-  - id: validation-loop
+  - id: 01-validation-loop
     lessons:
       - 001-run-an-agent-headlessly
       - 002-build-a-doer
       - 003-build-a-validator
       - 004-feed-the-findings-back
-  - id: build-the-factory
+  - id: 02-build-the-factory
     lessons:
       - 005-join-them-into-a-line
       - 006-read-only-validator

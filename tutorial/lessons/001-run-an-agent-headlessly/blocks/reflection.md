@@ -1,7 +1,7 @@
 ---
 type: reflection
 tutor: |-
-  Ask the learner to answer the question in the block.
+  Ask the learner a couple of questions to help them reflect on the exercise.
 
   A satisfactory answer identifies the quoted input as the job and the surrounding invocation as
   the harness. It explains that -p and --no-session make the run end without a conversation, and
@@ -12,5 +12,4 @@ tutor: |-
 
 ## Reflection
 
-In your own words: which part was the harness and which part was the job to be done? What made the
-run headless, and what could the agent not have done however it was asked?
+In your own words: which part was the harness and which part was the job to be done?

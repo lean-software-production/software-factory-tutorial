@@ -10,13 +10,15 @@ tutor: |-
   changes into calculator, and Pi runs with -p, no session, and only read-only tools.
 ---
 
-## Run the supplied headless command
+## Get a description of the calculator
 
-Run this command from the session workspace:
+Run this command, to get `pi` to describe the project we're going to be working in.
 
 ```sh command
 echo "Describe what this calculator does, in three sentences." \
   | (cd calculator && pi --no-session --tools read,grep,find,ls -p)
 ```
 
-Pi should print a short description of the calculator and exit. Its exact wording is not important.
+Note that we're passing it a list of tools it's allowed to use. Here's Pi's [reference documentation](https://github.com/earendil-works/pi/tree/main/packages/coding-agent#tool-options) for the `--tool` option.
+
+Pi should print a short description of the calculator and exit.
