@@ -327,6 +327,57 @@ describe("WorkbookTerminalManager", () => {
     expect(client.messages.at(-1)).toMatchObject({ type: "attempt-status", blockId: "practice", status: "submitted" });
   });
 
+  it("submits a superseding paused snapshot when terminal output resumes", async () => {
+    vi.useFakeTimers();
+    const submitAttempt = vi.fn<SubmitAttempt>(async () => undefined);
+    const { manager, ptys } = setup(submitAttempt, 5);
+    manager.attach(new FakeClient());
+
+    manager.receive({ type: "input", data: "npm test\r" });
+    ptys[0]!.emitData("first result");
+    await vi.advanceTimersByTimeAsync(6);
+    ptys[0]!.emitData("late result");
+    await vi.advanceTimersByTimeAsync(6);
+
+    expect(submitAttempt).toHaveBeenCalledTimes(2);
+    const firstEvidence = submitAttempt.mock.calls[0]![0].evidence;
+    const secondEvidence = submitAttempt.mock.calls[1]![0].evidence;
+    if (firstEvidence.kind !== "terminal" || secondEvidence.kind !== "terminal") throw new Error("Expected terminal evidence.");
+    expect(firstEvidence.transcript).toContain("first result");
+    expect(firstEvidence.transcript).not.toContain("late result");
+    expect(secondEvidence.transcript).toContain("late result");
+  });
+
+  it("submits the newest generation after output changes during an in-flight observation", async () => {
+    vi.useFakeTimers();
+    let releaseFirst: (() => void) | undefined;
+    const firstSubmission = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const submitAttempt = vi.fn<SubmitAttempt>(async () => {
+      if (submitAttempt.mock.calls.length === 1) await firstSubmission;
+    });
+    const { manager, ptys } = setup(submitAttempt, 5);
+    manager.attach(new FakeClient());
+
+    manager.receive({ type: "input", data: "npm test\r" });
+    ptys[0]!.emitData("first result");
+    await vi.advanceTimersByTimeAsync(6);
+    expect(submitAttempt).toHaveBeenCalledTimes(1);
+
+    ptys[0]!.emitData("late result");
+    await vi.advanceTimersByTimeAsync(6);
+    expect(submitAttempt).toHaveBeenCalledTimes(1);
+
+    releaseFirst?.();
+    await vi.advanceTimersByTimeAsync(6);
+
+    expect(submitAttempt).toHaveBeenCalledTimes(2);
+    const firstEvidence = submitAttempt.mock.calls[0]![0].evidence;
+    const secondEvidence = submitAttempt.mock.calls[1]![0].evidence;
+    if (firstEvidence.kind !== "terminal" || secondEvidence.kind !== "terminal") throw new Error("Expected terminal evidence.");
+    expect(firstEvidence.transcript).not.toContain("late result");
+    expect(secondEvidence.transcript).toContain("late result");
+  });
+
   it("retains bounded terminal attempts as reflection evidence in memory", () => {
     const { manager, ptys } = setup();
     manager.attach(new FakeClient());

@@ -240,8 +240,13 @@ export class WorkbookTerminalManager {
   #practiceTranscripts = new Map<string, PracticeTranscript>();
   #commandPending = false;
   #observeTimer: NodeJS.Timeout | undefined;
+  #observationQueued = false;
   #inFlight = false;
-  #lastFingerprint = "";
+  // Each entered command and its later output advances the evidence generation.
+  // A completed submission records the generation it froze, not the end of
+  // observation: terminal output can resume after a quiet interval.
+  #observationGeneration = 0;
+  #submittedGeneration = -1;
   #lastError = new Map<string, string>();
   readonly #getActiveBlock: () => ActiveObservedTerminalBlock | undefined;
   readonly #submitAttempt: SubmitAttempt;
@@ -299,10 +304,14 @@ export class WorkbookTerminalManager {
       this.#record("input", message.data);
       if (this.#isSubmittedCommand(message.data)) {
         this.#commandPending = true;
+        this.#observationGeneration++;
         this.#client?.send(JSON.stringify({ type: "attempt-status", blockId: this.#getActiveBlock()?.blockId, status: "running" }));
         this.#scheduleObservation();
       }
-      if (message.data.includes("\x03")) this.#commandPending = false;
+      if (message.data.includes("\x03")) {
+        this.#commandPending = false;
+        this.#observationQueued = false;
+      }
       return;
     }
     if (message.type === "resize" && Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols > 0 && message.rows > 0) {
@@ -337,6 +346,7 @@ export class WorkbookTerminalManager {
       this.#client?.send(JSON.stringify({ type: "output", data }));
       this.#record("output", data);
       if (this.#commandPending) {
+        this.#observationGeneration++;
         this.#client?.send(JSON.stringify({ type: "attempt-status", blockId: this.#getActiveBlock()?.blockId, status: "running" }));
         this.#scheduleObservation();
       }
@@ -356,7 +366,9 @@ export class WorkbookTerminalManager {
       this.#captureKey = key;
       this.#transcript = this.#practiceTranscripts.get(key)?.transcript ?? "";
       this.#commandPending = false;
-      this.#lastFingerprint = "";
+      this.#observationQueued = false;
+      this.#observationGeneration = 0;
+      this.#submittedGeneration = -1;
     }
     const label = kind === "input" ? "LEARNER INPUT" : "TERMINAL OUTPUT";
     this.#transcript = boundedAppend(this.#transcript, `\n[${label}]\n${data}`, this.#maxTranscriptBytes);
@@ -378,16 +390,22 @@ export class WorkbookTerminalManager {
 
   async #submitPausedAttempt(): Promise<void> {
     this.#observeTimer = undefined;
-    if (!this.#commandPending || this.#inFlight) return;
+    if (!this.#commandPending) return;
+    if (this.#inFlight) {
+      // The quiet period has already elapsed. Submit this newer generation as
+      // soon as the immutable older snapshot has been handed to the workflow.
+      this.#observationQueued = true;
+      return;
+    }
     const block = this.#getActiveBlock();
     if (!block) return;
     const key = terminalKey(block);
     if (this.#captureKey !== key || !this.#transcript.trim()) return;
+    const generation = this.#observationGeneration;
+    if (generation <= this.#submittedGeneration) return;
     const transcript = this.#transcript.slice(-this.#maxTranscriptBytes);
     const terminalHtml = this.frozenTerminalHtml();
-    const fingerprint = `${key}\n${transcript}`;
-    if (fingerprint === this.#lastFingerprint) return;
-    this.#lastFingerprint = fingerprint;
+    let submitNewestGeneration = false;
     this.#inFlight = true;
     this.#client?.send(JSON.stringify({ type: "attempt-status", blockId: block.blockId, status: "checking" }));
     try {
@@ -399,9 +417,10 @@ export class WorkbookTerminalManager {
       });
       const stillActive = this.#getActiveBlock();
       if (!stillActive || terminalKey(stillActive) !== key) return;
-      this.#commandPending = false;
+      this.#submittedGeneration = generation;
       this.#lastError.delete(key);
-      this.#client?.send(JSON.stringify({ type: "attempt-status", blockId: block.blockId, status: "submitted" }));
+      submitNewestGeneration = this.#commandPending && this.#captureKey === key && this.#observationGeneration > generation;
+      if (!submitNewestGeneration) this.#client?.send(JSON.stringify({ type: "attempt-status", blockId: block.blockId, status: "submitted" }));
     } catch (error) {
       const message = "Could not submit the terminal attempt. Keep working in the embedded terminal; your next command will be checked again.";
       this.#lastError.set(key, message);
@@ -409,6 +428,12 @@ export class WorkbookTerminalManager {
       this.#client?.send(JSON.stringify({ type: "attempt-error", blockId: block.blockId, message }));
     } finally {
       this.#inFlight = false;
+      if (submitNewestGeneration && this.#commandPending && this.#captureKey === key) {
+        if (this.#observationQueued) {
+          this.#observationQueued = false;
+          void this.#submitPausedAttempt();
+        } else if (!this.#observeTimer) this.#scheduleObservation();
+      }
     }
   }
 }
