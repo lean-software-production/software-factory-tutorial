@@ -320,6 +320,30 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("keeps a server-submitted accepted attempt completable after a content reload", async () => {
+    const { dir, session } = await sessionFixture();
+    const fakeWatch = fakeContentWatchFactory();
+    const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted before reload." });
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, watchContent: true, contentWatchFactory: fakeWatch.factory, contentWatchDebounceMs: 1, mainTutor: tutor, blockTutor: new FakeBlockTutor() });
+    try {
+      await waitForWatchPath(fakeWatch, resolve(session.contentRoot, "lessons/001-first/blocks"));
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "factory acceptance marker" })).status).toBe(202);
+      await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted", "editor acceptance before reload");
+
+      const reloaded = nextSseEvent(server.url, "content-reloaded");
+      await writeBlock(resolve(dir, "lessons/001-first"), "edit-answer", "editor-practice", "Edit", "Reloaded editor instructions.", "Private editor rubric: mention the factory acceptance marker.", "factory/answer.md");
+      fakeWatch.emit(resolve(session.contentRoot, "lessons/001-first/blocks"), "edit-answer.md");
+      await reloaded;
+
+      const restored = await state(server.url);
+      expect(block(restored, "lesson--001-first--edit-answer")).toMatchObject({ checkpoint: { status: "accepted" }, workAccepted: true });
+      expect(restored.progress.readyBlocks).toContain("lesson--001-first--run-supplied-command");
+      const completed = await completeBlock(server.url, "lesson--001-first--edit-answer").then((response) => response.json() as Promise<any>);
+      expect(completed).toMatchObject({ outcome: "completed", state: { progress: { activeBlockId: "lesson--001-first--run-supplied-command" } } });
+    } finally { await server.close(); }
+  });
+
   it("falls back to the next valid block when a structural reload removes the current block", async () => {
     const { dir, session } = await sessionFixture();
     const fakeWatch = fakeContentWatchFactory();
