@@ -22,3 +22,4 @@ tutorial-engine/test/.tmp/
 .pi/settings.json
 .local/
 evals/reports/
+.yaks
