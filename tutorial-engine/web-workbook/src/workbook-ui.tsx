@@ -29,7 +29,7 @@ export type PublicCheckpoint = {
   summary?: string;
   evidence?: { kind: AttemptKind; text?: string; terminalHtml?: string; conversation?: ReflectionTurn[] };
 };
-export type BlockProgress = { id: string; type?: string; ready: boolean; active: boolean; completed: boolean; verified: boolean; workAccepted?: boolean; checkpoint?: PublicCheckpoint; terminalHtml?: string; emerged: boolean; revision?: number; draftText?: string; editorStatus?: EditorStatus };
+export type BlockProgress = { id: string; type?: string; ready: boolean; active: boolean; completed: boolean; completedAt?: string; verified: boolean; workAccepted?: boolean; checkpoint?: PublicCheckpoint; terminalHtml?: string; emerged: boolean; revision?: number; draftText?: string; editorStatus?: EditorStatus };
 export type Progress = { activeLessonId: string; activeBlockId: string; activeAnchorId?: string; completedLessons: string[]; completedBlocks?: string[]; workAcceptedBlocks?: string[]; readyBlocks?: string[]; blocks: BlockProgress[]; reflections: Record<string, string>; reflectionConversations: Record<string, ReflectionTurn[]>; canComplete?: { blockId: string; eligible: boolean; reason?: string }; workbookComplete?: boolean };
 type Identity = { title: string };
 export type CompleteBlockResult = { outcome: "completed"; state: State; navigationTarget: string } | { outcome: "already-completed"; state: State } | { outcome: "rejected"; state: State; reason: string };
@@ -327,14 +327,33 @@ function useContinueOnce(block: Block, state: BlockProgress | undefined, refresh
   return { active, pending, continueOnce };
 }
 
-export function ContinuationPageBreak() {
-  return <div className="continuation-controls flow-break-only"><div className="continuation-page-break" aria-hidden="true" /></div>;
+export function completionAgeLabel(completedAt: string | undefined, now = Date.now()): string {
+  if (!completedAt) return "Completed";
+  const elapsedSeconds = Math.max(0, Math.floor((now - Date.parse(completedAt)) / 1_000));
+  if (!Number.isFinite(elapsedSeconds) || elapsedSeconds < 60) return "Completed just now";
+  if (elapsedSeconds < 3_600) return `Completed ${Math.floor(elapsedSeconds / 60)}m ago`;
+  if (elapsedSeconds < 86_400) return `Completed ${Math.floor(elapsedSeconds / 3_600)}h ago`;
+  if (elapsedSeconds < 604_800) return `Completed ${Math.floor(elapsedSeconds / 86_400)}d ago`;
+  return "Completed";
+}
+
+function CompletionMarker({ completedAt }: { completedAt?: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  return <span className="continuation-completed">✓ <time dateTime={completedAt}>{completionAgeLabel(completedAt, now)}</time></span>;
+}
+
+export function ContinuationPageBreak({ completedAt }: { completedAt?: string }) {
+  return <div className="continuation-controls"><CompletionMarker completedAt={completedAt} /><div className="continuation-page-break" aria-hidden="true" /></div>;
 }
 
 export function ContinueControls({ block, state, refresh, label, preserveCompletedBreak = false }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void; label?: string; preserveCompletedBreak?: boolean }) {
   const { active, pending, continueOnce } = useContinueOnce(block, state, refresh);
 
-  if (state?.completed) return preserveCompletedBreak ? <ContinuationPageBreak /> : <p className="next-ready">The next step has appeared below.</p>;
+  if (state?.completed) return preserveCompletedBreak ? <ContinuationPageBreak completedAt={state.completedAt} /> : <p className="next-ready">The next step has appeared below.</p>;
   if (!active) return null;
   const buttonLabel = label ?? (block.id === "workbook--introduction" ? "Ready to continue" : "Continue");
   return <div className="continuation-controls">
@@ -852,7 +871,7 @@ export function App() {
     if (recordIsActive && activeContinuationEligible && effectiveActiveBlockProgress) {
       return <ContinueControls block={activeContinueBlock} state={effectiveActiveBlockProgress} refresh={setState} label={continueLabelFor(state, effectiveActiveBlockId)} />;
     }
-    if (!recordIsActive && blockProgress?.completed) return <ContinuationPageBreak />;
+    if (!recordIsActive && blockProgress?.completed) return <ContinuationPageBreak completedAt={blockProgress.completedAt} />;
     return null;
   };
   return <div className="shell">

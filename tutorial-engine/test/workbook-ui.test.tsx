@@ -60,7 +60,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
-import { AcceptanceConfetti, App, BlockView, LessonRail, LessonView, scrollActiveLessonIntoView, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress } from "../web-workbook/src/workbook-ui.js";
+import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, LessonView, completionAgeLabel, scrollActiveLessonIntoView, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress } from "../web-workbook/src/workbook-ui.js";
 import { lessonAnchorHref, lessonElementId } from "../src/workbook/lesson-links.js";
 
 const progress: Progress = {
@@ -246,6 +246,21 @@ function scrollPromotionFixture() {
 }
 
 describe("workbook lesson UI", () => {
+  it("formats a compact completion age", () => {
+    const now = Date.parse("2026-08-26T12:00:00.000Z");
+    expect(completionAgeLabel("2026-08-26T11:59:40.000Z", now)).toBe("Completed just now");
+    expect(completionAgeLabel("2026-08-26T11:58:00.000Z", now)).toBe("Completed 2m ago");
+    expect(completionAgeLabel("2026-08-26T09:00:00.000Z", now)).toBe("Completed 3h ago");
+  });
+
+  it("uses a completion indicator while preserving the continuation layout", () => {
+    const markup = html(createElement(ContinuationPageBreak, { completedAt: new Date().toISOString() }));
+    expect(markup).toContain('class="continuation-completed"');
+    expect(markup).toContain(">Completed just now</time>");
+    expect(markup).toContain('class="continuation-page-break"');
+    expect(markup).not.toContain("<button");
+  });
+
   it("refreshes state in place on author hot-reload SSE and shows non-modal reload errors", async () => {
     const { initialState } = scrollPromotionFixture();
     const reloadedState = { ...initialState, workbook: { title: "Reloaded Workbook" }, introduction: "Reloaded intro copy.", timeline: [{ ...initialState.timeline[0], text: "# Reloaded Workbook\n\nReloaded intro copy." }] } as any;

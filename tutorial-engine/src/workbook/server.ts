@@ -277,12 +277,15 @@ async function publicState(loaded: LoadedWorkbook, learnerWorkspace: string, rec
   const orderedBlocks = stream.map(publicOrderedBlock);
   const revealedBlockIds = new Set(stream.slice(0, workbookProjection.activeIndex + 1).map((block) => block.id));
   const renderedBlockIds = new Set([...revealedBlockIds, ...workbookProjection.readyBlockIds]);
+  const completionTimes = new Map<string, string>();
+  for (const record of records) if (record.type === "block_completed") completionTimes.set(record.blockId, record.at);
 
-  const blocks = await Promise.all(stream.map(async (ordered): Promise<PublicBlockProgress & { anchorId: string; origin: string; kind: string; title: string; workAccepted: boolean }> => {
+  const blocks = await Promise.all(stream.map(async (ordered): Promise<PublicBlockProgress & { anchorId: string; origin: string; kind: string; title: string; workAccepted: boolean; completedAt?: string }> => {
     const completed = workbookProjection.completedBlockIds.has(ordered.id);
     const active = current?.id === ordered.id;
     const ready = workbookProjection.readyBlockIds.has(ordered.id);
-    const base = { id: ordered.id, type: ordered.kind, anchorId: ordered.anchorId, origin: ordered.origin, kind: ordered.kind, title: ordered.title, ready, active, completed, verified: false, emerged: renderedBlockIds.has(ordered.id), workAccepted: workbookProjection.workAcceptedBlockIds.has(ordered.id) };
+    const completedAt = completed ? completionTimes.get(ordered.id) : undefined;
+    const base = { id: ordered.id, type: ordered.kind, anchorId: ordered.anchorId, origin: ordered.origin, kind: ordered.kind, title: ordered.title, ready, active, completed, ...(completedAt ? { completedAt } : {}), verified: false, emerged: renderedBlockIds.has(ordered.id), workAccepted: workbookProjection.workAcceptedBlockIds.has(ordered.id) };
     if (ordered.origin !== "declared") return base;
     const authored = ordered.block;
     const currentAttempt = isEvaluatedBlock(authored) ? await attempts.current(ordered.lessonId, ordered.id).catch(() => undefined) : undefined;

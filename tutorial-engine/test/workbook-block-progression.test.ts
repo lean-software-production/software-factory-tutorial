@@ -61,6 +61,8 @@ describe("workbook block progression", () => {
       const intro = await complete(server.url, "workbook--introduction");
       expect(intro).toMatchObject({ outcome: "completed", navigationTarget: "part--validation-loop" });
       expect(intro.state.progress.completedBlocks).toContain("workbook--introduction");
+      expect(block(intro.state, "workbook--introduction")?.completedAt).toEqual(expect.any(String));
+      expect(Number.isFinite(Date.parse(block(intro.state, "workbook--introduction")?.completedAt))).toBe(true);
       expect(intro.state.progress.activeBlockId).toBe("part--validation-loop");
       expect(intro.state.progress.readyBlocks).toEqual(["lesson--001-first"]);
       expect(block(intro.state, "part--validation-loop")).toMatchObject({ active: true, ready: false, completed: false, workAccepted: true });

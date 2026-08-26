@@ -29,7 +29,7 @@ main { position: relative; min-width: 0; background-color: #fafaf3; background-i
 .active-block-region.is-active { padding-bottom: 0; }
 .ready-successor-scroll-runway { min-height: calc(100vh - 120px + 2rem); pointer-events: none; }
 .continuation-controls { display: grid; gap: 18px; justify-items: start; margin-top: 20px; }
-.continuation-controls.flow-break-only { gap: 0; }
+.continuation-completed { display: inline-flex; align-items: center; min-height: calc(.78rem * 1.58 + 18px); color: var(--muted); font-size: .72rem; letter-spacing: .02em; }
 .continuation-page-break { width: 100%; min-height: 12rem; border-top: 1px dashed rgb(99 112 124 / .32); }
 .part-link { display: block; width: fit-content; text-decoration: none; }
 .workbook-completion-panel { min-height: 72vh; padding: 14vh 0 4rem; }
