@@ -99,14 +99,6 @@ describe("the transcript's layout", () => {
   const declarations = (selector: string) =>
     styles.split("}").find((rule) => rule.split("{")[0]?.trim() === selector)?.split("{")[1] ?? "";
 
-  it.skip("legacy layout was removed with the browser tutor", () => {
-    // main and .transcript are grids, and a grid child defaults to
-    // min-width: auto — it refuses to shrink below its content's own width. A
-    // single long line then widens the card, the transcript and the page, and
-    // the overflow rules below never get a chance to apply. Wrapping the
-    // excerpt was not enough on its own; this is the other half of it.
-    expect(declarations("main > *, .transcript > *, header > *")).toContain("min-width: 0");
-  });
 
   it("keeps code blocks readable with an overlaid icon-only copy control", () => {
     expect(declarations(".markdown")).toContain("overflow-x: auto");
