@@ -1,12 +1,15 @@
 ---
 parts:
-  - id: 01-validation-loop
+  - id: what-is-a-factory
+    lessons:
+      - what-is-a-factory
+  - id: validation-loop
     lessons:
       - 001-run-an-agent-headlessly
       - 002-build-a-doer
       - 003-build-a-validator
       - 004-feed-the-findings-back
-  - id: 02-build-the-factory
+  - id: build-the-factory
     lessons:
       - 005-join-them-into-a-line
       - 006-read-only-validator
@@ -36,7 +39,7 @@ Here are some other examples of things you can build software factories to produ
 * port a library from Go to Rust
 * discover, triage and fix flickering tests
 
-Here, we're going to build a factory that refactors a codebase.
+Here, we're going to build a factory that refactors a codebase
+that's got into a bit of a mess.
 
-We'll start out in **part 1** by running each piece of the factory by hand, then we'll plug
-things together into an automated assembly line in **part 2**.
+But I'm getting ahead of myself. Let's start by getting on the same page about what a factory is.
