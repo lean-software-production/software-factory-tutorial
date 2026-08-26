@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
-import type { WorkbookEvent } from "../../tutorial-engine/src/workbook/events.js";
+import { normalizeWorkbookTimelineRecord, type WorkbookTimelineRecord } from "../../tutorial-engine/src/workbook/timeline.js";
 import type { PublicWorkbookState, V2ArtifactSnapshot, V2EditorEntry, V2RecordedPublicState, V2ReflectionEntry, V2SessionTrace, V2TerminalTranscriptEntry } from "./types.js";
 
 const PRIVATE_TEXT_PATTERNS = [/This is private tutor guidance/i, /Do not reveal an exact command/i, /Follow up until the learner/i, /Private editor criterion/i];
@@ -41,17 +41,17 @@ export function recordEditorStatus(trace: V2SessionTrace, entry: V2EditorEntry):
   return entry;
 }
 
-export async function readWorkbookEvents(sessionRoot: string): Promise<WorkbookEvent[]> {
+export async function readWorkbookTimeline(sessionRoot: string): Promise<WorkbookTimelineRecord[]> {
   const eventPath = resolve(sessionRoot, "workbook/events.jsonl");
   let text: string;
   try { text = await readFile(eventPath, "utf8"); }
   catch (error: any) { if (error?.code === "ENOENT") return []; throw error; }
   return text.split(/\r?\n/).filter(Boolean).map((line, index) => {
-    let event: WorkbookEvent;
-    try { event = JSON.parse(line) as WorkbookEvent; }
+    let record: WorkbookTimelineRecord;
+    try { record = normalizeWorkbookTimelineRecord(JSON.parse(line), index + 1); }
     catch (error) { throw new Error(`${eventPath}:${index + 1}: invalid JSONL event`); }
-    assertNoPrivateTutorState(event, `events[${index}]`);
-    return event;
+    assertNoPrivateTutorState(record, `timeline[${index}]`);
+    return record;
   });
 }
 

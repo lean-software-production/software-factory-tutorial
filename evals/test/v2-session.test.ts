@@ -5,7 +5,7 @@ import { loadWorkbook } from "../../tutorial-engine/src/workbook/load.js";
 import type { WorkbookServerOptions } from "../../tutorial-engine/src/workbook/server.js";
 import type { TutorDecision } from "../../tutorial-engine/src/workbook/tutor.js";
 import { RecordingMainTutor } from "../../tutorial-engine/test/support/fake-tutors.js";
-import { createEmptyV2SessionTrace, readWorkbookEvents, recordPublicState, snapshotArtifacts } from "../v2/session.js";
+import { createEmptyV2SessionTrace, readWorkbookTimeline, recordPublicState, snapshotArtifacts } from "../v2/session.js";
 import { createEvaluationWorkspace } from "../v2/workspace.js";
 
 const tempRoots: string[] = [];
@@ -79,7 +79,7 @@ describe("v2 public session trace", () => {
 
       recordPublicState(trace, "exact-command-visible", state);
       const session = workspace.latestSession();
-      trace.events = await readWorkbookEvents(session.sessionRoot);
+      trace.events = await readWorkbookTimeline(session.sessionRoot);
 
       expect(session.contentRoot).toBe(await realpath(workspace.root));
       expect(session.workspaceRoot).toBe(resolve(session.sessionRoot, "workspace"));
@@ -129,7 +129,7 @@ describe("v2 public session trace", () => {
       terminalHtml: ""
     })}\n`);
 
-    await expect(readWorkbookEvents(sessionRoot)).rejects.toThrow(/private tutor/i);
+    await expect(readWorkbookTimeline(sessionRoot)).rejects.toThrow(/private tutor/i);
 
     await workspace.close();
     tempRoots.length = 0;

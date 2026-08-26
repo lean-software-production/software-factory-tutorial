@@ -1,4 +1,4 @@
-import { readWorkbookEvents, snapshotArtifacts } from "./session.js";
+import { readWorkbookTimeline, snapshotArtifacts } from "./session.js";
 import { createV2WorkbookDriver, type V2WorkbookDriver } from "./driver.js";
 import type { EvaluationWorkspace, V2ArtifactSnapshot, V2SessionTrace } from "./types.js";
 
@@ -148,7 +148,7 @@ export async function runV2ScenarioSession(options: { scenario: V2Scenario; work
   const driver = createV2WorkbookDriver({ serverUrl: options.serverUrl, trace: options.trace });
   await driveV2Scenario(driver, options.scenario);
   const session = options.workspace.latestSession();
-  options.trace.events = await readWorkbookEvents(session.sessionRoot);
+  options.trace.events = await readWorkbookTimeline(session.sessionRoot);
   options.trace.artifacts = await snapshotArtifacts(session.workspaceRoot);
   return options.trace;
 }

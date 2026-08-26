@@ -633,6 +633,39 @@ describe("workbook browser API", () => {
     } finally { await secondServer.close(); }
   });
 
+  it("projects historical lesson milestones through the canonical ordered block stream", async () => {
+    const dir = await fixture();
+    await mkdir(resolve(dir, ".tutorial/.tmp/workbook"), { recursive: true });
+    await writeFile(tutorialStatePath(dir, "workbook", "events.jsonl"), [
+      JSON.stringify({ type: "session_started", at: "2026-08-21T00:00:00.000Z" }),
+      JSON.stringify({ type: "workbook_introduction_completed", at: "2026-08-21T00:00:01.000Z" }),
+      JSON.stringify({ type: "block_completed", blockId: "part--loop", at: "2026-08-21T00:00:02.000Z" }),
+      JSON.stringify({ type: "block_completed", blockId: "lesson--001-first", at: "2026-08-21T00:00:03.000Z" }),
+      JSON.stringify({ type: "block_continued", lessonId: "001-first", blockId: "orientation", at: "2026-08-21T00:00:04.000Z" }),
+      JSON.stringify({ type: "editor_practice_unlocked", lessonId: "001-first", blockId: "edit-answer", revisionId: 1, path: "factory/answer.md", at: "2026-08-21T00:00:05.000Z" }),
+      JSON.stringify({ type: "block_completed", lessonId: "001-first", blockId: "run-supplied-command", at: "2026-08-21T00:00:06.000Z" }),
+      JSON.stringify({ type: "block_completed", lessonId: "001-first", blockId: "change-job", at: "2026-08-21T00:00:07.000Z" }),
+      JSON.stringify({ type: "reflection_completed", lessonId: "001-first", blockId: "reflection", at: "2026-08-21T00:00:08.000Z" }),
+      JSON.stringify({ type: "lesson_transitioned", lessonId: "001-first", blockId: "transition", at: "2026-08-21T00:00:09.000Z" }),
+      ""
+    ].join("\n"));
+
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });
+    try {
+      const recovered = await state(server.url);
+      expect(recovered.progress.completedLessons).toContain("001-first");
+      expect(recovered.progress.completedBlocks).toEqual(expect.arrayContaining([
+        "lesson--001-first--orientation",
+        "lesson--001-first--edit-answer",
+        "lesson--001-first--run-supplied-command",
+        "lesson--001-first--change-job",
+        "lesson--001-first--reflection",
+        "lesson--001-first--transition",
+      ]));
+      expect(recovered.progress.activeBlockId).toBe("lesson--002-second");
+    } finally { await server.close(); }
+  });
+
   it("projects missing legacy frames before an already-authored active block without rewriting append order", async () => {
     const dir = await fixture();
     await mkdir(resolve(dir, ".tutorial/.tmp/workbook"), { recursive: true });
