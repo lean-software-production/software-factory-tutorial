@@ -60,7 +60,8 @@ export type LessonSummary = TimelineMetadata & {
   coveredThroughId: string;
 };
 
-export type BlockTutorBriefing = TimelineMetadata & {
+/** Historical private briefing rows from older sessions. New timeline appends no longer write them. */
+export type LegacyBlockTutorBriefing = TimelineMetadata & {
   type: "block_tutor_briefed";
   lessonId: string;
   blockId: string;
@@ -82,7 +83,7 @@ export type TutorFailure = TimelineMetadata & {
   lessonId: string;
   blockId: string;
   requestId: string;
-  operation: "reply" | "hint" | "briefing" | "readiness" | "review" | "restore" | "block_summary" | "lesson_summary" | "completion_summary";
+  operation: "reply" | "hint" | "readiness" | "review" | "restore" | "block_summary" | "lesson_summary" | "completion_summary";
   publicMessage: string;
 };
 
@@ -91,13 +92,12 @@ export type WorkbookCompletionSummary = TimelineMetadata & {
   text: string;
 };
 
-export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TimelineMessage | BlockSummary | LessonSummary | BlockTutorBriefing | BlockTutorReadiness | TutorFailure | WorkbookCompletionSummary;
+export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TimelineMessage | BlockSummary | LessonSummary | LegacyBlockTutorBriefing | BlockTutorReadiness | TutorFailure | WorkbookCompletionSummary;
 export type TimelineAppendInput =
   | WorkbookWorkflowInput
   | Omit<TimelineMessage, keyof TimelineMetadata>
   | Omit<BlockSummary, keyof TimelineMetadata>
   | Omit<LessonSummary, keyof TimelineMetadata>
-  | Omit<BlockTutorBriefing, keyof TimelineMetadata>
   | Omit<BlockTutorReadiness, keyof TimelineMetadata>
   | Omit<TutorFailure, keyof TimelineMetadata>
   | Omit<WorkbookCompletionSummary, keyof TimelineMetadata>;

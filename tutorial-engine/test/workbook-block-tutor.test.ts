@@ -103,7 +103,7 @@ describe("FastWorkbookBlockTutor", () => {
     const tutor = new FastWorkbookBlockTutor({ workspace, log: { info() {}, error() {} } });
 
     try {
-      const hint = tutor.hint({ context: activeContext(), briefing: "Private guidance." });
+      const hint = tutor.hint({ context: activeContext() });
       await prompted;
       await vi.advanceTimersByTimeAsync(250);
       await expect(hint).resolves.toBe("Name the removed shell capability.");
@@ -112,7 +112,7 @@ describe("FastWorkbookBlockTutor", () => {
     }
   });
 
-  it("creates a fresh read-only block session for each hint with private briefing and active evidence", async () => {
+  it("creates a fresh read-only block session for each hint with private author guidance and active evidence", async () => {
     const workspace = await workspaceFixture();
     const sessions: FakeSession[] = [];
     const tutor = new FastWorkbookBlockTutor({ workspace, sessionFactory: async (request) => {
@@ -122,16 +122,16 @@ describe("FastWorkbookBlockTutor", () => {
     } });
     const context = activeContext();
 
-    await expect(tutor.hint({ context, briefing: "Watch for the learner naming shell execution as removed." })).resolves.toBe("Try naming which command ability was removed.");
-    await expect(tutor.hint({ context, briefing: "Second private briefing." })).resolves.toBe("Try naming which command ability was removed.");
+    await expect(tutor.hint({ context })).resolves.toBe("Try naming which command ability was removed.");
+    await expect(tutor.hint({ context })).resolves.toBe("Try naming which command ability was removed.");
 
     expect(sessions).toHaveLength(2);
     expect(sessions[0]!.disposed).toBe(true);
     expect(sessions[1]!.disposed).toBe(true);
     expect(sessions[0]!.request.tools).toEqual(["read", "grep", "find", "ls"]);
     expect(sessions[0]!.request.customTools.map((tool: any) => tool.name).sort()).toEqual(["find", "grep", "ls", "read"]);
-    expect(sessions[0]!.request.systemPrompt).toContain("private briefing");
-    expect(sessions[0]!.prompts[0]).toContain("Watch for the learner naming shell execution as removed.");
+    expect(sessions[0]!.request.systemPrompt).toContain("author guidance");
+    expect(sessions[0]!.request.systemPrompt).not.toContain("private briefing");
     expect(sessions[0]!.prompts[0]).toContain("\"authorGuidance\": \"Accept only if the learner names the removed shell capability.\"");
     expect(sessions[0]!.prompts[0]).toContain("\"attempts\"");
   });
@@ -144,30 +144,21 @@ describe("FastWorkbookBlockTutor", () => {
       return session;
     } });
 
-    await expect(tutor.hint({ context: activeContext(), briefing: "Private guidance." })).rejects.toThrow(/empty block tutor hint/i);
+    await expect(tutor.hint({ context: activeContext() })).rejects.toThrow(/empty block tutor hint/i);
   });
 
-  it("rejects hints that quote private briefing or author guidance", async () => {
+  it("rejects hints that quote private author guidance", async () => {
     const workspace = await workspaceFixture();
-    const briefing = "Watch for the learner naming shell execution as removed.";
     const context = activeContext();
-    const tutor = new FastWorkbookBlockTutor({ workspace, sessionFactory: async (request) => {
-      const session = new FakeSession(request);
-      session.response = `Tell the learner: ${briefing}`;
-      return session;
-    } });
-
-    await expect(tutor.hint({ context, briefing })).rejects.toThrow(/private/i);
-
     const authorLeakTutor = new FastWorkbookBlockTutor({ workspace, sessionFactory: async (request) => {
       const session = new FakeSession(request);
       session.response = `Internal rubric says: ${context.authorGuidance}`;
       return session;
     } });
-    await expect(authorLeakTutor.hint({ context, briefing: "Private briefing." })).rejects.toThrow(/private/i);
+    await expect(authorLeakTutor.hint({ context })).rejects.toThrow(/private/i);
   });
 
-  it("rejects exact private briefing or guidance text even when it is short", async () => {
+  it("rejects exact private guidance text even when it is short", async () => {
     const workspace = await workspaceFixture();
     const shortContext = { ...activeContext(), authorGuidance: "K9" };
     const shortGuidanceTutor = new FastWorkbookBlockTutor({ workspace, sessionFactory: async (request) => {
@@ -175,14 +166,7 @@ describe("FastWorkbookBlockTutor", () => {
       session.response = "Try K9 next.";
       return session;
     } });
-    await expect(shortGuidanceTutor.hint({ context: shortContext, briefing: "Z7" })).rejects.toThrow(/private/i);
-
-    const shortBriefingTutor = new FastWorkbookBlockTutor({ workspace, sessionFactory: async (request) => {
-      const session = new FakeSession(request);
-      session.response = "Look for z7 in your answer.";
-      return session;
-    } });
-    await expect(shortBriefingTutor.hint({ context: shortContext, briefing: "Z7" })).rejects.toThrow(/private/i);
+    await expect(shortGuidanceTutor.hint({ context: shortContext })).rejects.toThrow(/private/i);
   });
 
   it("exposes only safe read-only workspace tools inside the workspace", async () => {
@@ -193,7 +177,7 @@ describe("FastWorkbookBlockTutor", () => {
       return new FakeSession(request);
     } });
 
-    await tutor.hint({ context: activeContext(), briefing: "Private guidance." });
+    await tutor.hint({ context: activeContext() });
 
     const tools = new Map(requests[0]!.customTools.map((tool: any) => [tool.name, tool]));
     expect([...tools.keys()].sort()).toEqual(["find", "grep", "ls", "read"]);
@@ -225,7 +209,7 @@ describe("FastWorkbookBlockTutor", () => {
       return new FakeSession(request);
     } });
 
-    await tutor.hint({ context: activeContext(), briefing: "Private guidance." });
+    await tutor.hint({ context: activeContext() });
 
     const tools = new Map(requests[0]!.customTools.map((tool: any) => [tool.name, tool]));
     await expect((tools.get("read") as any).execute("read-authored", { path: "lessons/001/blocks/step.md" }, undefined, undefined, undefined))
@@ -264,7 +248,7 @@ describe("FastWorkbookBlockTutor", () => {
       return new FakeSession(request);
     } });
 
-    await tutor.hint({ context: activeContext(), briefing: "Private guidance." });
+    await tutor.hint({ context: activeContext() });
 
     const tools = new Map(requests[0]!.customTools.map((tool: any) => [tool.name, tool]));
     await expect((tools.get("read") as any).execute("read-learner", { path: "factory/answer.md" }, undefined, undefined, undefined))

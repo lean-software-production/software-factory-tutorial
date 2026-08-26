@@ -11,7 +11,6 @@ import { createEvaluationWorkspace } from "../v2/workspace.js";
 const tempRoots: string[] = [];
 class SessionFakeMainTutor extends RecordingMainTutor {
   protected override defaultReply = "Public fake tutor reply.";
-  protected override briefingFor = () => "Public fake block briefing.";
   protected override blockSummaryFor = () => "Public fake block summary.";
   protected override lessonSummaryFor = () => "Public fake lesson summary.";
   protected override async decide(): Promise<TutorDecision> { return { outcome: "working" }; }
