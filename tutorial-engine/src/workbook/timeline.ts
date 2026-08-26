@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { tutorialSessionStatePath, tutorialStatePath } from "./tutorial-state.js";
 import type { AttemptKind } from "./attempts.js";
@@ -150,6 +150,15 @@ export class WorkbookTimeline {
 
   append(input: TimelineAppendInput): Promise<WorkbookTimelineRecord> {
     return this.run(() => this.appendWithinRun(input));
+  }
+
+  reset(): Promise<void> {
+    return this.run(() => this.resetWithinRun());
+  }
+
+  /** Clear the presentation timeline as one step of an operation already serialized through run(). */
+  async resetWithinRun(): Promise<void> {
+    await rm(this.eventPath, { force: true });
   }
 
   /** Append as one step of an operation already serialized through run(). */

@@ -60,6 +60,7 @@ describe("workbook CLI", () => {
       session: sessionFixture("session-20260824-120000-a1b2c3d4"),
       webRoot: resolve("/pkg", "dist/web-workbook"),
       embeddedTerminal: true,
+      watchContent: false,
     }));
     expect(lines).toEqual([
       "Created tutorial session: session-20260824-120000-a1b2c3d4",
@@ -93,6 +94,23 @@ describe("workbook CLI", () => {
     expect(startServer.mock.calls[0]![0].session?.runtimeProvision?.mounts).toEqual([
       expect.objectContaining({ hostSource: expect.stringContaining("workbook-cli-runtime-source-"), workspaceTarget: "runtime-tools", readonly: true }),
     ]);
+  });
+
+  it("passes --watch through to the workbook server without changing session reopening", async () => {
+    const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
+    const resolveSession = vi.fn(async () => sessionFixture("lesson-007"));
+
+    await runWorkbookCli(["/tmp/workbook", "--session", "lesson-007", "--port", "4310", "--watch", "--no-open"], {
+      startServer,
+      resolveSession,
+      installSignalHandlers: false,
+      packageDirectory: "/pkg",
+      logger: { info: vi.fn(), error: vi.fn() },
+      writeLine: () => undefined,
+    });
+
+    expect(resolveSession).toHaveBeenCalledWith("/tmp/workbook", "lesson-007");
+    expect(startServer).toHaveBeenCalledWith(expect.objectContaining({ port: 4310, watchContent: true }));
   });
 
   it("passes an explicit --session ID through to reopening and prints the reopened workspace", async () => {

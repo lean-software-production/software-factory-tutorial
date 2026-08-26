@@ -1,5 +1,5 @@
 import type { Dirent } from "node:fs";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { tutorialSessionStatePath, tutorialStatePath } from "./tutorial-state.js";
@@ -155,6 +155,10 @@ export class AttemptStore {
   async acceptCurrent(id: string, successMessage: string): Promise<Attempt | undefined> {
     const message = successMessage.trim().slice(0, 1_000) || "Nice work — this attempt is accepted.";
     return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "accepted", feedback: undefined, successMessage: message }));
+  }
+
+  async resetPresentationState(): Promise<void> {
+    await rm(this.#root(), { recursive: true, force: true });
   }
 
   async #updateCurrent(id: string, update: (attempt: Attempt) => Attempt): Promise<Attempt | undefined> {

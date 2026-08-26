@@ -246,6 +246,49 @@ function scrollPromotionFixture() {
 }
 
 describe("workbook lesson UI", () => {
+  it("refreshes state in place on author hot-reload SSE and shows non-modal reload errors", async () => {
+    const { initialState } = scrollPromotionFixture();
+    const reloadedState = { ...initialState, workbook: { title: "Reloaded Workbook" }, introduction: "Reloaded intro copy.", timeline: [{ ...initialState.timeline[0], text: "# Reloaded Workbook\n\nReloaded intro copy." }] } as any;
+    class FakeEventSource {
+      static instances: FakeEventSource[] = [];
+      readonly listeners = new Map<string, Array<(event: { data: string }) => void>>();
+      readonly url: string;
+      closed = false;
+      constructor(url: string) { this.url = url; FakeEventSource.instances.push(this); }
+      addEventListener(event: string, listener: (event: { data: string }) => void) { (this.listeners.get(event) ?? this.listeners.set(event, []).get(event)!).push(listener); }
+      close() { this.closed = true; }
+      emit(event: string, data: unknown = {}) { for (const listener of this.listeners.get(event) ?? []) listener({ data: JSON.stringify(data) }); }
+    }
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => ({ ok: true, json: async () => String(input).startsWith("/api/workbook/state") ? reloadedState : initialState }));
+    const scrollIntoView = vi.fn();
+    const replaceState = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", FakeEventSource as any);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
+
+    const container = await mount(createElement(App), (win) => {
+      stubAppShellGlobals(win);
+      win.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+      vi.stubGlobal("history", { pushState: vi.fn(), replaceState });
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(FakeEventSource.instances[0]!.url).toBe("api/workbook/timeline");
+    expect(container.textContent).toContain("Workbook");
+
+    await act(async () => { FakeEventSource.instances[0]!.emit("content-reload-error", { message: "workbook.md front matter is incomplete" }); });
+    expect(container.textContent).toContain("Author reload failed.");
+    expect(container.textContent).toContain("workbook.md front matter is incomplete");
+    expect(container.textContent).toContain("Workbook");
+
+    await act(async () => { FakeEventSource.instances[0]!.emit("content-reloaded", { generation: 2 }); await Promise.resolve(); });
+    expect(fetchMock).toHaveBeenCalledWith("/api/workbook/state");
+    expect(container.textContent).toContain("Reloaded Workbook");
+    expect(container.textContent).toContain("Reloaded intro copy.");
+    expect(container.textContent).not.toContain("Author reload failed.");
+    expect(replaceState).toHaveBeenCalledWith(null, "", "#workbook--introduction");
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
   it("submits the typed tutor message with Enter", async () => {
     const onSend = vi.fn(async () => undefined);
     const container = await mount(createElement(TimelineThread, {

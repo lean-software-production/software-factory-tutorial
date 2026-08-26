@@ -4,13 +4,14 @@
  * never be mistaken for the tutorial directory however the flags are ordered.
  */
 
-export const USAGE = "Usage: tutorial-engine <tutorial-directory> [--session <id>] [--port 4310] [--host 0.0.0.0] [--no-open]";
+export const USAGE = "Usage: tutorial-engine <tutorial-directory> [--session <id>] [--port 4310] [--host 0.0.0.0] [--watch] [--no-open]";
 
 export interface TutorialArguments {
   target: string;
   port?: number;
   host?: string;
   noOpen: boolean;
+  watch: boolean;
   session?: string;
 }
 
@@ -20,7 +21,7 @@ export type ParsedArguments = { kind: "run"; options: TutorialArguments } | { ki
 export class ArgumentError extends Error {}
 
 const VALUE_FLAGS = ["--port", "--host", "--session"] as const;
-const BARE_FLAGS = ["--no-open"] as const;
+const BARE_FLAGS = ["--no-open", "--watch"] as const;
 
 function splitFlag(argument: string): { flag: string; inlineValue?: string } {
   const equals = argument.indexOf("=");
@@ -50,6 +51,7 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
   let port: number | undefined;
   let host: string | undefined;
   let noOpen = false;
+  let watch = false;
   let session: string | undefined;
   let endOfFlags = false;
 
@@ -78,7 +80,8 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
     }
     if ((BARE_FLAGS as readonly string[]).includes(flag)) {
       if (inlineValue !== undefined) throw new ArgumentError(`${flag} does not take a value.`);
-      noOpen = true;
+      if (flag === "--no-open") noOpen = true;
+      else watch = true;
       continue;
     }
     throw new ArgumentError(`Unknown option '${flag}'.`);
@@ -87,5 +90,5 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
   const [target, ...extra] = positional;
   if (!target) throw new ArgumentError("Name the tutorial directory to serve.");
   if (extra.length > 0) throw new ArgumentError(`Serve one tutorial directory at a time; got ${positional.length} (${positional.join(", ")}).`);
-  return { kind: "run", options: { target, port, host, noOpen, session } };
+  return { kind: "run", options: { target, port, host, noOpen, watch, session } };
 }
