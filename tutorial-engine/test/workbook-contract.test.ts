@@ -375,7 +375,7 @@ describe("workbook lesson contract", () => {
     expect(lesson.durationMinutes).toBe(10);
     expect(lesson.introduction).toContain("An **agent** is a harness with a job to be done.");
     expect(lesson.introduction).toContain("Claude's docs");
-    expect(lesson.blocks.map((block) => block.id)).toEqual(["run-supplied-command", "change-job", "reflection", "transition"]);
+    expect(lesson.blocks.map((block) => block.id)).toEqual(["run-supplied-command", "change-job", "reflection"]);
     const practice = lesson.blocks.find((block) => block.id === "run-supplied-command");
     if (practice?.type !== "terminal-practice") throw new Error("run-supplied-command must be terminal-practice");
     expect(practice.tutor.length).toBeGreaterThan(0);
