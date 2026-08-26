@@ -216,6 +216,13 @@ function EmbeddedTerminal({ block, command, active, completed, verified, checkpo
     scheduleReviewPoll(generation);
   }, [reviewKey, scheduleReviewPoll]);
 
+  // The review-polling callbacks change identity whenever the attempt revision changes (it bumps
+  // the moment the coach starts reviewing). Keep them in a ref so the terminal instance below is
+  // not torn down and re-attached on every coach round — that remount blanks the terminal and makes
+  // the server replay the whole transcript, which looks like the terminal redrawing and jumping.
+  const pollingCallbacksRef = useRef({ startReviewPolling, stopReviewPolling });
+  pollingCallbacksRef.current = { startReviewPolling, stopReviewPolling };
+
   useEffect(() => {
     const shouldPoll = active && !completed && !verified && checkpointStatus === "reviewing";
     if (shouldPoll) startReviewPolling();
@@ -248,10 +255,10 @@ function EmbeddedTerminal({ block, command, active, completed, verified, checkpo
       if (message.type === "advice" && message.blockId === block.id) onAdvice(message.message);
       if ((message.type === "observer-status" || message.type === "attempt-status") && message.blockId === block.id) {
         onStatus(message.status === "running" ? "Running — waiting for terminal output…" : message.status === "checking" || message.status === "submitted" ? "Checking…" : "Keep going; the expected result is not visible yet.");
-        if (message.status === "submitted") startReviewPolling();
+        if (message.status === "submitted") pollingCallbacksRef.current.startReviewPolling();
       }
       if ((message.type === "observer-error" || message.type === "attempt-error") && message.blockId === block.id) onError(message.message);
-      if (message.type === "verified-complete" && message.blockId === block.id) { stopReviewPolling(); refresh(message.state); }
+      if (message.type === "verified-complete" && message.blockId === block.id) { pollingCallbacksRef.current.stopReviewPolling(); refresh(message.state); }
       if (message.type === "busy") onError(message.message);
       if (message.type === "terminal-error") onError(message.message);
       if (message.type === "exit") onStatus("The embedded shell exited. Refresh the page to start a new one.");
@@ -260,7 +267,7 @@ function EmbeddedTerminal({ block, command, active, completed, verified, checkpo
     ws.addEventListener("error", () => { setConnected(false); onError("Embedded terminal connection failed. Refresh the page and try again."); });
     addEventListener("resize", sendResize);
     return () => {
-      stopReviewPolling(false);
+      pollingCallbacksRef.current.stopReviewPolling(false);
       removeEventListener("resize", sendResize);
       dataDisposable.dispose();
       ws.close();
@@ -270,7 +277,7 @@ function EmbeddedTerminal({ block, command, active, completed, verified, checkpo
       socket.current = null;
       setConnected(false);
     };
-  }, [active, completed, verified, block.id, refresh, onAdvice, onError, onStatus, startReviewPolling, stopReviewPolling]);
+  }, [active, completed, verified, block.id, refresh, onAdvice, onError, onStatus]);
 
   const insertCommand = useCallback(() => {
     if (!command) return;
