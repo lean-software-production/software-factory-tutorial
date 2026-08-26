@@ -2,10 +2,10 @@
 /**
  * Diagnostic real-browser trace for tutor-chat submit scrolling.
  *
- * This is deliberately observational: it boots the real workbook UI/server against the visual
- * fixture, sends one delayed fake-tutor chat message, and prints the scroll/layout trace as JSON.
- * It asserts only that the API/UI milestones were reached, not what the product's scroll policy
- * should be.
+ * This boots the real workbook UI/server against the visual fixture, sends one delayed fake-tutor
+ * chat message, and prints the scroll/layout trace as JSON. It asserts the simplified chat scroll
+ * contract: the persisted learner record appears once without scrolling, then the persisted tutor
+ * reply receives exactly one deterministic auto/start scroll.
  *
  *   npm run --workspace=tutorial-engine build:web:workbook
  *   cd tutorial-engine && npx tsx test/tutor-chat-scroll.mts
@@ -135,6 +135,8 @@ async function main(): Promise<void> {
       };
       const state = await fetch("/api/workbook/state").then((response) => response.json()).catch((error) => ({ error: String(error) }));
       const messages = [...document.querySelectorAll(".timeline-message")];
+      const learnerMessages = [...document.querySelectorAll(".timeline-message.learner")];
+      const tutorMessages = [...document.querySelectorAll(".timeline-message.tutor:not(.thinking)")];
       const latest = messages.at(-1) as HTMLElement | undefined;
       const composer = document.querySelector(".timeline-composer-dock") as HTMLElement | null;
       const textarea = document.querySelector(".timeline-composer-textarea") as HTMLTextAreaElement | null;
@@ -159,6 +161,11 @@ async function main(): Promise<void> {
           bottom: Math.round(message.getBoundingClientRect().bottom),
           text: message.textContent?.replace(/\s+/g, " ").trim().slice(0, 70),
         })),
+        conversationCounts: {
+          learner: learnerMessages.length,
+          tutor: tutorMessages.length,
+          thinking: document.querySelectorAll(".timeline-message.tutor.thinking").length,
+        },
         composer: {
           dockRect: rectOf(composer),
           textareaRect: rectOf(textarea),
@@ -224,13 +231,19 @@ async function main(): Promise<void> {
 
     await page.locator(".round-send").click();
     await waitFor(() => mainTutor.replies.length === 1, "api: fake main tutor did not receive the learner message");
-    const localEchoRendered = await page.waitForFunction((snippet: string) => {
-      const hasLearnerEcho = [...document.querySelectorAll(".timeline-message.learner")].some((node) => node.textContent?.includes(snippet));
-      return hasLearnerEcho && Boolean(document.querySelector(".timeline-message.tutor.thinking"));
+    const persistedLearnerRendered = await page.waitForFunction((snippet: string) => {
+      const learners = [...document.querySelectorAll(".timeline-message.learner")];
+      return learners.length === 1
+        && learners[0]?.textContent?.includes(snippet)
+        && !document.querySelector(".timeline-message.tutor.thinking");
     }, "Diagnostic learner message paragraph 1", { timeout: 10_000 }).then(() => true).catch(() => false);
-    check(localEchoRendered, "ui: local echo and thinking card did not render");
-    await page.waitForTimeout(150);
-    trace.push(await snapshot("after-local-echo-thinking"));
+    check(persistedLearnerRendered, "ui: exactly one persisted learner record did not render before tutor reply");
+    await page.waitForTimeout(250);
+    const afterLearner = await snapshot("after-persisted-learner");
+    trace.push(afterLearner);
+    check(afterLearner.conversationCounts.learner === 1, `ui: expected one learner bubble after persisted learner, saw ${afterLearner.conversationCounts.learner}`);
+    check(afterLearner.conversationCounts.thinking === 0, "ui: main-chat thinking card rendered while tutor reply was pending");
+    check(afterLearner.scrollIntoViewCalls.length === 0, `scroll: persisted learner arrival should not scroll (${JSON.stringify(afterLearner.scrollIntoViewCalls)})`);
 
     reply.resolve(tutorReply);
     const tutorReplyRendered = await page.waitForFunction((snippet: string) => {
@@ -238,8 +251,15 @@ async function main(): Promise<void> {
       return text.includes(snippet) && !document.querySelector(".timeline-message.tutor.thinking");
     }, "Diagnostic tutor reply paragraph 1", { timeout: 10_000 }).then(() => true).catch(() => false);
     check(tutorReplyRendered, "ui: final tutor reply did not render");
-    await page.waitForTimeout(250);
-    trace.push(await snapshot("after-tutor-reply"));
+    await page.waitForTimeout(350);
+    const afterReply = await snapshot("after-tutor-reply");
+    trace.push(afterReply);
+
+    const replyScrolls = afterReply.scrollIntoViewCalls.filter((call: any) => call.target.className?.includes("timeline-message tutor") && call.target.text?.includes("Diagnostic tutor reply paragraph 1"));
+    check(afterReply.conversationCounts.learner === 1, `ui: expected one learner bubble after tutor reply, saw ${afterReply.conversationCounts.learner}`);
+    check(replyScrolls.length === 1, `scroll: expected exactly one tutor reply scroll, saw ${replyScrolls.length} (${JSON.stringify(afterReply.scrollIntoViewCalls)})`);
+    check(replyScrolls[0]?.options?.behavior === "auto" && replyScrolls[0]?.options?.block === "start", `scroll: tutor reply used unexpected scroll options ${JSON.stringify(replyScrolls[0]?.options)}`);
+    check(!afterReply.scrollIntoViewCalls.some((call: any) => call.options?.behavior === "smooth"), `scroll: tutor reply phase should not use smooth scrolling (${JSON.stringify(afterReply.scrollIntoViewCalls)})`);
 
     check(mainTutor.replies[0]?.learnerMessage.text === learnerMessage.trim(), "api: fake main tutor received unexpected learner message text");
   } finally {

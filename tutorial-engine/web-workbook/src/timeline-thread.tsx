@@ -40,18 +40,26 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
   const [commandInserted, setCommandInserted] = useState(false);
-  const [pendingEchoes, setPendingEchoes] = useState<{ id: string; text: string }[]>([]);
-  const nextEchoId = useRef(0);
-  const latestEntryRef = useRef<HTMLElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const chatEntryCount = records.reduce((count, record) => count + ((record.type === "message" && record.presentation !== "course") || record.type === "tutor_failed" ? 1 : 0), 0) + pendingEchoes.length + (activeReflectionReviewing ? 1 : 0);
+  const responseEntryRefs = useRef(new Map<string, HTMLElement>());
+  const knownResponseIds = useRef<Set<string> | null>(null);
   const recordMatchesActive = (record: { lessonId: string; blockId: string }) => record.blockId === activeBlockId && (record.lessonId === activeLessonId || activeBlockId.includes("--"));
   const activeAuthoredRecordId = [...records].reverse().find((record) => record.type === "message" && record.presentation === "course" && record.source === "authored" && recordMatchesActive(record))?.id;
   const readyBlockIdSet = new Set(readyBlockIds);
-  useEffect(() => {
-    if (chatEntryCount === 0) return;
-    (latestEntryRef.current as (HTMLElement & { scrollIntoView?(options?: ScrollIntoViewOptions): void }) | null)?.scrollIntoView?.({ behavior: "smooth", block: "end" });
-  }, [chatEntryCount]);
+  const responseRecords = records.filter((record) => record.type === "tutor_failed" || (record.type === "message" && record.role === "assistant" && !isAuthoredCourseRecord(record)));
+  const latestResponseId = responseRecords.at(-1)?.id;
+  const responseIdsKey = responseRecords.map((record) => record.id).join("\u0000");
+  useLayoutEffect(() => {
+    const nextKnownResponseIds = new Set(responseRecords.map((record) => record.id));
+    if (knownResponseIds.current === null) {
+      knownResponseIds.current = nextKnownResponseIds;
+      return;
+    }
+    const shouldScroll = latestResponseId !== undefined && !knownResponseIds.current.has(latestResponseId);
+    knownResponseIds.current = nextKnownResponseIds;
+    if (!shouldScroll) return;
+    responseEntryRefs.current.get(latestResponseId)?.scrollIntoView({ behavior: "auto", block: "start" });
+  }, [latestResponseId, responseIdsKey]);
   useLayoutEffect(() => {
     if (textareaRef.current) resizeComposerTextarea(textareaRef.current);
   }, [draft]);
@@ -61,15 +69,12 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     if (inputDisabled || pending || !trimmed) return;
     setDraft("");
     setPending(true);
-    const echoId = `local-echo-${nextEchoId.current++}`;
-    setPendingEchoes((echoes) => [...echoes, { id: echoId, text: trimmed }]);
     try {
       await onSend(trimmed);
     } catch (error) {
       setDraft(text);
       throw error;
     } finally {
-      setPendingEchoes((echoes) => echoes.filter((echo) => echo.id !== echoId));
       setPending(false);
     }
   };
@@ -94,14 +99,18 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     }
     void submitText(draft || event.currentTarget.value);
   };
+  const responseEntryRef = (recordId: string) => (el: HTMLElement | null) => {
+    if (el) responseEntryRefs.current.set(recordId, el);
+    else responseEntryRefs.current.delete(recordId);
+  };
   const renderConversationRecord = (record: TimelineThreadRecord) => {
-    if (record.type === "tutor_failed") return <aside key={record.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message tutor failure" aria-live="polite"><b>Tutor unavailable</b><p>{record.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(record.failureId)}>Retry</button></aside>;
+    if (record.type === "tutor_failed") return <aside key={record.id} ref={responseEntryRef(record.id)} className="timeline-message tutor failure" aria-live="polite"><b>Tutor unavailable</b><p>{record.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(record.failureId)}>Retry</button></aside>;
     if (record.type !== "message") return null;
     const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : record.presentation === "hint" ? " hint" : ""}`;
-    return <article key={record.id} ref={(el) => { latestEntryRef.current = el; }} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown source={record.source === "authored" && record.presentation === "course" ? "authored" : "generated"}>{record.text}</Markdown>}</article>;
+    const trackResponse = record.role === "assistant" && !(record.source === "authored" && record.presentation === "course");
+    return <article key={record.id} ref={trackResponse ? responseEntryRef(record.id) : undefined} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown source={record.source === "authored" && record.presentation === "course" ? "authored" : "generated"}>{record.text}</Markdown>}</article>;
   };
-  const pendingEchoNodes = pendingEchoes.map((echo) => <article key={echo.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message learner"><b>You</b><p>{echo.text}</p></article>);
-  const pendingThinkingNode = pendingEchoes.length > 0 || activeReflectionReviewing ? <aside ref={(el) => { latestEntryRef.current = el; }} className="timeline-message tutor thinking" role="status" aria-live="polite" aria-label="Tutor is thinking"><b>Tutor</b><span className="tutor-thinking-dots" aria-hidden="true"><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /></span><span className="tutor-thinking-label">Thinking</span></aside> : null;
+  const reflectionReviewingNode = activeReflectionReviewing ? <aside className="timeline-message tutor thinking" role="status" aria-live="polite" aria-label="Tutor is thinking"><b>Tutor</b><span className="tutor-thinking-dots" aria-hidden="true"><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /></span><span className="tutor-thinking-label">Thinking</span></aside> : null;
   const renderedRecords = (() => {
     const nodes: React.ReactNode[] = [];
     for (let index = 0; index < records.length; index += 1) {
@@ -123,8 +132,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
           {active && activeSurface}
           {canInsertCommand && <button className="button primary timeline-do-it" onClick={() => { onDoItForMe?.(); setCommandInserted(true); }}>{commandInserted ? "Inserted — press Enter" : "Do it for me"}</button>}
           {following.map(renderConversationRecord)}
-          {active && pendingEchoNodes}
-          {active && pendingThinkingNode}
+          {active && reflectionReviewingNode}
           {renderContinuation?.(lastMessage)}
           {readyBlockIdSet.has(record.blockId) ? <div className="ready-successor-scroll-runway" aria-hidden="true" /> : null}
         </section>);
@@ -133,7 +141,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
       const hasAuthoredBlock = records.some((candidate) => isAuthoredCourseRecord(candidate) && belongsToAuthoredBlock(record, candidate));
       if (!hasAuthoredBlock) nodes.push(renderConversationRecord(record));
     }
-    if (!nodes.some((node: any) => node?.props?.["data-active-block"] === "true")) nodes.push(...pendingEchoNodes, pendingThinkingNode);
+    if (!nodes.some((node: any) => node?.props?.["data-active-block"] === "true")) nodes.push(reflectionReviewingNode);
     return nodes;
   })();
   return <section className="timeline-thread has-fixed-composer" aria-label="Tutor conversation">

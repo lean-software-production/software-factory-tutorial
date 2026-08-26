@@ -525,7 +525,7 @@ describe("workbook lesson UI", () => {
     expect(textarea.style.overflowY).toBe("auto");
   });
 
-  it("shows the learner's message immediately while the tutor reply is still pending", async () => {
+  it("clears the composer and disables sending while the tutor POST is pending without adding local chat records", async () => {
     let resolveSend!: () => void;
     const onSend = vi.fn(() => new Promise<void>((resolve) => { resolveSend = resolve; }));
     const container = await mount(createElement(TimelineThread, {
@@ -536,6 +536,7 @@ describe("workbook lesson UI", () => {
       records: []
     }));
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+    const sendButton = container.querySelector<HTMLButtonElement>(".round-send")!;
 
     textarea.value = "What should I try next?";
     textarea.focus();
@@ -544,22 +545,19 @@ describe("workbook lesson UI", () => {
 
     expect(onSend).toHaveBeenCalledWith("What should I try next?");
     expect(textarea.value).toBe("");
-    const learnerBubble = container.querySelector(".timeline-message.learner");
-    expect(learnerBubble).not.toBeNull();
-    expect(learnerBubble!.textContent).toContain("What should I try next?");
-    const thinking = container.querySelector<HTMLElement>(".timeline-message.tutor.thinking");
-    expect(thinking).not.toBeNull();
-    expect(thinking?.getAttribute("role")).toBe("status");
-    expect(thinking?.getAttribute("aria-label")).toBe("Tutor is thinking");
-    expect(thinking?.querySelectorAll(".tutor-thinking-dot")).toHaveLength(3);
+    expect(textarea.disabled).toBe(true);
+    expect(sendButton.disabled).toBe(true);
+    expect(container.querySelector(".timeline-message.learner")).toBeNull();
+    expect(container.querySelector(".timeline-message.tutor.thinking")).toBeNull();
 
     await act(async () => { resolveSend(); await Promise.resolve(); });
 
+    expect(textarea.disabled).toBe(false);
     expect(container.querySelector(".timeline-message.learner")).toBeNull();
     expect(container.querySelector(".timeline-message.tutor.thinking")).toBeNull();
   });
 
-  it("restores the draft if onSend rejects, but still removes the pending echo", async () => {
+  it("restores the draft if onSend rejects without adding local chat records", async () => {
     let rejectSend!: (error: Error) => void;
     const onSend = vi.fn(() => new Promise<void>((_resolve, reject) => { rejectSend = reject; }));
     const container = await mount(createElement(TimelineThread, {
@@ -578,7 +576,8 @@ describe("workbook lesson UI", () => {
 
     expect(onSend).toHaveBeenCalledWith("What should I try next?");
     expect(textarea.value).toBe("");
-    expect(container.querySelector(".timeline-message.learner")).not.toBeNull();
+    expect(textarea.disabled).toBe(true);
+    expect(container.querySelector(".timeline-message.learner")).toBeNull();
 
     const onUnhandledRejection = (error: unknown) => { void error; };
     process.on("unhandledRejection", onUnhandledRejection);
@@ -592,6 +591,7 @@ describe("workbook lesson UI", () => {
     }
 
     expect(textarea.value).toBe("What should I try next?");
+    expect(textarea.disabled).toBe(false);
     expect(container.querySelector(".timeline-message.learner")).toBeNull();
   });
 
@@ -658,38 +658,101 @@ describe("workbook lesson UI", () => {
     expect(container.querySelectorAll(".timeline-lesson-transition")).toHaveLength(0);
   });
 
-  it("scrolls the newest conversation entry into view but not for course-only records", async () => {
+  it("scrolls only when a persisted tutor response or tutor failure is appended", async () => {
     const scrollIntoView = vi.fn();
     const baseRecords = [
-      { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "Course note" }
+      { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "Course note" },
+      { type: "message", id: "history", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "main_tutor", presentation: "chat", text: "Historic tutor reply" }
     ] as const;
-    const container = await mount(createElement(TimelineThread, {
+    const render = (records: readonly any[], activeReflectionReviewing = false) => createElement(TimelineThread, {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend: vi.fn(async () => undefined),
       onRetry: vi.fn(async () => undefined),
-      records: baseRecords as any
-    }), (win) => { win.HTMLElement.prototype.scrollIntoView = scrollIntoView; });
+      activeReflectionReviewing,
+      records
+    });
+    const container = await mount(render(baseRecords), (win) => { win.HTMLElement.prototype.scrollIntoView = scrollIntoView; });
 
     expect(scrollIntoView).not.toHaveBeenCalled();
 
-    await act(async () => {
-      mountedRoot!.render(createElement(TimelineThread, {
-        activeLessonId: "part/lesson-one",
-        activeBlockId: "orientation",
-        onSend: vi.fn(async () => undefined),
-        onRetry: vi.fn(async () => undefined),
-        records: [
-          ...baseRecords,
-          { type: "message", id: "reply", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "main_tutor", presentation: "chat", text: "Tutor reply" }
-        ] as any
-      }));
-    });
+    const withLearner = [
+      ...baseRecords,
+      { type: "message", id: "learner", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "user", source: "learner", presentation: "chat", text: "Learner follow-up" }
+    ] as const;
+    await act(async () => { mountedRoot!.render(render(withLearner)); });
+    expect(scrollIntoView).not.toHaveBeenCalled();
 
+    await act(async () => { mountedRoot!.render(render(withLearner, true)); });
+    expect(container.querySelector('.timeline-message.tutor.thinking[role="status"][aria-label="Tutor is thinking"]')).toBeTruthy();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    const withReply = [
+      ...withLearner,
+      { type: "message", id: "reply", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "main_tutor", presentation: "chat", text: "Tutor reply" }
+    ] as const;
+    await act(async () => { mountedRoot!.render(render(withReply)); });
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    const tutorBubble = [...container.querySelectorAll(".timeline-message.tutor")].at(-1);
+    expect(scrollIntoView.mock.instances[0]).toBe(tutorBubble);
+    expect(scrollIntoView.mock.calls[0]?.[0]).toEqual({ behavior: "auto", block: "start" });
+
+    const withFailure = [
+      ...withReply,
+      { type: "tutor_failed", id: "failure-record", sequence: 5, at: "2026-08-21T00:00:04.000Z", lessonId: "part/lesson-one", blockId: "orientation", failureId: "failure", operation: "chat", publicMessage: "Please retry." }
+    ] as const;
+    await act(async () => { mountedRoot!.render(render(withFailure)); });
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+    expect(scrollIntoView.mock.instances[1]).toBe(container.querySelector(".timeline-message.tutor.failure"));
+    expect(scrollIntoView.mock.calls[1]?.[0]).toEqual({ behavior: "auto", block: "start" });
+  });
+
+  it("shows one persisted learner bubble and waits to scroll until the persisted tutor reply arrives", async () => {
+    let resolveSend!: () => void;
+    const onSend = vi.fn(() => new Promise<void>((resolve) => { resolveSend = resolve; }));
+    const scrollIntoView = vi.fn();
+    const course = { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "Course note" } as const;
+    const learner = { type: "message", id: "learner", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "user", source: "learner", presentation: "chat", text: "What should I try next?" } as const;
+    const reply = { type: "message", id: "reply", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "main_tutor", presentation: "chat", text: "Try the next visible command." } as const;
+    const render = (records: readonly any[]) => createElement(TimelineThread, {
+      activeLessonId: "part/lesson-one",
+      activeBlockId: "orientation",
+      onSend,
+      onRetry: vi.fn(async () => undefined),
+      records
+    });
+    const container = await mount(render([course]), (win) => { win.HTMLElement.prototype.scrollIntoView = scrollIntoView; });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+
+    textarea.value = "What should I try next?";
+    textarea.focus();
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    await act(async () => { textarea.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+
+    expect(onSend).toHaveBeenCalledWith("What should I try next?");
+    expect(textarea.value).toBe("");
+    expect(textarea.disabled).toBe(true);
+    expect(container.querySelectorAll(".timeline-message.learner")).toHaveLength(0);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    await act(async () => { mountedRoot!.render(render([course, learner])); });
+
+    const learnerBubbles = container.querySelectorAll(".timeline-message.learner");
+    expect(learnerBubbles).toHaveLength(1);
+    expect(learnerBubbles[0]?.textContent).toContain("What should I try next?");
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    await act(async () => { mountedRoot!.render(render([course, learner, reply])); });
+
+    expect(container.querySelectorAll(".timeline-message.learner")).toHaveLength(1);
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     const tutorBubble = container.querySelector(".timeline-message.tutor");
     expect(scrollIntoView.mock.instances[0]).toBe(tutorBubble);
-    expect(scrollIntoView.mock.instances[0]).not.toBe(container.querySelector(".timeline-composer-dock"));
+    expect(scrollIntoView.mock.calls[0]?.[0]).toEqual({ behavior: "auto", block: "start" });
+
+    await act(async () => { resolveSend(); await Promise.resolve(); });
   });
 
   it("renders an active editor-practice block without exposing private tutor text", () => {
