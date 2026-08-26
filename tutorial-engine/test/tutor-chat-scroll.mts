@@ -5,7 +5,7 @@
  * This boots the real workbook UI/server against the visual fixture, sends one delayed fake-tutor
  * chat message, and prints the scroll/layout trace as JSON. It asserts the simplified chat scroll
  * contract: the persisted learner record appears once without scrolling, then the persisted tutor
- * reply receives exactly one deterministic auto/start scroll.
+ * reply receives exactly one deterministic auto/end scroll that leaves the reply above the fixed composer.
  *
  *   npm run --workspace=tutorial-engine build:web:workbook
  *   cd tutorial-engine && npx tsx test/tutor-chat-scroll.mts
@@ -258,8 +258,19 @@ async function main(): Promise<void> {
     const replyScrolls = afterReply.scrollIntoViewCalls.filter((call: any) => call.target.className?.includes("timeline-message tutor") && call.target.text?.includes("Diagnostic tutor reply paragraph 1"));
     check(afterReply.conversationCounts.learner === 1, `ui: expected one learner bubble after tutor reply, saw ${afterReply.conversationCounts.learner}`);
     check(replyScrolls.length === 1, `scroll: expected exactly one tutor reply scroll, saw ${replyScrolls.length} (${JSON.stringify(afterReply.scrollIntoViewCalls)})`);
-    check(replyScrolls[0]?.options?.behavior === "auto" && replyScrolls[0]?.options?.block === "start", `scroll: tutor reply used unexpected scroll options ${JSON.stringify(replyScrolls[0]?.options)}`);
+    check(replyScrolls[0]?.options?.behavior === "auto" && replyScrolls[0]?.options?.block === "end", `scroll: tutor reply used unexpected scroll options ${JSON.stringify(replyScrolls[0]?.options)}`);
     check(!afterReply.scrollIntoViewCalls.some((call: any) => call.options?.behavior === "smooth"), `scroll: tutor reply phase should not use smooth scrolling (${JSON.stringify(afterReply.scrollIntoViewCalls)})`);
+
+    const replyRect = afterReply.latestConversationItem?.rect;
+    const composerDockTop = afterReply.composer.dockRect?.top;
+    if (replyRect && composerDockTop !== undefined) {
+      const gapAboveComposer = composerDockTop - replyRect.bottom;
+      check(replyRect.top > 16, `scroll: tutor reply should not be pinned at the viewport top (${JSON.stringify({ replyRect, composerDockTop })})`);
+      check(replyRect.bottom <= composerDockTop + 2, `scroll: tutor reply bottom should be above the composer dock (${JSON.stringify({ replyRect, composerDockTop })})`);
+      check(gapAboveComposer <= 40, `scroll: tutor reply should end close to the composer dock (${JSON.stringify({ gapAboveComposer, replyRect, composerDockTop })})`);
+    } else {
+      check(false, `scroll: missing tutor reply or composer geometry (${JSON.stringify(afterReply.latestConversationItem)}, ${JSON.stringify(afterReply.composer)})`);
+    }
 
     check(mainTutor.replies[0]?.learnerMessage.text === learnerMessage.trim(), "api: fake main tutor received unexpected learner message text");
   } finally {

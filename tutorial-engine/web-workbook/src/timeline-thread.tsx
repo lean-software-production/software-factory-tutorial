@@ -58,7 +58,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     const shouldScroll = latestResponseId !== undefined && !knownResponseIds.current.has(latestResponseId);
     knownResponseIds.current = nextKnownResponseIds;
     if (!shouldScroll) return;
-    responseEntryRefs.current.get(latestResponseId)?.scrollIntoView({ behavior: "auto", block: "start" });
+    responseEntryRefs.current.get(latestResponseId)?.scrollIntoView({ behavior: "auto", block: "end" });
   }, [latestResponseId, responseIdsKey]);
   useLayoutEffect(() => {
     if (textareaRef.current) resizeComposerTextarea(textareaRef.current);

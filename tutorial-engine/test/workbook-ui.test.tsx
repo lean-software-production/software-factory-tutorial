@@ -696,7 +696,7 @@ describe("workbook lesson UI", () => {
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     const tutorBubble = [...container.querySelectorAll(".timeline-message.tutor")].at(-1);
     expect(scrollIntoView.mock.instances[0]).toBe(tutorBubble);
-    expect(scrollIntoView.mock.calls[0]?.[0]).toEqual({ behavior: "auto", block: "start" });
+    expect(scrollIntoView.mock.calls[0]?.[0]).toEqual({ behavior: "auto", block: "end" });
 
     const withFailure = [
       ...withReply,
@@ -706,7 +706,7 @@ describe("workbook lesson UI", () => {
 
     expect(scrollIntoView).toHaveBeenCalledTimes(2);
     expect(scrollIntoView.mock.instances[1]).toBe(container.querySelector(".timeline-message.tutor.failure"));
-    expect(scrollIntoView.mock.calls[1]?.[0]).toEqual({ behavior: "auto", block: "start" });
+    expect(scrollIntoView.mock.calls[1]?.[0]).toEqual({ behavior: "auto", block: "end" });
   });
 
   it("shows one persisted learner bubble and waits to scroll until the persisted tutor reply arrives", async () => {
@@ -750,7 +750,7 @@ describe("workbook lesson UI", () => {
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     const tutorBubble = container.querySelector(".timeline-message.tutor");
     expect(scrollIntoView.mock.instances[0]).toBe(tutorBubble);
-    expect(scrollIntoView.mock.calls[0]?.[0]).toEqual({ behavior: "auto", block: "start" });
+    expect(scrollIntoView.mock.calls[0]?.[0]).toEqual({ behavior: "auto", block: "end" });
 
     await act(async () => { resolveSend(); await Promise.resolve(); });
   });
