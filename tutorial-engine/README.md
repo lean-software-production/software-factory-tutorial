@@ -55,9 +55,12 @@ Supported authored block types are:
 - `editor-practice`: embedded editor work. It requires private `tutor` and workspace-relative `path` front matter.
 - `reflection`: tutor-mediated reflection. It requires private `tutor` front matter.
 
-The workbook renders a lesson's structural preamble as title, dek, outcomes, then full
-introduction before the first declared block. The introduction is not a progressive block,
-anchor, event, or completion gate.
+The workbook synthesizes the workbook introduction, each part preamble, and each lesson preamble
+as structural blocks. A lesson-preamble block contains its title, dek, outcomes, and full
+introduction before the first declared block. Structural blocks have anchors, participate in the
+same progression flow as declared blocks, and do not require evaluated learner evidence. See
+[`docs/workbook-state-vocabulary.md`](docs/workbook-state-vocabulary.md) for the state vocabulary
+and transitions.
 
 ## Commands
 
