@@ -20,7 +20,7 @@ async function fixture() {
   await writeFile(resolve(dir, "lessons/001-first/blocks/edit-answer.md"), ["---", "type: editor-practice", "path: factory/answer.txt", "tutor: Accept any clear answer.", "---", "## Edit answer", "", "Write the answer."].join("\n"));
   await mkdir(resolve(dir, "factory"), { recursive: true });
   await writeFile(resolve(dir, "factory/answer.txt"), "");
-  await writeFile(resolve(dir, "lessons/001-first/blocks/finish.md"), ["---", "type: lesson-transition", "---", "## Finish", "", "Done."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/blocks/finish.md"), ["---", "type: narrative", "---", "## Finish", "", "Done."].join("\n"));
   await mkdir(resolve(dir, "web")); await writeFile(resolve(dir, "web/index.html"), "<!doctype html><div id=\"root\"></div>");
   return dir;
 }
@@ -37,7 +37,7 @@ describe("workbook block progression", () => {
       ["structural", "lesson-preamble", "lesson--001-first", "lesson--001-first"],
       ["declared", "narrative", "lesson--001-first--orientation", "lesson--001-first--orientation"],
       ["declared", "editor-practice", "lesson--001-first--edit-answer", "lesson--001-first--edit-answer"],
-      ["declared", "lesson-transition", "lesson--001-first--finish", "lesson--001-first--finish"],
+      ["declared", "narrative", "lesson--001-first--finish", "lesson--001-first--finish"],
     ]);
     const lessonPreamble = stream.find((block) => block.kind === "lesson-preamble");
     expect(lessonPreamble?.markdown).toContain("Lesson preamble.\n\n## What you will learn\n\n- Know the flow.\n\nFull lesson introduction before declared blocks.");

@@ -71,7 +71,7 @@ const progress: Progress = {
     { id: "orientation", type: "narrative", ready: true, active: true, completed: false, verified: false, emerged: true },
     { id: "practice", type: "terminal-practice", ready: false, active: false, completed: false, verified: false, emerged: false },
     { id: "reflect", type: "reflection", ready: false, active: false, completed: false, verified: false, emerged: false },
-    { id: "transition", type: "lesson-transition", ready: false, active: false, completed: false, verified: false, emerged: false },
+    { id: "transition", type: "narrative", ready: false, active: false, completed: false, verified: false, emerged: false },
   ],
   reflections: {},
   reflectionConversations: {},
@@ -98,7 +98,7 @@ const lesson: Lesson = {
     withPrivateTutorText({ id: "orientation", type: "narrative", title: "Orientation", markdown: "Read **carefully**.\n\n- One\n- Two" }, "private narrative note"),
     withPrivateTutorText({ id: "practice", type: "terminal-practice", title: "Practice", markdown: "Run this:\n\n```sh command\necho hi \\\n  | cat\n```" }, "private practice guidance"),
     withPrivateTutorText({ id: "reflect", type: "reflection", title: "Reflect", markdown: "Why did it work?" }, "private reflection prompt"),
-    { id: "transition", type: "lesson-transition", title: "Next", markdown: "Continue to **lesson two**." },
+    { id: "transition", type: "narrative", title: "Next", markdown: "Continue to **lesson two**." },
   ],
 };
 
@@ -523,7 +523,7 @@ describe("workbook lesson UI", () => {
     expect(unavailableMarkup).not.toContain("Do it for me");
   });
 
-  it("marks only authored part and lesson-frame records as timeline transitions", async () => {
+  it("marks only authored part records as timeline transitions", async () => {
     const container = await mount(createElement(TimelineThread, {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
@@ -537,14 +537,12 @@ describe("workbook lesson UI", () => {
     }));
 
     const part = container.querySelector(".timeline-authored-content.timeline-part-transition");
-    const frame = container.querySelector(".timeline-authored-content.timeline-lesson-transition");
-    const ordinary = container.querySelector(".timeline-authored-content:not(.timeline-part-transition):not(.timeline-lesson-transition)");
+    const ordinary = [...container.querySelectorAll(".timeline-authored-content:not(.timeline-part-transition)")];
 
     expect(part?.textContent).toContain("Part One");
-    expect(frame?.textContent).toContain("Lesson One");
-    expect(ordinary?.textContent).toContain("Orientation");
+    expect(ordinary.map((node) => node.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("Lesson One"), expect.stringContaining("Orientation")]));
     expect(container.querySelectorAll(".timeline-part-transition")).toHaveLength(1);
-    expect(container.querySelectorAll(".timeline-lesson-transition")).toHaveLength(1);
+    expect(container.querySelectorAll(".timeline-lesson-transition")).toHaveLength(0);
   });
 
   it("scrolls the newest conversation entry into view but not for course-only records", async () => {
@@ -961,7 +959,7 @@ describe("workbook lesson UI", () => {
     expect(markup).not.toContain("private");
   });
 
-  it("shows continuation controls and page breaks only for active narrative and transition blocks", () => {
+  it("shows continuation controls and page breaks for active narrative blocks", () => {
     const activeNarrative = html(createElement(BlockView, { block: lesson.blocks[0]!, progress, refresh: vi.fn() }));
     expect(activeNarrative).toContain("Continue");
     expect(activeNarrative).toContain('class="continuation-page-break"');
@@ -1496,7 +1494,7 @@ describe("workbook lesson UI", () => {
         { id: "lesson--001-first--orientation", type: "narrative", ready: false, active: false, completed: true, verified: false, emerged: true },
         { id: "lesson--001-first--practice", type: "terminal-practice", ready: false, active: true, completed: false, verified: false, emerged: true },
         { id: "lesson--001-first--reflect", type: "reflection", ready: true, active: false, completed: false, verified: false, emerged: true },
-        { id: "lesson--001-first--transition", type: "lesson-transition", ready: false, active: false, completed: false, verified: false, emerged: false },
+        { id: "lesson--001-first--transition", type: "narrative", ready: false, active: false, completed: false, verified: false, emerged: false },
       ] as any,
     };
     const orderedBlocks = currentLesson.blocks.map((block) => ({ id: `lesson--001-first--${block.id}`, anchorId: `lesson--001-first--${block.id}`, title: block.title, origin: "declared", kind: block.type, lessonId: "001-first", declaredId: block.id }));
@@ -1751,7 +1749,7 @@ describe("workbook lesson UI", () => {
       blocks: [
         { id: "orientation", type: "narrative", ready: true, active: true, completed: false, verified: false, emerged: true },
         { id: "practice", type: "terminal-practice", ready: false, active: false, completed: false, verified: false, emerged: false },
-        { id: "transition", type: "lesson-transition", ready: false, active: false, completed: false, verified: false, emerged: false },
+        { id: "transition", type: "narrative", ready: false, active: false, completed: false, verified: false, emerged: false },
       ],
     };
     const state = {

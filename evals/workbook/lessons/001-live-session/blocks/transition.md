@@ -1,5 +1,5 @@
 ---
-type: lesson-transition
+type: narrative
 ---
 ## Finish the evaluator fixture
 

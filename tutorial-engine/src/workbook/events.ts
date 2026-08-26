@@ -67,8 +67,7 @@ export function project(events: readonly ProjectedRecord[], lesson: WorkbookLess
     const active = activeBlock();
     if (!active || active.id !== event.blockId) continue;
     if (event.type === "attempt_accepted" && (active.type === "editor-practice" || active.type === "terminal-practice" || active.type === "reflection")) acceptedCheckpoints.set(active.id, { summary: event.summary, kind: event.kind });
-    if (event.type === "block_continued" && (active.type === "narrative" || active.type === "lesson-transition" || acceptedCheckpoints.has(active.id))) completed.add(active.id);
-    if (event.type === "lesson_transitioned" && active.type === "lesson-transition") completed.add(active.id);
+    if (event.type === "block_continued" && (active.type === "narrative" || acceptedCheckpoints.has(active.id))) completed.add(active.id);
     if (event.type === "block_completed" && active.type === "terminal-practice" && verified.has(active.id)) completed.add(active.id);
     if (event.type === "reflection_completed" && active.type === "reflection") completed.add(active.id);
     if (event.type === "editor_practice_unlocked" && active.type === "editor-practice" && Number.isInteger(event.revisionId) && event.revisionId > 0 && event.path === active.path) {

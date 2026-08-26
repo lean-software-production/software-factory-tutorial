@@ -250,7 +250,7 @@ describe("v2 live evaluator scenarios", () => {
           activeLessonId: lessonId,
           activeBlockId: "transition",
           completedLessons: [lessonId],
-          blocks: [{ id: "transition", type: "lesson-transition", completed: true, active: false }]
+          blocks: [{ id: "transition", type: "narrative", completed: true, active: false }]
         }
       }
     });

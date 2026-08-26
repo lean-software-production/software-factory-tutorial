@@ -67,7 +67,7 @@ async function fixture() {
   await writeFile(resolve(migrated, "blocks/practice.md"), ["---", "type: terminal-practice", "tutor: Synthetic tutor guidance.", "---", "## Practice Block", "", "Synthetic practice body."].join("\n"));
   await writeFile(resolve(migrated, "blocks/edit.md"), ["---", "type: editor-practice", "path: factory/refactor.md", "tutor: Check one criterion.", "---", "## Edit Block", "", "Synthetic editor practice body."].join("\n"));
   await writeFile(resolve(migrated, "blocks/think.md"), ["---", "type: reflection", "tutor: Synthetic tutor guidance.", "---", "## Reflect Block", "", "Synthetic reflection question?"].join("\n"));
-  await writeFile(resolve(migrated, "blocks/onward.md"), ["---", "type: lesson-transition", "---", "## Onward Block", "", "Synthetic transition body."].join("\n"));
+  await writeFile(resolve(migrated, "blocks/onward.md"), ["---", "type: narrative", "---", "## Onward Block", "", "Synthetic transition body."].join("\n"));
 
   const second = resolve(beta, "01-beta-lesson");
   await writeFile(resolve(second, "lesson.md"), [
@@ -169,7 +169,7 @@ describe("workbook lesson contract", () => {
       ["practice", "terminal-practice", "Practice Block"],
       ["edit", "editor-practice", "Edit Block"],
       ["think", "reflection", "Reflect Block"],
-      ["onward", "lesson-transition", "Onward Block"],
+      ["onward", "narrative", "Onward Block"],
     ]);
     const intro = lesson.blocks[0];
     if (intro?.type !== "narrative") throw new Error("intro must be narrative");
@@ -183,7 +183,7 @@ describe("workbook lesson contract", () => {
     expect(edit.path).toBe("factory/refactor.md");
     expect(edit.tutor).toBe("Check one criterion.");
     expect(edit.markdown).toBe("Synthetic editor practice body.");
-    // The private tutor field never appears on narrative or transition blocks.
+    // The private tutor field never appears on narrative blocks.
     expect((intro as any).tutor).toBeUndefined();
     expect((lesson.blocks[4] as any).tutor).toBeUndefined();
   });
@@ -460,7 +460,7 @@ describe("workbook lesson contract", () => {
     const last = blocks[blocks.length - 1];
 
     expect(last?.id).toBe("capstone-closure");
-    expect(last?.type).toBe("lesson-transition");
+    expect(last?.type).toBe("narrative");
   });
 
   it("defines factory in lesson 013 with the canonical glossary wording", async () => {
@@ -634,16 +634,15 @@ describe("workbook lesson contract", () => {
     expect(() => validateBlockFrontMatter({ type: "narrative", path: "factory/x.md" }, "blocks/x.md")).toThrow(/path/);
     expect(() => validateBlockFrontMatter({ type: "terminal-practice", path: "factory/x.md", tutor: "Do X." }, "blocks/x.md")).toThrow(/path/);
     expect(() => validateBlockFrontMatter({ type: "reflection", path: "factory/x.md", tutor: "Think." }, "blocks/x.md")).toThrow(/path/);
-    expect(() => validateBlockFrontMatter({ type: "lesson-transition", path: "factory/x.md" }, "blocks/x.md")).toThrow(/path/);
   });
 
-  it("rejects a tutor field on narrative and lesson-transition blocks", () => {
+  it("rejects a tutor field on narrative blocks", () => {
     expect(() => validateBlockFrontMatter({ type: "narrative", tutor: "Not allowed." }, "blocks/x.md")).toThrow(/tutor/);
-    expect(() => validateBlockFrontMatter({ type: "lesson-transition", tutor: "Not allowed." }, "blocks/x.md")).toThrow(/tutor/);
   });
 
   it("rejects an unsupported block type", () => {
     expect(() => validateBlockFrontMatter({ type: "mystery" }, "blocks/x.md")).toThrow(/type/);
+    expect(() => validateBlockFrontMatter({ type: "lesson-transition" }, "blocks/x.md")).toThrow(/type/);
   });
 
   it("rejects unknown front matter fields on blocks", () => {

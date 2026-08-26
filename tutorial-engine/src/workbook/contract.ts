@@ -5,9 +5,9 @@
  * determines a document's kind, so there is no `kind` field anywhere here.
  */
 
-export type WorkbookBlockType = "narrative" | "terminal-practice" | "editor-practice" | "reflection" | "lesson-transition";
+export type WorkbookBlockType = "narrative" | "terminal-practice" | "editor-practice" | "reflection";
 
-const BLOCK_TYPES: readonly WorkbookBlockType[] = ["narrative", "terminal-practice", "editor-practice", "reflection", "lesson-transition"];
+const BLOCK_TYPES: readonly WorkbookBlockType[] = ["narrative", "terminal-practice", "editor-practice", "reflection"];
 const TUTOR_REQUIRED_TYPES = new Set<WorkbookBlockType>(["terminal-practice", "editor-practice", "reflection"]);
 
 /** Every block gets its id from its filename, its title from its H2, and its body as learner Markdown. */
@@ -16,8 +16,7 @@ export interface NarrativeBlock extends WorkbookBlockBase { type: "narrative"; }
 export interface TerminalPracticeBlock extends WorkbookBlockBase { type: "terminal-practice"; tutor: string; }
 export interface EditorPracticeBlock extends WorkbookBlockBase { type: "editor-practice"; path: string; tutor: string; }
 export interface ReflectionBlock extends WorkbookBlockBase { type: "reflection"; tutor: string; }
-export interface LessonTransitionBlock extends WorkbookBlockBase { type: "lesson-transition"; }
-export type WorkbookBlock = NarrativeBlock | TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock | LessonTransitionBlock;
+export type WorkbookBlock = NarrativeBlock | TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock;
 
 /** The assembled lesson: title, compact dek, and possibly empty full introduction come from lesson.md. */
 export interface WorkbookLesson {

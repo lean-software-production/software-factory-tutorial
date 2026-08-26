@@ -44,10 +44,10 @@ async function fixture(options: { editorPath?: string } = {}) {
   await writeBlock(first, "run-supplied-command", "terminal-practice", "Run", "Run the supplied command.", "Observe run result.");
   await writeBlock(first, "change-job", "terminal-practice", "Change", "Change the job and run again.", "Observe changed-job result.");
   await writeBlock(first, "reflection", "reflection", "Reflect", "Why did this count as headless?", "Ask about harness and job.");
-  await writeBlock(first, "transition", "lesson-transition", "Finish", "Move to the next lesson.");
+  await writeBlock(first, "transition", "narrative", "Finish", "Move to the next lesson.");
   await writeLesson(second, "Second lesson", ["second-orientation", "second-finish"]);
   await writeBlock(second, "second-orientation", "narrative", "Second orientation", "Second lesson starts here.");
-  await writeBlock(second, "second-finish", "lesson-transition", "Second finish", "Second lesson done.");
+  await writeBlock(second, "second-finish", "narrative", "Second finish", "Second lesson done.");
   await mkdir(resolve(dir, "web")); await writeFile(resolve(dir, "web/index.html"), "<!doctype html><div id=\"root\"></div>");
   return dir;
 }

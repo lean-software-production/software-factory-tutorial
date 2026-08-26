@@ -112,7 +112,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
         const active = recordMatchesActive(record);
         const transitionClass = record.blockId.startsWith("part--") || record.lessonId.startsWith("workbook:part:") && record.blockId === "__part__"
           ? " timeline-part-transition"
-          : /^lesson--[^-]+(?:-[^-]+)*$/.test(record.blockId) || record.blockId === "__lesson_frame__" ? " timeline-lesson-transition" : "";
+          : "";
         const canInsertCommand = Boolean(onDoItForMe && record.id === activeAuthoredRecordId);
         const lastMessage = ([...following].reverse().find((candidate): candidate is TimelineMessageRecord => candidate.type === "message") ?? record);
         nodes.push(<section key={record.id} id={record.blockId} className={`work-block active-block-region${active ? " is-active" : ""}`} tabIndex={-1} data-active-block={active ? "true" : undefined}>

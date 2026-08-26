@@ -1,5 +1,5 @@
 ---
-type: lesson-transition
+type: narrative
 ---
 
 ## Complete lesson 001

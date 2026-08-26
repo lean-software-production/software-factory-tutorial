@@ -40,7 +40,7 @@ describe("v2 live-evaluation workbook fixture", () => {
       "Submit an editor draft and wait for reviewer promotion.",
       "Run a learner-visible exact command in the embedded terminal.",
       "Attempt a clue-only terminal task without exposing private tutor guidance.",
-      "Submit a reflection and finish through a transition."
+      "Submit a reflection and finish through a narrative close."
     ]);
 
     expect(chapter.lesson.blocks.map((block) => [block.id, block.type, block.title])).toEqual([
@@ -49,7 +49,7 @@ describe("v2 live-evaluation workbook fixture", () => {
       ["exact-command", "terminal-practice", "Run the exact command"],
       ["clue-only", "terminal-practice", "Use the clues"],
       ["reflection", "reflection", "Reflection"],
-      ["transition", "lesson-transition", "Finish the evaluator fixture"]
+      ["transition", "narrative", "Finish the evaluator fixture"]
     ]);
 
     const editorPractice = chapter.lesson.blocks[1]!;
@@ -78,7 +78,7 @@ describe("v2 live-evaluation workbook fixture", () => {
     expect(reflection.tutor).toContain("Follow up");
 
     const transition = chapter.lesson.blocks[5]!;
-    expect(transition.type).toBe("lesson-transition");
+    expect(transition.type).toBe("narrative");
     expect(transition.markdown).toContain("The live evaluator has enough signal");
     expect((transition as any).tutor).toBeUndefined();
   });

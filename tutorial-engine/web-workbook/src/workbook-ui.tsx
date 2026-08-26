@@ -9,14 +9,13 @@ import { lessonElementId } from "../../src/workbook/lesson-links.js";
 import { ActivityBand } from "./activity-band.js";
 import { TimelineThread, type PublicTimelineRecord } from "./timeline-thread.js";
 
-export type WorkbookBlockType = "narrative" | "terminal-practice" | "editor-practice" | "reflection" | "lesson-transition";
+export type WorkbookBlockType = "narrative" | "terminal-practice" | "editor-practice" | "reflection";
 type BlockBase = { id: string; title: string; markdown: string; label?: string };
 export type NarrativeBlock = BlockBase & { type: "narrative" };
 export type TerminalPracticeBlock = BlockBase & { type: "terminal-practice" };
 export type EditorPracticeBlock = BlockBase & { type: "editor-practice"; path: string; tutor?: never };
 export type ReflectionBlock = BlockBase & { type: "reflection" };
-export type LessonTransitionBlock = BlockBase & { type: "lesson-transition" };
-export type Block = NarrativeBlock | TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock | LessonTransitionBlock;
+export type Block = NarrativeBlock | TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock;
 export type Lesson = { id: string; title: string; dek: string; introduction: string; durationMinutes: number; outcomes: string[]; blocks: Block[] };
 export type Chapter = { id: string; title: string; partId?: string; part?: string; partMarkdown?: string; partNumber?: number; lessonNumber: number; lesson?: Lesson };
 export type AttemptKind = "editor" | "terminal" | "reflection";
@@ -400,7 +399,6 @@ function AttemptCheckpointStatus({ state }: { state: BlockProgress | undefined }
 
 function NarrativeBlock({ lessonId, block, state, refresh, continueLabel }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; continueLabel?: string }) {
   return <section id={blockElementId(lessonId, block.id)} className={`work-block narrative ${state?.active ? "is-active" : ""}`}>
-    <p className="section-label">The idea</p>
     <h2>{block.title}</h2>
     <Markdown source="authored">{block.markdown}</Markdown>
     <ContinueControls block={block} state={state} refresh={refresh} label={continueLabel} />
@@ -555,23 +553,13 @@ function ReflectionBlock({ lessonId, block, state, turns, refresh, continueLabel
   </section>;
 }
 
-function TransitionBlock({ lessonId, block, state, refresh, continueLabel }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; continueLabel?: string }) {
-  return <section id={blockElementId(lessonId, block.id)} className={`work-block lesson-end ${state?.active ? "is-active" : ""}`}>
-    <p className="section-label">Lesson transition</p>
-    <h2>{block.title}</h2>
-    <Markdown source="authored">{block.markdown}</Markdown>
-    <ContinueControls block={block} state={state} refresh={refresh} label={continueLabel} />
-  </section>;
-}
-
 export function BlockView({ lessonId, block, progress, refresh, showAuthoredContent = true, onTerminalInsertionChange, continueLabel }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; continueLabel?: string }) {
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
   if (block.type === "narrative") return <NarrativeBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} continueLabel={continueLabel} />;
   if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} onTerminalInsertionChange={onTerminalInsertionChange} continueLabel={continueLabel} />;
   if (block.type === "editor-practice") return <EditorPracticeBlockView lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} continueLabel={continueLabel} />;
-  if (block.type === "reflection") return <ReflectionBlock lessonId={resolvedLessonId} block={block} state={state} turns={activeLessonValue(progress, resolvedLessonId, progress.reflectionConversations[block.id], [])} refresh={refresh} continueLabel={continueLabel} />;
-  return <TransitionBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} continueLabel={continueLabel} />;
+  return <ReflectionBlock lessonId={resolvedLessonId} block={block} state={state} turns={activeLessonValue(progress, resolvedLessonId, progress.reflectionConversations[block.id], [])} refresh={refresh} continueLabel={continueLabel} />;
 }
 
 function WorkbookIntroduction({ state, refresh }: { state: State; refresh(state: State): void }) {
@@ -856,7 +844,7 @@ export function App() {
       if (next.progress.activeBlockId !== before || next.progress.workbookComplete && !state.progress.workbookComplete) requestAnimationFrame(() => navigateToAnchor(next.progress.activeAnchorId ?? next.progress.activeBlockId, "push"));
     });
   };
-  const activeContinuationEligible = !state.introductionComplete ? true : state.progress.canComplete ? state.progress.canComplete.blockId === effectiveActiveBlockId && state.progress.canComplete.eligible : Boolean(effectiveActiveBlockProgress?.active && effectiveActiveBlockProgress.ready && !effectiveActiveBlockProgress.completed && (activeBlock?.type === "narrative" || activeBlock?.type === "lesson-transition" || effectiveActiveBlockProgress.checkpoint?.status === "accepted"));
+  const activeContinuationEligible = !state.introductionComplete ? true : state.progress.canComplete ? state.progress.canComplete.blockId === effectiveActiveBlockId && state.progress.canComplete.eligible : Boolean(effectiveActiveBlockProgress?.active && effectiveActiveBlockProgress.ready && !effectiveActiveBlockProgress.completed && (activeBlock?.type === "narrative" || effectiveActiveBlockProgress.checkpoint?.status === "accepted"));
   const reflectionComposerDisabled = Boolean(state.introductionComplete && activeBlock?.type === "reflection" && ["reviewing", "accepted"].includes(activeBlockProgress?.checkpoint?.status ?? ""));
   const currentReadyRunwayIds = new Set(state.readyBlockIds ?? state.progress.readyBlocks ?? []);
   for (const id of previousReadyRunwayIds.current) if (!currentReadyRunwayIds.has(id) && state.progress.activeBlockId === id && !state.progress.workbookComplete) preservedRunwayIds.current.add(id);

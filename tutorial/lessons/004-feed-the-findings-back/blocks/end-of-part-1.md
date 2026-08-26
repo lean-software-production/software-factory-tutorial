@@ -1,5 +1,5 @@
 ---
-type: lesson-transition
+type: narrative
 ---
 
 ## End of Part 1

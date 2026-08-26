@@ -48,6 +48,13 @@ Markdown under the target directory:
 - a lesson H1 supplies the title; the first paragraph after it is the compact dek used in summaries and history; any remaining Markdown is the full lesson introduction;
 - each `lessons/<lesson-id>/blocks/<block-id>.md` has one H2 title, block-type front matter, and learner-facing Markdown.
 
+Supported authored block types are:
+
+- `narrative`: authored workbook prose. It has only `type: narrative` front matter, renders its H2 title and Markdown, and advances with Continue.
+- `terminal-practice`: embedded terminal work. It requires private `tutor` front matter.
+- `editor-practice`: embedded editor work. It requires private `tutor` and workspace-relative `path` front matter.
+- `reflection`: tutor-mediated reflection. It requires private `tutor` front matter.
+
 The workbook renders a lesson's structural preamble as title, dek, outcomes, then full
 introduction before the first declared block. The introduction is not a progressive block,
 anchor, event, or completion gate.

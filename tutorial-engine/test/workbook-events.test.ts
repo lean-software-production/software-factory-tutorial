@@ -6,8 +6,8 @@ import { WorkbookEventStore, nowEvent, project } from "../src/workbook/events.js
 import type { WorkbookLesson } from "../src/workbook/contract.js";
 
 /**
- * A minimal new-schema lesson: all listed blocks are sequenced. Narrative and
- * transition blocks advance through the generic continuation event, terminal
+ * A minimal new-schema lesson: all listed blocks are sequenced. Narrative
+ * blocks advance through the generic continuation event, terminal
  * practice needs observer verification plus explicit completion, and reflection
  * keeps its explicit tutor-mediated completion.
  */
@@ -25,7 +25,7 @@ const lesson: WorkbookLesson = {
     { id: "first-practice", type: "terminal-practice", title: "First", markdown: "Practice body", tutor: "Observe the first result." },
     { id: "second-practice", type: "terminal-practice", title: "Second", markdown: "Practice body", tutor: "Observe the second result." },
     { id: "reflect", type: "reflection", title: "Reflect", markdown: "Question?", tutor: "Discuss the question." },
-    { id: "finish", type: "lesson-transition", title: "Finish", markdown: "Body" },
+    { id: "finish", type: "narrative", title: "Finish", markdown: "Body" },
   ],
 };
 
