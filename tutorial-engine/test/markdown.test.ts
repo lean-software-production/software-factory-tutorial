@@ -1,8 +1,13 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { createElement } from "react";
+import { JSDOM } from "jsdom";
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const mermaid = vi.hoisted(() => ({ initialize: vi.fn(), render: vi.fn() }));
+vi.mock("mermaid", () => ({ default: mermaid }));
 import { FileExcerptCodeBlock, Markdown } from "../web-workbook/src/markdown.js";
 
 describe("Markdown", () => {
@@ -14,6 +19,27 @@ describe("Markdown", () => {
     expect(markup).toContain("<table>");
     expect(markup).toContain("<th>Step</th>");
     expect(markup).toContain("<td>Done</td>");
+  });
+
+  it("renders authored Mermaid fences as diagram containers but keeps generated Mermaid literal and copyable", () => {
+    const authored = renderToStaticMarkup(createElement(Markdown, {
+      source: "authored",
+      children: "```mermaid\ngraph TD\n  A --> B\n```"
+    }));
+    const generated = renderToStaticMarkup(createElement(Markdown, {
+      children: "```mermaid\ngraph TD\n  A --> B\n```"
+    }));
+
+    // Server rendering does not import Mermaid: the browser effect will render this container.
+    expect(authored).toContain('class="mermaid-diagram"');
+    expect(authored).toContain('aria-busy="true"');
+    expect(authored).not.toContain('class="code-block"');
+    expect(mermaid.initialize).not.toHaveBeenCalled();
+    expect(mermaid.render).not.toHaveBeenCalled();
+    expect(generated).not.toContain('class="mermaid-diagram"');
+    expect(generated).toContain('class="code-block"');
+    expect(generated).toContain('aria-label="Copy code"');
+    expect(generated).toContain("graph TD");
   });
 
   it("highlights declared fenced-code languages without changing inline code", () => {
@@ -90,5 +116,63 @@ describe("the transcript's layout", () => {
     expect(declarations(".code-block pre")).toContain("font-size: 1rem");
     expect(declarations(".code-block.wrap pre")).toContain("white-space: pre-wrap");
     expect(styles).not.toContain("code-block-toolbar");
+  });
+
+  it("bounds Mermaid diagrams and allows horizontal scrolling", () => {
+    expect(declarations(".mermaid-diagram")).toContain("width: 100%");
+    expect(declarations(".mermaid-diagram")).toContain("overflow-x: auto");
+    expect(declarations(".mermaid-diagram svg")).toContain("max-width: none");
+  });
+});
+
+let root: Root | undefined;
+let dom: JSDOM | undefined;
+
+afterEach(async () => {
+  if (root) await act(async () => { root?.unmount(); });
+  root = undefined;
+  dom?.window.close();
+  dom = undefined;
+  vi.unstubAllGlobals();
+});
+
+async function mountMarkdown(source: "authored" | "generated", children: string) {
+  dom = new JSDOM("<!doctype html><html><body><div id=\"root\"></div></body></html>");
+  vi.stubGlobal("window", dom.window as any);
+  vi.stubGlobal("document", dom.window.document as any);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => { root?.render(createElement(Markdown, { source, children })); });
+  return dom.window.document.body;
+}
+
+describe("MermaidDiagram", () => {
+  it("initialises Mermaid strictly, renders SVG, falls back on errors, and ignores obsolete renders", async () => {
+    mermaid.render.mockResolvedValueOnce({ svg: "<svg data-diagram=\"first\"></svg>" });
+    const body = await mountMarkdown("authored", "```mermaid\ngraph TD\n  A --> B\n```");
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(mermaid.initialize).toHaveBeenCalledWith({ startOnLoad: false, securityLevel: "strict", htmlLabels: false });
+    expect(body.querySelector("svg[data-diagram='first']")).not.toBeNull();
+
+    mermaid.render.mockRejectedValueOnce(new Error("invalid diagram"));
+    await act(async () => { root?.render(createElement(Markdown, { source: "authored", children: "```mermaid\nnot a diagram\n```" })); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(body.querySelector(".mermaid-diagram")).toBeNull();
+    expect(body.querySelector(".code-block")?.textContent).toContain("not a diagram");
+    expect(body.querySelector(".copy-code")).not.toBeNull();
+
+    let resolveSlow!: (value: { svg: string }) => void;
+    mermaid.render.mockImplementationOnce(() => new Promise((resolve) => { resolveSlow = resolve; }));
+    await act(async () => { root?.render(createElement(Markdown, { source: "authored", children: "```mermaid\ngraph TD\n  slow\n```" })); });
+    await act(async () => { await Promise.resolve(); });
+    mermaid.render.mockResolvedValueOnce({ svg: "<svg data-diagram=\"fast\"></svg>" });
+    await act(async () => { root?.render(createElement(Markdown, { source: "authored", children: "```mermaid\ngraph TD\n  fast\n```" })); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    resolveSlow({ svg: "<svg data-diagram=\"slow\"></svg>" });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(body.querySelector("svg[data-diagram='fast']")).not.toBeNull();
+    expect(body.querySelector("svg[data-diagram='slow']")).toBeNull();
   });
 });

@@ -908,6 +908,26 @@ describe("workbook lesson UI", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("renders direct curriculum Mermaid as a diagram while live feedback remains copyable code", () => {
+    const diagram = "```mermaid\ngraph TD\n  A --> B\n```";
+    const curriculumMarkup = html(createElement(BlockView, {
+      block: { ...lesson.blocks[0]!, markdown: diagram },
+      progress,
+      refresh: vi.fn()
+    }));
+    const feedbackMarkup = html(createElement(BlockView, {
+      block: { ...lesson.blocks[1]!, markdown: diagram },
+      progress: activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "feedback", feedback: diagram } } as any),
+      refresh: vi.fn()
+    }));
+
+    expect(curriculumMarkup).toContain('class="mermaid-diagram"');
+    expect(curriculumMarkup).not.toContain('class="code-block"');
+    expect(feedbackMarkup.match(/class="mermaid-diagram"/g)).toHaveLength(1);
+    expect(feedbackMarkup).toContain('class="code-block"');
+    expect(feedbackMarkup).toContain('aria-label="Copy code"');
+  });
+
   it("renders the Markdown manifest lesson header, fixed outcomes section, and ordered Markdown blocks", () => {
     const markup = html(createElement(LessonView, { chapter: chapter(), progress, refresh: vi.fn() }));
 

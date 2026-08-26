@@ -383,7 +383,7 @@ function NarrativeBlock({ lessonId, block, state, refresh, continueLabel }: { le
   return <section id={blockElementId(lessonId, block.id)} className={`work-block narrative ${state?.active ? "is-active" : ""}`}>
     <p className="section-label">The idea</p>
     <h2>{block.title}</h2>
-    <Markdown>{block.markdown}</Markdown>
+    <Markdown source="authored">{block.markdown}</Markdown>
     <ContinueControls block={block} state={state} refresh={refresh} label={continueLabel} />
   </section>;
 }
@@ -405,12 +405,12 @@ function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = 
   const showLiveTerminal = !state?.verified && !state?.completed;
   useEffect(() => { setObserverFeedback(undefined); setObserverStatus(undefined); }, [block.id, state?.completed, state?.checkpoint?.status]);
   return <section id={blockElementId(lessonId, block.id)} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
-    {showAuthoredContent && <><p className="section-label">Practice · embedded terminal</p><h2>{block.title}</h2><Markdown>{block.markdown}</Markdown></>}
+    {showAuthoredContent && <><p className="section-label">Practice · embedded terminal</p><h2>{block.title}</h2><Markdown source="authored">{block.markdown}</Markdown></>}
     {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : showLiveTerminal && <div className={`terminal-live-surface${liveFeedback ? " has-feedback" : ""}`}>
       <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={false} checkpointStatus={state?.checkpoint?.status} reviewKey={state?.revision} refresh={refresh} onAdvice={setObserverFeedback} onError={setObserverFeedback} onStatus={setObserverStatus} onTerminalInsertionChange={onTerminalInsertionChange} />
-      {liveFeedback && <aside className="live-block-feedback terminal-feedback-overlay" aria-live="polite"><Markdown>{liveFeedback}</Markdown></aside>}
+      {liveFeedback && <aside className="live-block-feedback terminal-feedback-overlay" aria-live="polite"><Markdown source="generated">{liveFeedback}</Markdown></aside>}
     </div>}
-    {!accepted && liveFeedback && !showLiveTerminal && <aside className="live-block-feedback" aria-live="polite"><Markdown>{liveFeedback}</Markdown></aside>}
+    {!accepted && liveFeedback && !showLiveTerminal && <aside className="live-block-feedback" aria-live="polite"><Markdown source="generated">{liveFeedback}</Markdown></aside>}
   </section>;
 }
 
@@ -515,11 +515,11 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh, showAuthored
   // bottom of the work surface. Feedback outranks the running status, which outranks nothing.
   const liveFeedback = localError ?? state?.checkpoint?.feedback ?? editorStatusText(state, completed);
   return <section id={blockElementId(lessonId, block.id)} className={`work-block editor-practice ${state?.active ? "is-active" : ""}`}>
-    {showAuthoredContent && <><p className="section-label">Practice · embedded editor</p><h2>{block.title}</h2><Markdown>{block.markdown}</Markdown></>}
+    {showAuthoredContent && <><p className="section-label">Practice · embedded editor</p><h2>{block.title}</h2><Markdown source="authored">{block.markdown}</Markdown></>}
     <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
     {canEdit && <div className={`editor-live-surface${liveFeedback ? " has-feedback" : ""}`}>
       <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />
-      {liveFeedback && <aside className="live-block-feedback editor-feedback-overlay" aria-live="polite"><Markdown>{liveFeedback}</Markdown></aside>}
+      {liveFeedback && <aside className="live-block-feedback editor-feedback-overlay" aria-live="polite"><Markdown source="generated">{liveFeedback}</Markdown></aside>}
     </div>}
     {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : completed ? <aside className="success-checkpoint editor-unlocked" aria-live="polite">
       <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Unlocked</p><h3>Accepted revision unlocked the next step.</h3><p>{state?.checkpoint?.successMessage || "The latest accepted editor draft was written to the target file."}</p></div>
@@ -530,7 +530,7 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh, showAuthored
 function ReflectionBlock({ lessonId, block, state, turns, refresh, continueLabel }: { lessonId: string; block: Block; state: BlockProgress | undefined; turns: ReflectionTurn[]; refresh(state: State): void; continueLabel?: string }) {
   const accepted = state?.checkpoint?.status === "accepted";
   const visibleTurns = accepted ? state?.checkpoint?.evidence?.conversation ?? turns : turns;
-  return <section id={blockElementId(lessonId, block.id)} className={`work-block reflection ${state?.active ? "is-active" : ""}`}><p className="section-label">Reflection · discuss it</p><h2>{block.title}</h2><div className="question"><Markdown>{block.markdown}</Markdown></div>
+  return <section id={blockElementId(lessonId, block.id)} className={`work-block reflection ${state?.active ? "is-active" : ""}`}><p className="section-label">Reflection · discuss it</p><h2>{block.title}</h2><div className="question"><Markdown source="authored">{block.markdown}</Markdown></div>
     {visibleTurns.length > 0 && !accepted && <div className="reflection-thread" aria-live="polite">{visibleTurns.map((turn, index) => <div key={index} className={`reflection-turn ${turn.role}`}><b>{turn.role === "learner" ? "You" : "Tutor"}</b><p>{turn.text}</p></div>)}</div>}
     {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : state?.completed ? <p className="next-ready">Reflection complete. The next step has appeared below.</p> : <AttemptCheckpointStatus state={state} />}
   </section>;
@@ -540,7 +540,7 @@ function TransitionBlock({ lessonId, block, state, refresh, continueLabel }: { l
   return <section id={blockElementId(lessonId, block.id)} className={`work-block lesson-end ${state?.active ? "is-active" : ""}`}>
     <p className="section-label">Lesson transition</p>
     <h2>{block.title}</h2>
-    <Markdown>{block.markdown}</Markdown>
+    <Markdown source="authored">{block.markdown}</Markdown>
     <ContinueControls block={block} state={state} refresh={refresh} label={continueLabel} />
   </section>;
 }
@@ -558,7 +558,7 @@ export function BlockView({ lessonId, block, progress, refresh, showAuthoredCont
 function WorkbookIntroduction({ state, refresh }: { state: State; refresh(state: State): void }) {
   return <section className="workbook-intro" aria-label="Workbook introduction">
     <header><h1>{state.workbook.title}</h1></header>
-    <Markdown>{state.introduction}</Markdown>
+    <Markdown source="authored">{state.introduction}</Markdown>
     {state.introductionComplete ? <p className="next-ready">The first lesson is ready below.</p> : <button className="button primary introduction-continue" onClick={() => completeBlockRequest("workbook--introduction").then((result) => refresh(stateFromCompletion(result)))}>{continueLabelFor(state, "workbook--introduction") ?? "Ready to continue"}</button>}
   </section>;
 }
@@ -626,7 +626,7 @@ export function LessonView({ chapter, progress, refresh, renderBlocks = true, ch
 
 function PartChapter({ chapter }: { chapter: Chapter }) {
   if (!chapter.part || !chapter.partMarkdown) return null;
-  return <section id={`part-${chapter.id}`} className="part-chapter" aria-label={chapter.part}><div><p className="part-title">{chapter.part}</p><div className="part-copy"><Markdown>{chapter.partMarkdown}</Markdown></div></div></section>;
+  return <section id={`part-${chapter.id}`} className="part-chapter" aria-label={chapter.part}><div><p className="part-title">{chapter.part}</p><div className="part-copy"><Markdown source="authored">{chapter.partMarkdown}</Markdown></div></div></section>;
 }
 
 function reducedMotionPreferred(): boolean {
@@ -695,7 +695,7 @@ function CompletionPanel({ state, onRetry }: { state: State; onRetry(failureId: 
   return <section id={state.completion.anchorId} className="workbook-completion-panel work-block" tabIndex={-1} aria-live="polite">
     <p className="section-label">Workbook complete</p>
     <h1>You finished the workbook.</h1>
-    {state.completion.summary ? <Markdown>{state.completion.summary}</Markdown> : <p>The tutor is preparing your completion summary.</p>}
+    {state.completion.summary ? <Markdown source="generated">{state.completion.summary}</Markdown> : <p>The tutor is preparing your completion summary.</p>}
     {failures.map((failure) => <aside key={failure.id} className="timeline-message tutor failure" aria-live="polite"><b>Summary unavailable</b><p>{failure.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(failure.failureId)}>Retry</button></aside>)}
   </section>;
 }

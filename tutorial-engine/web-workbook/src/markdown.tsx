@@ -1,4 +1,4 @@
-import { Children, isValidElement, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import { Children, isValidElement, useEffect, useId, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -107,6 +107,46 @@ export function FileExcerptCodeBlock({ path, source }: { path: string; source: s
   </ReactMarkdown>;
 }
 
-export function Markdown({ children }: { children: string }) {
-  return <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={{ pre: CodeBlockFromPre }}>{children}</ReactMarkdown></div>;
+type MarkdownSource = "authored" | "generated";
+type MermaidRender = { source: string; status: "loading" | "success" | "failed"; svg?: string };
+
+let mermaidRenderer: Promise<(typeof import("mermaid"))["default"]> | undefined;
+
+function loadMermaid() {
+  mermaidRenderer ??= import("mermaid").then(({ default: mermaid }) => {
+    mermaid.initialize({ startOnLoad: false, securityLevel: "strict", htmlLabels: false });
+    return mermaid;
+  });
+  return mermaidRenderer;
+}
+
+function MermaidDiagram({ source }: { source: string }) {
+  const diagramId = `workbook-mermaid-${useId().replace(/[^A-Za-z0-9_-]/g, "")}`;
+  const [render, setRender] = useState<MermaidRender>({ source, status: "loading" });
+  const current = render.source === source ? render : { source, status: "loading" as const };
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadMermaid().then((mermaid) => mermaid.render(diagramId, source)).then(({ svg }) => {
+      if (!cancelled) setRender({ source, status: "success", svg });
+    }).catch(() => {
+      if (!cancelled) setRender({ source, status: "failed" });
+    });
+    return () => { cancelled = true; };
+  }, [diagramId, source]);
+
+  if (current.status === "failed") return <CodeBlock source={source} language="mermaid" className="language-mermaid" />;
+  if (current.status === "success") return <div className="mermaid-diagram" role="img" aria-label="Mermaid diagram" dangerouslySetInnerHTML={{ __html: current.svg ?? "" }} />;
+  return <div className="mermaid-diagram" aria-busy="true" aria-label="Loading Mermaid diagram" />;
+}
+
+function MarkdownPre({ source, ...props }: ComponentPropsWithoutRef<"pre"> & { source: MarkdownSource }) {
+  const code = codeChild(props.children);
+  const language = languageFromClassName(code?.props.className);
+  if (source === "authored" && language === "mermaid") return <MermaidDiagram source={textContent(code?.props.children ?? props.children)} />;
+  return <CodeBlockFromPre {...props} />;
+}
+
+export function Markdown({ children, source = "generated" }: { children: string; source?: MarkdownSource }) {
+  return <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={{ pre: (props) => <MarkdownPre {...props} source={source} /> }}>{children}</ReactMarkdown></div>;
 }

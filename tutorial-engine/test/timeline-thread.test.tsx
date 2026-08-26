@@ -51,6 +51,24 @@ describe("TimelineThread", () => {
     expect(markup).not.toContain("Private readiness");
   });
 
+  it("only gives authored course records the Mermaid diagram path", () => {
+    const diagram = "```mermaid\ngraph TD\n  A --> B\n```";
+    const markup = renderToStaticMarkup(createElement(TimelineThread, {
+      activeLessonId: "lesson",
+      activeBlockId: "write",
+      onSend: noopSend,
+      onRetry: noopRetry,
+      records: [
+        { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "authored", presentation: "course", text: diagram },
+        { type: "message", id: "tutor", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "main_tutor", presentation: "chat", text: diagram },
+      ]
+    }));
+
+    expect(markup).toContain('class="mermaid-diagram"');
+    expect(markup).toContain('class="code-block"');
+    expect(markup).toContain('aria-label="Copy code"');
+  });
+
   it("renders assistant chat, hint, and review text as Markdown instead of literal syntax", () => {
     const markup = renderToStaticMarkup(createElement(TimelineThread, {
       activeLessonId: "lesson",

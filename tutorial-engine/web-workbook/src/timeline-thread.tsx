@@ -91,7 +91,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     if (record.type === "tutor_failed") return <aside key={record.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message tutor failure" aria-live="polite"><b>Tutor unavailable</b><p>{record.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(record.failureId)}>Retry</button></aside>;
     if (record.type !== "message") return null;
     const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : record.presentation === "hint" ? " hint" : ""}`;
-    return <article key={record.id} ref={(el) => { latestEntryRef.current = el; }} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown>{record.text}</Markdown>}</article>;
+    return <article key={record.id} ref={(el) => { latestEntryRef.current = el; }} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown source={record.source === "authored" && record.presentation === "course" ? "authored" : "generated"}>{record.text}</Markdown>}</article>;
   };
   const pendingEchoNodes = pendingEchoes.map((echo) => <article key={echo.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message learner"><b>You</b><p>{echo.text}</p></article>);
   const pendingThinkingNode = pendingEchoes.length > 0 ? <aside ref={(el) => { latestEntryRef.current = el; }} className="timeline-message tutor thinking" role="status" aria-live="polite" aria-label="Tutor is thinking"><b>Tutor</b><span className="tutor-thinking-dots" aria-hidden="true"><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /></span><span className="tutor-thinking-label">Thinking</span></aside> : null;
@@ -116,7 +116,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
         const canInsertCommand = Boolean(onDoItForMe && record.id === activeAuthoredRecordId);
         const lastMessage = ([...following].reverse().find((candidate): candidate is TimelineMessageRecord => candidate.type === "message") ?? record);
         nodes.push(<section key={record.id} id={record.blockId} className={`work-block active-block-region${active ? " is-active" : ""}`} tabIndex={-1} data-active-block={active ? "true" : undefined}>
-          <article className={`timeline-authored-content${transitionClass}`}><Markdown>{record.text}</Markdown></article>
+          <article className={`timeline-authored-content${transitionClass}`}><Markdown source="authored">{record.text}</Markdown></article>
           {active && activeSurface}
           {canInsertCommand && <button className="button primary timeline-do-it" onClick={() => { onDoItForMe?.(); setCommandInserted(true); }}>{commandInserted ? "Inserted — press Enter" : "Do it for me"}</button>}
           {following.map(renderConversationRecord)}
