@@ -13,11 +13,9 @@ import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import type { ContentWatchFactory } from "../src/workbook/content-watch.js";
 import type { TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
 import type { Attempt } from "../src/workbook/attempts.js";
-import type { ActiveBlockContext } from "../src/workbook/pi-history.js";
-import type { TerminalCoachAssessment, WorkbookBlockTutor } from "../src/workbook/block-tutor.js";
-import type { MainTutorContext, MainWorkbookTutor, TutorDecision, TutorReview } from "../src/workbook/tutor.js";
-import type { BlockTutorReadiness, TimelineMessage, WorkbookTimelineRecord } from "../src/workbook/timeline.js";
-import { QueuedMainTutor as FakeMainTutor, RecordingBlockTutor as FakeBlockTutor, TerminalCoachBlockTutor as FastFakeBlockTutor, type QueuedDecision, type QueuedReadiness } from "./support/fake-tutors.js";
+import type { TutorDecision } from "../src/workbook/tutor.js";
+import type { TimelineMessage, WorkbookTimelineRecord } from "../src/workbook/timeline.js";
+import { QueuedMainTutor as FakeMainTutor, RecordingBlockTutor as FakeBlockTutor, TerminalCoachBlockTutor as FastFakeBlockTutor } from "./support/fake-tutors.js";
 
 let dirs: string[] = [];
 
@@ -767,30 +765,25 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("briefs the block tutor privately before exposing an active editor block", async () => {
+  it("activates a terminal practice block without generating a main-tutor briefing", async () => {
     const dir = await fixture();
-    const mainTutor = new FakeMainTutor();
-    mainTutor.briefingQueue.push("Use the private editor rubric without quoting it.");
+    const mainTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor, blockTutor: new FakeBlockTutor() });
     try {
       await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, mainTutor);
       const opened = await state(server.url);
-      expect(opened.progress.activeBlockId).toBe("lesson--001-first--edit-answer");
+      expect(opened.progress.activeBlockId).toBe("lesson--001-first--run-supplied-command");
       const records = await privateTimeline(dir);
-      const briefing = records.find((record) => record.type === "block_tutor_briefed" && record.blockId === "lesson--001-first--edit-answer");
-      const authored = records.find((record) => record.type === "message" && record.source === "authored" && record.blockId === "lesson--001-first--edit-answer");
-      expect(authored).toBeTruthy();
-      expect(briefing).toMatchObject({ type: "block_tutor_briefed", lessonId: "001-first", blockId: "lesson--001-first--edit-answer", text: "Use the private editor rubric without quoting it." });
-      expect(mainTutor.briefings[0]).toMatchObject({ lessonId: "001-first", blockId: "lesson--001-first--edit-answer", activeContext: { title: "Edit", markdown: "Write the answer in the editor.", authorGuidance: "Private editor rubric: mention the factory acceptance marker.", attempts: [] } });
-      expect(JSON.stringify(opened)).not.toContain("Private editor rubric");
-      expect(JSON.stringify(opened)).not.toContain("Use the private editor rubric");
+      expect(records.find((record) => record.type === "message" && record.source === "authored" && record.blockId === "lesson--001-first--run-supplied-command")).toBeTruthy();
+      expect(records.filter((record) => record.type === "block_tutor_briefed")).toEqual([]);
+      expect(JSON.stringify(opened)).not.toContain("Observe run result");
     } finally { await server.close(); }
   });
 
-  it("returns block-tutor hints from the stored briefing and latest active evidence", async () => {
+  it("returns block-tutor hints from authored guidance and latest active evidence", async () => {
     const dir = await fixture();
     const mainTutor = new FakeMainTutor({ outcome: "working" });
-    mainTutor.briefingQueue.push("Stored private editor briefing.");
     const blockTutor = new FakeBlockTutor();
     blockTutor.hintQueue.push("Compare the draft with the marker the block asks for.");
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor, blockTutor });
@@ -803,10 +796,9 @@ describe("workbook browser API", () => {
       expect(response.status).toBe(202);
       const hinted = await response.json() as any;
       expect(blockTutor.hints).toHaveLength(1);
-      expect(blockTutor.hints[0]).toMatchObject({ briefing: "Stored private editor briefing.", context: { blockId: "lesson--001-first--edit-answer", attempts: [{ evidence: { kind: "editor", text: "latest draft evidence" } }] } });
+      expect(blockTutor.hints[0]).toMatchObject({ context: { blockId: "lesson--001-first--edit-answer", authorGuidance: "Private editor rubric: mention the factory acceptance marker.", attempts: [{ evidence: { kind: "editor", text: "latest draft evidence" } }] } });
       const hintMessages = hinted.timeline.filter((record: any) => record.type === "message" && record.source === "block_tutor" && record.presentation === "hint");
       expect(hintMessages).toEqual([expect.objectContaining({ role: "assistant", text: "Compare the draft with the marker the block asks for." })]);
-      expect(JSON.stringify(hinted)).not.toContain("Stored private editor briefing");
       expect(JSON.stringify(hinted)).not.toContain("Private editor rubric");
       expect(JSON.stringify(hinted)).not.toContain("still_working");
     } finally { await server.close(); }
@@ -882,11 +874,10 @@ describe("workbook browser API", () => {
     try {
       await introduceAndOpenEditor(server.url);
       expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "almost" })).status).toBe(202);
-      const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "feedback" && mainTutor.briefings.some((briefing) => briefing.activeContext?.attempts.some((attempt) => attempt.status === "feedback")), "main tutor editor feedback briefing refresh");
+      const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "feedback" && mainTutor.reviews.length === 1, "main tutor editor feedback");
       expect(blockTutor.terminalAssessments).toHaveLength(0);
       expect(mainTutor.reviews[0]!.readiness).toBeUndefined();
       expect(block(feedback, "lesson--001-first--edit-answer")?.checkpoint?.feedback).toBe("Add the exact marker before this can continue.");
-      expect(mainTutor.briefings.at(-1)).toMatchObject({ lessonId: "001-first", blockId: "lesson--001-first--edit-answer", activeContext: { attempts: [expect.objectContaining({ status: "feedback", feedback: "Add the exact marker before this can continue.", evidence: { kind: "editor", text: "almost" } })] } });
       expect(feedback.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
     } finally { await server.close(); }
   });
@@ -905,30 +896,13 @@ describe("workbook browser API", () => {
       await introduceAndOpenEditor(server.url);
       await acceptEditor(server.url, mainTutor);
       await submitTerminalAttempt(server.url, "lesson--001-first--run-supplied-command");
-      const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.status === "feedback" && mainTutor.reviews.length === 2 && mainTutor.briefings.some((briefing) => briefing.blockId === "lesson--001-first--run-supplied-command" && briefing.activeContext?.attempts.some((attempt) => attempt.status === "feedback")), "main review after fast coach failure");
+      const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.status === "feedback" && mainTutor.reviews.length === 2, "main review after fast coach failure");
       expect(blockTutor.terminalAssessments).toHaveLength(1);
       expect(mainTutor.reviews[1]!.readiness).toBeUndefined();
       expect(block(feedback, "lesson--001-first--run-supplied-command")?.checkpoint?.feedback).toBe("Main tutor can still judge this terminal output.");
-      expect(mainTutor.briefings.at(-1)).toMatchObject({ lessonId: "001-first", blockId: "lesson--001-first--run-supplied-command", activeContext: { attempts: [expect.objectContaining({ status: "feedback", feedback: "Main tutor can still judge this terminal output.", evidence: expect.objectContaining({ kind: "terminal", terminalHtml: expect.stringContaining("ran:run lesson--001-first--run-supplied-command") }) })] } });
       expect(feedback.timeline.filter((record: any) => record.type === "tutor_failed" && record.operation === "readiness")).toEqual([]);
       expect(JSON.stringify(feedback.timeline)).not.toContain("BLOCK_TUTOR_MODEL auth failed");
       expect(feedback.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
-    } finally { await server.close(); }
-  });
-
-  it("keeps post-review briefing refresh failures out of the public timeline", async () => {
-    const dir = await fixture();
-    const mainTutor = new FakeMainTutor({ outcome: "feedback", message: "Use the exact marker." });
-    mainTutor.briefingQueue.push("Initial private briefing.", new Error("briefing provider unavailable after review"));
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor, blockTutor: new FakeBlockTutor() });
-    try {
-      await introduceAndOpenEditor(server.url);
-      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "almost" })).status).toBe(202);
-      const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "feedback" && mainTutor.briefings.length >= 2, "silent failed post-review briefing refresh");
-      expect(block(feedback, "lesson--001-first--edit-answer")?.checkpoint?.feedback).toBe("Use the exact marker.");
-      expect(feedback.timeline.filter((record: any) => record.type === "tutor_failed" && record.operation === "briefing")).toEqual([]);
-      expect(feedback.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
-      expect(JSON.stringify(feedback.timeline)).not.toContain("briefing provider unavailable after review");
     } finally { await server.close(); }
   });
 
@@ -979,11 +953,10 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("restores active context and reuses the latest stored briefing for hints after restart", async () => {
+  it("restores active context and passes authored guidance for hints after restart", async () => {
     const dir = await fixture();
     const never = deferred<TutorDecision>();
     const firstMainTutor = new FakeMainTutor(never.promise);
-    firstMainTutor.briefingQueue.push("Persisted private briefing.");
     const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: firstMainTutor, blockTutor: new FakeBlockTutor() });
     try {
       await introduceAndOpenEditor(firstServer.url);
@@ -999,9 +972,8 @@ describe("workbook browser API", () => {
       await waitForWorkbookState(secondServer.url, () => secondMainTutor.restores.length === 1 && secondMainTutor.reviews.length === 1, "restored active attempt requeued");
       expect(secondMainTutor.restores[0]!.activeContext).toMatchObject({ blockId: "lesson--001-first--edit-answer", attempts: [{ evidence: { kind: "editor", text: "draft before restart" } }] });
       expect((await postHint(secondServer.url, { blockId: "lesson--001-first--edit-answer" })).status).toBe(202);
-      expect(secondBlockTutor.hints[0]).toMatchObject({ briefing: "Persisted private briefing.", context: { blockId: "lesson--001-first--edit-answer", attempts: [{ evidence: { kind: "editor", text: "draft before restart" } }] } });
+      expect(secondBlockTutor.hints[0]).toMatchObject({ context: { blockId: "lesson--001-first--edit-answer", authorGuidance: "Private editor rubric: mention the factory acceptance marker.", attempts: [{ evidence: { kind: "editor", text: "draft before restart" } }] } });
       const visible = await state(secondServer.url);
-      expect(JSON.stringify(visible)).not.toContain("Persisted private briefing");
       expect(JSON.stringify(visible)).not.toContain("Private editor rubric");
     } finally { await secondServer.close(); }
   });

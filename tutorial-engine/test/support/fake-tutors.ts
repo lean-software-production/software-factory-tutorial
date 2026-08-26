@@ -26,15 +26,12 @@ export class RecordingMainTutor implements MainWorkbookTutor {
   readonly reviews: ReviewInput[] = [];
   readonly restores: MainTutorContext[] = [];
   readonly replies: Array<MainTutorContext & { learnerMessage: TimelineMessage }> = [];
-  readonly briefings: Array<MainTutorContext & { lessonId: string; blockId: string }> = [];
   readonly blockSummaries: Array<MainTutorContext & { lessonId: string; blockId: string; coveredThroughId: string }> = [];
   readonly lessonSummaries: Array<MainTutorContext & { lessonId: string; coveredThroughId: string }> = [];
   disposed = false;
   replyQueue: Array<string | Error | Promise<string>> = [];
-  briefingQueue: Array<string | Error | Promise<string>> = [];
 
   protected defaultReply = "Try the workspace-relative path.";
-  protected briefingFor = (blockId: string): string => `Private briefing for ${blockId}.`;
   protected blockSummaryFor = (blockId: string): string => `Summary of ${blockId}.`;
   protected lessonSummaryFor = (lessonId: string): string => `Summary of ${lessonId}.`;
 
@@ -45,10 +42,6 @@ export class RecordingMainTutor implements MainWorkbookTutor {
     return unwrap(await (this.replyQueue.shift() ?? this.defaultReply));
   }
 
-  async prepareBlockBriefing(input: MainTutorContext & { lessonId: string; blockId: string }): Promise<string> {
-    this.briefings.push(input);
-    return unwrap(await (this.briefingQueue.shift() ?? this.briefingFor(input.blockId)));
-  }
 
   async review(input: ReviewInput): Promise<TutorDecision> {
     this.reviews.push(input);
@@ -85,7 +78,7 @@ export class QueuedMainTutor extends RecordingMainTutor {
 }
 
 export class RecordingBlockTutor implements WorkbookBlockTutor {
-  readonly hints: Array<{ context: ActiveBlockContext; briefing: string }> = [];
+  readonly hints: Array<{ context: ActiveBlockContext }> = [];
   readonly assessments: Array<{ context: ActiveBlockContext; attempt: Attempt }> = [];
   hintQueue: Array<string | Error | Promise<string>> = [];
   readinessQueue: QueuedReadiness[] = [];
@@ -93,7 +86,7 @@ export class RecordingBlockTutor implements WorkbookBlockTutor {
   protected defaultHint = "Look at the current draft and compare it with the block goal.";
   protected defaultReadiness: BlockReadiness = { readiness: "still_working", text: "The attempt still needs main-tutor judgment." };
 
-  async hint(input: { context: ActiveBlockContext; briefing: string }): Promise<string> {
+  async hint(input: { context: ActiveBlockContext }): Promise<string> {
     this.hints.push(input);
     return unwrap(await (this.hintQueue.shift() ?? this.defaultHint));
   }

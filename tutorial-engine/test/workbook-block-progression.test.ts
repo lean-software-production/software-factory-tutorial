@@ -171,7 +171,7 @@ async function waitForState(serverUrl: string, predicate: (state: any) => boolea
 }
 
 function fakeTutor(decision: any = { outcome: "working" }, reply: any = "Tutor reply."): any {
-  return { restore: async () => undefined, reply: async () => reply, prepareBlockBriefing: async () => "Briefing.", review: async () => decision, summarizeBlock: async () => "Block summary.", summarizeLesson: async () => "Lesson summary.", dispose() {} };
+  return { restore: async () => undefined, reply: async () => reply, review: async () => decision, summarizeBlock: async () => "Block summary.", summarizeLesson: async () => "Lesson summary.", dispose() {} };
 }
 
 function fakeBlockTutor(): any {
