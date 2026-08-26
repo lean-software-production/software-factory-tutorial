@@ -397,6 +397,9 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
   const appendFailure = async (input: Omit<TutorFailure, "id" | "sequence" | "at" | "type"> & { operation: TutorFailure["operation"] }): Promise<void> => {
     await append({ type: "tutor_failed", ...input });
   };
+  const logSummaryFailure = (operation: Extract<TutorFailure["operation"], "block_summary" | "lesson_summary" | "completion_summary">, { lessonId, blockId, requestId }: Pick<TutorFailure, "lessonId" | "blockId" | "requestId">, error: unknown): void => {
+    log.info(`Workbook tutor ${operation} failed for ${lessonId}/${blockId} (request ${requestId}): ${error instanceof Error ? error.message : String(error)}`);
+  };
   const refreshBlockBriefing = async (requested: DeclaredWorkbookBlock, coveredThroughId: string, options: { silentFailure?: boolean } = {}): Promise<void> => {
     if (!blockSupportsHints(requested.block)) return;
     // Capture the exact declaration and tutor history under the timeline lock, then release it for
@@ -610,12 +613,18 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
 
   const summarizeDeparture = async (leaving: DeclaredWorkbookBlock, workflowId: string): Promise<void> => {
     try { await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text: requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId: workflowId }), "block_summary"), coveredThroughId: workflowId }); }
-    catch { await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId, operation: "block_summary", publicMessage: TUTOR_UNAVAILABLE }); }
+    catch (error) {
+      logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId }, error);
+      await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId, operation: "block_summary", publicMessage: TUTOR_UNAVAILABLE });
+    }
     const projection = currentWorkbookProjection();
     const lessonComplete = stream.filter((block) => block.origin === "declared" && block.lessonId === leaving.lessonId).every((block) => projection.completedBlockIds.has(block.id));
     if (lessonComplete) {
       try { await append({ type: "lesson_summarized", lessonId: leaving.lessonId, text: requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: leaving.lessonId, coveredThroughId: workflowId }), "lesson_summary"), coveredThroughId: workflowId }); }
-      catch { await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId, operation: "lesson_summary", publicMessage: TUTOR_UNAVAILABLE }); }
+      catch (error) {
+        logSummaryFailure("lesson_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId }, error);
+        await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId, operation: "lesson_summary", publicMessage: TUTOR_UNAVAILABLE });
+      }
     }
   };
 
@@ -623,7 +632,8 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     try {
       const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: "workbook", coveredThroughId: workflowId }), "completion_summary");
       await append({ type: "workbook_completion_summary", text });
-    } catch {
+    } catch (error) {
+      logSummaryFailure("completion_summary", { lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID, requestId: workflowId }, error);
       await appendFailure({ lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID, requestId: workflowId, operation: "completion_summary", publicMessage: TUTOR_UNAVAILABLE });
     }
   };
@@ -822,11 +832,17 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
       const leaving = stream.find((block): block is DeclaredWorkbookBlock => block.origin === "declared" && block.lessonId === failure.lessonId && block.id === failure.blockId);
       if (leaving) {
         try { await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text: requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId: failure.requestId }), "block_summary"), coveredThroughId: failure.requestId }); }
-        catch { await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: failure.requestId, operation: "block_summary", publicMessage: TUTOR_UNAVAILABLE }); }
+        catch (error) {
+          logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: failure.requestId }, error);
+          await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: failure.requestId, operation: "block_summary", publicMessage: TUTOR_UNAVAILABLE });
+        }
       }
     } else if (failure.operation === "lesson_summary") {
       try { await append({ type: "lesson_summarized", lessonId: failure.lessonId, text: requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: failure.lessonId, coveredThroughId: failure.requestId }), "lesson_summary"), coveredThroughId: failure.requestId }); }
-      catch { await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: failure.requestId, operation: "lesson_summary", publicMessage: TUTOR_UNAVAILABLE }); }
+      catch (error) {
+        logSummaryFailure("lesson_summary", { lessonId: failure.lessonId, blockId: failure.blockId, requestId: failure.requestId }, error);
+        await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: failure.requestId, operation: "lesson_summary", publicMessage: TUTOR_UNAVAILABLE });
+      }
     } else if (failure.operation === "completion_summary") {
       await requestCompletionSummary(failure.requestId);
     }

@@ -1020,6 +1020,42 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("logs the error and context when a failed block summary retry fails", async () => {
+    const dir = await fixture();
+    const tutor = new FakeMainTutor();
+    const errors = [new Error("initial block summary failure"), new Error("retry block summary failure")];
+    tutor.summarizeBlock = async (input) => {
+      tutor.blockSummaries.push(input);
+      throw errors.shift()!;
+    };
+    const logs: string[] = [];
+    const server = await startWorkbookServer({
+      target: dir,
+      webRoot: resolve(dir, "web"),
+      port: 0,
+      embeddedTerminal: false,
+      mainTutor: tutor,
+      blockTutor: new FakeBlockTutor(),
+      logger: { info: (message) => { logs.push(message); }, error() {} },
+    });
+    try {
+      await introduceAndOpenEditor(server.url);
+      const failed = (await state(server.url)).timeline.find((record: any) => record.type === "tutor_failed" && record.operation === "block_summary");
+      expect(failed).toMatchObject({ lessonId: "001-first", blockId: "lesson--001-first--orientation" });
+
+      expect((await fetch(`${server.url}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId: failed.failureId }) })).status).toBe(202);
+
+      const failures = (await privateTimeline(dir)).filter((record): record is Extract<WorkbookTimelineRecord, { type: "tutor_failed" }> => record.type === "tutor_failed" && record.operation === "block_summary");
+      expect(failures).toHaveLength(2);
+      for (const failure of failures) {
+        expect(failure).toMatchObject({ lessonId: "001-first", blockId: "lesson--001-first--orientation", requestId: expect.any(String) });
+      }
+      const prefix = `Workbook tutor block_summary failed for 001-first/lesson--001-first--orientation (request ${failures[0]!.requestId}):`;
+      expect(logs).toContain(`${prefix} initial block summary failure`);
+      expect(logs).toContain(`${prefix} retry block summary failure`);
+    } finally { await server.close(); }
+  });
+
   it("records a public retryable failure instead of provider feedback when chat fails", async () => {
     const dir = await fixture();
     const tutor = new FakeMainTutor();
