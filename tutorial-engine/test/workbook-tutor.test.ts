@@ -335,22 +335,4 @@ describe("MainWorkbookTutor", () => {
     await expect(tutor.reply({ records: [], activeContext: activeContext(), learnerMessage: message("learner-1", 1, "learner", "user", "Hello?") })).rejects.toThrow(/empty tutor response/i);
   });
 
-  it("serializes reviews and compaction while logging compaction failures", async () => {
-    const session = new FakeSession({ systemPrompt: "", customTools: [], tools: [], history: { summaries: [], turns: [] } satisfies MainTutorHistoryProjection });
-    const logs = logger();
-    const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", log: logs.log, sessionFactory: async () => session });
-
-    session.compactError = new Error("provider rejected compaction");
-    const first = tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-1", "terminal"), privateGuidance: "Review terminal evidence." });
-    const compact = tutor.compactAfterBlock();
-    const second = tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-2", "reflection"), privateGuidance: "Review reflection." });
-
-    await expect(Promise.all([first, compact, second])).resolves.toEqual([
-      { outcome: "feedback", message: "Needs one more concrete detail." },
-      undefined,
-      { outcome: "feedback", message: "Needs one more concrete detail." },
-    ]);
-    expect(session.calls).toEqual(["review", "compaction", "review"]);
-    expect(logs.errors.join("\n")).toContain("provider rejected compaction");
-  });
 });

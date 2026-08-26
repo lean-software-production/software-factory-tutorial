@@ -65,7 +65,7 @@ describe("workbook CLI", () => {
       "Created tutorial session: session-20260824-120000-a1b2c3d4",
       "Session state: /content/.tutorial/session-20260824-120000-a1b2c3d4",
       "Learner workspace: /content/.tutorial/session-20260824-120000-a1b2c3d4/workspace",
-      "Reopen with: npm run tutorial -- --session session-20260824-120000-a1b2c3d4",
+      "Reopen with: npm run tutorial:workbook -- --session session-20260824-120000-a1b2c3d4",
     ]);
     expect(startServer.mock.calls[0]![0]).not.toHaveProperty("terminalPtyFactory");
     expect(startServer.mock.calls[0]![0]).not.toHaveProperty("terminalObserver");

@@ -12,6 +12,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 export type WorkspaceAuditEvent = {
+  type: "audit";
+  id: string;
   tool: string;
   paths: string[];
   mutation: boolean;

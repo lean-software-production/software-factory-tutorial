@@ -99,15 +99,14 @@ resumed or migrated by the launcher.
 
 From lesson 007 the line commits to the calculator, and from 008 it does so unattended. Those commits
 land in `tutorial/.tutorial/<session-id>/workspace/.git`, not in the cloned tutorial repository. A
-plain `npm run tutorial` creates a new session-local repository; `--session <id>` reopens that same
-repository so the learner can inspect or continue its private history.
+plain `npm run tutorial:workbook` creates a new session-local repository; `--session <id>` reopens
+that same repository so the learner can inspect or continue its private history.
 
 ## Changing a Part 1 lesson means changing the Part 2 seed
 
-`tutorial/docs/seeds/part-2/` holds what lessons 002 to 004 leave in `tutorial/factory/`, so a
-learner who chooses "Start at Part 2" finds what lesson 005 expects to move. Change what those
-lessons have the learner write, and change the seed to match — the two are the same artefact taught
-two ways.
+`tutorial/docs/seeds/part-2/` holds what lessons 002 to 004 leave in `tutorial/factory/`. Change
+what those lessons have the learner write, and change the seed to match — the two are the same
+artefact taught two ways.
 
 `seed.test.ts` reads lesson 005's `mv` commands and fails if the seed does not supply every source
 path they name. That catches a renamed file, not a rewritten one, so the content is still yours to

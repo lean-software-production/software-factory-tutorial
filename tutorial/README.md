@@ -16,7 +16,7 @@ See the calculator's [README](./calculator/README.md) for more details.
 
 You begin with a single headless `pi -p` command that reads the calculator and answers a question. It creates no files and there is no loop yet. From there you build a doer that changes the code, then a validator that checks the change against written criteria, then carry the validator's findings back to the doer by hand. Only once you have run that loop yourself do you automate it.
 
-Thirteen lessons: 001–004 are Part 1, 005–013 are Part 2. Each part is a separate piece of homework, and the tutor stops at the end of lesson 004 so you can choose whether to carry straight on.
+Thirteen lessons: 001–004 are Part 1, and 005–013 are Part 2.
 
 The two parts are comparable homework, but not comparable in length. Part 2 is roughly twice the lessons, because automating something you were doing by hand is the easy half — the other half is being able to see what it did once you stopped watching, and neither half is optional. Every lesson in it is the same size as a lesson in Part 1, and there are simply more of them.
 
@@ -43,7 +43,7 @@ After setup, start the tutor from the repository root. It prints a learner works
 use that path for lesson commands:
 
 ```sh
-npm run tutorial
+npm run tutorial:workbook
 cd tutorial/.tutorial/<session-id>/workspace
 ```
 
@@ -96,10 +96,10 @@ values fall back to that same Pi choice.
 
 ## Start the tutorial
 
-From the repository root, use the retained convenience launcher:
+From the repository root, start the workbook:
 
 ```sh
-npm run tutorial
+npm run tutorial:workbook
 ```
 
 It uses this `tutorial/` directory as the authored content template, creates a fresh
@@ -112,7 +112,7 @@ a subfolder, such as the EnsembleWorks canvas dev-server control at `/dev/4310/`
 port the proxy expects and bind beyond loopback:
 
 ```sh
-npm run tutorial -- --port 4310 --host 0.0.0.0 --no-open
+npm run tutorial:workbook -- --port 4310 --host 0.0.0.0 --no-open
 ```
 
 The tutor has no authentication and edits the session-local learner workspace, so only do that
@@ -151,12 +151,12 @@ Lesson 005 moves the whole line into `factory/refactor/`, and from then on you r
 
 ## Where to begin, and how to resume
 
-Every plain `npm run tutorial` launch creates a new session. The launcher prints the session ID,
-the session state path, and the learner workspace path. Save the ID if you want to come back to
-that exact work later:
+Every plain `npm run tutorial:workbook` launch creates a new session. The launcher prints the
+session ID, the session state path, and the learner workspace path. Save the ID if you want to come
+back to that exact work later:
 
 ```sh
-npm run tutorial -- --session <session-id>
+npm run tutorial:workbook -- --session <session-id>
 ```
 
 Only an explicit `--session <session-id>` resumes a previous session. Legacy state under

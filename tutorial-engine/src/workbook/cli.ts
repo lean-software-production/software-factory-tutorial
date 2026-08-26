@@ -40,7 +40,7 @@ function sessionLaunchLines(session: TutorialSessionPaths, reopened: boolean): s
     `${action}: ${session.sessionId}`,
     `Session state: ${session.sessionRoot}`,
     `Learner workspace: ${session.workspaceRoot}`,
-    `Reopen with: npm run tutorial:workbook -- --session ${session.sessionId}`,"}] } }]}Oops JSON malformed? Tool output absent. Need inspect. likely syntax failed no output due? It says no response weird. Need maybe call actual. Maybe assistant message had invalid? Looking not formatted as call? It did show to=functions.edit? Not output. I wrote disastrous trailing. Let's reattempt. +#+#+#+#+#+출장샵assistant to=functions.edit մեկնെങ്കിലും 植物百科通json? no. Let's make normal. +#+#+#+#+#+assistant to=functions.edit  天天中彩票大神推荐 彩娱乐彩票{
+    `Reopen with: npm run tutorial:workbook -- --session ${session.sessionId}`,
   ];
 }
 

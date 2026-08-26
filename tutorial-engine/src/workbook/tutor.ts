@@ -60,24 +60,10 @@ const WORKING_TOOL_NAME = "mark_attempt_still_working";
 const COMPLETE_BLOCK_TOOL_NAME = "completeBlock";
 const FALLBACK_ACCEPTED = "Accepted — this attempt satisfies the block.";
 
-type LegacyRestoreInput = readonly WorkbookTimelineRecord[];
-type LegacyReplyInput = { lessonId: string; blockId: string; learnerMessage: TimelineMessage };
-type LegacyReviewDecision = { accepted: boolean; feedback: string };
 type PiSessionMessage = Parameters<ReturnType<typeof SessionManager.inMemory>["appendMessage"]>[0];
 type PiUserMessage = Extract<PiSessionMessage, { role: "user" }>;
 type PiAssistantMessage = Extract<PiSessionMessage, { role: "assistant" }>;
 type ResolvedTutorModel = NonNullable<TutorModelChoice["model"]>;
-
-// Kept only as the pre-Task-4 server-facing shape; Task 4 will switch callers to MainWorkbookTutor.
-export interface WorkbookTutor {
-  restore(input: LegacyRestoreInput): Promise<void>;
-  reply(input: LegacyReplyInput): Promise<string>;
-  review(input: TutorReview): Promise<LegacyReviewDecision>;
-  compactAfterBlock(): Promise<void>;
-  summarizeBlock(input: { lessonId: string; blockId: string; coveredThroughId: string }): Promise<string>;
-  summarizeLesson(input: { lessonId: string; coveredThroughId: string }): Promise<string>;
-  dispose(): void;
-}
 
 function systemPrompt(): string {
   return `You are the main tutor for a browser-led workbook tutorial.
@@ -141,12 +127,6 @@ ${JSON.stringify({
 }, null, 2)}
 
 Review only this snapshot. If it satisfies the private guidance, call accept_current_attempt() with no arguments and include a concise success message for the learner. ${incompleteInstruction} Otherwise do not call either tool; return concise material feedback.`;
-}
-
-function compactionInstruction(): string {
-  return `WORKBOOK TUTOR COMPACTION
-
-Compact the workbook tutor context now that the learner continued from an accepted checkpoint. Retain only a concise factual summary of the completed block: its goal, the accepted evidence, key feedback or success message, and any learner misconception worth carrying forward. Do not invent filesystem, shell, or network observations.`;
 }
 
 function publicText(text: string): string {
@@ -297,15 +277,15 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
     this.#sessionFactory = options.sessionFactory ?? ((request) => createPiWorkbookTutorSession(options.workspace, request, this.#log));
   }
 
-  restore(input: MainTutorContext | LegacyRestoreInput): Promise<void> {
+  restore(input: MainTutorContext): Promise<void> {
     return this.#enqueue(async () => {
-      this.#setHistory(normalizeContext(input));
+      this.#setHistory(input);
     });
   }
 
-  reply(input: (MainTutorContext & { learnerMessage: TimelineMessage }) | LegacyReplyInput): Promise<TutorReplyResult> {
+  reply(input: MainTutorContext & { learnerMessage: TimelineMessage }): Promise<TutorReplyResult> {
     return this.#enqueue(async () => {
-      const context = normalizeContext(input);
+      const context = input;
       const session = await this.#ensureSession(context);
       this.#completionBlockId = undefined;
       try {
@@ -325,9 +305,9 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
     });
   }
 
-  review(input: (MainTutorContext & TutorReview & { readiness?: BlockTutorReadiness }) | TutorReview): Promise<TutorDecision> {
+  review(input: MainTutorContext & TutorReview & { readiness?: BlockTutorReadiness }): Promise<TutorDecision> {
     return this.#enqueue(async () => {
-      const context = normalizeContext(input);
+      const context = input;
       const session = await this.#ensureSession(context);
       this.#activeAttemptId = input.attempt.id;
       this.#acceptedAttemptId = undefined;
@@ -350,27 +330,17 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
     });
   }
 
-  compactAfterBlock(): Promise<void> {
+  summarizeBlock(input: MainTutorContext & { lessonId: string; blockId: string; coveredThroughId: string }): Promise<string> {
     return this.#enqueue(async () => {
-      try {
-        await (await this.#ensureSession()).compact(compactionInstruction());
-      } catch (error) {
-        this.#log.error("Workbook tutor compaction failed", error);
-      }
-    });
-  }
-
-  summarizeBlock(input: (MainTutorContext & { lessonId: string; blockId: string; coveredThroughId: string }) | { lessonId: string; blockId: string; coveredThroughId: string }): Promise<string> {
-    return this.#enqueue(async () => {
-      const session = await this.#ensureSession(normalizeContext(input));
+      const session = await this.#ensureSession(input);
       const result = await session.compact(`Summarize only completed workbook block ${input.lessonId}/${input.blockId} through ${input.coveredThroughId}. Retain its goal, displayed course idea, accepted evidence in concise form, and material learner feedback. Do not claim filesystem, shell, network, or workspace observations.`);
       return result.summary;
     });
   }
 
-  summarizeLesson(input: (MainTutorContext & { lessonId: string; coveredThroughId: string }) | { lessonId: string; coveredThroughId: string }): Promise<string> {
+  summarizeLesson(input: MainTutorContext & { lessonId: string; coveredThroughId: string }): Promise<string> {
     return this.#enqueue(async () => {
-      const session = await this.#ensureSession(normalizeContext(input));
+      const session = await this.#ensureSession(input);
       const result = await session.compact(`Summarize only completed workbook lesson ${input.lessonId} through ${input.coveredThroughId}. Retain completed block goals, accepted evidence in concise form, and material learner context. Do not claim filesystem, shell, network, or workspace observations.`);
       return result.summary;
     });
@@ -445,12 +415,6 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
     this.#tail = run.catch(() => undefined);
     return run;
   }
-}
-
-function normalizeContext(input: MainTutorContext | LegacyRestoreInput | TutorReview | LegacyReplyInput | { lessonId: string; blockId?: string; coveredThroughId: string }): MainTutorContext {
-  if (Array.isArray(input)) return { records: input };
-  if ("records" in input) return { records: input.records, activeContext: input.activeContext, completionTool: input.completionTool };
-  return { records: [] };
 }
 
 function historySignature(history: MainTutorHistoryProjection, completionBlockId?: string): string {
