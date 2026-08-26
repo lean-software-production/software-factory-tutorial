@@ -17,7 +17,7 @@ function resizeComposerTextarea(textarea: HTMLTextAreaElement) {
   textarea.style.overflowY = textarea.scrollHeight > composerMaxHeightPx ? "auto" : "hidden";
 }
 
-export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, activeSurface, completionPanel, readyBlockIds = [], inputDisabled = false }: {
+export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, activeSurface, completionPanel, readyBlockIds = [], inputDisabled = false, activeReflectionReviewing = false }: {
   records: readonly TimelineThreadRecord[];
   activeLessonId: string;
   activeBlockId: string;
@@ -29,6 +29,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   completionPanel?: React.ReactNode;
   readyBlockIds?: readonly string[];
   inputDisabled?: boolean;
+  activeReflectionReviewing?: boolean;
 }) {
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
@@ -37,7 +38,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   const nextEchoId = useRef(0);
   const latestEntryRef = useRef<HTMLElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const chatEntryCount = records.reduce((count, record) => count + ((record.type === "message" && record.presentation !== "course") || record.type === "tutor_failed" ? 1 : 0), 0) + pendingEchoes.length;
+  const chatEntryCount = records.reduce((count, record) => count + ((record.type === "message" && record.presentation !== "course") || record.type === "tutor_failed" ? 1 : 0), 0) + pendingEchoes.length + (activeReflectionReviewing ? 1 : 0);
   const recordMatchesActive = (record: { lessonId: string; blockId: string }) => record.blockId === activeBlockId && (record.lessonId === activeLessonId || activeBlockId.includes("--"));
   const activeAuthoredRecordId = [...records].reverse().find((record) => record.type === "message" && record.presentation === "course" && record.source === "authored" && recordMatchesActive(record))?.id;
   const readyBlockIdSet = new Set(readyBlockIds);
@@ -94,7 +95,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     return <article key={record.id} ref={(el) => { latestEntryRef.current = el; }} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown source={record.source === "authored" && record.presentation === "course" ? "authored" : "generated"}>{record.text}</Markdown>}</article>;
   };
   const pendingEchoNodes = pendingEchoes.map((echo) => <article key={echo.id} ref={(el) => { latestEntryRef.current = el; }} className="timeline-message learner"><b>You</b><p>{echo.text}</p></article>);
-  const pendingThinkingNode = pendingEchoes.length > 0 ? <aside ref={(el) => { latestEntryRef.current = el; }} className="timeline-message tutor thinking" role="status" aria-live="polite" aria-label="Tutor is thinking"><b>Tutor</b><span className="tutor-thinking-dots" aria-hidden="true"><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /></span><span className="tutor-thinking-label">Thinking</span></aside> : null;
+  const pendingThinkingNode = pendingEchoes.length > 0 || activeReflectionReviewing ? <aside ref={(el) => { latestEntryRef.current = el; }} className="timeline-message tutor thinking" role="status" aria-live="polite" aria-label="Tutor is thinking"><b>Tutor</b><span className="tutor-thinking-dots" aria-hidden="true"><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /></span><span className="tutor-thinking-label">Thinking</span></aside> : null;
   const renderedRecords = (() => {
     const nodes: React.ReactNode[] = [];
     for (let index = 0; index < records.length; index += 1) {

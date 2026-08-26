@@ -372,6 +372,8 @@ describe("workbook lesson UI", () => {
     expect(events.url).toBe("api/workbook/timeline");
     expect(events.listenerCount("record")).toBe(1);
     expect(container.textContent).toContain("I would inspect the flow map.");
+    expect(container.textContent).toContain("Thinking");
+    expect(container.querySelector('.timeline-message.tutor.thinking[role="status"][aria-label="Tutor is thinking"]')).toBeTruthy();
     expect(container.textContent).not.toContain("Final tutor review added asynchronously.");
 
     await act(async () => { events.emit("record", { sequence: 3 }); await Promise.resolve(); });
@@ -381,6 +383,7 @@ describe("workbook lesson UI", () => {
     await act(async () => { secondRecordFetch.resolve(latestReviewState); await Promise.resolve(); });
     expect(container.textContent).toContain("Tutor review");
     expect(container.textContent).toContain("Final tutor review added asynchronously.");
+    expect(container.querySelector(".timeline-message.tutor.thinking")).toBeNull();
 
     await act(async () => { firstRecordFetch.resolve(staleReviewState); await Promise.resolve(); });
     expect(container.textContent).toContain("Final tutor review added asynchronously.");
