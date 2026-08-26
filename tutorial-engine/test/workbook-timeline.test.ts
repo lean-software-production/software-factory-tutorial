@@ -79,35 +79,5 @@ describe("WorkbookTimeline", () => {
     await expect(timeline.read()).resolves.toMatchObject([{ type: "message", source: "main_tutor" }]);
   });
 
-  it("persists block tutor readiness records and still reads legacy briefing records", async () => {
-    const directory = await workspace();
-    const timeline = new WorkbookTimeline(directory);
-    await mkdir(resolve(directory, ".tutorial/.tmp/workbook"), { recursive: true });
-    await writeFile(timeline.eventPath, `${JSON.stringify({
-      id: "legacy-briefing",
-      sequence: 1,
-      at: "2026-08-21T00:00:00.000Z",
-      type: "block_tutor_briefed",
-      lessonId: "lesson",
-      blockId: "editor",
-      text: "Coach this block by asking for the learner's edited script.",
-      coveredThroughId: "message-7"
-    })}\n`);
 
-    const readiness = await timeline.append({
-      type: "block_tutor_readiness",
-      lessonId: "lesson",
-      blockId: "editor",
-      attemptId: "attempt-3",
-      readiness: "likely_ready",
-      text: "The learner's third attempt satisfies the block goal."
-    });
-
-    expect(readiness).toMatchObject({ type: "block_tutor_readiness", sequence: 2, lessonId: "lesson", blockId: "editor", attemptId: "attempt-3", readiness: "likely_ready" });
-    expect(readiness.id).toMatch(/^[0-9a-f-]{36}$/i);
-
-    const records = await timeline.read();
-    expect(records[0]).toMatchObject({ id: "legacy-briefing", sequence: 1, type: "block_tutor_briefed", text: "Coach this block by asking for the learner's edited script." });
-    expect(records[1]).toEqual(readiness);
-  });
 });

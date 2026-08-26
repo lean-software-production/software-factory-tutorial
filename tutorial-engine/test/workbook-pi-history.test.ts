@@ -145,7 +145,7 @@ describe("workbook Pi history", () => {
       record("1", 1, { type: "message", lessonId: "lesson", blockId: "complete", role: "assistant", source: "authored", presentation: "course", text: "Completed block" }),
       record("2", 2, { type: "block_summarized", lessonId: "lesson", blockId: "complete", text: "The completed block is done.", coveredThroughId: "1" }),
       record("3", 3, { type: "message", lessonId: "lesson", blockId: "active", role: "assistant", source: "authored", presentation: "course", text: "## Active block\n\nEdit the script." }),
-      record("4", 4, { type: "message", lessonId: "lesson", blockId: "active", role: "assistant", source: "block_tutor", presentation: "hint", text: "Try changing the generated filename." }),
+      record("4", 4, { type: "message", lessonId: "lesson", blockId: "active", role: "assistant", source: "main_tutor", presentation: "review", text: "Try changing the generated filename." }),
     ];
     const activeContext: ActiveBlockContext = {
       lessonId: "lesson",

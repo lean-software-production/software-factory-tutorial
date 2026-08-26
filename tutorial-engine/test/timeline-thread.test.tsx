@@ -38,13 +38,13 @@ describe("TimelineThread", () => {
         { type: "block_tutor_briefed", id: "brief", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson", blockId: "write", text: "Private briefing", coveredThroughId: "course" },
         { type: "block_tutor_readiness", id: "ready", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "write", attemptId: "attempt", readiness: "likely_ready", text: "Private readiness" },
         { type: "message", id: "main", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "main_tutor", presentation: "chat", text: "Main tutor reply" },
-        { type: "message", id: "hint", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "block_tutor", presentation: "hint", text: "Block tutor hint" },
+        { type: "message", id: "hint", sequence: 4, at: "2026-08-21T00:00:03.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "main_tutor", presentation: "review", text: "Block tutor hint" },
       ] as any
     }));
 
     expect(markup).toContain('class="timeline-message tutor"');
-    expect(markup).toContain('class="timeline-message tutor hint"');
-    expect(markup.match(/<b>Tutor<\/b>/g)).toHaveLength(2);
+    expect(markup).toContain('class="timeline-message tutor review"');
+    expect(markup.match(/<b>Tutor(?: review)?<\/b>/g)).toHaveLength(2);
     expect(markup).toContain("Main tutor reply");
     expect(markup).toContain("Block tutor hint");
     expect(markup).not.toContain("Private briefing");
@@ -77,7 +77,7 @@ describe("TimelineThread", () => {
       onRetry: noopRetry,
       records: [
         { type: "message", id: "chat", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "main_tutor", presentation: "chat", text: "Run `git status` and **check** the diff." },
-        { type: "message", id: "hint", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "block_tutor", presentation: "hint", text: "Try *this* next." },
+        { type: "message", id: "hint", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "main_tutor", presentation: "review", text: "Try *this* next." },
         { type: "message", id: "review", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "main_tutor", presentation: "review", text: "Use `.tmp` for **scratch** files." },
       ]
     }));
@@ -111,7 +111,7 @@ describe("TimelineThread", () => {
       onSend: noopSend,
       onRetry: noopRetry,
       activeReflectionReviewing: false,
-      records: [...records, { type: "message", id: "review", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "lesson", blockId: "reflect", role: "assistant", source: "block_tutor", presentation: "review", text: "Accepted." }]
+      records: [...records, { type: "message", id: "review", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "lesson", blockId: "reflect", role: "assistant", source: "main_tutor", presentation: "review", text: "Accepted." }]
     }));
 
     expect(reviewingMarkup).toContain('role="status"');

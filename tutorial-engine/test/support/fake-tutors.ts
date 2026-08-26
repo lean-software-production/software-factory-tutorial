@@ -6,15 +6,13 @@
  * primes, or logic keyed to the evidence — so that is the one method subclasses override.
  */
 import type { Attempt } from "../../src/workbook/attempts.js";
-import type { TerminalCoachAssessment, WorkbookBlockTutor } from "../../src/workbook/block-tutor.js";
-import type { ActiveBlockContext } from "../../src/workbook/pi-history.js";
-import type { BlockTutorReadiness, TimelineMessage } from "../../src/workbook/timeline.js";
-import type { MainTutorContext, MainWorkbookTutor, TutorDecision, TutorReview } from "../../src/workbook/tutor.js";
+import type { PracticeCoach, PracticeCoachOutcome } from "../../src/workbook/practice-coach.js";
+import type { TimelineMessage } from "../../src/workbook/timeline.js";
+import type { MainTutorContext, MainWorkbookTutor, PracticeCoachHandoff, TutorDecision, TutorReview } from "../../src/workbook/tutor.js";
 
-export type ReviewInput = MainTutorContext & TutorReview & { readiness?: BlockTutorReadiness };
-export type BlockReadiness = Awaited<ReturnType<WorkbookBlockTutor["assess"]>>;
+export type ReviewInput = MainTutorContext & TutorReview & { practiceCoachHandoff?: PracticeCoachHandoff };
 export type QueuedDecision = TutorDecision | Error | Promise<TutorDecision> | ((review: ReviewInput) => TutorDecision | Promise<TutorDecision>);
-export type QueuedReadiness = BlockReadiness | Error | Promise<BlockReadiness>;
+export type QueuedCoachOutcome = PracticeCoachOutcome | Error | Promise<PracticeCoachOutcome>;
 
 function unwrap<T>(next: T | Error): T {
   if (next instanceof Error) throw next;
@@ -77,33 +75,12 @@ export class QueuedMainTutor extends RecordingMainTutor {
   }
 }
 
-export class RecordingBlockTutor implements WorkbookBlockTutor {
-  readonly hints: Array<{ context: ActiveBlockContext }> = [];
-  readonly assessments: Array<{ context: ActiveBlockContext; attempt: Attempt }> = [];
-  hintQueue: Array<string | Error | Promise<string>> = [];
-  readinessQueue: QueuedReadiness[] = [];
+export class RecordingPracticeCoach implements PracticeCoach {
+  readonly assessments: Array<{ attempt: Attempt; rubric: string }> = [];
+  queue: QueuedCoachOutcome[] = [];
 
-  protected defaultHint = "Look at the current draft and compare it with the block goal.";
-  protected defaultReadiness: BlockReadiness = { readiness: "still_working", text: "The attempt still needs main-tutor judgment." };
-
-  async hint(input: { context: ActiveBlockContext }): Promise<string> {
-    this.hints.push(input);
-    return unwrap(await (this.hintQueue.shift() ?? this.defaultHint));
-  }
-
-  async assess(input: { context: ActiveBlockContext; attempt: Attempt }): Promise<BlockReadiness> {
+  async assess(input: { attempt: Attempt; rubric: string }): Promise<PracticeCoachOutcome> {
     this.assessments.push(input);
-    return unwrap(await (this.readinessQueue.shift() ?? this.defaultReadiness));
-  }
-}
-
-/** Adds the quick terminal coach, which only the terminal path calls. */
-export class TerminalCoachBlockTutor extends RecordingBlockTutor {
-  readonly terminalAssessments: Array<{ context: ActiveBlockContext; attempt: Attempt }> = [];
-  terminalQueue: Array<TerminalCoachAssessment | Error | Promise<TerminalCoachAssessment>> = [];
-
-  async assessTerminal(input: { context: ActiveBlockContext; attempt: Attempt }): Promise<TerminalCoachAssessment> {
-    this.terminalAssessments.push(input);
-    return unwrap(await (this.terminalQueue.shift() ?? { outcome: "likely_ready" as const, text: "Ready for main review." }));
+    return unwrap(await (this.queue.shift() ?? { outcome: "ready", text: "Ordinary terminal handoff." }));
   }
 }

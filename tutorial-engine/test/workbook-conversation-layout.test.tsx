@@ -177,14 +177,14 @@ describe("workbook fixed conversation layout", () => {
       onRetry: vi.fn(async () => undefined),
       records: [
         { type: "message", id: "main", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson", blockId: editorBlock.id, role: "assistant", source: "main_tutor", presentation: "chat", text: "Main reply" },
-        { type: "message", id: "hint", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson", blockId: editorBlock.id, role: "assistant", source: "block_tutor", presentation: "hint", text: "Hint reply" },
+        { type: "message", id: "hint", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson", blockId: editorBlock.id, role: "assistant", source: "main_tutor", presentation: "review", text: "Hint reply" },
         { type: "message", id: "learner", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "part/lesson", blockId: editorBlock.id, role: "user", source: "learner", presentation: "chat", text: "Learner reply" }
       ]
     }));
 
     expect(markup).toContain('class="timeline-message tutor"');
-    expect(markup).toContain('class="timeline-message tutor hint"');
+    expect(markup).toContain('class="timeline-message tutor review"');
     expect(markup).toContain('class="timeline-message learner"');
-    expect(markup.match(/<b>Tutor<\/b>/g)).toHaveLength(2);
+    expect(markup.match(/<b>Tutor(?: review)?<\/b>/g)).toHaveLength(2);
   });
 });

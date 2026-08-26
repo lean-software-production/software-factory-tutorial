@@ -27,10 +27,10 @@ export type LegacyWorkbookWorkflowInput =
 
 export type WorkbookWorkflowEvent = (WorkbookWorkflowInput | LegacyWorkbookWorkflowInput) & TimelineMetadata;
 
-export type TimelineMessageSource = "authored" | "learner" | "main_tutor" | "block_tutor";
+export type TimelineMessageSource = "authored" | "learner" | "main_tutor";
 export type MainTutorSource = Extract<TimelineMessageSource, "main_tutor">;
-export type TimelinePresentation = "course" | "chat" | "hint" | "review";
-export type TutorPresentation = Extract<TimelinePresentation, "chat" | "hint" | "review">;
+export type TimelinePresentation = "course" | "chat" | "review";
+export type TutorPresentation = Extract<TimelinePresentation, "chat" | "review">;
 
 export type TimelineMessage = TimelineMetadata & {
   type: "message";
@@ -60,30 +60,12 @@ export type LessonSummary = TimelineMetadata & {
   coveredThroughId: string;
 };
 
-/** Historical private briefing rows from older sessions. New timeline appends no longer write them. */
-export type LegacyBlockTutorBriefing = TimelineMetadata & {
-  type: "block_tutor_briefed";
-  lessonId: string;
-  blockId: string;
-  text: string;
-  coveredThroughId: string;
-};
-
-export type BlockTutorReadiness = TimelineMetadata & {
-  type: "block_tutor_readiness";
-  lessonId: string;
-  blockId: string;
-  attemptId: string;
-  readiness: "likely_ready" | "still_working" | "uncertain";
-  text: string;
-};
-
 export type TutorFailure = TimelineMetadata & {
   type: "tutor_failed";
   lessonId: string;
   blockId: string;
   requestId: string;
-  operation: "reply" | "hint" | "readiness" | "review" | "restore" | "block_summary" | "lesson_summary" | "completion_summary";
+  operation: "reply" | "review" | "restore" | "block_summary" | "lesson_summary" | "completion_summary";
   publicMessage: string;
 };
 
@@ -92,13 +74,12 @@ export type WorkbookCompletionSummary = TimelineMetadata & {
   text: string;
 };
 
-export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TimelineMessage | BlockSummary | LessonSummary | LegacyBlockTutorBriefing | BlockTutorReadiness | TutorFailure | WorkbookCompletionSummary;
+export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TimelineMessage | BlockSummary | LessonSummary | TutorFailure | WorkbookCompletionSummary;
 export type TimelineAppendInput =
   | WorkbookWorkflowInput
   | Omit<TimelineMessage, keyof TimelineMetadata>
   | Omit<BlockSummary, keyof TimelineMetadata>
   | Omit<LessonSummary, keyof TimelineMetadata>
-  | Omit<BlockTutorReadiness, keyof TimelineMetadata>
   | Omit<TutorFailure, keyof TimelineMetadata>
   | Omit<WorkbookCompletionSummary, keyof TimelineMetadata>;
 

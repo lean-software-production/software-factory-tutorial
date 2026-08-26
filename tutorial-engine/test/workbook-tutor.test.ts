@@ -132,7 +132,7 @@ describe("MainWorkbookTutor", () => {
       message("authored-1", 1, "authored", "assistant", "## Course note\n\nUse `.tmp`."),
       message("learner-1", 2, "learner", "user", "Which path?"),
       message("main-1", 3, "main_tutor", "assistant", "Use the workspace-relative `.tmp/evidence.txt`."),
-      message("block-1", 4, "block_tutor", "assistant", "Your terminal output is close."),
+      message("block-1", 4, "main_tutor", "assistant", "Your terminal output is close."),
     ];
     const firstActive = activeContext([attempt("a-1", "terminal")]);
     const learnerMessage = message("learner-2", 5, "learner", "user", "Can I put it elsewhere?");
