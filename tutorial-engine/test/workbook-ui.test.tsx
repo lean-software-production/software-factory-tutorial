@@ -262,9 +262,9 @@ describe("workbook lesson UI", () => {
     expect(markup).not.toContain("<button");
   });
 
-  it("refreshes state in place on author hot-reload SSE and shows non-modal reload errors", async () => {
-    const { initialState } = scrollPromotionFixture();
-    const reloadedState = { ...initialState, workbook: { title: "Reloaded Workbook" }, introduction: "Reloaded intro copy.", timeline: [{ ...initialState.timeline[0], text: "# Reloaded Workbook\n\nReloaded intro copy." }] } as any;
+  it("refreshes state in place on author hot-reload SSE and preserves the current URL anchor", async () => {
+    const { completedState } = scrollPromotionFixture();
+    const reloadedState = { ...completedState, workbook: { title: "Reloaded Workbook" }, introduction: "Reloaded intro copy.", timeline: [{ ...completedState.timeline[0], text: "# Reloaded Workbook\n\nReloaded intro copy." }] } as any;
     class FakeEventSource {
       static instances: FakeEventSource[] = [];
       readonly listeners = new Map<string, Array<(event: { data: string }) => void>>();
@@ -275,9 +275,10 @@ describe("workbook lesson UI", () => {
       close() { this.closed = true; }
       emit(event: string, data: unknown = {}) { for (const listener of this.listeners.get(event) ?? []) listener({ data: JSON.stringify(data) }); }
     }
-    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => ({ ok: true, json: async () => String(input).startsWith("/api/workbook/state") ? reloadedState : initialState }));
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => ({ ok: true, json: async () => String(input).startsWith("/api/workbook/state") ? reloadedState : completedState }));
     const scrollIntoView = vi.fn();
     const replaceState = vi.fn();
+    const pushState = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("EventSource", FakeEventSource as any);
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
@@ -285,7 +286,9 @@ describe("workbook lesson UI", () => {
     const container = await mount(createElement(App), (win) => {
       stubAppShellGlobals(win);
       win.HTMLElement.prototype.scrollIntoView = scrollIntoView;
-      vi.stubGlobal("history", { pushState: vi.fn(), replaceState });
+      win.history.replaceState(null, "", "#part--validation-loop");
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("history", { pushState, replaceState });
     });
     await act(async () => { await Promise.resolve(); });
     expect(FakeEventSource.instances[0]!.url).toBe("api/workbook/timeline");
@@ -301,8 +304,32 @@ describe("workbook lesson UI", () => {
     expect(container.textContent).toContain("Reloaded Workbook");
     expect(container.textContent).toContain("Reloaded intro copy.");
     expect(container.textContent).not.toContain("Author reload failed.");
-    expect(replaceState).toHaveBeenCalledWith(null, "", "#workbook--introduction");
-    expect(scrollIntoView).toHaveBeenCalled();
+    expect(location.hash).toBe("#part--validation-loop");
+    expect(replaceState).not.toHaveBeenCalledWith(null, "", "#workbook--introduction");
+    expect(pushState).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the active anchor without a modal when the URL anchor is no longer valid", async () => {
+    const { completedState } = scrollPromotionFixture();
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => completedState }));
+    const scrollIntoView = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
+
+    const container = await mount(createElement(App), (win) => {
+      stubAppShellGlobals(win);
+      win.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+      win.history.replaceState(null, "", "#removed-by-author");
+      const replaceState = vi.spyOn(win.history, "replaceState");
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("history", win.history);
+      replaceState.mockClear();
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.textContent).not.toContain("The lesson you're linking to is not ready yet");
+    expect(location.hash).toBe("#part--validation-loop");
+    expect(history.replaceState).toHaveBeenCalledWith(null, "", "#part--validation-loop");
   });
 
   it("submits the typed tutor message with Enter", async () => {
@@ -1565,6 +1592,7 @@ describe("workbook lesson UI", () => {
     const state = { workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: false, chapters, progress: readyProgress, adapter: {}, revealedBlockIds: ["workbook--introduction"], renderedBlockIds: ["workbook--introduction", "part--validation-loop"], timeline: [] } as any;
     const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
     vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
     const container = await mount(createElement(App), (win) => {
       stubAppShellGlobals(win);
       win.history.replaceState(null, "", "#part--validation-loop");
@@ -1572,7 +1600,7 @@ describe("workbook lesson UI", () => {
       vi.stubGlobal("history", win.history);
     });
     await act(async () => { await Promise.resolve(); });
-    expect(container.textContent).toContain("The lesson you're linking to is not ready yet");
+    expect(container.textContent).not.toContain("The lesson you're linking to is not ready yet");
   });
 
   it("renders the unopened introduction through the timeline with a composer and durable intro target", async () => {

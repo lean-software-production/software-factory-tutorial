@@ -712,10 +712,8 @@ export function App() {
   const [state, setState] = useState<State>();
   const [viewed, setViewed] = useState<string>();
   const [terminalInsertion, setTerminalInsertion] = useState<(() => void) | undefined>();
-  const [blockedLink, setBlockedLink] = useState(false);
   const [contentReloadError, setContentReloadError] = useState<string>();
   const scrollCompletionPending = useRef(false);
-  const navigateToIntroductionAfterReload = useRef(false);
   const previousReadyRunwayIds = useRef<Set<string>>(new Set());
   const preservedRunwayIds = useRef<Set<string>>(new Set());
   const registerTerminalInsertion = useCallback((insertCommand: (() => void) | undefined) => {
@@ -729,12 +727,6 @@ export function App() {
     events.addEventListener("content-reloaded", () => {
       readWorkbookState().then((next) => {
         setContentReloadError(undefined);
-        setTerminalInsertion(undefined);
-        setBlockedLink(false);
-        setViewed(undefined);
-        previousReadyRunwayIds.current = new Set();
-        preservedRunwayIds.current = new Set();
-        navigateToIntroductionAfterReload.current = true;
         setState(next);
       }).catch((error) => {
         console.error(error);
@@ -751,12 +743,6 @@ export function App() {
     });
     return () => events.close();
   }, [hasInitialState]);
-  useEffect(() => {
-    if (!state || !navigateToIntroductionAfterReload.current) return;
-    navigateToIntroductionAfterReload.current = false;
-    const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback: FrameRequestCallback) => setTimeout(callback, 0) as unknown as number;
-    raf(() => navigateToAnchor(INTRODUCTION_BLOCK_ID, "replace"));
-  }, [state?.workbook.title, state?.introduction]);
   useEffect(() => { if (state) document.title = state.workbook.title; }, [state?.workbook.title]);
   useEffect(() => {
     if (!state) return;
@@ -769,8 +755,8 @@ export function App() {
       raf(() => navigateToAnchor(fragment, "none"));
       return;
     }
-    setBlockedLink(true);
-  }, [state?.workbook.title, state?.progress.activeAnchorId, state?.progress.workbookComplete]);
+    raf(() => navigateToAnchor(state.progress.activeAnchorId ?? state.progress.activeBlockId, "replace"));
+  }, [state?.workbook.title, state?.progress.activeAnchorId, state?.progress.workbookComplete, state?.revealedBlockIds?.join("|")]);
   useEffect(() => { setTerminalInsertion(undefined); }, [state?.progress.activeLessonId, state?.progress.activeBlockId]);
   useEffect(() => {
     if (!state || state.progress.workbookComplete || typeof IntersectionObserver === "undefined") return;
@@ -864,7 +850,6 @@ export function App() {
     return null;
   };
   return <div className="shell">
-    {blockedLink && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Lesson not ready"><div className="modal"><p>The lesson you're linking to is not ready yet — you still have some work to do!</p><button className="button primary" onClick={() => { setBlockedLink(false); navigateToAnchor(state.progress.activeAnchorId ?? state.progress.activeBlockId, "replace"); }}>OK</button></div></div>}
     {contentReloadError && <aside className="author-reload-notice" aria-live="polite"><b>Author reload failed.</b> {contentReloadError}</aside>}
     <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />

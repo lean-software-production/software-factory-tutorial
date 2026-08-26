@@ -203,8 +203,14 @@ async function waitForWatchPath(fake: ReturnType<typeof fakeContentWatchFactory>
   }
   throw new Error(`Timed out waiting for watch subscription ${path}`);
 }
-async function privateTimeline(workspace: string): Promise<WorkbookTimelineRecord[]> {
-  const text = await readFile(tutorialStatePath(workspace, "workbook", "events.jsonl"), "utf8");
+async function privateTimeline(workspaceOrSessionRoot: string): Promise<WorkbookTimelineRecord[]> {
+  let text: string;
+  try {
+    text = await readFile(tutorialSessionStatePath(workspaceOrSessionRoot, "workbook/events.jsonl"), "utf8");
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw error;
+    text = await readFile(tutorialStatePath(workspaceOrSessionRoot, "workbook", "events.jsonl"), "utf8");
+  }
   return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as WorkbookTimelineRecord);
 }
 async function completeBlock(serverUrl: string, blockId: string) {
@@ -264,36 +270,74 @@ afterEach(async () => {
 });
 
 describe("workbook browser API", () => {
-  it("hot reloads lesson Markdown, resets presentation, and retains learner workspace files", async () => {
+  it("hot reloads authored prose in place while retaining progress, attempts, and learner workspace files", async () => {
     const { dir, session } = await sessionFixture();
     const fakeWatch = fakeContentWatchFactory();
+    const tutor = new FakeMainTutor({ outcome: "feedback", message: "Old feedback." });
     await writeFile(resolve(session.workspaceRoot, "factory/sentinel.txt"), "keep me\n", "utf8");
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, watchContent: true, contentWatchFactory: fakeWatch.factory, contentWatchDebounceMs: 1, mainTutor: tutor, blockTutor: new FakeBlockTutor() });
+    try {
+      await waitForWatchPath(fakeWatch, resolve(session.contentRoot, "lessons/001-first"));
+      await waitForWatchPath(fakeWatch, resolve(session.contentRoot, "lessons/001-first/blocks"));
+      await introduceAndOpenEditor(server.url);
+      const before = await state(server.url);
+      expect(before.progress.activeBlockId).toBe("lesson--001-first--edit-answer");
+      expect(before.introductionComplete).toBe(true);
+      const authoredBefore = before.timeline.find((record: any) => record.type === "message" && record.source === "authored" && record.blockId === "lesson--001-first--edit-answer");
+      expect(authoredBefore?.text).toContain("Write the answer in the editor.");
+
+      expect((await postMessage(server.url, { blockId: "lesson--001-first--edit-answer", text: "I'm still here." })).status).toBe(202);
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "draft before reload" })).status).toBe(202);
+      await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "feedback", "editor feedback before reload");
+
+      const reloaded = nextSseEvent(server.url, "content-reloaded");
+      await writeBlock(resolve(dir, "lessons/001-first"), "edit-answer", "editor-practice", "Edit", "Write the refreshed answer in the editor.", "Private editor rubric: require the refreshed marker.", "factory/answer.md");
+      fakeWatch.emit(resolve(session.contentRoot, "lessons/001-first/blocks"), "edit-answer.md");
+      await reloaded;
+
+      const next = await state(server.url);
+      expect(next.progress.activeBlockId).toBe("lesson--001-first--edit-answer");
+      expect(next.introductionComplete).toBe(true);
+      expect(next.progress.completedBlocks).toEqual(before.progress.completedBlocks);
+      expect(next.timeline?.filter((record: any) => record.type === "message" && record.source === "learner").map((record: any) => record.text)).toContain("I'm still here.");
+      expect(block(next, "lesson--001-first--edit-answer")?.checkpoint?.status).toBe("feedback");
+      await expect(readFile(resolve(session.workspaceRoot, "factory/sentinel.txt"), "utf8")).resolves.toBe("keep me\n");
+      await expect(access(resolve(session.workspaceRoot, ".git"))).resolves.toBeUndefined();
+
+      const authoredAfter = next.timeline.find((record: any) => record.type === "message" && record.source === "authored" && record.blockId === "lesson--001-first--edit-answer");
+      expect(authoredAfter?.id).toBe(authoredBefore.id);
+      expect(authoredAfter?.text).toContain("Write the refreshed answer in the editor.");
+      expect(authoredAfter?.text).not.toContain("Write the answer in the editor.");
+      const activeBlock = next.chapters[0].lesson.blocks.find((candidate: any) => candidate.id === "lesson--001-first--edit-answer");
+      expect(activeBlock.markdown).toBe("Write the refreshed answer in the editor.");
+      expect(tutor.restores.at(-1)?.activeContext).toMatchObject({ blockId: "lesson--001-first--edit-answer", markdown: "Write the refreshed answer in the editor.", authorGuidance: "Private editor rubric: require the refreshed marker." });
+      const privateRecords = await privateTimeline(session.sessionRoot);
+      expect(privateRecords.filter((record: any) => record.type === "session_started")).toHaveLength(1);
+    } finally { await server.close(); }
+  });
+
+  it("falls back to the next valid block when a structural reload removes the current block", async () => {
+    const { dir, session } = await sessionFixture();
+    const fakeWatch = fakeContentWatchFactory();
     const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, watchContent: true, contentWatchFactory: fakeWatch.factory, contentWatchDebounceMs: 1, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });
     try {
       await waitForWatchPath(fakeWatch, resolve(session.contentRoot, "lessons/001-first"));
       await introduceAndOpenEditor(server.url);
-      expect((await state(server.url)).progress.activeBlockId).toBe("lesson--001-first--edit-answer");
+      const before = await state(server.url);
+      expect(before.progress.activeBlockId).toBe("lesson--001-first--edit-answer");
+      expect(before.progress.completedBlocks).toContain("lesson--001-first--orientation");
 
       const reloaded = nextSseEvent(server.url, "content-reloaded");
-      await writeLesson(resolve(dir, "lessons/001-first"), "First lesson reloaded", ["orientation", "edit-answer", "run-supplied-command", "change-job", "reflection", "transition"], "Reloaded lesson introduction.");
+      await rm(resolve(dir, "lessons/001-first/blocks/edit-answer.md"));
+      await writeLesson(resolve(dir, "lessons/001-first"), "First lesson", ["orientation", "run-supplied-command", "change-job", "reflection", "transition"]);
       fakeWatch.emit(resolve(session.contentRoot, "lessons/001-first"), "lesson.md");
       await reloaded;
 
-      const reset = await state(server.url);
-      expect(reset.progress.activeBlockId).toBe("workbook--introduction");
-      expect(reset.introductionComplete).toBe(false);
-      expect(reset.timeline?.filter((record: any) => record.type === "message" && record.source === "learner")).toEqual([]);
-      await expect(readFile(resolve(session.workspaceRoot, "factory/sentinel.txt"), "utf8")).resolves.toBe("keep me\n");
-      await expect(access(resolve(session.workspaceRoot, ".git"))).resolves.toBeUndefined();
-
-      await completeBlock(server.url, "workbook--introduction");
-      await continueActive(server.url);
-      const opened = await continueActive(server.url).then((response) => response.json() as any);
-      expect(opened.state.chapters[0].lesson).toMatchObject({ title: "First lesson reloaded", dek: "First lesson reloaded dek.", introduction: "Reloaded lesson introduction." });
-      const preambleText = opened.state.timeline.find((record: any) => record.type === "message" && record.blockId === "lesson--001-first")?.text;
-      expect(preambleText).toContain("# First lesson reloaded");
-      expect(preambleText).toContain("Reloaded lesson introduction.");
-      expect(preambleText.split("Reloaded lesson introduction.")).toHaveLength(2);
+      const next = await state(server.url);
+      expect(next.progress.activeBlockId).toBe("lesson--001-first--run-supplied-command");
+      expect(next.progress.completedBlocks).toContain("lesson--001-first--orientation");
+      expect(next.orderedBlocks.map((entry: any) => entry.id)).not.toContain("lesson--001-first--edit-answer");
+      expect(next.timeline.some((record: any) => record.type === "message" && record.source === "authored" && record.blockId === "lesson--001-first--edit-answer")).toBe(false);
     } finally { await server.close(); }
   });
 
@@ -323,9 +367,9 @@ describe("workbook browser API", () => {
       fakeWatch.emit(session.contentRoot, "workbook.md");
       await reloaded;
 
-      const reset = await state(server.url);
-      expect(reset.progress.activeBlockId).toBe("workbook--introduction");
-      expect(reset.orderedBlocks.map((entry: any) => entry.id)).toContain("lesson--003-third--third-orientation");
+      const next = await state(server.url);
+      expect(next.progress.activeBlockId).toBe("workbook--introduction");
+      expect(next.orderedBlocks.map((entry: any) => entry.id)).toContain("lesson--003-third--third-orientation");
       await waitForWatchPath(fakeWatch, resolve(session.contentRoot, "lessons/003-third/blocks"));
     } finally { await server.close(); }
   });
@@ -364,7 +408,7 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("does not let a delayed review from before hot reload write into the reset generation", async () => {
+  it("does not let a delayed review from before hot reload write into the new generation", async () => {
     const { dir, session } = await sessionFixture();
     const fakeWatch = fakeContentWatchFactory();
     const pending = deferred<TutorDecision>();
@@ -385,7 +429,7 @@ describe("workbook browser API", () => {
       await waitMs(20);
       const next = await state(server.url);
       expect(JSON.stringify(next.timeline)).not.toContain("Old review accepted");
-      expect(next.progress.activeBlockId).toBe("workbook--introduction");
+      expect(next.progress.activeBlockId).toBe("lesson--001-first--edit-answer");
       const privateRecords = (await readFile(tutorialSessionStatePath(session.sessionRoot, "workbook/events.jsonl"), "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
       expect(privateRecords.some((record: any) => record.type === "attempt_accepted")).toBe(false);
     } finally { await server.close(); }

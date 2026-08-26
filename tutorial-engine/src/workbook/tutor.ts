@@ -421,12 +421,14 @@ function historySignature(history: MainTutorHistoryProjection, completionBlockId
   return JSON.stringify({
     summaries: history.summaries.map((summary) => ({
       sourceEventId: summary.sourceEventId,
-      coveredThroughId: summary.coveredThroughId
+      coveredThroughId: summary.coveredThroughId,
+      text: summary.text
     })),
-    turnIds: history.turns.map((turn) => turn.sourceEventId),
+    turns: history.turns.map((turn) => ({ sourceEventId: turn.sourceEventId, text: turn.text })),
     active: history.activeContext
       ? {
           sourceEventIds: history.activeContext.sourceEventIds,
+          text: history.activeContext.text,
           attemptIds: activeAttemptIds(history.activeContext.text)
         }
       : undefined,
