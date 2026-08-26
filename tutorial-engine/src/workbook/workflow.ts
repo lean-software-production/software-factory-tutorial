@@ -297,8 +297,9 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
   let stream = buildWorkbookBlockStream(loaded);
   let records = await timeline.read();
   let closed = false;
-  let restoringFailed = false;
   const reviewFinalizers = new Set<Promise<unknown>>();
+  const briefingFinalizers = new Set<Promise<unknown>>();
+  const ordinaryCommands = new Set<Promise<unknown>>();
   let reloadGeneration = 0;
 
   const append = async (input: Parameters<WorkbookTimeline["append"]>[0]): Promise<WorkbookTimelineRecord> => {
@@ -307,6 +308,12 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     return record;
   };
   const transact = <T>(operation: () => Promise<T>): Promise<T> => timeline.run(operation);
+  const trackOrdinaryCommand = <T>(operation: () => Promise<T>): Promise<T> => {
+    const command = operation();
+    ordinaryCommands.add(command);
+    void command.then(() => ordinaryCommands.delete(command), () => ordinaryCommands.delete(command));
+    return command;
+  };
   const publicReloadError = (error: unknown): string => {
     const message = error instanceof Error ? error.message : String(error);
     return message.replace(/\s+/g, " ").trim().slice(0, 500) || "The workbook content could not be loaded yet.";
@@ -343,7 +350,12 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     const active = activeOrderedBlock();
     if (!active) return;
     const authored = await ensureAuthoredBlock(active);
-    if (active.origin === "declared" && blockSupportsHints(active.block) && !newestBriefing(active.lessonId, active.id)) await refreshBlockBriefing(active, authored?.id ?? records.at(-1)?.id ?? active.id);
+    // Briefing invokes a model. It must run after this serialized command releases the timeline.
+    if (active.origin === "declared" && blockSupportsHints(active.block) && !newestBriefing(active.lessonId, active.id)) {
+      const briefing = refreshBlockBriefing(active, authored?.id ?? records.at(-1)?.id ?? active.id);
+      briefingFinalizers.add(briefing);
+      void briefing.then(() => briefingFinalizers.delete(briefing), () => briefingFinalizers.delete(briefing));
+    }
   };
   const ensureActiveWorkAcceptance = async (): Promise<void> => {
     const active = activeOrderedBlock();
@@ -385,18 +397,30 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
   const appendFailure = async (input: Omit<TutorFailure, "id" | "sequence" | "at" | "type"> & { operation: TutorFailure["operation"] }): Promise<void> => {
     await append({ type: "tutor_failed", ...input });
   };
-  const refreshBlockBriefing = async (active: DeclaredWorkbookBlock, coveredThroughId: string, options: { silentFailure?: boolean } = {}): Promise<void> => {
-    if (!blockSupportsHints(active.block)) return;
-    const generation = reloadGeneration;
+  const refreshBlockBriefing = async (requested: DeclaredWorkbookBlock, coveredThroughId: string, options: { silentFailure?: boolean } = {}): Promise<void> => {
+    if (!blockSupportsHints(requested.block)) return;
+    // Capture the exact declaration and tutor history under the timeline lock, then release it for
+    // provider work. A reload or progression invalidates this snapshot at guarded finalization.
+    const snapshot = await transact(async () => {
+      const active = activeDeclaredBlock();
+      if (!active || active.id !== requested.id || active.lessonId !== requested.lessonId || !blockSupportsHints(active.block)) return undefined;
+      return { generation: reloadGeneration, active, context: await activeBlockContext(), tutorContext: await mainContext() };
+    });
+    if (!snapshot) return;
     try {
-      const context = await activeBlockContext();
-      const text = requireTutorText(await mainTutor.prepareBlockBriefing({ ...(await mainContext()), lessonId: active.lessonId, blockId: active.id, activeContext: context }), "briefing");
-      if (!generationIsCurrent(generation)) return;
-      await append({ type: "block_tutor_briefed", lessonId: active.lessonId, blockId: active.id, text, coveredThroughId });
+      const text = requireTutorText(await mainTutor.prepareBlockBriefing({ ...snapshot.tutorContext, lessonId: snapshot.active.lessonId, blockId: snapshot.active.id, activeContext: snapshot.context }), "briefing");
+      await transact(async () => {
+        const active = activeDeclaredBlock();
+        if (!generationIsCurrent(snapshot.generation) || !active || active.id !== snapshot.active.id || active.lessonId !== snapshot.active.lessonId) return;
+        await append({ type: "block_tutor_briefed", lessonId: snapshot.active.lessonId, blockId: snapshot.active.id, text, coveredThroughId });
+      });
     } catch (error) {
-      if (!generationIsCurrent(generation)) return;
-      log.info(`Workbook tutor briefing failed for ${active.lessonId}/${active.id}: ${error instanceof Error ? error.message : String(error)}`);
-      if (!options.silentFailure) await appendFailure({ lessonId: active.lessonId, blockId: active.id, requestId: coveredThroughId, operation: "briefing", publicMessage: TUTOR_UNAVAILABLE });
+      await transact(async () => {
+        const active = activeDeclaredBlock();
+        if (!generationIsCurrent(snapshot.generation) || !active || active.id !== snapshot.active.id || active.lessonId !== snapshot.active.lessonId) return;
+        log.info(`Workbook tutor briefing failed for ${snapshot.active.lessonId}/${snapshot.active.id}: ${error instanceof Error ? error.message : String(error)}`);
+        if (!options.silentFailure) await appendFailure({ lessonId: snapshot.active.lessonId, blockId: snapshot.active.id, requestId: coveredThroughId, operation: "briefing", publicMessage: TUTOR_UNAVAILABLE });
+      });
     }
   };
   const appendReviewMessage = async (attempt: Attempt, text: string): Promise<TimelineMessage> => {
@@ -404,8 +428,31 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     if (attempt.evidence.kind === "reflection") await append({ type: "reflection_reply_recorded", lessonId: attempt.lessonId, blockId: attempt.blockId, response: text });
     return message;
   };
-  const appendAcceptedCheckpoint = async (accepted: Attempt): Promise<void> => {
-    await append({ type: "attempt_accepted", lessonId: accepted.lessonId, blockId: accepted.blockId, attemptId: accepted.id, version: accepted.version, kind: accepted.evidence.kind, summary: accepted.successMessage ?? "Nice work — this attempt is accepted." });
+  /**
+   * This row is the acceptance commit record. Write it before mutating AttemptStore: if a later
+   * store or timeline write fails, startup/reload can finish this declared decision rather than
+   * leaving an accepted attempt that cannot be replaced or continued.
+   */
+  const appendAcceptedCheckpoint = async (attempt: Attempt, summary: string): Promise<void> => {
+    const existing = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }> => record.type === "attempt_accepted" && record.attemptId === attempt.id);
+    if (existing) return;
+    await append({ type: "attempt_accepted", lessonId: attempt.lessonId, blockId: attempt.blockId, attemptId: attempt.id, version: attempt.version, kind: attempt.evidence.kind, summary });
+  };
+  /** Replay an interrupted two-store acceptance commit for the one block that can still advance. */
+  const recoverAcceptedActiveAttempt = async (): Promise<void> => {
+    const active = activeDeclaredBlock();
+    if (!active || !isEvaluatedBlock(active.block)) return;
+    let current = await attempts.current(active.lessonId, active.id).catch(() => undefined);
+    if (!current || !evidenceMatchesBlock(current.evidence, active.block)) return;
+    const pending = current;
+    const commit = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }> =>
+      record.type === "attempt_accepted" && record.lessonId === active.lessonId && record.blockId === active.id && record.attemptId === pending.id && record.version === pending.version);
+    if (commit && pending.status !== "accepted") current = await attempts.acceptCurrent(pending.id, commit.summary) ?? pending;
+    if (current.status !== "accepted") return;
+    // This also repairs legacy sessions interrupted after AttemptStore accepted but before its
+    // timeline checkpoint was appended.
+    await appendAcceptedCheckpoint(current, current.successMessage ?? commit?.summary ?? "Nice work — this attempt is accepted.");
+    await recordWorkAccepted(active);
   };
 
   const trackFinalizer = (finalizer: Promise<unknown>): void => {
@@ -496,10 +543,12 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
             return;
           }
         }
+        // `attempt_accepted` is a write-ahead acceptance commit. Recovery replays it into the
+        // AttemptStore and work_accepted projection if any subsequent write is interrupted.
+        await appendAcceptedCheckpoint(current, message);
         const accepted = await attempts.acceptCurrent(current.id, message);
         if (!accepted) return;
         await appendReviewMessage(accepted, message);
-        await appendAcceptedCheckpoint(accepted);
         await recordWorkAccepted(active);
         return;
       }
@@ -507,18 +556,21 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
       const feedback = await attempts.markFeedback(current.id, message);
       if (!feedback) return;
       await appendReviewMessage(feedback, feedback.feedback ?? message);
-      if (feedback.evidence.kind !== "reflection") await refreshBlockBriefing(active, feedback.id, { silentFailure: true });
+      if (feedback.evidence.kind !== "reflection") void refreshBlockBriefing(active, feedback.id, { silentFailure: true });
     });
     trackFinalizer(finalizer);
   };
 
   const createAttempt = async (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }): Promise<Attempt> => {
     if (closed) throw new Error("Workbook server is closed.");
+    // This runs inside timeline.run(). Never trust guidance captured by a terminal/browser caller:
+    // a reload can change the declared block while that caller is queued. The active declaration is
+    // the only authority for the review prompt.
     const active = activeDeclaredBlock();
     if (!active || active.lessonId !== input.lessonId || active.id !== input.blockId || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(input.evidence, active.block)) throw new Error("This block is not active yet.");
     const attempt = await attempts.create({ lessonId: input.lessonId, blockId: input.blockId, evidence: input.evidence });
     const reviewing = await attempts.markReviewing(attempt.id) ?? attempt;
-    void finishReview(reviewing, input.privateGuidance);
+    void finishReview(reviewing, active.block.tutor);
     return reviewing;
   };
   const submitAttempt = (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }): Promise<Attempt> => transact(() => createAttempt(input));
@@ -604,56 +656,109 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
       log.info(`Workbook content reload failed: ${message}`);
       return { outcome: "error", message };
     }
-    await transact(async () => {
-      if (closed) return;
+    const generation = await transact(async () => {
+      if (closed) return reloadGeneration;
       reloadGeneration += 1;
       loaded = candidate;
       stream = buildWorkbookBlockStream(loaded);
       records = await timeline.read();
+      await recoverAcceptedActiveAttempt();
       await ensureActiveWorkAcceptance();
-      try {
-        await mainTutor.restore(await mainContext());
-        restoringFailed = false;
+      return reloadGeneration;
+    });
+    // Restoring a model session is deliberately outside the timeline transaction. Its finalizer
+    // checks the generation before it changes durable workflow state.
+    try {
+      await mainTutor.restore(await mainContext());
+      await transact(async () => {
+        if (!generationIsCurrent(generation)) return;
         await requeueActiveAttempt({ includeFeedback: false });
-      } catch (error) {
-        restoringFailed = true;
+      });
+    } catch (error) {
+      if (!closed) await transact(async () => {
+        if (!generationIsCurrent(generation)) return;
         log.info(`Workbook tutor restoration after content reload failed: ${error instanceof Error ? error.message : String(error)}`);
         const active = activeOrderedBlock();
         await appendFailure({ lessonId: active?.lessonId ?? WORKBOOK_INTRODUCTION_BLOCK_ID, blockId: active?.id ?? WORKBOOK_INTRODUCTION_BLOCK_ID, requestId: "content-reload", operation: "restore", publicMessage: TUTOR_UNAVAILABLE });
-      }
-    });
-    return closed ? { outcome: "closed" } : { outcome: "reloaded", generation: reloadGeneration };
+      });
+    }
+    return closed ? { outcome: "closed" } : { outcome: "reloaded", generation };
   };
 
-  const sendMessage = async ({ blockId, text, blockInView }: { blockId: string; text: string; blockInView?: string }) => transact(async () => {
-    const active = activeOrderedBlock();
-    const projection = currentWorkbookProjection();
-    const target = active && active.id === blockId
-      ? { lessonId: active.lessonId, blockId: active.id, active }
-      : (!active && blockId === WORKBOOK_COMPLETE_ANCHOR_ID ? { lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID, active: undefined } : undefined);
-    if (!target) throw new WorkbookWorkflowCommandError(409, "This block is not active yet.");
-    const visibleBlock = blockInView && (isNavigable(projection, blockInView) || blockInView === WORKBOOK_COMPLETE_ANCHOR_ID && projection.workbookComplete) ? blockInView : undefined;
-    const learnerMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "user", source: "learner", presentation: "chat", text, blockInView: visibleBlock }) as TimelineMessage;
-    try {
-      const reply = await mainTutor.reply({ ...(await mainContextForTarget(target.lessonId, target.blockId)), learnerMessage });
-      if (typeof reply !== "string" && reply.outcome === "complete-block") {
-        await completeBlock(reply.blockId);
+  const sendMessage = ({ blockId, text, blockInView }: { blockId: string; text: string; blockInView?: string }) => trackOrdinaryCommand(async () => {
+    const snapshot = await transact(async () => {
+      if (closed) throw new Error("Workbook server is closed.");
+      const active = activeOrderedBlock();
+      const projection = currentWorkbookProjection();
+      const target = active && active.id === blockId
+        ? { lessonId: active.lessonId, blockId: active.id, active }
+        : (!active && blockId === WORKBOOK_COMPLETE_ANCHOR_ID ? { lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID, active: undefined } : undefined);
+      if (!target) throw new WorkbookWorkflowCommandError(409, "This block is not active yet.");
+      const visibleBlock = blockInView && (isNavigable(projection, blockInView) || blockInView === WORKBOOK_COMPLETE_ANCHOR_ID && projection.workbookComplete) ? blockInView : undefined;
+      const learnerMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "user", source: "learner", presentation: "chat", text, blockInView: visibleBlock }) as TimelineMessage;
+      return { generation: reloadGeneration, target, learnerMessage, tutorContext: await mainContextForTarget(target.lessonId, target.blockId) };
+    });
+    let reply: Awaited<ReturnType<MainWorkbookTutor["reply"]>> | undefined;
+    let providerError: unknown;
+    try { reply = await mainTutor.reply({ ...snapshot.tutorContext, learnerMessage: snapshot.learnerMessage }); }
+    catch (error) { providerError = error; }
+    return await transact(async () => {
+      if (closed) throw new Error("Workbook server is closed.");
+      const active = activeOrderedBlock();
+      const stillActive = snapshot.target.active
+        ? active?.id === snapshot.target.blockId && active.lessonId === snapshot.target.lessonId
+        : !active && snapshot.target.blockId === WORKBOOK_COMPLETE_ANCHOR_ID;
+      if (!generationIsCurrent(snapshot.generation) || !stillActive) return await currentPublicState();
+      if (providerError) {
+        log.info(`Workbook tutor reply failed for ${snapshot.target.lessonId}/${snapshot.target.blockId}: ${providerError instanceof Error ? providerError.message : String(providerError)}`);
+        await appendFailure({ lessonId: snapshot.target.lessonId, blockId: snapshot.target.blockId, requestId: snapshot.learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE });
         return await currentPublicState();
       }
-      const textReply = requireTutorText(reply as string, "reply");
-      const tutorMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: textReply, inReplyTo: learnerMessage.id }) as TimelineMessage;
-      if (target.active?.origin === "declared") await refreshBlockBriefing(target.active, tutorMessage.id);
-    } catch (error) {
-      log.info(`Workbook tutor reply failed for ${target.lessonId}/${target.blockId}: ${error instanceof Error ? error.message : String(error)}`);
-      await appendFailure({ lessonId: target.lessonId, blockId: target.blockId, requestId: learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE });
-    }
-    return await currentPublicState();
+      if (typeof reply !== "string" && reply!.outcome === "complete-block") {
+        await completeBlock(reply!.blockId);
+        return await currentPublicState();
+      }
+      try {
+        const textReply = requireTutorText(reply as string, "reply");
+        const tutorMessage = await append({ type: "message", lessonId: snapshot.target.lessonId, blockId: snapshot.target.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: textReply, inReplyTo: snapshot.learnerMessage.id }) as TimelineMessage;
+        if (snapshot.target.active?.origin === "declared") void refreshBlockBriefing(snapshot.target.active, tutorMessage.id);
+      } catch (error) {
+        log.info(`Workbook tutor reply failed for ${snapshot.target.lessonId}/${snapshot.target.blockId}: ${error instanceof Error ? error.message : String(error)}`);
+        await appendFailure({ lessonId: snapshot.target.lessonId, blockId: snapshot.target.blockId, requestId: snapshot.learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE });
+      }
+      return await currentPublicState();
+    });
   });
 
-  const appendHint = async (blockId: string) => transact(async () => {
-    const result = await appendHintForActiveBlock(blockId, blockId || "hint");
-    if (result === "inactive") throw new WorkbookWorkflowCommandError(409, "Hints are available only for the active editor or terminal block.");
-    return await currentPublicState();
+  const appendHint = (blockId: string) => trackOrdinaryCommand(async () => {
+    const snapshot = await transact(async () => {
+      if (closed) throw new Error("Workbook server is closed.");
+      const active = activeDeclaredBlock();
+      if (!active || (active.id !== blockId && active.declaredId !== blockId) || !blockSupportsHints(active.block)) throw new WorkbookWorkflowCommandError(409, "Hints are available only for the active editor or terminal block.");
+      const briefing = newestBriefing(active.lessonId, active.id);
+      if (!briefing) {
+        await appendFailure({ lessonId: active.lessonId, blockId: active.id, requestId: blockId || "hint", operation: "briefing", publicMessage: TUTOR_UNAVAILABLE });
+        return undefined;
+      }
+      return { generation: reloadGeneration, active, briefing: briefing.text, context: await activeBlockContext() };
+    });
+    if (!snapshot) return await currentPublicState();
+    let hint: string | undefined;
+    let providerError: unknown;
+    try { hint = requireTutorText(await blockTutor.hint({ context: snapshot.context!, briefing: snapshot.briefing }), "hint"); }
+    catch (error) { providerError = error; }
+    return await transact(async () => {
+      if (closed) throw new Error("Workbook server is closed.");
+      const active = activeDeclaredBlock();
+      if (!generationIsCurrent(snapshot.generation) || !active || active.id !== snapshot.active.id || active.lessonId !== snapshot.active.lessonId) return await currentPublicState();
+      if (providerError) {
+        log.info(`Workbook block tutor hint failed for ${snapshot.active.lessonId}/${snapshot.active.id}: ${providerError instanceof Error ? providerError.message : String(providerError)}`);
+        await appendFailure({ lessonId: snapshot.active.lessonId, blockId: snapshot.active.id, requestId: blockId || "hint", operation: "hint", publicMessage: TUTOR_UNAVAILABLE });
+      } else {
+        await append({ type: "message", lessonId: snapshot.active.lessonId, blockId: snapshot.active.id, role: "assistant", source: "block_tutor", presentation: "hint", text: hint! });
+      }
+      return await currentPublicState();
+    });
   });
 
   const submitEditor = async (blockId: string, text: string) => {
@@ -688,7 +793,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     return (await completeBlock(active.id)).state;
   });
 
-  const retry = async (failureId: string) => transact(async () => {
+  const retry = (failureId: string) => trackOrdinaryCommand(async () => transact(async () => {
     const failure = records.find((record): record is TutorFailure => record.type === "tutor_failed" && record.id === failureId);
     if (!failure) throw new WorkbookWorkflowCommandError(404, "Unknown tutor failure.");
     if (failure.operation === "reply") {
@@ -701,15 +806,15 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
         if (typeof reply !== "string" && reply.outcome === "complete-block") { await completeBlock(reply.blockId); return await currentPublicState(); }
         const textReply = requireTutorText(reply as string, "reply");
         const tutorMessage = await append({ type: "message", lessonId: failure.lessonId, blockId: failure.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: textReply, inReplyTo: learnerMessage.id }) as TimelineMessage;
-        if (active && active.lessonId === failure.lessonId && active.id === failure.blockId) await refreshBlockBriefing(active, tutorMessage.id);
+        if (active && active.lessonId === failure.lessonId && active.id === failure.blockId) void refreshBlockBriefing(active, tutorMessage.id);
       } catch { await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE }); }
     } else if (failure.operation === "hint") {
       await appendHintForActiveBlock(failure.blockId, failure.id);
     } else if (failure.operation === "briefing") {
       const active = activeDeclaredBlock();
-      if (active && active.lessonId === failure.lessonId && active.id === failure.blockId) await refreshBlockBriefing(active, failure.id);
+      if (active && active.lessonId === failure.lessonId && active.id === failure.blockId) void refreshBlockBriefing(active, failure.id);
     } else if (failure.operation === "restore") {
-      try { await mainTutor.restore(await mainContext()); restoringFailed = false; await requeueActiveAttempt(); }
+      try { await mainTutor.restore(await mainContext()); await requeueActiveAttempt(); }
       catch { await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: "restore", operation: "restore", publicMessage: TUTOR_UNAVAILABLE }); }
     } else if (failure.operation === "readiness" || failure.operation === "review") {
       await requeueActiveAttempt();
@@ -726,28 +831,43 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
       await requestCompletionSummary(failure.requestId);
     }
     return await currentPublicState();
-  });
+  }));
 
 
   return {
     start: async () => {
       if (records.length === 0) await transact(async () => { if (records.length === 0) await append({ type: "session_started" }); });
-      await transact(ensureActiveWorkAcceptance);
-      try { await mainTutor.restore(await mainContext()); await requeueActiveAttempt(); }
-      catch (error) {
-        restoringFailed = true;
-        log.info(`Workbook tutor restoration failed: ${error instanceof Error ? error.message : String(error)}`);
-        const active = activeOrderedBlock();
-        await transact(() => appendFailure({ lessonId: active?.lessonId ?? WORKBOOK_INTRODUCTION_BLOCK_ID, blockId: active?.id ?? WORKBOOK_INTRODUCTION_BLOCK_ID, requestId: "restore", operation: "restore", publicMessage: TUTOR_UNAVAILABLE }));
+      await transact(async () => { await recoverAcceptedActiveAttempt(); await ensureActiveWorkAcceptance(); });
+      try {
+        await mainTutor.restore(await mainContext());
+        await transact(async () => { if (!closed) await requeueActiveAttempt(); });
+      } catch (error) {
+        if (!closed) {
+          log.info(`Workbook tutor restoration failed: ${error instanceof Error ? error.message : String(error)}`);
+          const active = activeOrderedBlock();
+          await transact(() => appendFailure({ lessonId: active?.lessonId ?? WORKBOOK_INTRODUCTION_BLOCK_ID, blockId: active?.id ?? WORKBOOK_INTRODUCTION_BLOCK_ID, requestId: "restore", operation: "restore", publicMessage: TUTOR_UNAVAILABLE }));
+        }
       }
     },
-    close: async () => { closed = true; await Promise.allSettled([...reviewFinalizers]); },
+    close: async () => {
+      // New/queued ordinary commands observe `closed` when they enter either phase. Commands
+      // already awaiting a provider are drained here; their guarded finalizer rejects rather than
+      // appending into a closed workflow.
+      closed = true;
+      await Promise.allSettled([...ordinaryCommands, ...reviewFinalizers]);
+    },
     state: currentPublicState,
     timeline: () => publicTimeline(loaded, records),
     subscribe: (listener) => timeline.subscribe((record) => { const publicRecord = publicTimelineRecord(record, loaded); if (publicRecord) listener(publicRecord); }),
     activeObservedBlock,
     submitAttempt,
-    completeBlock: (blockId) => transact(() => completeBlock(blockId)),
+    completeBlock: (blockId) => trackOrdinaryCommand(async () => {
+      const result = await transact(() => completeBlock(blockId));
+      // A ready practice block is not exposed until its initial private briefing has settled, but
+      // the provider call happens after the transaction above has released the timeline.
+      await Promise.allSettled([...briefingFinalizers]);
+      return result;
+    }),
     reloadContent,
     sendMessage,
     appendHint,
