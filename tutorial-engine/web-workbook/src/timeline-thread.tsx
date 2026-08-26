@@ -10,6 +10,14 @@ type TimelineThreadRecord = PublicTimelineRecord | InternalTimelineRecord;
 
 const composerMaxHeightPx = 160;
 
+function isAuthoredCourseRecord(record: TimelineThreadRecord): record is TimelineMessageRecord {
+  return record.type === "message" && record.presentation === "course" && record.source === "authored";
+}
+
+function belongsToAuthoredBlock(record: TimelineThreadRecord, authored: TimelineMessageRecord): boolean {
+  return record.lessonId === authored.lessonId && record.blockId === authored.blockId;
+}
+
 function resizeComposerTextarea(textarea: HTMLTextAreaElement) {
   textarea.style.height = "auto";
   const nextHeight = Math.min(textarea.scrollHeight, composerMaxHeightPx);
@@ -101,15 +109,11 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index];
       if (!record) continue;
-      if (record.type === "message" && record.presentation === "course" && record.source === "authored") {
-        const following: TimelineThreadRecord[] = [];
-        let nextIndex = index + 1;
-        while (nextIndex < records.length) {
-          const next = records[nextIndex]!;
-          if (next.type === "message" && next.presentation === "course" && next.source === "authored") break;
-          if (("lessonId" in next ? next.lessonId : undefined) === record.lessonId && ("blockId" in next ? next.blockId : undefined) === record.blockId) following.push(next);
-          nextIndex += 1;
-        }
+      if (isAuthoredCourseRecord(record)) {
+        // A ready successor is authored as soon as this block's work is accepted, while this
+        // block remains active until the learner continues. Later conversation still belongs to
+        // this block, so collect it by its lifecycle identity rather than by the next course row.
+        const following = records.filter((candidate) => !isAuthoredCourseRecord(candidate) && belongsToAuthoredBlock(candidate, record));
         const active = recordMatchesActive(record);
         const transitionClass = record.blockId.startsWith("part--") || record.lessonId.startsWith("workbook:part:") && record.blockId === "__part__"
           ? " timeline-part-transition"
@@ -126,11 +130,10 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
           {renderContinuation?.(lastMessage)}
           {readyBlockIdSet.has(record.blockId) ? <div className="ready-successor-scroll-runway" aria-hidden="true" /> : null}
         </section>);
-        index = nextIndex - 1;
         continue;
       }
-      const hasPriorCourse = records.slice(0, index).some((candidate) => candidate.type === "message" && candidate.presentation === "course" && candidate.source === "authored" && "lessonId" in record && candidate.lessonId === record.lessonId && candidate.blockId === record.blockId);
-      if (!hasPriorCourse) nodes.push(renderConversationRecord(record));
+      const hasAuthoredBlock = records.some((candidate) => isAuthoredCourseRecord(candidate) && belongsToAuthoredBlock(record, candidate));
+      if (!hasAuthoredBlock) nodes.push(renderConversationRecord(record));
     }
     if (!nodes.some((node: any) => node?.props?.["data-active-block"] === "true")) nodes.push(...pendingEchoNodes, pendingThinkingNode);
     return nodes;

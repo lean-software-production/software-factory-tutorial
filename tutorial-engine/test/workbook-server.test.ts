@@ -3,10 +3,13 @@ import * as terminalModule from "../src/workbook/terminal.js";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { WebSocket } from "ws";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tutorialSessionStatePath, tutorialStatePath } from "../src/workbook/tutorial-state.js";
 import { SessionWorkspaceManager } from "../src/session-workspace.js";
 import { startWorkbookServer } from "../src/workbook/server.js";
+import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import type { ContentWatchFactory } from "../src/workbook/content-watch.js";
 import type { TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
 import type { Attempt } from "../src/workbook/attempts.js";
@@ -542,6 +545,41 @@ describe("workbook browser API", () => {
       expect(secondTutor.restores[0]!.records.filter((record) => record.type === "message")).toEqual(persistedTimeline!.filter((record) => record.type === "message"));
       expect((await postMessage(secondServer.url, { blockId: "workbook--introduction", text: "Still before the first block?" })).status).toBe(202);
     } finally { await secondServer.close(); }
+  });
+
+  it("renders active-block conversation after its ready successor was already revealed", async () => {
+    const dir = await fixture();
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });
+    try {
+      // Startup accepts the introduction and reveals the part preamble, but the introduction
+      // remains active until Continue. Its later conversation must not be swallowed by that row.
+      const replied = await postMessage(server.url, { blockId: "workbook--introduction", text: "Question for the active introduction." });
+      expect(replied.status).toBe(202);
+      const browserState = await replied.json() as any;
+      const timeline = browserState.timeline;
+      expect(timeline.map((record: any) => [record.source, record.blockId, record.text])).toEqual(expect.arrayContaining([
+        ["authored", "part--loop", expect.stringContaining("Part 1")],
+        ["learner", "workbook--introduction", "Question for the active introduction."],
+        ["main_tutor", "workbook--introduction", "Try the workspace-relative path."],
+      ]));
+
+      const continuationRecordIds: string[] = [];
+      const markup = renderToStaticMarkup(createElement(TimelineThread, {
+        records: timeline,
+        activeLessonId: "workbook--introduction",
+        activeBlockId: "workbook--introduction",
+        onSend: async () => undefined,
+        onRetry: async () => undefined,
+        renderContinuation: (record) => { continuationRecordIds.push(record.id); return null; },
+      }));
+
+      const reply = timeline.find((record: any) => record.source === "main_tutor" && record.blockId === "workbook--introduction");
+      expect(markup).toContain("Question for the active introduction.");
+      expect(markup).toContain("Try the workspace-relative path.");
+      expect(markup.indexOf("Question for the active introduction.")).toBeLessThan(markup.indexOf("Try the workspace-relative path."));
+      expect(markup.indexOf("Try the workspace-relative path.")).toBeLessThan(markup.indexOf("Part 1"));
+      expect(continuationRecordIds).toContain(reply.id);
+    } finally { await server.close(); }
   });
 
   it("retries a failed intro reply without adopting the newly active block context after continue", async () => {
