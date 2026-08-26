@@ -1,12 +1,10 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Markdown } from "./markdown.js";
+import type { PublicTimelineMessage, PublicTimelineRecord } from "../../src/workbook/public-contract.js";
 
-type TimelineMessageRecord = { type: "message"; id: string; sequence: number; at: string; lessonId: string; blockId: string; role: "assistant" | "user"; source: "authored" | "learner" | "main_tutor" | "block_tutor" | "tutor"; presentation: "course" | "chat" | "hint" | "review"; text: string; blockInView?: string };
-export type PublicTimelineRecord =
-  | TimelineMessageRecord
-  | { type: "tutor_failed"; id: string; sequence: number; at: string; lessonId: string; blockId: string; failureId: string; operation: string; publicMessage: string };
-type InternalTimelineRecord = { type: "block_tutor_briefed" | "block_tutor_readiness" | "block_summarized" | "lesson_summarized"; id: string; sequence: number; at: string; lessonId?: string; blockId?: string; text?: string };
-type TimelineThreadRecord = PublicTimelineRecord | InternalTimelineRecord;
+export type { PublicTimelineRecord };
+type TimelineMessageRecord = PublicTimelineMessage;
+type TimelineThreadRecord = PublicTimelineRecord;
 
 const composerMaxHeightPx = 160;
 

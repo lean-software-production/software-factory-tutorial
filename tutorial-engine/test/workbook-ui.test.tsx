@@ -60,7 +60,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
-import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, LessonView, completionAgeLabel, scrollActiveLessonIntoView, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress } from "../web-workbook/src/workbook-ui.js";
+import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, LessonView, completionAgeLabel, scrollActiveLessonIntoView, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
 import { lessonAnchorHref, lessonElementId } from "../src/workbook/lesson-links.js";
 
 const progress: Progress = {
@@ -149,6 +149,11 @@ function activeBlockProgress(block: { id: string; type: string }, overrides: Par
     activeBlockId: block.id,
     blocks: [{ id: block.id, type: block.type, ready: true, active: true, completed: false, verified: false, emerged: true, ...overrides } as any],
   };
+}
+
+// HTTP mocks use the same complete response shape the browser validates in production.
+function workbookState(progress: Progress): State {
+  return { workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: true, chapters: [chapter()], progress, adapter: {} };
 }
 
 let mountedRoot: Root | undefined;
@@ -921,7 +926,7 @@ describe("workbook lesson UI", () => {
   it("debounces editor-practice edits and posts only the latest text at the next revision", async () => {
     vi.useFakeTimers();
     const refresh = vi.fn();
-    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => ({ progress: activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any) }) }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any)) }));
     vi.stubGlobal("fetch", fetchMock);
     const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0 }), refresh }));
     const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']");
@@ -963,7 +968,7 @@ describe("workbook lesson UI", () => {
 
   it("continues submitting after a refreshed draft recreates the editor", async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => ({ progress: activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "waiting" } as any) }) }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "waiting" } as any)) }));
     vi.stubGlobal("fetch", fetchMock);
     const refresh = vi.fn();
     const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: "" } as any), refresh }));
@@ -986,7 +991,7 @@ describe("workbook lesson UI", () => {
 
   it("polls public state while an editor review is in flight and refreshes on completion", async () => {
     vi.useFakeTimers();
-    const unlockedState = { progress: activeEditorProgress({ active: false, completed: true, revision: 1, editorStatus: "unlocked", feedback: "Accepted." } as any) };
+    const unlockedState = workbookState(activeEditorProgress({ active: false, completed: true, revision: 1, editorStatus: "unlocked", feedback: "Accepted." } as any));
     const refresh = vi.fn();
     const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => unlockedState }));
     vi.stubGlobal("fetch", fetchMock);
@@ -1010,7 +1015,7 @@ describe("workbook lesson UI", () => {
 
   it("stops editor review polling when the active editor unmounts", async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => ({ progress: activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any) }) }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any)) }));
     vi.stubGlobal("fetch", fetchMock);
 
     await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 1, editorStatus: "reviewing" } as any), refresh: vi.fn() }));
@@ -2073,7 +2078,7 @@ describe("workbook lesson UI", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     const initialProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "reviewing" } } as any);
     const feedbackProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "feedback", feedback: "The command failed because the file path is wrong." } } as any);
-    const feedbackState = { progress: feedbackProgress } as any;
+    const feedbackState = workbookState(feedbackProgress);
     const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => feedbackState }));
     vi.stubGlobal("fetch", fetchMock);
     function Harness() {
@@ -2117,7 +2122,7 @@ describe("workbook lesson UI", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     const reviewingProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "reviewing" } } as any);
     const feedbackProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "feedback", feedback: "Delayed main-tutor feedback." } } as any);
-    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => ({ progress: fetchMock.mock.calls.length <= 120 ? reviewingProgress : feedbackProgress }) }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => workbookState(fetchMock.mock.calls.length <= 120 ? reviewingProgress : feedbackProgress) }));
     vi.stubGlobal("fetch", fetchMock);
     function Harness() {
       const [current, setCurrent] = useState(reviewingProgress);
@@ -2166,7 +2171,7 @@ describe("workbook lesson UI", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     const initialProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "reviewing" } } as any);
     const workingProgress = activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "working" } } as any);
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ progress: workingProgress }) })));
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => workbookState(workingProgress) })));
     function Harness() {
       const [current, setCurrent] = useState(initialProgress);
       return createElement(BlockView, { block: lesson.blocks[1]!, progress: current, refresh: (next: any) => setCurrent(next.progress) });

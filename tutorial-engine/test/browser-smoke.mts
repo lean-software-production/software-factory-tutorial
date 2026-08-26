@@ -8,23 +8,16 @@ import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, resolve } from "node:path";
+import type { PublicCompleteBlockResult, PublicWorkbookLesson, PublicWorkbookState } from "../src/workbook/public-contract.js";
 
 const webRoot = resolve(import.meta.dirname, "../dist/web-workbook");
 const mime: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" };
 
-type PublicState = {
-  workbook: { title: string };
-  introduction: string;
-  introductionComplete: boolean;
-  chapters: Array<{ id: string; title: string; part: string; partMarkdown: string; partNumber: number; lessonNumber: number; lesson?: unknown }>;
-  progress: { activeLessonId: string; activeBlockId: string; completedLessons: string[]; blocks: unknown[]; reflections: Record<string, string>; reflectionConversations: Record<string, unknown[]> };
-  adapter: { modelBackedHelp: boolean; note: string };
-};
-
-const lesson = {
+const lesson: PublicWorkbookLesson = {
   id: "01-smoke/01-current-rendering",
   title: "Smoke lesson",
   dek: "A current v2 workbook lesson.",
+  introduction: "This lesson opens with the current rendering contract.",
   durationMinutes: 5,
   outcomes: ["Render current workbook blocks."],
   blocks: [
@@ -33,7 +26,7 @@ const lesson = {
   ],
 };
 
-function state(stage: "intro" | "lesson" | "practice"): PublicState {
+function state(stage: "intro" | "lesson" | "practice"): PublicWorkbookState {
   const introductionComplete = stage !== "intro";
   const visibleLesson = introductionComplete ? lesson : undefined;
   return {
@@ -63,6 +56,10 @@ function sendJson(response: ServerResponse, body: unknown): void {
   response.end(JSON.stringify(body));
 }
 
+function completed(stage: "lesson" | "practice", navigationTarget: string): Extract<PublicCompleteBlockResult, { outcome: "completed" }> {
+  return { outcome: "completed", state: state(stage), navigationTarget };
+}
+
 async function readJson(request: IncomingMessage): Promise<unknown> {
   let body = "";
   for await (const chunk of request) body += String(chunk);
@@ -83,14 +80,14 @@ async function main(): Promise<void> {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (request.method === "GET" && url.pathname === "/api/workbook/state") return sendJson(response, state(current));
-    if (request.method === "POST" && url.pathname === "/api/workbook/introduction") { current = "lesson"; return sendJson(response, state(current)); }
+    if (request.method === "POST" && url.pathname === "/api/workbook/introduction") { current = "lesson"; return sendJson(response, completed(current, "lesson--01-smoke/01-current-rendering")); }
     if (request.method === "POST" && url.pathname === "/api/workbook/complete-block") {
       const body = await readJson(request) as { blockId?: string };
-      if (body.blockId === "workbook--introduction") { current = "lesson"; return sendJson(response, state(current)); }
+      if (body.blockId === "workbook--introduction") { current = "lesson"; return sendJson(response, completed(current, "lesson--01-smoke/01-current-rendering")); }
       if (body.blockId === "orientation") {
         resolveContinuation(body);
         current = "practice";
-        return sendJson(response, state(current));
+        return sendJson(response, completed(current, "practice"));
       }
       response.writeHead(400).end(`Unexpected complete-block request: ${JSON.stringify(body)}`);
       return;
