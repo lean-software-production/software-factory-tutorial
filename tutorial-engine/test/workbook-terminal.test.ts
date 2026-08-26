@@ -2,19 +2,21 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertDockerTerminalReady, dockerContainerUser, dockerExecArguments, dockerRunArguments, WorkbookTerminalManager, type SubmitAttempt, type TerminalClient, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
+import { assertDockerTerminalReady, createDockerPty, dockerContainerUser, dockerExecArguments, dockerRunArguments, WorkbookTerminalManager, type SubmitAttempt, type TerminalClient, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
 import { trustRuntimeProvision } from "../src/workbook/runtime-provision.js";
 
 class FakePty implements TerminalPty {
   writes: string[] = [];
   resizes: Array<[number, number]> = [];
   killed = false;
+  opens = 0;
   cwd = "";
   #data: ((data: string) => void)[] = [];
   #exit: ((event: { exitCode: number }) => void)[] = [];
   write(data: string): void { this.writes.push(data); }
   resize(cols: number, rows: number): void { this.resizes.push([cols, rows]); }
   kill(): void { this.killed = true; }
+  open(): void { this.opens += 1; }
   onData(callback: (data: string) => void): void { this.#data.push(callback); }
   onExit(callback: (event: { exitCode: number }) => void): void { this.#exit.push(callback); }
   emitData(data: string): void { this.#data.forEach((callback) => callback(data)); }
@@ -202,10 +204,11 @@ describe("WorkbookTerminalManager", () => {
     try {
       assertDockerTerminalReady(workspace);
       const args = await readFile(capture, "utf8");
-      expect(args).toMatch(/run\n-d\n--rm\n--name\nworkbook-terminal-preflight-/);
-      expect(args).toContain("exec\nworkbook-terminal-preflight-");
+      expect(args).toMatch(/run\n-d\n--rm\n--name\nworkbook-terminal-/);
+      expect(args).not.toContain("workbook-terminal-preflight-");
+      expect(args).toContain("exec\nworkbook-terminal-");
       expect(args).toContain("--input-type=module\n-e\n");
-      expect(args).toContain("rm\n-f\nworkbook-terminal-preflight-");
+      expect(args).toContain("rm\n-f\nworkbook-terminal-");
     } finally {
       if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
       if (previousKey === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = previousKey;
@@ -232,6 +235,40 @@ describe("WorkbookTerminalManager", () => {
     }
   });
 
+  it("starts and preflights the retained Docker container without opening an interactive shell", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "workbook-fake-docker-"));
+    const workspace = await mkdtemp(join(tmpdir(), "workbook-terminal-workspace-"));
+    tempDirs.push(directory, workspace);
+    const capture = join(directory, "docker-args");
+    const docker = join(directory, "docker");
+    await writeFile(docker, redactingFakeDocker);
+    await chmod(docker, 0o755);
+    const previousPath = process.env.PATH;
+    const previousKey = process.env.OPENCODE_API_KEY;
+    const previousCapture = process.env.WORKBOOK_TERMINAL_DOCKER_ARGS;
+    process.env.PATH = `${directory}:${previousPath}`;
+    process.env.OPENCODE_API_KEY = "<redacted>";
+    process.env.WORKBOOK_TERMINAL_DOCKER_ARGS = capture;
+    try {
+      const terminal = createDockerPty({ cwd: workspace, cols: 90, rows: 24 });
+      try {
+        const args = await readFile(capture, "utf8");
+        expect(args).toMatch(/run\n-d\n--rm\n--name\nworkbook-terminal-/);
+        expect(args).toContain("exec\nworkbook-terminal-");
+        expect(args).toContain("--input-type=module\n-e\n");
+        expect(args).not.toContain("exec\n-it\n");
+      } finally {
+        (terminal as any).stopContainer?.();
+      }
+      const afterDispose = await readFile(capture, "utf8");
+      expect(afterDispose).toContain("rm\n-f\nworkbook-terminal-");
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+      if (previousKey === undefined) delete process.env.OPENCODE_API_KEY; else process.env.OPENCODE_API_KEY = previousKey;
+      if (previousCapture === undefined) delete process.env.WORKBOOK_TERMINAL_DOCKER_ARGS; else process.env.WORKBOOK_TERMINAL_DOCKER_ARGS = previousCapture;
+    }
+  });
+
   it("starts a bare Bash prompt without resolving a container user", () => {
     expect(dockerExecArguments("workbook-terminal-test")).toEqual([
       "exec", "-it", "--env", "PS1=$ ", "--workdir", "/workspace", "workbook-terminal-test",
@@ -239,11 +276,18 @@ describe("WorkbookTerminalManager", () => {
     ]);
   });
 
-  it("starts the PTY in the canonical workspace without writing a command", () => {
+  it("prestarts the terminal in the canonical workspace without opening a shell or writing a command", () => {
     const { manager, ptys } = setup();
+    manager.start();
+    expect(ptys).toHaveLength(1);
+    expect(ptys[0]?.cwd).toBe("/tmp/workspace");
+    expect(ptys[0]?.opens).toBe(0);
+    expect(ptys[0]?.writes).toEqual([]);
+
     const client = new FakeClient();
     expect(manager.attach(client)).toBe(true);
-    expect(ptys[0]?.cwd).toBe("/tmp/workspace");
+    expect(ptys).toHaveLength(1);
+    expect(ptys[0]?.opens).toBe(1);
     expect(ptys[0]?.writes).toEqual([]);
   });
 

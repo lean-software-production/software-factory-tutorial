@@ -93,11 +93,12 @@ async function writeBlock(lessonDir: string, id: string, type: string, title: st
 
 class ServerFakePty implements TerminalPty {
   writes: string[] = [];
+  killed = false;
   data?: (data: string) => void;
   exit?: (event: { exitCode: number }) => void;
   write(data: string): void { this.writes.push(data); this.data?.(`\r\nran:${data}`); }
   resize(): void {}
-  kill(): void {}
+  kill(): void { this.killed = true; }
   onData(callback: (data: string) => void): void { this.data = callback; }
   onExit(callback: (event: { exitCode: number }) => void): void { this.exit = callback; }
 }
@@ -453,12 +454,14 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("starts embedded terminals in the learner workspace with session-local Git", async () => {
+  it("prestarts embedded terminals in the learner workspace with session-local Git and disposes them on close", async () => {
     const { dir, session } = await sessionFixture();
     const pty = new ServerFakePty();
     let terminalOptions: any;
     const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
     const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: (options) => { terminalOptions = options; return pty; }, terminalDebounceMs: 1, mainTutor: tutor, blockTutor: new FakeBlockTutor() });
+    expect(terminalOptions.cwd).toBe(resolve(session.workspaceRoot));
+    expect(pty.writes).toEqual([]);
     try {
       await introduceAndOpenEditor(server.url);
       await postEditor(server.url, { blockId: "edit-answer", text: "draft" });
@@ -467,10 +470,10 @@ describe("workbook browser API", () => {
       const ws = await connect(server.url);
       await waitMs(20);
       ws.close();
-      expect(terminalOptions.cwd).toBe(resolve(session.workspaceRoot));
       await expect(access(resolve(session.workspaceRoot, ".git"))).resolves.toBeUndefined();
       await expect(access(resolve(dir, ".git"))).rejects.toThrow();
     } finally { await server.close(); }
+    expect(pty.killed).toBe(true);
   });
 
   it("rejects an explicit invalid runtime provision source instead of silently falling back", async () => {
@@ -1329,13 +1332,14 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("enables the embedded terminal in the production server path", async () => {
+  it("enables and prestarts the embedded terminal in the production server path", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty();
-    const ready = vi.spyOn(terminalModule, "assertDockerTerminalReady").mockImplementation(() => {});
-    vi.spyOn(terminalModule, "createDockerPty").mockImplementation(() => pty);
+    const create = vi.spyOn(terminalModule, "createDockerPty").mockImplementation(() => pty);
     const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." }, { outcome: "accepted", message: "Terminal accepted." });
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalDebounceMs: 1, mainTutor: tutor, blockTutor: new FakeBlockTutor() });
+    expect(create).toHaveBeenCalledOnce();
+    expect(pty.writes).toEqual([]);
     try {
       await introduceAndOpenEditor(server.url);
       await acceptEditor(server.url, tutor);
@@ -1345,13 +1349,11 @@ describe("workbook browser API", () => {
       await submitted;
       ws.close();
       await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.status === "accepted", "default terminal accepted");
-      expect(ready).toHaveBeenCalledOnce();
     } finally { await server.close(); }
   });
 
   it("refuses unsafe embedded-terminal hosts and origins", async () => {
     const dir = await fixture();
-    vi.spyOn(terminalModule, "assertDockerTerminalReady").mockImplementation(() => {});
     await expect(startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), host: "0.0.0.0", port: 0, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() })).rejects.toThrow(/loopback/i);
 
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => new ServerFakePty(), mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });

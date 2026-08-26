@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import * as pty from "node-pty";
@@ -20,6 +20,8 @@ export interface TerminalPty {
   kill(): void;
   onData(callback: (data: string) => void): void;
   onExit(callback: (event: { exitCode: number; signal?: number }) => void): void;
+  /** Activate an already-prepared terminal without writing learner bytes. */
+  open?(): void;
 }
 
 export interface TerminalPtyOptions { cwd: string; cols: number; rows: number; runtimeProvision?: TrustedRuntimeProvision; }
@@ -87,23 +89,9 @@ export function requireOpenCodeApiKey(): string {
 }
 
 export function assertDockerTerminalReady(workspace: string | { workspace: string; runtimeProvision?: TrustedRuntimeProvision } = process.cwd()): void {
-  const apiKey = requireOpenCodeApiKey();
   const roots = typeof workspace === "string" ? { workspace, runtimeProvision: NO_RUNTIME_PROVISION } : { workspace: workspace.workspace, runtimeProvision: workspace.runtimeProvision ?? NO_RUNTIME_PROVISION };
-  const available = spawnSync("docker", ["info"], { stdio: "ignore" });
-  if (available.error || available.status !== 0) throw new Error("Docker must be running before starting the workbook terminal.");
-  const image = spawnSync("docker", ["image", "inspect", WORKBOOK_TERMINAL_IMAGE], { stdio: "ignore" });
-  if (image.error || image.status !== 0) throw new Error(`Docker image ${WORKBOOK_TERMINAL_IMAGE} is missing. Run npm run --workspace=tutorial-engine build:workbook-terminal.`);
-  prepareDefaultWritableWorkspaceDirectories(roots.workspace);
-  const name = `workbook-terminal-preflight-${randomUUID()}`;
-  try {
-    const args = dockerRunArguments({ workspace: roots.workspace, runtimeProvision: roots.runtimeProvision, name, apiKey });
-    args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
-    execFileSync("docker", args, { stdio: "ignore" });
-    const preflight = spawnSync("docker", ["exec", name, "node", "--input-type=module", "-e", PI_PREFLIGHT], { stdio: "ignore", timeout: 20_000 });
-    if (preflight.error || preflight.status !== 0) throw new Error(`Could not authenticate Pi with ${OPENCODE_API_KEY_ENV} inside the workbook terminal.`);
-  } finally {
-    try { execFileSync("docker", ["rm", "-f", name], { stdio: "ignore" }); } catch { /* preflight cleanup is best effort. */ }
-  }
+  const terminal = createDockerPty({ cwd: roots.workspace, runtimeProvision: roots.runtimeProvision, cols: 90, rows: 24 }) as DockerPty;
+  terminal.stopContainer?.();
 }
 
 function bindMount(src: string, dst: string, readonly = false): string {
@@ -147,6 +135,18 @@ function workspaceChildForMount(workspace: string, child: string): string | unde
   return safeExistingChildForMount(workspace, child, "workbook workspace");
 }
 
+function assertDockerDaemonAndImage(): void {
+  try { execFileSync("docker", ["info"], { stdio: "ignore" }); }
+  catch { throw new Error("Docker must be running before starting the workbook terminal."); }
+  try { execFileSync("docker", ["image", "inspect", WORKBOOK_TERMINAL_IMAGE], { stdio: "ignore" }); }
+  catch { throw new Error(`Docker image ${WORKBOOK_TERMINAL_IMAGE} is missing. Run npm run --workspace=tutorial-engine build:workbook-terminal.`); }
+}
+
+function preflightPiAuthentication(name: string): void {
+  try { execFileSync("docker", ["exec", name, "node", "--input-type=module", "-e", PI_PREFLIGHT], { stdio: "ignore", timeout: 20_000 }); }
+  catch { throw new Error(`Could not authenticate Pi with ${OPENCODE_API_KEY_ENV} inside the workbook terminal.`); }
+}
+
 export function dockerRunArguments(options: DockerRunArgumentsOptions): string[] {
   const workspace = resolve(options.workspace);
   const provision = options.runtimeProvision ?? NO_RUNTIME_PROVISION;
@@ -168,18 +168,58 @@ export function dockerExecArguments(name: string): string[] {
 
 /** Starts a hardened, per-practice container; browser bytes can only reach docker exec. */
 export function createDockerPty(options: TerminalPtyOptions): TerminalPty {
-  const workspace = resolve(options.cwd);
-  prepareDefaultWritableWorkspaceDirectories(workspace);
-  const name = `workbook-terminal-${randomUUID()}`;
-  const args = dockerRunArguments({ workspace, runtimeProvision: options.runtimeProvision, name, apiKey: requireOpenCodeApiKey() });
-  args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
-  try { execFileSync("docker", args, { stdio: "ignore" }); }
-  catch (error) { throw new Error(`Could not start isolated terminal container: ${error instanceof Error ? error.message : String(error)}`); }
-  const instance = pty.spawn("docker", dockerExecArguments(name), {
-    name: "xterm-256color", cols: options.cols, rows: options.rows, cwd: workspace, env: { ...process.env, TERM: "xterm-256color" }
-  }) as DockerPty;
-  instance.stopContainer = () => { try { execFileSync("docker", ["rm", "-f", name], { stdio: "ignore" }); } catch { /* removal is best effort; --rm cleans a stopped container. */ } };
-  return instance;
+  return new PreparedDockerPty(options);
+}
+
+class PreparedDockerPty implements DockerPty {
+  readonly #workspace: string;
+  readonly #runtimeProvision: TrustedRuntimeProvision | undefined;
+  readonly #name = `workbook-terminal-${randomUUID()}`;
+  #cols: number;
+  #rows: number;
+  #shell: TerminalPty | undefined;
+  readonly #dataCallbacks: Array<(data: string) => void> = [];
+  readonly #exitCallbacks: Array<(event: { exitCode: number; signal?: number }) => void> = [];
+
+  constructor(options: TerminalPtyOptions) {
+    this.#workspace = resolve(options.cwd);
+    this.#runtimeProvision = options.runtimeProvision;
+    this.#cols = options.cols;
+    this.#rows = options.rows;
+    const apiKey = requireOpenCodeApiKey();
+    assertDockerDaemonAndImage();
+    prepareDefaultWritableWorkspaceDirectories(this.#workspace);
+    const args = dockerRunArguments({ workspace: this.#workspace, runtimeProvision: this.#runtimeProvision, name: this.#name, apiKey });
+    args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
+    try { execFileSync("docker", args, { stdio: "ignore" }); }
+    catch (error) { throw new Error(`Could not start isolated terminal container: ${error instanceof Error ? error.message : String(error)}`); }
+    try { preflightPiAuthentication(this.#name); }
+    catch (error) { this.stopContainer(); throw error; }
+  }
+
+  open(): void {
+    if (this.#shell) return;
+    const shell = pty.spawn("docker", dockerExecArguments(this.#name), {
+      name: "xterm-256color", cols: this.#cols, rows: this.#rows, cwd: this.#workspace, env: { ...process.env, TERM: "xterm-256color" }
+    }) as TerminalPty;
+    this.#shell = shell;
+    shell.onData((data) => { for (const callback of this.#dataCallbacks) callback(data); });
+    shell.onExit((event) => {
+      this.#shell = undefined;
+      for (const callback of this.#exitCallbacks) callback(event);
+    });
+  }
+
+  write(data: string): void { this.open(); this.#shell?.write(data); }
+  resize(cols: number, rows: number): void {
+    this.#cols = cols;
+    this.#rows = rows;
+    this.#shell?.resize(cols, rows);
+  }
+  kill(): void { this.#shell?.kill(); this.#shell = undefined; }
+  stopContainer(): void { this.kill(); try { execFileSync("docker", ["rm", "-f", this.#name], { stdio: "ignore" }); } catch { /* removal is best effort; --rm cleans a stopped container. */ } }
+  onData(callback: (data: string) => void): void { this.#dataCallbacks.push(callback); }
+  onExit(callback: (event: { exitCode: number; signal?: number }) => void): void { this.#exitCallbacks.push(callback); }
 }
 
 /**
@@ -221,12 +261,17 @@ export class WorkbookTerminalManager {
     this.#maxTranscriptBytes = options.maxTranscriptBytes ?? DEFAULT_MAX_TRANSCRIPT_BYTES;
   }
 
+  start(): void { this.#ensurePty(); }
+
   attach(client: TerminalClient): boolean {
     if (this.#client) return false;
     this.#client = client;
-    try { this.#ensurePty(); }
+    try { this.#ensurePty(); this.#pty?.open?.(); }
     catch (error) {
       this.#client = undefined;
+      const shell = this.#pty as DockerPty | undefined;
+      shell?.kill(); shell?.stopContainer?.();
+      this.#pty = undefined;
       this.#log.info(`Embedded terminal could not start: ${error instanceof Error ? error.message : String(error)}`);
       client.send(JSON.stringify({ type: "terminal-error", message: "The embedded terminal could not start on this machine. Check that Docker is running and the workbook terminal image is built, then refresh." }));
       return true;
@@ -298,7 +343,8 @@ export class WorkbookTerminalManager {
     });
     instance.onExit(({ exitCode, signal }) => {
       this.#client?.send(JSON.stringify({ type: "exit", exitCode, signal }));
-      this.#pty = undefined;
+      (instance as DockerPty).stopContainer?.();
+      if (this.#pty === instance) this.#pty = undefined;
     });
   }
 

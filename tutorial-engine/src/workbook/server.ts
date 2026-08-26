@@ -9,7 +9,7 @@ import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 import { project, type BlockProgress } from "./events.js";
 import { INTRODUCTION_BLOCK_ID, INTRODUCTION_LESSON_ID, LESSON_FRAME_BLOCK_ID, PART_BLOCK_ID, authoredBlockText, authoredIntroductionText, authoredLessonFrameText, authoredPartText, partLessonId } from "./pi-history.js";
 import { WORKBOOK_COMPLETE_ANCHOR_ID, WORKBOOK_INTRODUCTION_BLOCK_ID, blockText, buildWorkbookBlockStream, declaredBlockId, declaredSourceFromBlockId, successorAnchor, type AnchorId, type BlockId, type DeclaredWorkbookBlock, type OrderedWorkbookBlock } from "./workbook-blocks.js";
-import { assertDockerTerminalReady, createDockerPty, requireOpenCodeApiKey, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalPtyFactory } from "./terminal.js";
+import { createDockerPty, requireOpenCodeApiKey, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalPtyFactory } from "./terminal.js";
 import { NO_RUNTIME_PROVISION, trustRuntimeProvision, type RuntimeProvisionProfile, type TrustedRuntimeProvision } from "./runtime-provision.js";
 import { submitReflectionAttempt } from "./reflection.js";
 import { promoteCurrentEditorAttempt, resolveEditorTarget } from "./editor.js";
@@ -357,7 +357,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const embeddedTerminalEnabled = options.embeddedTerminal ?? true;
   const host = options.host ?? LOOPBACK_HOST;
   if (embeddedTerminalEnabled && !isLoopbackHost(host)) throw new Error("The embedded terminal can only be enabled on a loopback host; it exposes an isolated container shell.");
-  if (embeddedTerminalEnabled) { requireOpenCodeApiKey(); if (!options.terminalPtyFactory) assertDockerTerminalReady({ workspace: learnerWorkspace, runtimeProvision: runtime.runtimeProvision }); }
+  if (embeddedTerminalEnabled) requireOpenCodeApiKey();
 
   const timeline = new WorkbookTimeline({ stateRoot: runtime.sessionRoot });
   const attempts = new AttemptStore({ stateRoot: runtime.sessionRoot });
@@ -624,6 +624,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     return active?.block.type === "terminal-practice" ? { lessonId: active.lessonId, blockId: active.id, command: active.block.markdown, context: active.block.markdown, expectedObservation: active.block.tutor } : undefined;
   };
   const terminal = embeddedTerminalEnabled ? new WorkbookTerminalManager({ workspace: learnerWorkspace, runtimeProvision: runtime.runtimeProvision, getActiveBlock: activeObservedBlock, submitAttempt: async (input) => { await submitAttempt(input); }, ptyFactory: options.terminalPtyFactory ?? createDockerPty, debounceMs: options.terminalDebounceMs, logger: log }) : undefined;
+  try { terminal?.start(); }
+  catch (error) { terminal?.dispose(); mainTutor.dispose(); throw error; }
 
   const appendHintForActiveBlock = async (blockId: string, requestId: string): Promise<"ok" | "inactive"> => {
     const active = activeDeclaredBlock();
