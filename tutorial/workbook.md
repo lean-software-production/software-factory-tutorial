@@ -23,17 +23,20 @@ parts:
 
 Welcome! 👋
 
-We're going to build our own software factory, step by step, from fundamental building blocks.
+In this tutorial, we're going to build our own little software factory, step by step,
+from fundamental building blocks.
+
+Software factories can take on many forms, and deliver a variety of products. The most
+obvious one is working features, but that is [not the place to start](https://web.navan.dev/posts/2026-05-06-how-to-build-your-own-software-factory.html#what-are-you-manufacturing).
+
+Here are some other examples of things you can build software factories to produce:
+
+* automatically upgrade dependencies and frameworks in your codebase
+* proactively seek security vulnerabilities and patch them
+* port a library from Go to Rust
+* discover, triage and fix flickering tests
+
+Here, we're going to build a factory that refactors a codebase.
 
 We'll start out in **part 1** by running each piece of the factory by hand, then we'll plug
 things together into an automated assembly line in **part 2**.
-
-Here is the route:
-
-- **Part 1 — The validation loop.** Run an agent by hand, then build a doer and a validator that
-  check each other's work, and close the loop so a failing verdict sends the doer back around.
-- **Part 2 — Build the factory.** Join that loop into an ordered line, give it branching, a
-  record, a watcher, a way to ask it questions and talk to a running station, and finish by
-  naming what you built and what is still yours to judge.
-
-Ready to get started?

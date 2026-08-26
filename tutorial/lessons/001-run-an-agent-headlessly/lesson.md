@@ -10,7 +10,6 @@ blocks:
   - run-supplied-command
   - change-job
   - reflection
-  - transition
 ---
 
 # Run a headless agent
@@ -32,7 +31,7 @@ gemini -p "What is the capital of france"
 pi -p "What is the capital of france"
 ```
 
-Here's [Claude's docs](https://code.claude.com/docs/en/headless), the [Codex CLI reference](https://developers.openai.com/codex/cli/reference/), the [Gemini CLI documentation](https://geminicli.com/docs/cli/) and the [Pi coding agent README](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
+Here's [Claude's docs](https://code.claude.com/docs/en/headless), the [Codex exec CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-exec) the [Gemini CLI documentation for headless mode](https://geminicli.com/docs/cli/tutorials/automation) and the [Pi coding agent's print mode docs](https://github.com/earendil-works/pi/tree/main/packages/coding-agent#modes).
 
 For this tutorial we'll use Pi, because as an independent open-source project it allows us to choose
 a model from any provider.
