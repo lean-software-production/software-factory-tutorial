@@ -282,6 +282,20 @@ describe("MainWorkbookTutor", () => {
     await expect(tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("a-5", "reflection"), privateGuidance: "Follow up until the learner distinguishes public from private guidance." })).resolves.toEqual({ outcome: "feedback", message: "Please add the missing distinction in learner-visible terms." });
   });
 
+  it("records a usable block summary when Pi reports a short context needs no compaction", async () => {
+    const session = new FakeSession({ systemPrompt: "", customTools: [], tools: [], history: { summaries: [], turns: [] } satisfies MainTutorHistoryProjection });
+    const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", sessionFactory: async () => session });
+    session.compactError = new Error("Nothing to compact (session too small)");
+    const records: WorkbookTimelineRecord[] = [
+      { id: "accepted-1", sequence: 1, at: "2026-08-21T00:00:01.000Z", type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "a-1", version: 1, kind: "reflection", summary: "You distinguished the tutor from the validator." }
+    ];
+
+    await expect(tutor.summarizeBlock({ records, lessonId: "lesson", blockId: "block", coveredThroughId: "complete-1" })).resolves.toBe("Completed workbook block lesson/block. Accepted evidence: You distinguished the tutor from the validator.");
+
+    session.compactError = new Error("compaction provider unavailable");
+    await expect(tutor.summarizeBlock({ records, lessonId: "lesson", blockId: "block", coveredThroughId: "complete-2" })).rejects.toThrow("compaction provider unavailable");
+  });
+
   it("rejects empty material review feedback instead of inventing generic feedback", async () => {
     const session = new FakeSession({ systemPrompt: "", customTools: [], tools: [], history: { summaries: [], turns: [] } satisfies MainTutorHistoryProjection });
     const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", sessionFactory: async () => session });

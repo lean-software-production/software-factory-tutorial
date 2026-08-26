@@ -58,6 +58,7 @@ const ACCEPT_TOOL_NAME = "accept_current_attempt";
 const WORKING_TOOL_NAME = "mark_attempt_still_working";
 const COMPLETE_BLOCK_TOOL_NAME = "completeBlock";
 const FALLBACK_ACCEPTED = "Accepted — this attempt satisfies the block.";
+const NOTHING_TO_COMPACT = "Nothing to compact (session too small)";
 
 type PiSessionMessage = Parameters<ReturnType<typeof SessionManager.inMemory>["appendMessage"]>[0];
 type PiUserMessage = Extract<PiSessionMessage, { role: "user" }>;
@@ -124,6 +125,19 @@ function publicText(text: string): string {
 function acceptedText(text: string): string {
   const message = text.trim();
   return message ? message.slice(0, 1_000) : FALLBACK_ACCEPTED;
+}
+
+function isNothingToCompactError(error: unknown): boolean {
+  // Pi 0.84 exposes this expected manual-compaction no-op as a plain Error, not a typed result.
+  return error instanceof Error && error.message === NOTHING_TO_COMPACT;
+}
+
+function shortContextBlockSummary(input: MainTutorContext & { lessonId: string; blockId: string }): string {
+  const accepted = [...input.records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }> =>
+    record.type === "attempt_accepted" && record.lessonId === input.lessonId && record.blockId === input.blockId);
+  const acceptedEvidence = accepted?.summary.trim();
+  const prefix = `Completed workbook block ${input.lessonId}/${input.blockId}.`;
+  return acceptedEvidence ? `${prefix} Accepted evidence: ${acceptedEvidence}`.slice(0, 1_000) : prefix;
 }
 
 function requiredText(text: string, label: string): string {
@@ -315,8 +329,13 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
   summarizeBlock(input: MainTutorContext & { lessonId: string; blockId: string; coveredThroughId: string }): Promise<string> {
     return this.#enqueue(async () => {
       const session = await this.#ensureSession(input);
-      const result = await session.compact(`Summarize only completed workbook block ${input.lessonId}/${input.blockId} through ${input.coveredThroughId}. Retain its goal, displayed course idea, accepted evidence in concise form, and material learner feedback. Do not claim filesystem, shell, network, or workspace observations.`);
-      return result.summary;
+      try {
+        const result = await session.compact(`Summarize only completed workbook block ${input.lessonId}/${input.blockId} through ${input.coveredThroughId}. Retain its goal, displayed course idea, accepted evidence in concise form, and material learner feedback. Do not claim filesystem, shell, network, or workspace observations.`);
+        return result.summary;
+      } catch (error) {
+        if (isNothingToCompactError(error)) return shortContextBlockSummary(input);
+        throw error;
+      }
     });
   }
 
