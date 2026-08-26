@@ -57,7 +57,7 @@ export async function runWorkbookCli(argv: readonly string[], dependencies: Work
     ? await resolveSession(parsed.options.target, parsed.options.session, runtimeProvision)
     : await resolveSession(parsed.options.target, parsed.options.session);
   for (const line of sessionLaunchLines(session, parsed.options.session !== undefined)) writeLine(line);
-  const server = await startServer({ target: session.contentRoot, session, port: parsed.options.port, host: parsed.options.host, webRoot: resolve(packageDirectory, "dist/web-workbook"), logger: log, embeddedTerminal: true });
+  const server = await startServer({ target: session.contentRoot, session, port: parsed.options.port, host: parsed.options.host, webRoot: resolve(packageDirectory, "dist/web-workbook"), logger: log, embeddedTerminal: true, watchContent: parsed.options.watch });
   if (!parsed.options.noOpen) {
     const open = dependencies.browserCommand ?? browserCommand;
     const spawnProcess = dependencies.spawnBrowser ?? spawn;

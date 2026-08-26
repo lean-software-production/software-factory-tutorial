@@ -18,6 +18,7 @@ import { FastWorkbookBlockTutor, type WorkbookBlockTutor } from "./block-tutor.j
 import { DefaultMainWorkbookTutor, type MainTutorContext, type MainWorkbookTutor, type TutorDecision } from "./tutor.js";
 import { tutorialStatePath } from "./tutorial-state.js";
 import { WorkbookTimeline, type BlockTutorReadiness, type TimelineMessage, type TutorFailure, type WorkbookTimelineRecord } from "./timeline.js";
+import { watchWorkbookContent, type ContentWatch, type ContentWatchFactory } from "./content-watch.js";
 import type { EditorPracticeBlock, WorkbookBlock, WorkbookLesson } from "./contract.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
@@ -28,7 +29,7 @@ const REVIEW_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please try a
 const TUTOR_UNAVAILABLE = "The tutor is temporarily unavailable. Please retry.";
 
 export interface WorkbookRuntimeDescriptor { contentRoot: string; sessionRoot: string; workspaceRoot: string; runtimeProvision?: TrustedRuntimeProvision; }
-export interface WorkbookServerOptions { target: string; webRoot: string; session?: WorkbookRuntimeDescriptor; runtimeProvision?: RuntimeProvisionProfile; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; mainTutor?: MainWorkbookTutor; blockTutor?: WorkbookBlockTutor; }
+export interface WorkbookServerOptions { target: string; webRoot: string; session?: WorkbookRuntimeDescriptor; runtimeProvision?: RuntimeProvisionProfile; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; mainTutor?: MainWorkbookTutor; blockTutor?: WorkbookBlockTutor; watchContent?: boolean; contentWatchFactory?: ContentWatchFactory; contentWatchDebounceMs?: number; }
 export interface StartedWorkbookServer { url: string; port: number; host: string; close(): Promise<void>; }
 
 type PublicCheckpoint = {
@@ -329,7 +330,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const log = options.logger ?? createTutorialLogger();
   await access(resolve(options.webRoot, "index.html"));
   const runtime = await resolveRuntime(options);
-  const loaded = await loadWorkbook(runtime.contentRoot);
+  let loaded = await loadWorkbook(runtime.contentRoot);
+  let stream = buildWorkbookBlockStream(loaded);
   const learnerWorkspace = runtime.workspaceRoot;
   const embeddedTerminalEnabled = options.embeddedTerminal ?? true;
   const host = options.host ?? LOOPBACK_HOST;
@@ -344,6 +346,10 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   let closed = false;
   let restoringFailed = false;
   const reviewFinalizers = new Set<Promise<unknown>>();
+  let reloadGeneration = 0;
+  let contentWatch: ContentWatch | undefined;
+  let contentReloads: Promise<void> = Promise.resolve();
+  const sseClients = new Set<ServerResponse>();
 
   const append = async (input: Parameters<WorkbookTimeline["append"]>[0]): Promise<WorkbookTimelineRecord> => {
     const record = await timeline.appendWithinRun(input);
@@ -351,7 +357,17 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     return record;
   };
   const transact = <T>(operation: () => Promise<T>): Promise<T> => timeline.run(operation);
-  const stream = buildWorkbookBlockStream(loaded);
+  const sendSse = (response: ServerResponse, event: string, data: unknown): void => {
+    if (!response.destroyed) response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  const broadcastSse = (event: string, data: unknown): void => {
+    for (const client of sseClients) sendSse(client, event, data);
+  };
+  const publicReloadError = (error: unknown): string => {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.replace(/\s+/g, " ").trim().slice(0, 500) || "The workbook content could not be loaded yet.";
+  };
+  const generationIsCurrent = (generation: number): boolean => !closed && generation === reloadGeneration;
   const authoredMessageExists = (lessonId: string, blockId: string): boolean => records.some((record) => record.type === "message" && record.source === "authored" && record.lessonId === lessonId && record.blockId === blockId);
   const currentWorkbookProjection = (source = records) => projectWorkbookBlocks(stream, source);
   const activeOrderedBlock = (source = records) => currentWorkbookProjection(source).current;
@@ -428,11 +444,14 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   };
   const refreshBlockBriefing = async (active: DeclaredWorkbookBlock, coveredThroughId: string, options: { silentFailure?: boolean } = {}): Promise<void> => {
     if (!blockSupportsHints(active.block)) return;
+    const generation = reloadGeneration;
     try {
       const context = await activeBlockContext();
       const text = requireTutorText(await mainTutor.prepareBlockBriefing({ ...(await mainContext()), lessonId: active.lessonId, blockId: active.id, activeContext: context }), "briefing");
+      if (!generationIsCurrent(generation)) return;
       await append({ type: "block_tutor_briefed", lessonId: active.lessonId, blockId: active.id, text, coveredThroughId });
     } catch (error) {
+      if (!generationIsCurrent(generation)) return;
       log.info(`Workbook tutor briefing failed for ${active.lessonId}/${active.id}: ${error instanceof Error ? error.message : String(error)}`);
       if (!options.silentFailure) await appendFailure({ lessonId: active.lessonId, blockId: active.id, requestId: coveredThroughId, operation: "briefing", publicMessage: TUTOR_UNAVAILABLE });
     }
@@ -451,8 +470,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const trackFinalizer = (finalizer: Promise<unknown>): void => {
     reviewFinalizers.add(finalizer); void finalizer.finally(() => reviewFinalizers.delete(finalizer));
   };
-  const finishReview = async (attempt: Attempt, privateGuidance: string): Promise<void> => {
-    if (closed) return;
+  const finishReview = async (attempt: Attempt, privateGuidance: string, generation = reloadGeneration): Promise<void> => {
+    if (!generationIsCurrent(generation)) return;
     const activeBeforeAssessment = activeDeclaredBlock();
     const currentBeforeAssessment = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
     if (!activeBeforeAssessment || activeBeforeAssessment.lessonId !== attempt.lessonId || activeBeforeAssessment.id !== attempt.blockId || !currentBeforeAssessment || currentBeforeAssessment.id !== attempt.id || !isEvaluatedBlock(activeBeforeAssessment.block) || !evidenceMatchesBlock(currentBeforeAssessment.evidence, activeBeforeAssessment.block)) return;
@@ -464,7 +483,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         if (!context) return;
         const advice = await blockTutor.assessTerminal({ context, attempt: currentBeforeAssessment });
         const quickCoachFinalizer = transact(async () => {
-          if (closed) return { continueToMain: false as const, readiness: undefined };
+          if (!generationIsCurrent(generation)) return { continueToMain: false as const, readiness: undefined };
           const active = activeDeclaredBlock();
           const current = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
           if (!active || active.lessonId !== attempt.lessonId || active.id !== attempt.blockId || !current || current.id !== attempt.id || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(current.evidence, active.block)) return { continueToMain: false as const, readiness: undefined };
@@ -481,11 +500,11 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         });
         reviewFinalizers.add(quickCoachFinalizer); void quickCoachFinalizer.finally(() => reviewFinalizers.delete(quickCoachFinalizer));
         const quickCoach = await quickCoachFinalizer;
-        if (!quickCoach.continueToMain || closed) return;
+        if (!quickCoach.continueToMain || !generationIsCurrent(generation)) return;
         readiness = quickCoach.readiness;
       } catch (error) {
         log.info(`Workbook terminal quick coach unavailable for ${attempt.lessonId}/${attempt.blockId}: ${error instanceof Error ? error.message : String(error)}`);
-        if (closed) return;
+        if (!generationIsCurrent(generation)) return;
       }
     }
 
@@ -493,7 +512,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     try { decision = await mainTutor.review({ ...(await mainContext()), attempt: currentBeforeAssessment, privateGuidance, readiness }); }
     catch (error) {
       const failure = transact(async () => {
-        if (closed) return;
+        if (!generationIsCurrent(generation)) return;
         log.info(`Workbook tutor review failed for ${attempt.lessonId}/${attempt.blockId}: ${error instanceof Error ? error.message : String(error)}`);
         const feedback = await attempts.markFeedback(attempt.id, REVIEW_FAILURE_FEEDBACK);
         if (feedback) await appendFailure({ lessonId: feedback.lessonId, blockId: feedback.blockId, requestId: feedback.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK });
@@ -503,7 +522,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     }
 
     const finalizer = transact(async () => {
-      if (closed) return;
+      if (!generationIsCurrent(generation)) return;
       const active = activeDeclaredBlock();
       const current = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
       if (!active || active.lessonId !== attempt.lessonId || active.id !== attempt.blockId || !current || current.id !== attempt.id || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(current.evidence, active.block)) return;
@@ -643,17 +662,61 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     return { outcome: "completed", state: await currentPublicState(), navigationTarget: successorAnchor(stream, requested.id) };
   };
 
+  const reloadContent = async (): Promise<void> => {
+    if (closed) return;
+    let candidate: LoadedWorkbook;
+    try {
+      candidate = await loadWorkbook(runtime.contentRoot);
+    } catch (error) {
+      const message = publicReloadError(error);
+      log.info(`Workbook content reload failed: ${message}`);
+      broadcastSse("content-reload-error", { message });
+      return;
+    }
+    await transact(async () => {
+      if (closed) return;
+      reloadGeneration += 1;
+      loaded = candidate;
+      stream = buildWorkbookBlockStream(loaded);
+      await attempts.resetPresentationState();
+      await timeline.resetWithinRun();
+      records = [];
+      await append({ type: "session_started" });
+      await ensureActiveWorkAcceptance();
+      try {
+        await mainTutor.restore(await mainContext());
+        restoringFailed = false;
+      } catch (error) {
+        restoringFailed = true;
+        log.info(`Workbook tutor restoration after content reload failed: ${error instanceof Error ? error.message : String(error)}`);
+        const active = activeOrderedBlock();
+        await appendFailure({ lessonId: active?.lessonId ?? WORKBOOK_INTRODUCTION_BLOCK_ID, blockId: active?.id ?? WORKBOOK_INTRODUCTION_BLOCK_ID, requestId: "content-reload", operation: "restore", publicMessage: TUTOR_UNAVAILABLE });
+      }
+    });
+    if (closed) return;
+    await contentWatch?.rescan().catch((error) => log.info(`Workbook content watcher rescan failed: ${error instanceof Error ? error.message : String(error)}`));
+    broadcastSse("content-reloaded", { generation: reloadGeneration });
+  };
+  const queueContentReload = (): void => {
+    contentReloads = contentReloads.then(reloadContent, reloadContent).catch((error) => {
+      const message = publicReloadError(error);
+      log.info(`Workbook content reload failed: ${message}`);
+      broadcastSse("content-reload-error", { message });
+    });
+  };
+
   const server = createServer(async (request, response) => {
     headers(response);
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (request.method === "GET" && isRoute(url.pathname, "timeline")) {
       response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
-      response.write(`event: timeline\ndata: ${JSON.stringify(publicTimeline(loaded, records))}\n\n`);
+      sseClients.add(response);
+      sendSse(response, "timeline", publicTimeline(loaded, records));
       const unsubscribe = timeline.subscribe((record) => {
         const publicRecord = publicTimelineRecord(record, loaded);
-        if (publicRecord) response.write(`event: record\ndata: ${JSON.stringify(publicRecord)}\n\n`);
+        if (publicRecord) sendSse(response, "record", publicRecord);
       });
-      request.on("close", unsubscribe);
+      request.on("close", () => { unsubscribe(); sseClients.delete(response); });
       return;
     }
     if (request.method === "GET" && isRoute(url.pathname, "state")) return transact(async () => sendJson(response, 200, await currentPublicState()));
@@ -830,7 +893,10 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const port = options.port ?? 0;
   await new Promise<void>((resolvePromise, reject) => { server.once("error", reject); server.listen(port, host, () => { server.off("error", reject); resolvePromise(); }); });
   const address = server.address(); if (!address || typeof address === "string") throw new Error("Could not determine workbook server address.");
+  if (options.watchContent) {
+    contentWatch = watchWorkbookContent(runtime.contentRoot, queueContentReload, (error) => log.info(`Workbook content watcher failed: ${error.message}`), { watchFactory: options.contentWatchFactory, debounceMs: options.contentWatchDebounceMs });
+  }
   const url = `http://${LOOPBACK_HOST}:${address.port}`;
-  log.info(`Workbook tutor listening on ${url}. State: ${timeline.eventPath}${terminal ? " Embedded terminal enabled on loopback only." : ""}`);
-  return { url, port: address.port, host, close: async () => { closed = true; terminal?.dispose(); mainTutor.dispose(); wss?.close(); await Promise.allSettled([...reviewFinalizers]); const closing = new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise())); server.closeAllConnections(); await closing; } };
+  log.info(`Workbook tutor listening on ${url}. State: ${timeline.eventPath}${terminal ? " Embedded terminal enabled on loopback only." : ""}${contentWatch ? " Content watch enabled." : ""}`);
+  return { url, port: address.port, host, close: async () => { closed = true; contentWatch?.close(); terminal?.dispose(); mainTutor.dispose(); wss?.close(); for (const client of sseClients) client.end(); sseClients.clear(); await Promise.allSettled([contentReloads, ...reviewFinalizers]); const closing = new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise())); server.closeAllConnections(); await closing; } };
 }

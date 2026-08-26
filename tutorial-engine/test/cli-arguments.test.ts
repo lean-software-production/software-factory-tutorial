@@ -9,17 +9,17 @@ function run(argv: string[]) {
 
 describe("parseArguments", () => {
   it("serves the named directory on an ephemeral loopback port by default", () => {
-    expect(run(["/tutorials/factory"])).toEqual({ target: "/tutorials/factory", port: undefined, host: undefined, noOpen: false, session: undefined });
+    expect(run(["/tutorials/factory"])).toEqual({ target: "/tutorials/factory", port: undefined, host: undefined, noOpen: false, watch: false, session: undefined });
   });
 
-  it("reads the port, host, and browser flags", () => {
-    expect(run(["/tutorials/factory", "--port", "4310", "--host", "0.0.0.0", "--no-open"]))
-      .toEqual({ target: "/tutorials/factory", port: 4310, host: "0.0.0.0", noOpen: true, session: undefined });
+  it("reads the port, host, browser, and author watch flags", () => {
+    expect(run(["/tutorials/factory", "--port", "4310", "--host", "0.0.0.0", "--watch", "--no-open"]))
+      .toEqual({ target: "/tutorials/factory", port: 4310, host: "0.0.0.0", noOpen: true, watch: true, session: undefined });
   });
 
   it("accepts flags before the directory, because a flag value is never the target", () => {
     expect(run(["--host", "0.0.0.0", "--port", "4310", "/tutorials/factory"]))
-      .toEqual({ target: "/tutorials/factory", port: 4310, host: "0.0.0.0", noOpen: false, session: undefined });
+      .toEqual({ target: "/tutorials/factory", port: 4310, host: "0.0.0.0", noOpen: false, watch: false, session: undefined });
   });
 
   it("accepts --flag=value", () => {
@@ -54,6 +54,7 @@ describe("parseArguments", () => {
 
   it("rejects a value on a flag that takes none", () => {
     expect(() => parseArguments(["/tutorials/factory", "--no-open=true"])).toThrow(/--no-open does not take a value/);
+    expect(() => parseArguments(["/tutorials/factory", "--watch=true"])).toThrow(/--watch does not take a value/);
   });
 
   it("will not let a value flag swallow the following flag", () => {

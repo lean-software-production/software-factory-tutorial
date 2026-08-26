@@ -705,13 +705,50 @@ export function App() {
   const [viewed, setViewed] = useState<string>();
   const [terminalInsertion, setTerminalInsertion] = useState<(() => void) | undefined>();
   const [blockedLink, setBlockedLink] = useState(false);
+  const [contentReloadError, setContentReloadError] = useState<string>();
   const scrollCompletionPending = useRef(false);
+  const navigateToIntroductionAfterReload = useRef(false);
   const previousReadyRunwayIds = useRef<Set<string>>(new Set());
   const preservedRunwayIds = useRef<Set<string>>(new Set());
   const registerTerminalInsertion = useCallback((insertCommand: (() => void) | undefined) => {
     setTerminalInsertion(() => insertCommand);
   }, []);
   useEffect(() => { fetch("api/workbook/state").then((response) => response.json()).then((next: State) => setState(next)); }, []);
+  const hasInitialState = Boolean(state);
+  useEffect(() => {
+    if (!hasInitialState || typeof EventSource === "undefined") return;
+    const events = new EventSource("api/workbook/timeline");
+    events.addEventListener("content-reloaded", () => {
+      readWorkbookState().then((next) => {
+        setContentReloadError(undefined);
+        setTerminalInsertion(undefined);
+        setBlockedLink(false);
+        setViewed(undefined);
+        previousReadyRunwayIds.current = new Set();
+        preservedRunwayIds.current = new Set();
+        navigateToIntroductionAfterReload.current = true;
+        setState(next);
+      }).catch((error) => {
+        console.error(error);
+        setContentReloadError("Workbook content reloaded, but the browser could not fetch the new state yet.");
+      });
+    });
+    events.addEventListener("content-reload-error", (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { message?: string };
+        setContentReloadError(payload.message || "Workbook content could not be reloaded yet.");
+      } catch {
+        setContentReloadError("Workbook content could not be reloaded yet.");
+      }
+    });
+    return () => events.close();
+  }, [hasInitialState]);
+  useEffect(() => {
+    if (!state || !navigateToIntroductionAfterReload.current) return;
+    navigateToIntroductionAfterReload.current = false;
+    const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback: FrameRequestCallback) => setTimeout(callback, 0) as unknown as number;
+    raf(() => navigateToAnchor(INTRODUCTION_BLOCK_ID, "replace"));
+  }, [state?.workbook.title, state?.introduction]);
   useEffect(() => { if (state) document.title = state.workbook.title; }, [state?.workbook.title]);
   useEffect(() => {
     if (!state) return;
@@ -820,6 +857,7 @@ export function App() {
   };
   return <div className="shell">
     {blockedLink && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Lesson not ready"><div className="modal"><p>The lesson you're linking to is not ready yet — you still have some work to do!</p><button className="button primary" onClick={() => { setBlockedLink(false); navigateToAnchor(state.progress.activeAnchorId ?? state.progress.activeBlockId, "replace"); }}>OK</button></div></div>}
+    {contentReloadError && <aside className="author-reload-notice" aria-live="polite"><b>Author reload failed.</b> {contentReloadError}</aside>}
     <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">

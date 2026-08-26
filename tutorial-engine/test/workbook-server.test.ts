@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tutorialSessionStatePath, tutorialStatePath } from "../src/workbook/tutorial-state.js";
 import { SessionWorkspaceManager } from "../src/session-workspace.js";
 import { startWorkbookServer } from "../src/workbook/server.js";
+import type { ContentWatchFactory } from "../src/workbook/content-watch.js";
 import type { TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
 import type { Attempt } from "../src/workbook/attempts.js";
 import type { ActiveBlockContext } from "../src/workbook/pi-history.js";
@@ -162,6 +163,45 @@ async function timelineSnapshot(serverUrl: string): Promise<any[]> {
   if (!match) throw new Error(`Timeline stream did not include an initial event: ${text}`);
   return JSON.parse(match[1]!);
 }
+async function nextSseEvent(serverUrl: string, eventName: string): Promise<any> {
+  const controller = new AbortController();
+  const response = await fetch(`${serverUrl}/api/workbook/timeline`, { signal: controller.signal });
+  if (!response.body) throw new Error("Timeline stream did not expose a body.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+      const events = text.split("\n\n").filter(Boolean);
+      for (const event of events) {
+        const match = event.match(/^event: (.+)\ndata: (.*)$/s);
+        if (match?.[1] === eventName) return JSON.parse(match[2]!);
+      }
+    }
+    throw new Error(`Timed out waiting for ${eventName}. Saw: ${text}`);
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    controller.abort();
+  }
+}
+function fakeContentWatchFactory() {
+  const listeners = new Map<string, (eventType: string, filename: string | Buffer | null) => void>();
+  const closed: string[] = [];
+  const factory: ContentWatchFactory = (path, listener) => { listeners.set(path, listener); return { close: () => closed.push(path) }; };
+  return { factory, listeners, closed, emit: (dir: string, filename: string) => listeners.get(dir)?.("change", filename) };
+}
+async function waitForWatchPath(fake: ReturnType<typeof fakeContentWatchFactory>, path: string) {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    if (fake.listeners.has(path)) return;
+    await waitMs(5);
+  }
+  throw new Error(`Timed out waiting for watch subscription ${path}`);
+}
 async function privateTimeline(workspace: string): Promise<WorkbookTimelineRecord[]> {
   const text = await readFile(tutorialStatePath(workspace, "workbook", "events.jsonl"), "utf8");
   return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as WorkbookTimelineRecord);
@@ -223,6 +263,130 @@ afterEach(async () => {
 });
 
 describe("workbook browser API", () => {
+  it("hot reloads authored Markdown, resets presentation, and retains learner workspace files", async () => {
+    const { dir, session } = await sessionFixture();
+    const fakeWatch = fakeContentWatchFactory();
+    await writeFile(resolve(session.workspaceRoot, "factory/sentinel.txt"), "keep me\n", "utf8");
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, watchContent: true, contentWatchFactory: fakeWatch.factory, contentWatchDebounceMs: 1, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });
+    try {
+      await waitForWatchPath(fakeWatch, resolve(session.contentRoot, "lessons/001-first/blocks"));
+      await introduceAndOpenEditor(server.url);
+      expect((await state(server.url)).progress.activeBlockId).toBe("lesson--001-first--edit-answer");
+
+      const reloaded = nextSseEvent(server.url, "content-reloaded");
+      await writeBlock(resolve(dir, "lessons/001-first"), "orientation", "narrative", "Orientation reloaded", "Edited concept text.");
+      fakeWatch.emit(resolve(session.contentRoot, "lessons/001-first/blocks"), "orientation.md");
+      await reloaded;
+
+      const reset = await state(server.url);
+      expect(reset.progress.activeBlockId).toBe("workbook--introduction");
+      expect(reset.introductionComplete).toBe(false);
+      expect(reset.timeline?.filter((record: any) => record.type === "message" && record.source === "learner")).toEqual([]);
+      await expect(readFile(resolve(session.workspaceRoot, "factory/sentinel.txt"), "utf8")).resolves.toBe("keep me\n");
+      await expect(access(resolve(session.workspaceRoot, ".git"))).resolves.toBeUndefined();
+
+      await completeBlock(server.url, "workbook--introduction");
+      await continueActive(server.url);
+      const opened = await continueActive(server.url).then((response) => response.json() as any);
+      const orientation = opened.state.chapters[0].lesson.blocks.find((candidate: any) => candidate.id === "lesson--001-first--orientation");
+      expect(orientation).toMatchObject({ title: "Orientation reloaded", markdown: "Edited concept text." });
+    } finally { await server.close(); }
+  });
+
+  it("hot reloads lesson topology changes and rescans new block directories", async () => {
+    const { dir, session } = await sessionFixture();
+    const fakeWatch = fakeContentWatchFactory();
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, watchContent: true, contentWatchFactory: fakeWatch.factory, contentWatchDebounceMs: 1, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });
+    try {
+      await waitForWatchPath(fakeWatch, session.contentRoot);
+      await mkdir(resolve(dir, "lessons/003-third/blocks"), { recursive: true });
+      await writeLesson(resolve(dir, "lessons/003-third"), "Third lesson", ["third-orientation"]);
+      await writeBlock(resolve(dir, "lessons/003-third"), "third-orientation", "narrative", "Third orientation", "New topology block.");
+      const reloaded = nextSseEvent(server.url, "content-reloaded");
+      await writeFile(resolve(dir, "workbook.md"), [
+        "---",
+        "parts:",
+        "  - id: loop",
+        "    lessons:",
+        "      - 001-first",
+        "      - 002-second",
+        "      - 003-third",
+        "---",
+        "# Fixture workbook",
+        "",
+        "Welcome to the fixture workbook.",
+      ].join("\n"), "utf8");
+      fakeWatch.emit(session.contentRoot, "workbook.md");
+      await reloaded;
+
+      const reset = await state(server.url);
+      expect(reset.progress.activeBlockId).toBe("workbook--introduction");
+      expect(reset.orderedBlocks.map((entry: any) => entry.id)).toContain("lesson--003-third--third-orientation");
+      await waitForWatchPath(fakeWatch, resolve(session.contentRoot, "lessons/003-third/blocks"));
+    } finally { await server.close(); }
+  });
+
+  it("keeps the last valid workbook through reload errors and recovers on the next valid save", async () => {
+    const { dir, session } = await sessionFixture();
+    const fakeWatch = fakeContentWatchFactory();
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, watchContent: true, contentWatchFactory: fakeWatch.factory, contentWatchDebounceMs: 1, mainTutor: new FakeMainTutor(), blockTutor: new FakeBlockTutor() });
+    try {
+      await waitForWatchPath(fakeWatch, session.contentRoot);
+      const invalid = nextSseEvent(server.url, "content-reload-error");
+      await writeFile(resolve(dir, "workbook.md"), "---\ntitle: Broken\n# missing closing front matter\n", "utf8");
+      fakeWatch.emit(session.contentRoot, "workbook.md");
+      const error = await invalid;
+      expect(error.message).toMatch(/front matter|workbook\.md/i);
+      expect((await state(server.url)).workbook.title).toBe("Fixture workbook");
+
+      const recovered = nextSseEvent(server.url, "content-reloaded");
+      await writeFile(resolve(dir, "workbook.md"), [
+        "---",
+        "parts:",
+        "  - id: loop",
+        "    lessons:",
+        "      - 001-first",
+        "      - 002-second",
+        "---",
+        "# Recovered workbook",
+        "",
+        "Recovered introduction.",
+      ].join("\n"), "utf8");
+      fakeWatch.emit(session.contentRoot, "workbook.md");
+      await recovered;
+      const next = await state(server.url);
+      expect(next.workbook.title).toBe("Recovered workbook");
+      expect(next.introduction).toBe("Recovered introduction.");
+    } finally { await server.close(); }
+  });
+
+  it("does not let a delayed review from before hot reload write into the reset generation", async () => {
+    const { dir, session } = await sessionFixture();
+    const fakeWatch = fakeContentWatchFactory();
+    const pending = deferred<TutorDecision>();
+    const tutor = new FakeMainTutor(pending.promise);
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, watchContent: true, contentWatchFactory: fakeWatch.factory, contentWatchDebounceMs: 1, mainTutor: tutor, blockTutor: new FakeBlockTutor() });
+    try {
+      await waitForWatchPath(fakeWatch, session.contentRoot);
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "old draft" })).status).toBe(202);
+      await waitForWorkbookState(server.url, () => tutor.reviews.length === 1, "review to start before reload");
+
+      const reloaded = nextSseEvent(server.url, "content-reloaded");
+      await writeFile(resolve(dir, "workbook.md"), (await readFile(resolve(dir, "workbook.md"), "utf8")).replace("Welcome to the fixture workbook.", "Reloaded introduction."), "utf8");
+      fakeWatch.emit(session.contentRoot, "workbook.md");
+      await reloaded;
+
+      pending.resolve({ outcome: "accepted", message: "Old review accepted." });
+      await waitMs(20);
+      const next = await state(server.url);
+      expect(JSON.stringify(next.timeline)).not.toContain("Old review accepted");
+      expect(next.progress.activeBlockId).toBe("workbook--introduction");
+      const privateRecords = (await readFile(tutorialSessionStatePath(session.sessionRoot, "workbook/events.jsonl"), "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      expect(privateRecords.some((record: any) => record.type === "attempt_accepted")).toBe(false);
+    } finally { await server.close(); }
+  });
+
   it("keeps authored content read-only while editor attempts and workbook state use the session roots", async () => {
     const { dir, session } = await sessionFixture();
     const tutor = new FakeMainTutor();
