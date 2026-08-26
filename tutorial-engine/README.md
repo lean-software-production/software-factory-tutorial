@@ -2,6 +2,9 @@
 
 A local, browser-led tutorial runner. It embeds `@earendil-works/pi-coding-agent` directly as a TypeScript SDK; it does not start Pi’s CLI or RPC mode.
 
+What it is for, and the students, authors and facilitators it serves, is in
+[`docs/vision.md`](docs/vision.md).
+
 ## Run a tutorial
 
 Point the workbook engine at an authored tutorial directory. In this repository, that content
