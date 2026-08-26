@@ -16,7 +16,7 @@ export async function checkPiAuthentication(getAvailable) {
  * `pi -p` wants to be cheap and fast, and its mistakes are teaching material, so
  * it follows Pi's ordinary `/model` default. None should silently become another.
  *
- * tutorial-engine/src/agent/pi-adapter.ts resolves the tutor model variables for
+ * tutorial-engine/src/workbook/model.ts resolves the tutor model variables for
  * real; this mirrors it so `npm run setup` can report what the tutors will do.
  */
 export const TUTOR_MODEL_ENV = "TUTOR_MODEL";
