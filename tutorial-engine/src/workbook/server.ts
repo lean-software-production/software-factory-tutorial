@@ -6,7 +6,6 @@ import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import type { TutorialLogger } from "./runtime-log.js";
 import { createTutorialLogger } from "./runtime-log.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
-import { project, type BlockProgress } from "./events.js";
 import { INTRODUCTION_BLOCK_ID, INTRODUCTION_LESSON_ID, LESSON_FRAME_BLOCK_ID, PART_BLOCK_ID, authoredBlockText, authoredIntroductionText, authoredLessonFrameText, authoredPartText, partLessonId } from "./pi-history.js";
 import { WORKBOOK_COMPLETE_ANCHOR_ID, WORKBOOK_INTRODUCTION_BLOCK_ID, blockText, buildWorkbookBlockStream, declaredBlockId, declaredSourceFromBlockId, successorAnchor, type AnchorId, type BlockId, type DeclaredWorkbookBlock, type OrderedWorkbookBlock } from "./workbook-blocks.js";
 import { createDockerPty, requireOpenCodeApiKey, WorkbookTerminalManager, type ActiveObservedTerminalBlock, type TerminalPtyFactory } from "./terminal.js";
@@ -38,7 +37,21 @@ type PublicCheckpoint = {
   successMessage?: string;
   evidence?: { kind: AttemptEvidence["kind"]; text?: string; terminalHtml?: string; conversation?: Array<{ role: "learner" | "tutor"; text: string }> };
 };
-type PublicBlockProgress = Omit<BlockProgress, "checkpoint"> & { checkpoint?: PublicCheckpoint; draftText?: string; revision?: number; editorStatus?: "editing" | "reviewing" | "feedback" | "unlocked" };
+type PublicBlockProgress = {
+  id: string;
+  type: string;
+  emerged: boolean;
+  ready: boolean;
+  active: boolean;
+  completed: boolean;
+  verified: boolean;
+  terminalHtml?: string;
+  checkpoint?: PublicCheckpoint;
+  draftText?: string;
+  revision?: number;
+  editorStatus?: "editing" | "reviewing" | "feedback" | "unlocked";
+};
+type AcceptedCheckpoint = { summary: string; kind: AttemptEvidence["kind"] };
 type PublicTutorFailure = Omit<TutorFailure, "requestId"> & { failureId: string };
 type PublicTimelineRecord = TimelineMessage | PublicTutorFailure;
 type CompleteBlockResult =
@@ -98,15 +111,6 @@ function isEvaluatedBlock(block: WorkbookBlock): block is Extract<WorkbookBlock,
 function evidenceMatchesBlock(evidence: AttemptEvidence, block: WorkbookBlock): boolean { return (evidence.kind === "editor" && block.type === "editor-practice") || (evidence.kind === "terminal" && block.type === "terminal-practice") || (evidence.kind === "reflection" && block.type === "reflection"); }
 function acceptsWorkImmediately(block: OrderedWorkbookBlock): boolean { return block.origin === "structural" || block.kind === "narrative"; }
 
-function activeLesson(loaded: LoadedWorkbook, records: readonly WorkbookTimelineRecord[] = []): WorkbookLesson {
-  const lessons = loaded.chapters.map((chapter) => chapter.lesson).filter((lesson): lesson is WorkbookLesson => Boolean(lesson));
-  const lesson = lessons.find((candidate) => !project(records, candidate).completedLessons.includes(candidate.id)) ?? lessons.at(-1);
-  if (!lesson) throw new Error("No workbook lesson is migrated.");
-  return lesson;
-}
-function completedLessonIds(loaded: LoadedWorkbook, records: readonly WorkbookTimelineRecord[]): string[] {
-  return loaded.chapters.flatMap((chapter) => chapter.lesson && project(records, chapter.lesson).completedLessons.includes(chapter.lesson.id) ? [chapter.lesson.id] : []);
-}
 function publicBlock(block: WorkbookBlock) { const { tutor: _privateTutor, ...visible } = block as WorkbookBlock & { tutor?: string }; return visible; }
 function publicLesson(lesson: WorkbookLesson, blocks: WorkbookBlock[]) { return { ...lesson, blocks: blocks.map(publicBlock) }; }
 async function readTargetDraftText(workspace: string, block: EditorPracticeBlock): Promise<string> { try { return await readFile(await resolveEditorTarget(workspace, block.path), "utf8"); } catch (error: any) { if (error?.code === "ENOENT") return ""; throw error; } }
@@ -115,7 +119,7 @@ function publicAttemptEvidence(attempt: Attempt): PublicCheckpoint["evidence"] {
   if (attempt.evidence.kind === "terminal") return { kind: "terminal", terminalHtml: attempt.evidence.terminalHtml };
   return { kind: "reflection", conversation: [...attempt.evidence.conversation, { role: "learner", text: attempt.evidence.response }] };
 }
-function publicCheckpoint(attempt: Attempt | undefined, projected: BlockProgress["checkpoint"]): PublicCheckpoint | undefined {
+function publicCheckpoint(attempt: Attempt | undefined, projected: AcceptedCheckpoint | undefined): PublicCheckpoint | undefined {
   if (attempt && attempt.status !== "superseded") {
     const evidence = publicAttemptEvidence(attempt);
     if (attempt.status === "accepted") return projected ? { status: "accepted", successMessage: attempt.successMessage ?? projected.summary, evidence } : { status: "reviewing", evidence };
@@ -207,6 +211,7 @@ async function resolveRuntime(options: WorkbookServerOptions): Promise<Required<
   return { contentRoot, sessionRoot, workspaceRoot, runtimeProvision };
 }
 
+/** Map historical per-lesson completion rows onto the canonical ordered block IDs. */
 function canonicalCompletedId(record: WorkbookTimelineRecord): BlockId | undefined {
   if (record.type === "block_completed") {
     if (record.blockId.includes("--")) return record.blockId;

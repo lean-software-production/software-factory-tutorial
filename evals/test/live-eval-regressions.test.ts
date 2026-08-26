@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import type { WorkbookEvent } from "../../tutorial-engine/src/workbook/events.js";
+import type { WorkbookTimelineRecord } from "../../tutorial-engine/src/workbook/timeline.js";
 import { buildV2JudgePrompt, createV2Report, verifyV2JudgeResult } from "../v2/judge.js";
 import { deterministicV2Gate, findV2Scenario, satisfactoryEditorDraft, v2Scenarios } from "../v2/scenarios.js";
 import { createEmptyV2SessionTrace } from "../v2/session.js";
@@ -10,8 +10,8 @@ import type { V2SessionTrace } from "../v2/types.js";
 const lessonId = "001-live-session";
 const exactCommand = "mkdir -p factory/.tmp && printf 'command block complete\\n' > factory/.tmp/evaluator-command.txt && cat factory/.tmp/evaluator-command.txt";
 
-function event(event: Record<string, unknown>): WorkbookEvent {
-  return { at: "2026-08-20T00:00:00.000Z", ...event } as WorkbookEvent;
+function event(event: Record<string, unknown>): WorkbookTimelineRecord {
+  return { id: "fixture", sequence: 1, at: "2026-08-20T00:00:00.000Z", ...event } as WorkbookTimelineRecord;
 }
 
 function auditableTrace(): V2SessionTrace {

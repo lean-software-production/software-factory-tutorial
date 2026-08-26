@@ -6,23 +6,26 @@ import type { AttemptKind } from "./attempts.js";
 
 export type TimelineMetadata = { id: string; sequence: number; at: string };
 
-export type WorkflowPayload =
+export type WorkbookWorkflowInput =
   | { type: "session_started" }
   | { type: "workbook_introduction_completed" }
-  | { type: "observation_acknowledged"; lessonId: string; blockId: string }
-  | { type: "observation_verified"; lessonId: string; blockId: string; source: "terminal_observer"; summary: string; terminalHtml: string }
   | { type: "attempt_accepted"; lessonId: string; blockId: string; attemptId: string; version: number; kind: AttemptKind; summary: string }
   | { type: "work_accepted"; blockId: string }
   | { type: "block_completed"; blockId: string; lessonId?: string }
-  | { type: "block_continued"; lessonId: string; blockId: string }
   | { type: "reflection_submitted"; lessonId: string; blockId: string; response: string }
   | { type: "reflection_follow_up_submitted"; lessonId: string; blockId: string; response: string }
-  | { type: "reflection_reply_recorded"; lessonId: string; blockId: string; response: string }
+  | { type: "reflection_reply_recorded"; lessonId: string; blockId: string; response: string };
+
+/** Historical rows read from pre-stream sessions; new rows must not use these payloads. */
+export type LegacyWorkbookWorkflowInput =
+  | { type: "observation_acknowledged"; lessonId: string; blockId: string }
+  | { type: "observation_verified"; lessonId: string; blockId: string; source: "terminal_observer"; summary: string; terminalHtml: string }
+  | { type: "block_continued"; lessonId: string; blockId: string }
   | { type: "reflection_completed"; lessonId: string; blockId: string }
   | { type: "editor_practice_unlocked"; lessonId: string; blockId: string; revisionId: number; path: string }
   | { type: "lesson_transitioned"; lessonId: string; blockId: string };
 
-export type WorkbookWorkflowEvent = WorkflowPayload & TimelineMetadata;
+export type WorkbookWorkflowEvent = (WorkbookWorkflowInput | LegacyWorkbookWorkflowInput) & TimelineMetadata;
 
 export type TimelineMessageSource = "authored" | "learner" | "main_tutor" | "block_tutor";
 export type MainTutorSource = Extract<TimelineMessageSource, "main_tutor">;
@@ -90,7 +93,7 @@ export type WorkbookCompletionSummary = TimelineMetadata & {
 
 export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TimelineMessage | BlockSummary | LessonSummary | BlockTutorBriefing | BlockTutorReadiness | TutorFailure | WorkbookCompletionSummary;
 export type TimelineAppendInput =
-  | WorkflowPayload
+  | WorkbookWorkflowInput
   | Omit<TimelineMessage, keyof TimelineMetadata>
   | Omit<BlockSummary, keyof TimelineMetadata>
   | Omit<LessonSummary, keyof TimelineMetadata>
@@ -103,7 +106,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function legacyRecord(value: unknown, line: number): WorkbookTimelineRecord {
+export function normalizeWorkbookTimelineRecord(value: unknown, line: number): WorkbookTimelineRecord {
   if (!isRecord(value) || typeof value.type !== "string") throw new Error(`Invalid workbook timeline record at line ${line}.`);
   const id = typeof value.id === "string" ? value.id : `legacy:${line}`;
   const sequence = Number.isInteger(value.sequence) && (value.sequence as number) > 0 ? value.sequence as number : line;
@@ -141,7 +144,7 @@ export class WorkbookTimeline {
     }
     return contents.split(/\r?\n/).filter(Boolean).map((line, index) => {
       try {
-        return legacyRecord(JSON.parse(line), index + 1);
+        return normalizeWorkbookTimelineRecord(JSON.parse(line), index + 1);
       } catch (error) {
         throw new Error(`${this.eventPath}:${index + 1}: ${error instanceof Error ? error.message : "invalid JSONL event"}`);
       }

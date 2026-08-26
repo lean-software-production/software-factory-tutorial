@@ -9,7 +9,7 @@ import type { BlockTutorReadiness, TimelineMessage } from "../../tutorial-engine
 import type { MainTutorContext, TutorDecision, TutorReview } from "../../tutorial-engine/src/workbook/tutor.js";
 import { createV2WorkbookDriver, V2WorkbookDriver } from "../v2/driver.js";
 import { clueCommand, exactCommand, satisfactoryEditorDraft } from "../v2/scenarios.js";
-import { createEmptyV2SessionTrace, readWorkbookEvents } from "../v2/session.js";
+import { createEmptyV2SessionTrace, readWorkbookTimeline } from "../v2/session.js";
 import { createEvaluationWorkspace, type CreateEvaluationWorkspaceOptions } from "../v2/workspace.js";
 import { RecordingBlockTutor, RecordingMainTutor, type ReviewInput } from "../../tutorial-engine/test/support/fake-tutors.js";
 
@@ -307,7 +307,7 @@ describe("v2 workbook driver", () => {
       const session = workspace.latestSession();
       expect(session.sessionRoot.endsWith(`/.tutorial/${session.sessionId}`)).toBe(true);
       expect(session.workspaceRoot).toBe(resolve(session.sessionRoot, "workspace"));
-      trace.events = await readWorkbookEvents(session.sessionRoot);
+      trace.events = await readWorkbookTimeline(session.sessionRoot);
       expect(trace.events).toEqual(expect.arrayContaining([
         expect.objectContaining({ type: "reflection_submitted", blockId: "lesson--001-live-session--reflection" }),
         expect.objectContaining({ type: "reflection_reply_recorded", blockId: "lesson--001-live-session--reflection" })

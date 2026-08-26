@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promise
 import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { tutorialSessionStatePath, tutorialStatePath } from "./tutorial-state.js";
-import type { ReflectionTurn } from "./events.js";
+import type { ReflectionTurn } from "./reflection.js";
 
 export type AttemptKind = "editor" | "terminal" | "reflection";
 export type AttemptStatus = "working" | "reviewing" | "feedback" | "accepted" | "superseded";

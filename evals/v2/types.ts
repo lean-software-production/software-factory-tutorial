@@ -1,5 +1,5 @@
 import type { StartedWorkbookServer, WorkbookServerOptions } from "../../tutorial-engine/src/workbook/server.js";
-import type { WorkbookEvent } from "../../tutorial-engine/src/workbook/events.js";
+import type { WorkbookTimelineRecord } from "../../tutorial-engine/src/workbook/timeline.js";
 import type { TutorialSessionPaths } from "../../tutorial-engine/src/session-workspace.js";
 
 export type PublicWorkbookState = Record<string, unknown>;
@@ -42,7 +42,7 @@ export interface V2SessionTrace {
   terminalTranscript: V2TerminalTranscriptEntry[];
   reflections: V2ReflectionEntry[];
   editors: V2EditorEntry[];
-  events: WorkbookEvent[];
+  events: WorkbookTimelineRecord[];
   artifacts: V2ArtifactSnapshot[];
 }
 
