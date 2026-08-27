@@ -11,6 +11,7 @@ import { ActivityBand } from "./activity-band.js";
 import { TimelineThread } from "./timeline-thread.js";
 import { isPublicWorkbookState, parsePublicCompleteBlockResult, parsePublicWorkbookState } from "../../src/workbook/public-contract.js";
 import type { PublicAttemptKind, PublicCheckpoint, PublicCompleteBlockResult, PublicEditorStatus, PublicReflectionTurn, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookBlockType, PublicWorkbookChapter, PublicWorkbookLesson, PublicWorkbookProgress, PublicWorkbookState } from "../../src/workbook/public-contract.js";
+import { parsePublicTerminalMessage, type PublicTerminalMessage } from "../../src/workbook/public-terminal-contract.js";
 
 export type WorkbookBlockType = PublicWorkbookBlockType;
 export type Block = PublicWorkbookBlock;
@@ -152,6 +153,8 @@ function shellCommandFrom(markdown: string): string | undefined {
   return undefined;
 }
 
+const UNREADABLE_TERMINAL_FRAME = "The embedded terminal received an unreadable message from the workbook server. Refresh the page if the terminal stops responding.";
+
 function EmbeddedTerminal({ block, command, active, completed, verified, refresh, onAdvice, onError, onStatus, onTerminalInsertionChange }: { block: Block; command?: string; active: boolean; completed: boolean; verified: boolean; refresh(state: State): void; onAdvice(message: string): void; onError(message: string): void; onStatus(message: string | undefined): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
@@ -180,17 +183,27 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
     const dataDisposable = nextTerminal.onData((data) => { if (!verified && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data })); });
     ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); sendResize(); });
     ws.addEventListener("message", (event) => {
-      const message = JSON.parse(event.data);
-      if (message.type === "output") nextTerminal.write(message.data);
-      if (message.type === "advice" && message.blockId === block.id) onAdvice(message.message);
-      if ((message.type === "observer-status" || message.type === "attempt-status") && message.blockId === block.id) {
-        onStatus(message.status === "running" ? "Running — waiting for terminal output…" : message.status === "checking" || message.status === "submitted" ? "Checking…" : "Keep going; the expected result is not visible yet.");
+      let frame: PublicTerminalMessage | undefined;
+      // An unreadable frame is reported and dropped: throwing here would leave the socket open
+      // while the learner watched a terminal that had stopped answering.
+      try { frame = parsePublicTerminalMessage(event.data); }
+      catch { onError(UNREADABLE_TERMINAL_FRAME); return; }
+      if (!frame) return;
+      if (frame.type === "output") nextTerminal.write(frame.data);
+      if (frame.type === "advice" && frame.blockId === block.id) onAdvice(frame.message);
+      if (frame.type === "attempt-status" && frame.blockId === block.id) onStatus(frame.status === "running" ? "Running — waiting for terminal output…" : "Checking…");
+      if (frame.type === "attempt-error" && frame.blockId === block.id) onError(frame.message);
+      if (frame.type === "verified-complete" && frame.blockId === block.id) {
+        // The only socket frame carrying server state, so it reaches React through the same
+        // validation the HTTP responses use rather than as an unchecked object.
+        let state: State;
+        try { state = parsePublicWorkbookState(frame.state); }
+        catch { onError(UNREADABLE_TERMINAL_FRAME); return; }
+        onStatus(undefined);
+        refresh(state);
       }
-      if ((message.type === "observer-error" || message.type === "attempt-error") && message.blockId === block.id) onError(message.message);
-      if (message.type === "verified-complete" && message.blockId === block.id) { onStatus(undefined); refresh(message.state); }
-      if (message.type === "busy") onError(message.message);
-      if (message.type === "terminal-error") onError(message.message);
-      if (message.type === "exit") onStatus("The embedded shell exited. Refresh the page to start a new one.");
+      if (frame.type === "busy" || frame.type === "terminal-error") onError(frame.message);
+      if (frame.type === "exit") onStatus("The embedded shell exited. Refresh the page to start a new one.");
     });
     ws.addEventListener("close", () => setConnected(false));
     ws.addEventListener("error", () => { setConnected(false); onError("Embedded terminal connection failed. Refresh the page and try again."); });

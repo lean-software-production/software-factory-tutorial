@@ -2052,12 +2052,12 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector(".terminal-feedback-overlay")?.textContent).toContain("Persisted checkpoint feedback.");
     expect(container.textContent).not.toContain("Terminal feedback:");
 
-    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "observer-status", blockId: "practice", status: "running" }) }); });
+    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "attempt-status", blockId: "practice", status: "running" }) }); });
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
     expect(container.textContent).toContain("Running — waiting for terminal output…");
     expect(container.textContent).not.toContain("Persisted checkpoint feedback.");
 
-    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "observer-status", blockId: "practice", status: "checking" }) }); });
+    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "attempt-status", blockId: "practice", status: "checking" }) }); });
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
     expect(container.textContent).toContain("Checking…");
     expect(container.textContent).not.toContain("Running — waiting for terminal output…");
@@ -2067,10 +2067,85 @@ describe("workbook lesson UI", () => {
     expect(container.textContent).toContain("Observer advice.");
     expect(container.textContent).not.toContain("Running — waiting for terminal output…");
 
-    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "observer-error", blockId: "practice", message: "Terminal observer error." }) }); });
+    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "attempt-error", blockId: "practice", message: "Terminal attempt error." }) }); });
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
-    expect(container.textContent).toContain("Terminal observer error.");
+    expect(container.textContent).toContain("Terminal attempt error.");
     expect(container.textContent).not.toContain("Observer advice.");
+  });
+
+  it("keeps the terminal socket working after a malformed frame and an unknown frame type", async () => {
+    class FakeWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.CONNECTING;
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      constructor(_url: string) { FakeWebSocket.instances.push(this); }
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      send() {}
+      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
+      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const container = await mount(createElement(BlockView, {
+      block: lesson.blocks[1]!, progress: activeBlockProgress(lesson.blocks[1]!), refresh: vi.fn()
+    }), (win) => {
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
+    });
+    const socket = FakeWebSocket.instances[0]!;
+
+    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "attempt-status", blockId: "practice", status: "running" }) }); });
+    expect(container.textContent).toContain("Running — waiting for terminal output…");
+
+    // A truncated frame is not JSON at all; the failure must not escape the listener.
+    await act(async () => { socket.emit("message", { data: "{\"type\":\"output\"" }); });
+    expect(container.textContent).toContain("unreadable message");
+
+    // A frame type this build does not know is ignored rather than rendered.
+    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "sentiment", blockId: "practice", message: "Frame from a newer server." }) }); });
+    expect(container.textContent).not.toContain("Frame from a newer server.");
+
+    // Both bad frames are behind us and the socket still delivers real ones.
+    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "attempt-error", blockId: "practice", message: "Attempt could not be submitted." }) }); });
+    expect(container.textContent).toContain("Attempt could not be submitted.");
+  });
+
+  it("refreshes only from a verified-complete frame whose state passes the public contract", async () => {
+    class FakeWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.CONNECTING;
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      constructor(_url: string) { FakeWebSocket.instances.push(this); }
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      send() {}
+      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
+      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const refresh = vi.fn();
+    const container = await mount(createElement(BlockView, {
+      block: lesson.blocks[1]!, progress: activeBlockProgress(lesson.blocks[1]!), refresh
+    }), (win) => {
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
+    });
+    const socket = FakeWebSocket.instances[0]!;
+
+    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "verified-complete", blockId: "practice", state: { workbook: { title: "Workbook" } } }) }); });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("unreadable message");
+
+    const valid = workbookState(activeBlockProgress(lesson.blocks[1]!));
+    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "verified-complete", blockId: "practice", state: valid }) }); });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh.mock.calls[0]![0].progress.activeBlockId).toBe("practice");
   });
 
   it("refreshes a persisted reviewing terminal checkpoint from state SSE without polling", async () => {

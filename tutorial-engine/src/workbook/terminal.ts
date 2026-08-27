@@ -7,6 +7,7 @@ import type { TutorialLogger } from "./runtime-log.js";
 import { createTutorialLogger } from "./runtime-log.js";
 import type { SubmitAttempt } from "./attempts.js";
 import { NO_RUNTIME_PROVISION, type TrustedRuntimeProvision } from "./runtime-provision.js";
+import { publicTerminalFrame } from "./public-terminal-contract.js";
 export type { SubmitAttempt } from "./attempts.js";
 
 export type TerminalClient = { send(message: string): void; close(code?: number, reason?: string): void };
@@ -278,15 +279,15 @@ export class WorkbookTerminalManager {
       shell?.kill(); shell?.stopContainer?.();
       this.#pty = undefined;
       this.#log.info(`Embedded terminal could not start: ${error instanceof Error ? error.message : String(error)}`);
-      client.send(JSON.stringify({ type: "terminal-error", message: "The embedded terminal could not start on this machine. Check that Docker is running and the workbook terminal image is built, then refresh." }));
+      client.send(publicTerminalFrame({ type: "terminal-error", message: "The embedded terminal could not start on this machine. Check that Docker is running and the workbook terminal image is built, then refresh." }));
       return true;
     }
-    if (this.#replay) client.send(JSON.stringify({ type: "output", data: this.#replay }));
+    if (this.#replay) client.send(publicTerminalFrame({ type: "output", data: this.#replay }));
     const block = this.#getActiveBlock();
     if (block) {
       const key = terminalKey(block);
       const error = this.#lastError.get(key);
-      if (error) client.send(JSON.stringify({ type: "attempt-error", blockId: block.blockId, message: error }));
+      if (error) client.send(publicTerminalFrame({ type: "attempt-error", blockId: block.blockId, message: error }));
     }
     return true;
   }
@@ -305,7 +306,7 @@ export class WorkbookTerminalManager {
       if (this.#isSubmittedCommand(message.data)) {
         this.#commandPending = true;
         this.#observationGeneration++;
-        this.#client?.send(JSON.stringify({ type: "attempt-status", blockId: this.#getActiveBlock()?.blockId, status: "running" }));
+        this.#client?.send(publicTerminalFrame({ type: "attempt-status", blockId: this.#getActiveBlock()?.blockId, status: "running" }));
         this.#scheduleObservation();
       }
       if (message.data.includes("\x03")) {
@@ -343,16 +344,16 @@ export class WorkbookTerminalManager {
     this.#pty = instance;
     instance.onData((data) => {
       this.#replay = boundedAppend(this.#replay, data, MAX_REPLAY_BYTES);
-      this.#client?.send(JSON.stringify({ type: "output", data }));
+      this.#client?.send(publicTerminalFrame({ type: "output", data }));
       this.#record("output", data);
       if (this.#commandPending) {
         this.#observationGeneration++;
-        this.#client?.send(JSON.stringify({ type: "attempt-status", blockId: this.#getActiveBlock()?.blockId, status: "running" }));
+        this.#client?.send(publicTerminalFrame({ type: "attempt-status", blockId: this.#getActiveBlock()?.blockId, status: "running" }));
         this.#scheduleObservation();
       }
     });
     instance.onExit(({ exitCode, signal }) => {
-      this.#client?.send(JSON.stringify({ type: "exit", exitCode, signal }));
+      this.#client?.send(publicTerminalFrame({ type: "exit", exitCode, signal }));
       (instance as DockerPty).stopContainer?.();
       if (this.#pty === instance) this.#pty = undefined;
     });
@@ -407,7 +408,7 @@ export class WorkbookTerminalManager {
     const terminalHtml = this.frozenTerminalHtml();
     let submitNewestGeneration = false;
     this.#inFlight = true;
-    this.#client?.send(JSON.stringify({ type: "attempt-status", blockId: block.blockId, status: "checking" }));
+    this.#client?.send(publicTerminalFrame({ type: "attempt-status", blockId: block.blockId, status: "checking" }));
     try {
       await this.#submitAttempt({
         lessonId: block.lessonId,
@@ -420,12 +421,12 @@ export class WorkbookTerminalManager {
       this.#submittedGeneration = generation;
       this.#lastError.delete(key);
       submitNewestGeneration = this.#commandPending && this.#captureKey === key && this.#observationGeneration > generation;
-      if (!submitNewestGeneration) this.#client?.send(JSON.stringify({ type: "attempt-status", blockId: block.blockId, status: "submitted" }));
+      if (!submitNewestGeneration) this.#client?.send(publicTerminalFrame({ type: "attempt-status", blockId: block.blockId, status: "submitted" }));
     } catch (error) {
       const message = "Could not submit the terminal attempt. Keep working in the embedded terminal; your next command will be checked again.";
       this.#lastError.set(key, message);
       this.#log.info(`Terminal attempt submission failed for ${key}: ${error instanceof Error ? error.message : String(error)}`);
-      this.#client?.send(JSON.stringify({ type: "attempt-error", blockId: block.blockId, message }));
+      this.#client?.send(publicTerminalFrame({ type: "attempt-error", blockId: block.blockId, message }));
     } finally {
       this.#inFlight = false;
       if (submitNewestGeneration && this.#commandPending && this.#captureKey === key) {
