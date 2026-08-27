@@ -2,22 +2,19 @@
 type: narrative
 ---
 
-## A factory is a loop you can leave running
+## Conclusion
 
-A seed says what you want. The harness turns that intent into a repeatable process: it
-asks agents to plan and work, runs validation, and decides whether the next step is to
-fix the result, plan more work, or stop.
+A software factory gives agents a clear job and a way to check their work:
 
-The important part is not that an LLM produced an answer. It is that the harness checks
-that answer against evidence. A separate validator can catch work the agent that made it
-has missed, and a failed check gives the next agent a concrete reason to try again.
+- The seed describes the outcome you want.
+- The harness runs a repeatable loop: plan, work, validate, then fix, continue, or stop.
+- Separate agents can do the work and validate it, so the check is less likely to repeat
+  the worker's mistakes.
+- Validation turns an uncertain answer into evidence that the result meets your needs.
 
-That makes a factory different from a long conversation in a REPL. In a REPL, you stay
-in the loop, supplying direction and judging each response. Building a factory takes more
-up-front work: you must describe both the outcome and how to validate it. Once you have,
-the harness can run the loop autonomously and reliably apply it to larger or repeated
-jobs.
+That differs from working in a REPL, where you stay in a continuous conversation and
+judge each response yourself. A factory takes more preparation: you must describe both
+the outcome and how to validate it. In return, it can run autonomously on larger or
+repeated jobs.
 
-In the rest of this tutorial, you will build a small factory yourself. You will write its
-seed, harness, and validation steps, then see how those parts turn an agent's uncertain
-work into a process that can improve its own output.
+Next, you will build a small factory: its seed, harness, and validation steps.
