@@ -9,13 +9,15 @@ export type WorkbookBlockType = "narrative" | "terminal-practice" | "editor-prac
 
 const BLOCK_TYPES: readonly WorkbookBlockType[] = ["narrative", "terminal-practice", "editor-practice", "reflection"];
 const TUTOR_REQUIRED_TYPES = new Set<WorkbookBlockType>(["terminal-practice", "editor-practice", "reflection"]);
+/** Interactive blocks carry a private tutor rubric and a mandatory learner-facing learning outcome. */
+const OUTCOME_REQUIRED_TYPES = TUTOR_REQUIRED_TYPES;
 
 /** Every block gets its id from its filename, its title from its H2, and its body as learner Markdown. */
 export interface WorkbookBlockBase { id: string; type: WorkbookBlockType; title: string; markdown: string; }
 export interface NarrativeBlock extends WorkbookBlockBase { type: "narrative"; }
-export interface TerminalPracticeBlock extends WorkbookBlockBase { type: "terminal-practice"; tutor: string; }
-export interface EditorPracticeBlock extends WorkbookBlockBase { type: "editor-practice"; path: string; tutor: string; }
-export interface ReflectionBlock extends WorkbookBlockBase { type: "reflection"; tutor: string; }
+export interface TerminalPracticeBlock extends WorkbookBlockBase { type: "terminal-practice"; outcome: string; tutor: string; }
+export interface EditorPracticeBlock extends WorkbookBlockBase { type: "editor-practice"; outcome: string; path: string; tutor: string; }
+export interface ReflectionBlock extends WorkbookBlockBase { type: "reflection"; outcome: string; tutor: string; }
 export type WorkbookBlock = NarrativeBlock | TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock;
 
 /** The assembled lesson: title, compact dek, and possibly empty full introduction come from lesson.md. */
@@ -37,8 +39,8 @@ export interface WorkbookManifest { parts?: WorkbookPartManifest[]; }
 /** No part-level structured field is defined yet, so front matter must be an empty map. */
 export interface PartManifest {}
 
-export interface LessonFrontMatter { durationMinutes: number; outcomes: string[]; blocks: string[]; }
-export interface BlockFrontMatter { type: WorkbookBlockType; path?: string; tutor?: string; }
+export interface LessonFrontMatter { durationMinutes: number; blocks: string[]; }
+export interface BlockFrontMatter { type: WorkbookBlockType; path?: string; tutor?: string; outcome?: string; }
 
 const BLOCK_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 export const WORKBOOK_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -114,18 +116,15 @@ export function validatePartManifest(data: unknown, location = "part.md"): PartM
   return validateEmptyManifest(data, location);
 }
 
-/** Validate a lesson.md's raw front matter: duration, outcomes, and ordered block ids. */
+/** Validate a lesson.md's raw front matter: duration and ordered block ids. Learning outcomes are derived from the blocks. */
 export function validateLessonFrontMatter(data: unknown, location: string): LessonFrontMatter {
   const errors: string[] = [];
   if (!isPlainObject(data)) fail(location, [`${location}: front matter must be a YAML mapping.`]);
   const record = data as Record<string, unknown>;
-  rejectUnknownFields(record, ["durationMinutes", "outcomes", "blocks"], location, errors);
+  rejectUnknownFields(record, ["durationMinutes", "blocks"], location, errors);
 
   const duration = record.durationMinutes;
   if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) errors.push(`${location}: durationMinutes must be a positive number`);
-
-  const outcomes = record.outcomes;
-  if (!isStringArray(outcomes) || outcomes.length === 0 || outcomes.some((item) => !isNonEmptyString(item))) errors.push(`${location}: outcomes must be a non-empty list of non-empty strings`);
 
   const blocks = record.blocks;
   if (!isStringArray(blocks) || blocks.length === 0 || blocks.some((id) => !BLOCK_ID_PATTERN.test(id))) {
@@ -139,7 +138,7 @@ export function validateLessonFrontMatter(data: unknown, location: string): Less
   }
 
   if (errors.length) fail(location, errors);
-  return { durationMinutes: duration as number, outcomes: outcomes as string[], blocks: blocks as string[] };
+  return { durationMinutes: duration as number, blocks: blocks as string[] };
 }
 
 /** Validate one block's raw front matter: its type, and a private tutor field required only for interactive types. */
@@ -147,7 +146,7 @@ export function validateBlockFrontMatter(data: unknown, location: string): Block
   const errors: string[] = [];
   if (!isPlainObject(data)) fail(location, [`${location}: front matter must be a YAML mapping.`]);
   const record = data as Record<string, unknown>;
-  rejectUnknownFields(record, ["type", "path", "tutor"], location, errors);
+  rejectUnknownFields(record, ["type", "path", "tutor", "outcome"], location, errors);
 
   const type = record.type;
   const validType = typeof type === "string" && (BLOCK_TYPES as readonly string[]).includes(type);
@@ -168,11 +167,20 @@ export function validateBlockFrontMatter(data: unknown, location: string): Block
     errors.push(`${location}: tutor is only allowed for terminal-practice, editor-practice, and reflection blocks`);
   }
 
+  const outcome = record.outcome;
+  const outcomeRequired = validType && OUTCOME_REQUIRED_TYPES.has(type as WorkbookBlockType);
+  if (outcomeRequired) {
+    if (!isNonEmptyString(outcome)) errors.push(`${location}: outcome is required for ${type} blocks and must be a non-empty learning outcome`);
+  } else if (outcome !== undefined) {
+    errors.push(`${location}: outcome is only allowed for terminal-practice, editor-practice, and reflection blocks`);
+  }
+
   if (errors.length) fail(location, errors);
   return {
     type: type as WorkbookBlockType,
     path: isNonEmptyString(path) ? path : undefined,
     tutor: isNonEmptyString(tutor) ? tutor : undefined,
+    outcome: isNonEmptyString(outcome) ? outcome : undefined,
   };
 }
 
@@ -187,7 +195,9 @@ export function validateWorkbookLesson(value: unknown, location = "lesson"): Wor
   if (!isNonEmptyString(lesson.dek)) errors.push(`${location}.dek is required`);
   if (typeof lesson.introduction !== "string") errors.push(`${location}.introduction is required and must be a string`);
   if (typeof lesson.durationMinutes !== "number" || !Number.isFinite(lesson.durationMinutes) || lesson.durationMinutes <= 0) errors.push(`${location}.durationMinutes must be a positive number`);
-  if (!isStringArray(lesson.outcomes) || lesson.outcomes.length === 0 || lesson.outcomes.some((item) => !isNonEmptyString(item))) errors.push(`${location}.outcomes must be a non-empty list of non-empty strings`);
+  const hasInteractiveBlock = Array.isArray(lesson.blocks) && lesson.blocks.some((block) => block && block.type !== "narrative");
+  if (!isStringArray(lesson.outcomes)) errors.push(`${location}.outcomes must be a list of strings`);
+  else if (hasInteractiveBlock && (lesson.outcomes.length === 0 || lesson.outcomes.some((item) => !isNonEmptyString(item)))) errors.push(`${location}.outcomes must be a non-empty list of non-empty strings derived from its interactive blocks`);
 
   const ids = new Set<string>();
   if (!Array.isArray(lesson.blocks) || lesson.blocks.length === 0) errors.push(`${location}.blocks must contain ordered block instances`);
@@ -207,6 +217,11 @@ export function validateWorkbookLesson(value: unknown, location = "lesson"): Wor
     const tutorRequired = validType && TUTOR_REQUIRED_TYPES.has(block.type as WorkbookBlockType);
     if (tutorRequired) { if (!isNonEmptyString(block.tutor)) errors.push(`${path}.tutor is required`); }
     else if (block.tutor !== undefined) errors.push(`${path}.tutor is not allowed for ${block.type} blocks`);
+    const outcomeRequired = validType && OUTCOME_REQUIRED_TYPES.has(block.type as WorkbookBlockType);
+    if (outcomeRequired) {
+      const outcome = (block as Extract<WorkbookBlock, { outcome: string }>).outcome;
+      if (!isNonEmptyString(outcome)) errors.push(`${path}.outcome is required`);
+    } else if ((block as { outcome?: unknown }).outcome !== undefined) errors.push(`${path}.outcome is not allowed for ${block.type} blocks`);
   });
 
   if (errors.length) fail(location, errors);

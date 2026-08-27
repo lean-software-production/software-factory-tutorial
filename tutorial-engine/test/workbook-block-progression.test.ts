@@ -17,9 +17,9 @@ async function fixture() {
   await mkdir(resolve(dir, "lessons/001-first/blocks"), { recursive: true });
   await writeFile(resolve(dir, "workbook.md"), ["---", "parts:", "  - id: validation-loop", "    lessons:", "      - 001-first", "---", "# Demo workbook", "", "Welcome."].join("\n"));
   await writeFile(resolve(dir, "parts/validation-loop.md"), ["---", "---", "# Validation loop", "", "Part preamble."].join("\n"));
-  await writeFile(resolve(dir, "lessons/001-first/lesson.md"), ["---", "durationMinutes: 5", "outcomes:", "  - Know the flow.", "blocks:", "  - orientation", "  - edit-answer", "  - finish", "---", "# Run an agent headlessly", "", "Lesson preamble.", "", "Full lesson introduction before declared blocks."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/lesson.md"), ["---", "durationMinutes: 5", "blocks:", "  - orientation", "  - edit-answer", "  - finish", "---", "# Run an agent headlessly", "", "Lesson preamble.", "", "Full lesson introduction before declared blocks."].join("\n"));
   await writeFile(resolve(dir, "lessons/001-first/blocks/orientation.md"), ["---", "type: narrative", "---", "## Orientation", "", "Read this."].join("\n"));
-  await writeFile(resolve(dir, "lessons/001-first/blocks/edit-answer.md"), ["---", "type: editor-practice", "path: factory/answer.txt", "tutor: Accept any clear answer.", "---", "## Edit answer", "", "Write the answer."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/blocks/edit-answer.md"), ["---", "type: editor-practice", "outcome: Write a clear answer to the question.", "path: factory/answer.txt", "tutor: Accept any clear answer.", "---", "## Edit answer", "", "Write the answer."].join("\n"));
   await mkdir(resolve(dir, "factory"), { recursive: true });
   await writeFile(resolve(dir, "factory/answer.txt"), "");
   await writeFile(resolve(dir, "lessons/001-first/blocks/finish.md"), ["---", "type: narrative", "---", "## Finish", "", "Done."].join("\n"));
@@ -42,7 +42,7 @@ describe("workbook block progression", () => {
       ["declared", "narrative", "lesson--001-first--finish", "lesson--001-first--finish"],
     ]);
     const lessonPreamble = stream.find((block) => block.kind === "lesson-preamble");
-    expect(lessonPreamble?.markdown).toContain("Lesson preamble.\n\n## What you will learn\n\n- Know the flow.\n\nFull lesson introduction before declared blocks.");
+    expect(lessonPreamble?.markdown).toContain("Lesson preamble.\n\n## What you will learn\n\n- Write a clear answer to the question.\n\nFull lesson introduction before declared blocks.");
     expect(lessonPreamble?.markdown.split("Full lesson introduction before declared blocks.")).toHaveLength(2);
     expect(stream.filter((block) => block.title === "Full lesson introduction before declared blocks.")).toEqual([]);
   });

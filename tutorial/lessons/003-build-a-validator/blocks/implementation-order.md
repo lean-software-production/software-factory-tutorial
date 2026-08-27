@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Write the validator prompt and script, then run a doer turn followed by a validator turn and inspect the verdict format."
 tutor: |-
   Guide the learner through writing factory/refactor-validate.md and factory/refactor-validate.sh,
   then running chmod, ./factory/refactor-do.sh, and ./factory/refactor-validate.sh. Success means

@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Update the station prompts and scripts so they use the shared criteria."
 tutor: |-
   Ask the learner to answer the checks from the block. A satisfactory answer verifies run.sh
   executes doer before validator, waits at the pause, writes the last verdict, and that validate.md

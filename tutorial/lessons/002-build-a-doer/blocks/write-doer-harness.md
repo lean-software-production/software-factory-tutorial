@@ -1,5 +1,6 @@
 ---
 type: editor-practice
+outcome: "Create a doer script that records a quality baseline and invokes Pi with edit tools, not shell."
 path: factory/refactor-do.sh
 tutor: |-
   Check that factory/refactor-do.sh preserves the displayed harness behaviour: Bash with

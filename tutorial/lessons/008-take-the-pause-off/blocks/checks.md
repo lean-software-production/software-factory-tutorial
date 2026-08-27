@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Choose explicit stopping conditions for an unattended line and report when and why it finished."
 tutor: |-
   Ask the learner to answer the checks from the block. A satisfactory answer confirms there is no
   input wait, iterations are numbered, the ceiling stops the run, two consecutive failures stop

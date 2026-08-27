@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Explain why the doer boundary keeps evidence generation outside the doer."
 tutor: |-
   Ask the learner to answer the checks from the block. A satisfactory answer says refactor-do.sh
   announces its phases, records a baseline in factory/.tmp, runs Pi from calculator with edit tools

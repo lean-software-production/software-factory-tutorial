@@ -1,10 +1,5 @@
 ---
 durationMinutes: 10
-outcomes:
-  - Explain why validation is so important
-  - Describe the difference between the agent, the harness and the seed
-  - Explain why separate agents are used for each stage
-  - Reflect on the difference between working in a REPL and using a factory
 blocks:
   - importance-of-validation
   - describe-components

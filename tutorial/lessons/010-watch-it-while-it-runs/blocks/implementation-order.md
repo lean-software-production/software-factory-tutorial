@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Create factory/watch.sh and run it as a live watcher over a background line, following tool calls and cost as events arrive."
 tutor: |-
   Guide the learner through creating factory/watch.sh, running the line as a background job in the
   embedded terminal, running watchers against the same event files, and adding a cost watcher

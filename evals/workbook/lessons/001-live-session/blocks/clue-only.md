@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Attempt a clue-only terminal task without exposing private tutor guidance."
 tutor: |-
   Do not reveal an exact command for this block.
 

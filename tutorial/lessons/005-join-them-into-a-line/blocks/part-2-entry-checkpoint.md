@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Move the Part 1 scripts and prompts into a named refactor line and agree the shared success criteria."
 tutor: |-
   Accept either starting state. A learner who worked through Part 1 by hand should confirm the
   files they wrote across lessons 002 to 004; if any are missing, send them back to that lesson

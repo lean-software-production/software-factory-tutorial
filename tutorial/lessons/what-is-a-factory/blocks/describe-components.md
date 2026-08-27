@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Describe the difference between the agent, the harness, and the seed."
 tutor: |-
   Correct answer might look something like:
 

@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Reflect on the difference between working in a REPL and using a factory."
 tutor: |-
   We expect the student to highlight points like:
 

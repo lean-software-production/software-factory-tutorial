@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Run the behaviour checks outside the doer and read their verdict."
 tutor: |-
   Guide the learner through collecting independent evidence outside the doer: git diff --
   calculator, then npm test and node scripts/quality.mjs from calculator. Success means they

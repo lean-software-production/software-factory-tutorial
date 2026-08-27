@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Explain what judgements the factory still cannot make for itself."
 tutor: |-
   Ask the learner to answer the checks from the block. A satisfactory answer names run.sh as
   orchestrator and maps its five jobs to code, says factory-level scripts would work with another

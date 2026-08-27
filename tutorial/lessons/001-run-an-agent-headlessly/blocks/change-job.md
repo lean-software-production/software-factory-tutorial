@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Change the job while leaving the Pi invocation intact."
 tutor: |-
   Have the learner run the displayed command in the embedded terminal.
 

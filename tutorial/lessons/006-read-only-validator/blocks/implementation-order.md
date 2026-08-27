@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Rewrite the validator and its invocation to gather evidence in the harness, run them, and inspect the labelled evidence block."
 tutor: |-
   Guide the learner through adding the evidence-gathering block to validate.sh and run.sh, removing
   bash from validator Pi invocations, and rewriting validate.md to judge only labelled evidence

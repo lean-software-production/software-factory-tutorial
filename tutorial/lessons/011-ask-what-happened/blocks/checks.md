@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Explain why this station needs no tools when the caller hands it all of its evidence."
 tutor: |-
   Ask the learner to answer the checks from the block. A satisfactory answer verifies answers
   against records, confirms ask.sh has no tools and only receives filtered event lines from the

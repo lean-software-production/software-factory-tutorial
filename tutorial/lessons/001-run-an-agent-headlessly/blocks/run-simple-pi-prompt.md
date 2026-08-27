@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Run a Pi agent headlessly with a supplied job."
 tutor: |-
   Have the learner run the displayed command in the embedded terminal.
 

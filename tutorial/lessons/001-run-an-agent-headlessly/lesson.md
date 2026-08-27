@@ -1,11 +1,5 @@
 ---
 durationMinutes: 10
-outcomes:
-  - Run a Pi agent headlessly with a supplied job.
-  - Change the job while leaving the Pi invocation intact.
-  - Identify the job and harness in the command.
-  - State why the command exits rather than opening a conversation.
-  - State what the listed read-only tools prevent the agent from doing.
 blocks:
   - run-simple-pi-prompt
   - run-supplied-command

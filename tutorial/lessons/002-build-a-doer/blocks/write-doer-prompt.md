@@ -1,5 +1,6 @@
 ---
 type: editor-practice
+outcome: "Write the doer prompt that asks for one behaviour-preserving calculator refactoring."
 path: factory/refactor.md
 tutor: |-
   Check that factory/refactor.md tells the doer to choose and make one small,

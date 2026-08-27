@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Explain when a steer can still affect the station and how the channel is cleaned up on exit."
 tutor: |-
   Ask the learner to answer the checks from the block. A satisfactory answer confirms RPC doer stays
   alive, steered messages appear after tool calls rather than interrupting them, a steer can change

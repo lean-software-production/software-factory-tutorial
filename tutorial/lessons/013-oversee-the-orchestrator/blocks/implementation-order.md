@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Trace which shell code now performs the jobs the learner did by hand in Part 1."
 tutor: |-
   Guide the learner through running the completed factory in the embedded terminal and inspecting
   files rather than building new ones. Success means they can point to factory/refactor/run.sh as

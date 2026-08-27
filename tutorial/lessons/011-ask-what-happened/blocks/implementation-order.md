@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Create factory/ask.sh, filter the run record to tool and message events, and ask the model questions it must answer only from that record."
 tutor: |-
   Guide the learner through creating factory/ask.sh, comparing raw and filtered event counts, and
   asking questions about a recent run. Success means ask.sh requires a line and question, filters to

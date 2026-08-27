@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Run the doer once and review its diff after the run."
 tutor: |-
   Have the learner run the displayed commands from the session workspace. Success means
   factory/refactor-do.sh becomes executable and one doer turn starts through

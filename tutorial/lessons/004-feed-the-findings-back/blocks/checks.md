@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Describe what the human orchestrated by hand in the feedback loop."
 tutor: |-
   Ask the learner to answer the checks from the block. A satisfactory answer identifies that they
   chose when to rerun, carried findings into the doer context, preserved the baseline, and decided

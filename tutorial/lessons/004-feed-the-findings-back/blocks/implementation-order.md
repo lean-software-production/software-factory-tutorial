@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Run the doer and validator as a manual feedback cycle: append the findings to the doer, re-run it, then validate again."
 tutor: |-
   Guide the learner through getting a failing verdict, appending .tmp/refactor-validate-findings.txt
   to the doer context with the displayed subshell command, and validating again. Success means they

@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Explain why validation is so important."
 tutor: |-
   We expect the student to highlight points like:
 

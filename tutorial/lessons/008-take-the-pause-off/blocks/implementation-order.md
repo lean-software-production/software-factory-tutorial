@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Add iteration and consecutive-failure counters to run.sh, remove the pause, and run the line until it stops on its own."
 tutor: |-
   Guide the learner through choosing stop conditions, adding max_iterations, iteration, and
   consecutive_failures, removing the read, and printing the final iteration count. Success means

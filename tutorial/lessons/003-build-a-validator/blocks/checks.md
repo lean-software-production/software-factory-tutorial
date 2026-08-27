@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Explain why the validator may run checks but must not edit the calculator."
 tutor: |-
   Ask the learner to answer the checks from the block. A satisfactory answer verifies the validator
   announcement, no calculator edits, required VERDICT first line, quoted evidence, and the

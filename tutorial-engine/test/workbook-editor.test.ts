@@ -51,6 +51,7 @@ describe("promoteCurrentEditorAttempt", () => {
       title: "Refactor the line",
       markdown: "Edit the draft.",
       path: "factory/refactor.md",
+      outcome: "Refactor the line into the answer.",
       tutor: "private criteria"
     };
 
@@ -73,6 +74,7 @@ describe("promoteAcceptedEditorAttempt", () => {
       title: "Refactor the line",
       markdown: "Edit the draft.",
       path: "factory/refactor.md",
+      outcome: "Refactor the line into the answer.",
       tutor: "private criteria"
     };
 
@@ -90,7 +92,7 @@ describe("promoteAcceptedEditorAttempt", () => {
   it("does not promote accepted attempts for another evidence kind", async () => {
     const workspace = await temporaryWorkspace("workbook-editor-non-editor-");
     const attempts = new AttemptStore(workspace);
-    const block: EditorPracticeBlock = { id: "block-id", type: "editor-practice", title: "Edit", markdown: "Edit.", path: "factory/refactor.md", tutor: "private" };
+    const block: EditorPracticeBlock = { id: "block-id", type: "editor-practice", title: "Edit", markdown: "Edit.", path: "factory/refactor.md", outcome: "Edit the draft.", tutor: "private" };
     const terminal = await attempts.create({ lessonId: "lesson-id", blockId: block.id, evidence: { kind: "terminal", transcript: "pass", terminalHtml: "<pre>pass</pre>" } });
     await attempts.acceptCurrent(terminal.id, "Terminal accepted.");
 

@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Switch every model station to JSON mode, save one event log per station per iteration, and query the saved record for tool usage and cost with jq."
 tutor: |-
   Guide the learner through creating .tmp/events, adding --mode json to every Pi station, saving
   JSONL files named by iteration and station, adding text_of, and extracting validator findings and

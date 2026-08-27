@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "State why the command exits instead of opening a conversation, and what the read-only tools stop the agent from doing."
 tutor: |-
   Ask the learner a couple of questions to help them reflect on the exercise.
 

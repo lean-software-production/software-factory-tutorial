@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Identify the job and harness in a supplied command."
 tutor: |-
   Have the learner run the displayed command in the embedded terminal.
 

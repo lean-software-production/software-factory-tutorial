@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Create a run script that records a baseline, runs the doer, validates, and pauses after each iteration."
 tutor: |-
   Guide the learner through the four build steps: move the Part 1 files into factory/refactor/,
   repair stale paths and names, write success.md, update do.sh and validate.sh to receive

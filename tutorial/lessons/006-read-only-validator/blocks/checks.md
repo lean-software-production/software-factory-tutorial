@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Explain the guarantee and limitation created by closing the validator evidence set."
 tutor: |-
   Ask the learner to answer the checks from the block. A satisfactory answer points to the
   evidence-gathering announcement, four labelled sections in .tmp/evidence.txt, a verdict based on

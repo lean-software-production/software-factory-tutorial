@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Verify that unreadable verdicts fail closed rather than committing unchecked work."
 tutor: |-
   Ask the learner to answer the checks from the block. A satisfactory answer demonstrates both
   branch outcomes or a faithful simulation, confirms repair receives findings, PASS commits only

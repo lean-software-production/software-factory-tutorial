@@ -44,16 +44,20 @@ Markdown under the target directory:
 
 - `workbook.md` has YAML front matter, exactly one H1 title, and workbook introduction Markdown;
 - optional `parts/<part-id>.md` files have empty front matter, one H1 title, and part preamble Markdown;
-- each `lessons/<lesson-id>/lesson.md` has duration, outcomes, and ordered block ids in front matter;
+- each `lessons/<lesson-id>/lesson.md` has duration and ordered block ids in front matter;
 - a lesson H1 supplies the title; the first paragraph after it is the compact dek used in summaries and history; any remaining Markdown is the full lesson introduction;
 - each `lessons/<lesson-id>/blocks/<block-id>.md` has one H2 title, block-type front matter, and learner-facing Markdown.
 
 Supported authored block types are:
 
 - `narrative`: authored workbook prose. It has only `type: narrative` front matter, renders its H2 title and Markdown, and advances with Continue.
-- `terminal-practice`: embedded terminal work. It requires private `tutor` front matter.
-- `editor-practice`: embedded editor work. It requires private `tutor` and workspace-relative `path` front matter.
-- `reflection`: tutor-mediated reflection. It requires private `tutor` front matter.
+- `terminal-practice`: embedded terminal work. It requires private `tutor` front matter and a learner-facing `outcome`.
+- `editor-practice`: embedded editor work. It requires private `tutor`, workspace-relative `path` front matter, and a learner-facing `outcome`.
+- `reflection`: tutor-mediated reflection. It requires private `tutor` front matter and a learner-facing `outcome`.
+
+A lesson's `outcomes` are not authored in its front matter. They are derived, in block order, from the
+`outcome` field on every interactive block (`terminal-practice`, `editor-practice`, and `reflection`), so
+each learning outcome is delivered at the block where it is actually earned.
 
 The workbook synthesizes the workbook introduction, each part preamble, and each lesson preamble
 as structural blocks. A lesson-preamble block contains its title, dek, outcomes, and full

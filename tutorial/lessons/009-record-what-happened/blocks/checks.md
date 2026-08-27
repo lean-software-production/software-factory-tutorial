@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Explain why a machine-readable record and a human-readable view are separate artefacts."
 tutor: |-
   Ask the learner to answer the checks from the block. A satisfactory answer confirms one JSONL file
   per station per iteration, text extraction leaves plain findings and commit messages, jq reports

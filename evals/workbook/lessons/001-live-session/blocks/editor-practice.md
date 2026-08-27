@@ -1,6 +1,7 @@
 ---
 type: editor-practice
 path: editor-artifacts/evaluator-editor.txt
+outcome: "Submit an editor draft and have the reviewer promote it."
 tutor: |-
   Private editor criterion for the live evaluator's editor-practice scenario.
 

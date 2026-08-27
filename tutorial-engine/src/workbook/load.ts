@@ -9,6 +9,9 @@ import {
   validateWorkbookManifest,
   WORKBOOK_ID_PATTERN,
   type WorkbookBlock,
+  type EditorPracticeBlock,
+  type ReflectionBlock,
+  type TerminalPracticeBlock,
   type WorkbookIdentity,
   type WorkbookLesson,
   type WorkbookManifest,
@@ -177,10 +180,15 @@ async function loadWorkbookBlock(lessonDir: string, blockId: string, lessonPath:
   const front = validateBlockFrontMatter(data, path);
   const { title, body: markdown } = extractHeading(body, 2, path);
   const base = { id: blockId, title, markdown };
-  if (front.type === "terminal-practice") return { ...base, type: "terminal-practice", tutor: front.tutor! };
-  if (front.type === "editor-practice") return { ...base, type: "editor-practice", path: front.path!, tutor: front.tutor! };
-  if (front.type === "reflection") return { ...base, type: "reflection", tutor: front.tutor! };
+  if (front.type === "terminal-practice") return { ...base, type: "terminal-practice", outcome: front.outcome!, tutor: front.tutor! };
+  if (front.type === "editor-practice") return { ...base, type: "editor-practice", outcome: front.outcome!, path: front.path!, tutor: front.tutor! };
+  if (front.type === "reflection") return { ...base, type: "reflection", outcome: front.outcome!, tutor: front.tutor! };
   return { ...base, type: "narrative" };
+}
+
+/** Interactive blocks deliver a learning outcome; the lesson's outcomes are their ordered list. */
+function isInteractiveBlock(block: WorkbookBlock): block is TerminalPracticeBlock | EditorPracticeBlock | ReflectionBlock {
+  return block.type !== "narrative";
 }
 
 /** Assemble one lesson from its conventional directory and its lesson.md manifest. */
@@ -201,7 +209,8 @@ export async function loadWorkbookLesson(lessonDir: string, id: string): Promise
   if (unlisted.length) throw new Error(`${lessonPath}: blocks/ contains file(s) not listed in front matter blocks: ${unlisted.join(", ")}.`);
 
   const blocks = await Promise.all(front.blocks.map((blockId) => loadWorkbookBlock(lessonDir, blockId, lessonPath)));
-  return validateWorkbookLesson({ id, title, dek, introduction, durationMinutes: front.durationMinutes, outcomes: front.outcomes, blocks }, lessonPath);
+  const outcomes = blocks.filter(isInteractiveBlock).map((block) => block.outcome);
+  return validateWorkbookLesson({ id, title, dek, introduction, durationMinutes: front.durationMinutes, outcomes, blocks }, lessonPath);
 }
 
 interface ChapterDraft extends Omit<WorkbookChapter, "lessonNumber"> {

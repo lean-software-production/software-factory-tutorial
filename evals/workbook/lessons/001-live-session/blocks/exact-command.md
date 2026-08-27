@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Run a learner-visible exact command in the embedded terminal."
 tutor: |-
   This is private tutor guidance for the live evaluator's exact-command scenario.
 

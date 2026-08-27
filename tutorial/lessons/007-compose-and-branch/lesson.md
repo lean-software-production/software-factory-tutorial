@@ -1,10 +1,5 @@
 ---
 durationMinutes: 40
-outcomes:
-  - Add a repair station that responds to validator findings without starting a new refactoring.
-  - Add a commit-message station that writes only the message while git performs the commit.
-  - Branch run.sh on an anchored validator verdict and route failures to repair and passes to commit.
-  - Verify that unreadable verdicts fail closed rather than committing unchecked work.
 blocks:
   - key-concept
   - implementation-order

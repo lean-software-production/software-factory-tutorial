@@ -36,9 +36,6 @@ async function fixture() {
   await writeFile(resolve(migrated, "lesson.md"), [
     "---",
     "durationMinutes: 12",
-    "outcomes:",
-    "  - Synthetic outcome one.",
-    "  - Synthetic outcome two.",
     "blocks:",
     "  - intro",
     "  - practice",
@@ -51,14 +48,14 @@ async function fixture() {
     "Synthetic dek paragraph.",
   ].join("\n"));
   await writeFile(resolve(migrated, "blocks/intro.md"), ["---", "type: narrative", "---", "## Intro Block", "", "Synthetic narrative body."].join("\n"));
-  await writeFile(resolve(migrated, "blocks/practice.md"), ["---", "type: terminal-practice", "tutor: Synthetic tutor guidance.", "---", "## Practice Block", "", "Synthetic practice body."].join("\n"));
-  await writeFile(resolve(migrated, "blocks/edit.md"), ["---", "type: editor-practice", "path: factory/refactor.md", "tutor: Check one criterion.", "---", "## Edit Block", "", "Synthetic editor practice body."].join("\n"));
-  await writeFile(resolve(migrated, "blocks/think.md"), ["---", "type: reflection", "tutor: Synthetic tutor guidance.", "---", "## Reflect Block", "", "Synthetic reflection question?"].join("\n"));
+  await writeFile(resolve(migrated, "blocks/practice.md"), ["---", "type: terminal-practice", "outcome: Synthetic practice outcome.", "tutor: Synthetic tutor guidance.", "---", "## Practice Block", "", "Synthetic practice body."].join("\n"));
+  await writeFile(resolve(migrated, "blocks/edit.md"), ["---", "type: editor-practice", "outcome: Synthetic edit outcome.", "path: factory/refactor.md", "tutor: Check one criterion.", "---", "## Edit Block", "", "Synthetic editor practice body."].join("\n"));
+  await writeFile(resolve(migrated, "blocks/think.md"), ["---", "type: reflection", "outcome: Synthetic reflection outcome.", "tutor: Synthetic tutor guidance.", "---", "## Reflect Block", "", "Synthetic reflection question?"].join("\n"));
   await writeFile(resolve(migrated, "blocks/onward.md"), ["---", "type: narrative", "---", "## Onward Block", "", "Synthetic transition body."].join("\n"));
 
   const second = resolve(beta, "01-beta-lesson");
   await writeFile(resolve(second, "lesson.md"), [
-    "---", "durationMinutes: 5", "outcomes:", "  - Beta outcome.", "blocks:", "  - only", "---",
+    "---", "durationMinutes: 5", "blocks:", "  - only", "---",
     "# Beta Lesson Title", "", "Beta dek paragraph.",
   ].join("\n"));
   await writeFile(resolve(second, "blocks/only.md"), ["---", "type: narrative", "---", "## Only Block", "", "Beta body."].join("\n"));
@@ -69,7 +66,7 @@ async function writeFlatLesson(root: string, id: string, title: string, dek: str
   const lessonDir = resolve(root, "lessons", id);
   await mkdir(resolve(lessonDir, "blocks"), { recursive: true });
   await writeFile(resolve(lessonDir, "lesson.md"), [
-    "---", "durationMinutes: 5", "outcomes:", `  - ${title} outcome.`, "blocks:", "  - only", "---",
+    "---", "durationMinutes: 5", "blocks:", "  - only", "---",
     `# ${title}`, "", dek,
   ].join("\n"));
   await writeFile(resolve(lessonDir, "blocks/only.md"), ["---", "type: narrative", "---", "## Only Block", "", `${title} body.`].join("\n"));
@@ -104,9 +101,6 @@ function alphaLessonMd(dek: string, introduction = "") {
   return [
     "---",
     "durationMinutes: 12",
-    "outcomes:",
-    "  - Synthetic outcome one.",
-    "  - Synthetic outcome two.",
     "blocks:",
     "  - intro",
     "  - practice",
@@ -124,7 +118,7 @@ function alphaLessonMd(dek: string, introduction = "") {
 /** Rewrite the fixture's beta lesson.md (lessonNumber 1), keeping everything but its dek/introduction. */
 function betaLessonMd(dek: string, introduction = "") {
   return [
-    "---", "durationMinutes: 5", "outcomes:", "  - Beta outcome.", "blocks:", "  - only", "---",
+    "---", "durationMinutes: 5", "blocks:", "  - only", "---",
     "# Beta Lesson Title", "", dek,
     ...(introduction ? ["", introduction] : []),
   ].join("\n");
@@ -150,7 +144,7 @@ describe("workbook lesson contract", () => {
     expect(lesson.dek).toBe("Synthetic dek paragraph.");
     expect(lesson.introduction).toBe("");
     expect(lesson.durationMinutes).toBe(12);
-    expect(lesson.outcomes).toEqual(["Synthetic outcome one.", "Synthetic outcome two."]);
+    expect(lesson.outcomes).toEqual(["Synthetic practice outcome.", "Synthetic edit outcome.", "Synthetic reflection outcome."]);
     expect(lesson.blocks.map((block) => [block.id, block.type, block.title])).toEqual([
       ["intro", "narrative", "Intro Block"],
       ["practice", "terminal-practice", "Practice Block"],
@@ -350,7 +344,7 @@ describe("workbook lesson contract", () => {
   it("rejects a lesson without exactly one H1 title heading", async () => {
     const dir = await fixture();
     await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), [
-      "---", "durationMinutes: 12", "outcomes:", "  - X", "blocks:", "  - intro", "---",
+      "---", "durationMinutes: 12", "blocks:", "  - intro", "---",
       "No heading at all, just a dek paragraph.",
     ].join("\n"));
     await expect(loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "id")).rejects.toThrow(/exactly one H1/i);
@@ -359,7 +353,7 @@ describe("workbook lesson contract", () => {
   it("rejects a lesson with two H1 title headings", async () => {
     const dir = await fixture();
     await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), [
-      "---", "durationMinutes: 12", "outcomes:", "  - X", "blocks:", "  - intro", "---",
+      "---", "durationMinutes: 12", "blocks:", "  - intro", "---",
       "# First Title", "", "Dek.", "", "# Second Title",
     ].join("\n"));
     await expect(loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "id")).rejects.toThrow(/exactly one H1/i);
@@ -368,7 +362,7 @@ describe("workbook lesson contract", () => {
   it("rejects lesson prose before its H1 title heading", async () => {
     const dir = await fixture();
     await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), [
-      "---", "durationMinutes: 12", "outcomes:", "  - X", "blocks:", "  - intro", "  - practice", "  - think", "  - onward", "---",
+      "---", "durationMinutes: 12", "blocks:", "  - intro", "  - practice", "  - think", "  - onward", "---",
       "This prose appears before the title and must not become the dek.", "", "# Title",
     ].join("\n"));
     await expect(loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "id")).rejects.toThrow(/content before the H1 title/i);
@@ -403,7 +397,7 @@ describe("workbook lesson contract", () => {
     // Remove the other authored block files so the only mismatch under test is the missing one.
     await Promise.all(["practice", "edit", "think", "onward"].map((id) => unlink(resolve(lessonDir, `blocks/${id}.md`))));
     await writeFile(resolve(lessonDir, "lesson.md"), [
-      "---", "durationMinutes: 12", "outcomes:", "  - X", "blocks:", "  - intro", "  - missing-block", "---",
+      "---", "durationMinutes: 12", "blocks:", "  - intro", "  - missing-block", "---",
       "# Title", "", "Dek.",
     ].join("\n"));
     await expect(loadWorkbookLesson(lessonDir, "id")).rejects.toThrow(/missing-block/);
@@ -412,7 +406,7 @@ describe("workbook lesson contract", () => {
   it("rejects a lesson.md that duplicates a block id", async () => {
     const dir = await fixture();
     await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), [
-      "---", "durationMinutes: 12", "outcomes:", "  - X", "blocks:", "  - intro", "  - intro", "---",
+      "---", "durationMinutes: 12", "blocks:", "  - intro", "  - intro", "---",
       "# Title", "", "Dek.",
     ].join("\n"));
     await expect(loadWorkbookLesson(resolve(dir, "lessons/02-alpha-part/10-first-lesson"), "id")).rejects.toThrow(/more than once|duplicate/i);
@@ -433,54 +427,55 @@ describe("workbook lesson contract", () => {
 
   it("reports location-specific errors for malformed lesson front matter", () => {
     let message = "";
-    try { validateLessonFrontMatter({ durationMinutes: "twelve", outcomes: [], blocks: [], extra: true }, "lessons/x/lesson.md"); }
+    try { validateLessonFrontMatter({ durationMinutes: "twelve", blocks: [], extra: true }, "lessons/x/lesson.md"); }
     catch (error) { message = error instanceof Error ? error.message : String(error); }
     expect(message).toMatch(/lessons\/x\/lesson\.md: unknown front matter field "extra"/);
     expect(message).toMatch(/lessons\/x\/lesson\.md: durationMinutes must be a positive number/);
-    expect(message).toMatch(/lessons\/x\/lesson\.md: outcomes must be a non-empty list/);
     expect(message).toMatch(/lessons\/x\/lesson\.md: blocks must be a non-empty ordered list/);
   });
 
-  it("rejects an outcomes list containing a non-string or empty entry", () => {
-    expect(() => validateLessonFrontMatter({ durationMinutes: 5, outcomes: ["Fine.", ""], blocks: ["a"] }, "lesson.md")).toThrow(/outcomes/);
-    expect(() => validateLessonFrontMatter({ durationMinutes: 5, outcomes: ["Fine.", 4], blocks: ["a"] }, "lesson.md")).toThrow(/outcomes/);
-  });
-
   it("rejects malformed block ids", () => {
-    expect(() => validateLessonFrontMatter({ durationMinutes: 5, outcomes: ["X"], blocks: ["Bad Id!"] }, "lesson.md")).toThrow(/blocks/);
+    expect(() => validateLessonFrontMatter({ durationMinutes: 5, blocks: ["Bad Id!"] }, "lesson.md")).toThrow(/blocks/);
   });
 
-  it("requires a non-empty tutor field for terminal-practice, reflection, and editor-practice blocks", () => {
+  it("requires a non-empty tutor and outcome field for terminal-practice, reflection, and editor-practice blocks", () => {
     expect(() => validateBlockFrontMatter({ type: "terminal-practice" }, "blocks/x.md")).toThrow(/tutor/);
+    expect(() => validateBlockFrontMatter({ type: "terminal-practice", tutor: "Do X." }, "blocks/x.md")).toThrow(/outcome/);
     expect(() => validateBlockFrontMatter({ type: "reflection", tutor: "   " }, "blocks/x.md")).toThrow(/tutor/);
+    expect(() => validateBlockFrontMatter({ type: "reflection", tutor: "Think.", outcome: "   " }, "blocks/x.md")).toThrow(/outcome/);
     expect(() => validateBlockFrontMatter({ type: "editor-practice", path: "factory/refactor.md" }, "blocks/edit.md")).toThrow(/tutor/);
-    expect(validateBlockFrontMatter({ type: "terminal-practice", tutor: "Do X." }, "blocks/x.md")).toEqual({ type: "terminal-practice", tutor: "Do X." });
+    expect(() => validateBlockFrontMatter({ type: "editor-practice", path: "factory/refactor.md", tutor: "Check one criterion." }, "blocks/edit.md")).toThrow(/outcome/);
+    expect(validateBlockFrontMatter({ type: "terminal-practice", tutor: "Do X.", outcome: "Run the command." }, "blocks/x.md")).toEqual({ type: "terminal-practice", tutor: "Do X.", outcome: "Run the command." });
   });
 
-  it("accepts editor-practice path and private tutor front matter", () => {
+  it("accepts editor-practice path, private tutor, and outcome front matter", () => {
     expect(validateBlockFrontMatter(
-      { type: "editor-practice", path: "factory/refactor.md", tutor: "Check one criterion." },
+      { type: "editor-practice", path: "factory/refactor.md", tutor: "Check one criterion.", outcome: "Refactor the line." },
       "blocks/edit.md",
-    )).toEqual({ type: "editor-practice", path: "factory/refactor.md", tutor: "Check one criterion." });
+    )).toEqual({ type: "editor-practice", path: "factory/refactor.md", tutor: "Check one criterion.", outcome: "Refactor the line." });
   });
 
   it("requires a non-empty path for editor-practice blocks", () => {
     expect(() => validateBlockFrontMatter(
-      { type: "editor-practice", tutor: "Check it." }, "blocks/edit.md",
+      { type: "editor-practice", tutor: "Check it.", outcome: "Refactor." }, "blocks/edit.md",
     )).toThrow(/path/);
     expect(() => validateBlockFrontMatter(
-      { type: "editor-practice", path: "   ", tutor: "Check it." }, "blocks/edit.md",
+      { type: "editor-practice", path: "   ", tutor: "Check it.", outcome: "Refactor." }, "blocks/edit.md",
     )).toThrow(/path/);
   });
 
   it("rejects a path field on non-editor-practice blocks", () => {
     expect(() => validateBlockFrontMatter({ type: "narrative", path: "factory/x.md" }, "blocks/x.md")).toThrow(/path/);
-    expect(() => validateBlockFrontMatter({ type: "terminal-practice", path: "factory/x.md", tutor: "Do X." }, "blocks/x.md")).toThrow(/path/);
+    expect(() => validateBlockFrontMatter({ type: "terminal-practice", path: "factory/x.md", tutor: "Do X.", outcome: "Run." }, "blocks/x.md")).toThrow(/path/);
     expect(() => validateBlockFrontMatter({ type: "reflection", path: "factory/x.md", tutor: "Think." }, "blocks/x.md")).toThrow(/path/);
   });
 
   it("rejects a tutor field on narrative blocks", () => {
     expect(() => validateBlockFrontMatter({ type: "narrative", tutor: "Not allowed." }, "blocks/x.md")).toThrow(/tutor/);
+  });
+
+  it("rejects an outcome field on narrative blocks", () => {
+    expect(() => validateBlockFrontMatter({ type: "narrative", outcome: "Not delivered here." }, "blocks/x.md")).toThrow(/outcome/);
   });
 
   it("rejects an unsupported block type", () => {

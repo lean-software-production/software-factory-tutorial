@@ -36,11 +36,10 @@ describe("v2 live-evaluation workbook fixture", () => {
     expect(chapter.title).toBe("Live evaluator session");
     expect(chapter.lesson.dek).toBe("Exercise every public block shape the live evaluator drives.");
     expect(chapter.lesson.outcomes).toEqual([
-      "Continue from a narrative block.",
-      "Submit an editor draft and wait for reviewer promotion.",
+      "Submit an editor draft and have the reviewer promote it.",
       "Run a learner-visible exact command in the embedded terminal.",
       "Attempt a clue-only terminal task without exposing private tutor guidance.",
-      "Submit a reflection and finish through a narrative close."
+      "Submit a reflection that distinguishes public instructions from private tutor guidance."
     ]);
 
     expect(chapter.lesson.blocks.map((block) => [block.id, block.type, block.title])).toEqual([

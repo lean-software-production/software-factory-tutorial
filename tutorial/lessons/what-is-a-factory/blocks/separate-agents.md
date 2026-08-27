@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Explain why separate agents are used for each stage."
 tutor: |-
   The correct answer here revolves around these points:
 

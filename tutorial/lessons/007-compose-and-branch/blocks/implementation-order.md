@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Write the repair and commit prompts, branch run.sh on an anchored validator verdict so failures route to repair and passes commit, and run the line both ways."
 tutor: |-
   Guide the learner through creating repair.md and commit.md, then editing run.sh to parse an
   anchored verdict and route FAIL or unreadable output to repair and PASS to commit. Success means

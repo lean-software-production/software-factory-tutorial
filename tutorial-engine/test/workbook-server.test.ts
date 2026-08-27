@@ -67,8 +67,6 @@ async function writeLesson(lessonDir: string, title: string, blocks: string[], i
   await writeFile(resolve(lessonDir, "lesson.md"), [
     "---",
     "durationMinutes: 10",
-    "outcomes:",
-    "  - Fixture outcome.",
     "blocks:",
     ...blocks.map((id) => `  - ${id}`),
     "---",
@@ -80,10 +78,12 @@ async function writeLesson(lessonDir: string, title: string, blocks: string[], i
 }
 
 async function writeBlock(lessonDir: string, id: string, type: string, title: string, markdown: string, tutor?: string, path?: string) {
+  const interactive = type === "terminal-practice" || type === "editor-practice" || type === "reflection";
   await writeFile(resolve(lessonDir, `blocks/${id}.md`), [
     "---",
     `type: ${type}`,
     ...(path ? [`path: ${JSON.stringify(path)}`] : []),
+    ...(interactive ? [`outcome: Fixture block outcome for ${id}.`] : []),
     ...(tutor ? [`tutor: ${JSON.stringify(tutor)}`] : []),
     "---",
     `## ${title}`,

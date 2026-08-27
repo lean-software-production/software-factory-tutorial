@@ -1,5 +1,6 @@
 ---
 type: reflection
+outcome: "Verify that multiple watchers can consume the same record without changing the line."
 tutor: |-
   Ask the learner to answer the checks from the block. A satisfactory answer confirms live output,
   tool names matching station activity, watcher independence from the run, multiple watcher jobs,

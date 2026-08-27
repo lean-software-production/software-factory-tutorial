@@ -1,7 +1,5 @@
 ---
 durationMinutes: 5
-outcomes:
-  - Exercise the scroll-driven affordances.
 blocks:
   - orientation
   - editing

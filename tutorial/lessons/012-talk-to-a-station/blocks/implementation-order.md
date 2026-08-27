@@ -1,5 +1,6 @@
 ---
 type: terminal-practice
+outcome: "Put the doer station in RPC mode with a named pipe command channel, add cleanup, write steer.sh, and steer a live run."
 tutor: |-
   Guide the learner through replacing only the doer station with RPC mode, creating and holding the
   named pipe, adding cleanup, writing steer.sh with jq -cn, extending watch.sh to show assistant
