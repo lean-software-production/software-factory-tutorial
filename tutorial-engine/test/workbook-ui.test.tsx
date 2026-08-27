@@ -1,5 +1,5 @@
 import { JSDOM } from "jsdom";
-import { act, createElement, useState } from "react";
+import { StrictMode, act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -60,7 +60,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
-import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, LessonView, completionAgeLabel, navigateToAnchor, scrollActiveLessonIntoView, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
+import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, LessonView, completionAgeLabel, navigateToAnchor, scrollActiveLessonIntoView, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
 import { lessonAnchorHref, lessonElementId } from "../src/workbook/lesson-links.js";
 
 const progress: Progress = {
@@ -1526,6 +1526,65 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector("#part--validation-loop .ready-successor-scroll-runway")).toBeTruthy();
     expect(container.querySelector(".composer-contextual-continuation button")).toBeNull();
     expect(scrollBy).not.toHaveBeenCalled();
+  });
+
+  it("derives the scroll runway from server state alone across a block's ready-to-active life", () => {
+    const { initialState, completedState } = scrollPromotionFixture();
+    // While the introduction's work is accepted, the runway belongs to the ready successor.
+    expect(scrollRunwayBlockIds(initialState)).toEqual(["part--validation-loop"]);
+    // The successor keeps it once the learner continues into it and it leaves readyBlockIds.
+    expect(scrollRunwayBlockIds(completedState)).toEqual(["part--validation-loop"]);
+    // A block whose predecessor was never work-accepted was never a ready successor.
+    const unaccepted = { ...completedState, progress: { ...completedState.progress, workAcceptedBlocks: [], blocks: completedState.progress.blocks.map((block: any) => ({ ...block, workAccepted: false })) } };
+    expect(scrollRunwayBlockIds(unaccepted)).toEqual([]);
+    // Once its own work is accepted the next block is ready, and only that one carries the runway.
+    const nextReady = { ...completedState, readyBlockIds: ["lesson--001-first"], progress: { ...completedState.progress, readyBlocks: ["lesson--001-first"] } };
+    expect(scrollRunwayBlockIds(nextReady)).toEqual(["lesson--001-first"]);
+    // A finished workbook has nothing left to scroll towards.
+    expect(scrollRunwayBlockIds({ ...completedState, progress: { ...completedState.progress, workbookComplete: true } })).toEqual([]);
+  });
+
+  it("renders the ready runway for a promoted block on a fresh load, with no memory of an earlier render", async () => {
+    const { completedState } = scrollPromotionFixture();
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => completedState }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("IntersectionObserver", class { observe = vi.fn(); disconnect = vi.fn(); } as any);
+
+    const container = await mount(createElement(App), (win) => {
+      stubAppShellGlobals(win);
+      vi.stubGlobal("history", { pushState: vi.fn(), replaceState: vi.fn() });
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.querySelector("#part--validation-loop .ready-successor-scroll-runway")).toBeTruthy();
+    expect(container.querySelectorAll(".ready-successor-scroll-runway")).toHaveLength(1);
+  });
+
+  it("keeps the ready runway across promotion while StrictMode double-invokes the render", async () => {
+    const { initialState, completedState } = scrollPromotionFixture();
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? { outcome: "completed", state: completedState, navigationTarget: "part--validation-loop" } : initialState }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("IntersectionObserver", class { observe = vi.fn(); disconnect = vi.fn(); } as any);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
+
+    const container = await mount(createElement(StrictMode, null, createElement(App)), (win) => {
+      stubAppShellGlobals(win);
+      win.HTMLElement.prototype.scrollIntoView = () => {};
+      vi.stubGlobal("history", { pushState: vi.fn(), replaceState: vi.fn() });
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.querySelector("#part--validation-loop .ready-successor-scroll-runway")).toBeTruthy();
+
+    const continueButton = container.querySelector<HTMLButtonElement>("#workbook--introduction .continuation-controls > button")!;
+    await act(async () => {
+      continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector("#part--validation-loop .ready-successor-scroll-runway")).toBeTruthy();
+    expect(container.querySelectorAll(".ready-successor-scroll-runway")).toHaveLength(1);
   });
 
   it("keeps explicit Continue in the document canvas after tutor chat and uses the normal navigation path", async () => {
