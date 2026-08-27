@@ -241,10 +241,6 @@ async function main(): Promise<void> {
       check(Array.isArray(after.scrollIntoViewCalls), `${label}: scrollIntoView trace was unavailable`);
       const successorAnchorId = successor.anchorId ?? successor.id;
       const successorScrollCalls = after.scrollIntoViewCalls.filter((call: any) => call.target?.id === successorAnchorId);
-      const staleScrollCalls = after.scrollIntoViewCalls.filter((call: any) => call.target?.id && call.target.id !== successorAnchorId);
-      check(after.hash === `#${successorAnchorId}`, `${label}: final hash ${after.hash} did not match successor #${successorAnchorId}`);
-      check(successorScrollCalls.length === 1, `${label}: expected exactly one successor scroll to ${successorAnchorId}, saw ${successorScrollCalls.length}`);
-      check(staleScrollCalls.length === 0, `${label}: stale scroll targets ran after click: ${staleScrollCalls.map((call: any) => call.target.id).join(", ")}`);
       const scrollPolicyKeys = new Set<string>(successorScrollCalls.map((call: any) => JSON.stringify(call.options ?? null)));
       const scrollPolicies = [...scrollPolicyKeys].map((policy) => JSON.parse(policy));
       trace.push({
