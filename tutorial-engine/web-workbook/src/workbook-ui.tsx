@@ -31,50 +31,29 @@ export type State = PublicWorkbookState;
 
 function parseStateOrCompletion(value: unknown): State | CompleteBlockResult { return isPublicWorkbookState(value) ? value : parsePublicCompleteBlockResult(value); }
 
-async function completeBlockRequest(blockId: string): Promise<CompleteBlockResult> {
-  const response = await fetch("api/workbook/complete-block", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId }) });
+/**
+ * Every workbook request goes through here, so the address and the validation are decided once
+ * rather than per call site. The path stays relative to the page: the bundle is built with
+ * `base: "./"` and the server matches its routes by suffix, so a workbook served under a path
+ * prefix still reaches its own API. A body means a JSON POST; no body means a GET. Nothing reaches
+ * React until `parse` has agreed the response is the shape it claims to be.
+ */
+async function request<T>(path: string, body: object | undefined, parse: (value: unknown) => T): Promise<T> {
+  const init: RequestInit = body === undefined ? { method: "GET" } : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const response = await fetch(`api/workbook/${path}`, init);
   if (!response.ok) throw new Error(await response.text());
-  return parsePublicCompleteBlockResult(await response.json());
+  return parse(await response.json());
 }
 
-async function completeIntroduction(): Promise<State | CompleteBlockResult> {
-  const response = await fetch("api/workbook/introduction", { method: "POST" });
-  if (!response.ok) throw new Error(await response.text());
-  return parseStateOrCompletion(await response.json());
-}
-
-async function post(blockId: string, body: object): Promise<State | CompleteBlockResult> {
-  const response = await fetch("api/workbook/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, ...body }) });
-  if (!response.ok) throw new Error(await response.text());
-  return parseStateOrCompletion(await response.json());
-}
-
-async function postEditorDraft(blockId: string, revision: number, text: string): Promise<State> {
-  const response = await fetch("/api/workbook/editor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision, text }) });
-  if (!response.ok) throw new Error(await response.text());
-  return parsePublicWorkbookState(await response.json());
-}
+const completeBlockRequest = (blockId: string) => request("complete-block", { blockId }, parsePublicCompleteBlockResult);
+const post = (blockId: string, body: object) => request("events", { blockId, ...body }, parseStateOrCompletion);
+const postEditorDraft = (blockId: string, revision: number, text: string) => request("editor", { blockId, revision, text }, parsePublicWorkbookState);
+const postTutorMessage = (blockId: string, text: string, blockInView?: string) => request("messages", { blockId, text, blockInView }, parsePublicWorkbookState);
+const retryTutorOperation = (failureId: string) => request("retry", { failureId }, parsePublicWorkbookState);
+const readWorkbookState = () => request("state", undefined, parsePublicWorkbookState);
 
 const INTRODUCTION_BLOCK_ID = "workbook--introduction";
 const INTRODUCTION_LESSON_ID = "workbook--introduction";
-
-async function postTutorMessage(blockId: string, text: string, blockInView?: string): Promise<State> {
-  const response = await fetch("/api/workbook/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, text, blockInView }) });
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
-}
-
-async function retryTutorOperation(failureId: string): Promise<State> {
-  const response = await fetch("/api/workbook/retry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId }) });
-  if (!response.ok) throw new Error(await response.text());
-  return parsePublicWorkbookState(await response.json());
-}
-
-async function readWorkbookState(): Promise<State> {
-  const response = await fetch("/api/workbook/state");
-  if (!response.ok) throw new Error(await response.text());
-  return parsePublicWorkbookState(await response.json());
-}
 
 function stateFromCompletion(result: State | CompleteBlockResult): State { return "outcome" in result ? result.state : result; }
 function navigationTargetFrom(result: State | CompleteBlockResult): string | undefined { return "outcome" in result && result.outcome === "completed" ? result.navigationTarget : undefined; }

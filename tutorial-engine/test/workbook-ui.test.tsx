@@ -305,7 +305,7 @@ describe("workbook lesson UI", () => {
     const { completedState } = scrollPromotionFixture();
     const reloadedState = { ...completedState, workbook: { title: "Reloaded Workbook" }, introduction: "Reloaded intro copy.", timeline: [{ ...completedState.timeline[0], text: "# Reloaded Workbook\n\nReloaded intro copy." }, ...completedState.timeline.slice(1)] } as any;
     FakeEventSource.reset();
-    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => ({ ok: true, json: async () => String(input).startsWith("/api/workbook/state") ? reloadedState : completedState }));
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => ({ ok: true, json: async () => String(input).startsWith("api/workbook/state") ? reloadedState : completedState }));
     const scrollIntoView = vi.fn();
     const replaceState = vi.fn();
     const pushState = vi.fn();
@@ -335,7 +335,7 @@ describe("workbook lesson UI", () => {
 
     scrollIntoView.mockClear();
     await act(async () => { FakeEventSource.instances[0]!.emit("content-reloaded", { generation: 2 }); await Promise.resolve(); });
-    expect(fetchMock).toHaveBeenCalledWith("/api/workbook/state");
+    expect(fetchMock).toHaveBeenCalledWith("api/workbook/state", { method: "GET" });
     expect(container.textContent).toContain("Reloaded Workbook");
     expect(container.textContent).toContain("Reloaded intro copy.");
     expect(container.textContent).not.toContain("Author reload failed.");
@@ -1029,7 +1029,7 @@ describe("workbook lesson UI", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]![0]).toBe("/api/workbook/editor");
+    expect(fetchMock.mock.calls[0]![0]).toBe("api/workbook/editor");
     expect(fetchMock.mock.calls[0]![1]).toMatchObject({ method: "POST", headers: { "Content-Type": "application/json" } });
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ blockId: "edit-answer", revision: 1, text: "second draft" });
   });
@@ -1770,7 +1770,7 @@ describe("workbook lesson UI", () => {
     await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
     const sendButton = container.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!;
     await act(async () => { sendButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
-    const messageCall = fetchMock.mock.calls.find(([url]) => url === "/api/workbook/messages");
+    const messageCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/messages");
     expect(messageCall).toBeTruthy();
     expect(JSON.parse((messageCall![1] as RequestInit).body as string)).toEqual({ blockId: "workbook--introduction", text: "Can I ask first?" });
 
@@ -2280,7 +2280,7 @@ describe("workbook lesson UI", () => {
     const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/complete-block");
     expect(eventCall).toBeTruthy();
     expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "reflect" });
-    expect(fetchMock.mock.calls.find(([url]) => url === "/api/workbook/messages")).toBeUndefined();
+    expect(fetchMock.mock.calls.find(([url]) => url === "api/workbook/messages")).toBeUndefined();
   });
 
   it("disables reflection follow-up while the current attempt is reviewing", async () => {
@@ -2348,5 +2348,83 @@ describe("workbook lesson UI", () => {
     const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/events");
     expect(eventCall).toBeTruthy();
     expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "reflect", action: "reflection-follow-up", response: "Second answer" });
+  });
+
+  it("rejects a malformed tutor message response instead of rendering it", async () => {
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: false,
+      chapters: [chapter({ lesson: undefined } as any)],
+      progress,
+      adapter: {},
+      timeline: [{ type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nTimeline intro copy." }]
+    } as any;
+    const malformed = { error: "MALFORMED_TUTOR_REPLY" };
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => ({ ok: true, json: async () => String(input).endsWith("api/workbook/messages") ? malformed : state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+    textarea.value = "Is this thing on?";
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+
+    const rejections: unknown[] = [];
+    const onUnhandledRejection = (error: unknown) => { rejections.push(error); };
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      const sendButton = container.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!;
+      await act(async () => { sendButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+      await act(async () => { await Promise.resolve().then(() => Promise.resolve()); });
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("api/workbook/messages"))).toBe(true);
+    expect(rejections.map((error) => String(error)).join(" ")).toContain("invalid public state");
+    expect(container.textContent).toContain("Timeline intro copy.");
+    expect(container.textContent).not.toContain("MALFORMED_TUTOR_REPLY");
+    expect(textarea.value).toBe("Is this thing on?");
+  });
+
+  it("addresses every workbook request relatively so a workbook mounted under a sub-path still reaches its own API", async () => {
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: false,
+      chapters: [chapter({ lesson: undefined } as any)],
+      progress,
+      adapter: {},
+      timeline: [
+        { type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nTimeline intro copy." },
+        { type: "tutor_failed", id: "failed", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", failureId: "failure-1", operation: "message", publicMessage: "The tutor is unavailable." }
+      ]
+    } as any;
+    FakeEventSource.reset();
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => ({ ok: true, json: async () => String(input).endsWith("api/workbook/complete-block") ? { outcome: "already-completed", state } : state }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", FakeEventSource as any);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
+    textarea.value = "Where do I start?";
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    const sendButton = container.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!;
+    await act(async () => { sendButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+
+    const retryButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
+    await act(async () => { retryButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+
+    const continueButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Ready to continue")!;
+    await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls.filter((url) => url.startsWith("/"))).toEqual([]);
+    expect(new Set(urls)).toEqual(new Set(["api/workbook/state", "api/workbook/messages", "api/workbook/retry", "api/workbook/complete-block"]));
+    expect(FakeEventSource.instances[0]!.url).toBe("api/workbook/timeline");
   });
 });
