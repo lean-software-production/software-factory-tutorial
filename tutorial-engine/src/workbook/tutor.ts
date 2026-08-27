@@ -133,12 +133,57 @@ function isNothingToCompactError(error: unknown): boolean {
   return error instanceof Error && error.message === NOTHING_TO_COMPACT;
 }
 
+function compactFallbackText(text: string, maximum = 220): string {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  if (normalized.length <= maximum) return normalized;
+  return `${normalized.slice(0, maximum - 1).trimEnd()}…`;
+}
+
 function shortContextBlockSummary(input: MainTutorContext & { lessonId: string; blockId: string }): string {
   const accepted = [...input.records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }> =>
     record.type === "attempt_accepted" && record.lessonId === input.lessonId && record.blockId === input.blockId);
-  const acceptedEvidence = accepted?.summary.trim();
+  const acceptedEvidence = accepted ? compactFallbackText(accepted.summary) : "";
   const prefix = `Completed workbook block ${input.lessonId}/${input.blockId}.`;
   return acceptedEvidence ? `${prefix} Accepted evidence: ${acceptedEvidence}`.slice(0, 1_000) : prefix;
+}
+
+function latestByKey<T extends { sequence: number }>(items: readonly T[], keyFor: (item: T) => string): T[] {
+  const latest = new Map<string, T>();
+  for (const item of [...items].sort((left, right) => left.sequence - right.sequence)) latest.set(keyFor(item), item);
+  return [...latest.values()].sort((left, right) => left.sequence - right.sequence);
+}
+
+function lessonAuthoredHistory(input: MainTutorContext & { lessonId: string }): string[] {
+  return input.records
+    .filter((record): record is TimelineMessage => record.type === "message" && record.lessonId === input.lessonId && record.source === "authored")
+    .sort((left, right) => left.sequence - right.sequence)
+    .map((record) => `${record.blockId}: ${compactFallbackText(record.text)}`)
+    .filter(Boolean);
+}
+
+function authoredHistorySuffix(input: MainTutorContext & { lessonId: string }): string {
+  const history = lessonAuthoredHistory(input);
+  return history.length > 0 ? ` Authored history: ${history.join(" ")}` : "";
+}
+
+function shortContextLessonSummary(input: MainTutorContext & { lessonId: string }): string {
+  const prefix = `Completed workbook lesson ${input.lessonId}.`;
+  const blockSummaries = latestByKey(input.records.filter((record): record is Extract<WorkbookTimelineRecord, { type: "block_summarized" }> =>
+    record.type === "block_summarized" && record.lessonId === input.lessonId), (record) => record.blockId);
+  if (blockSummaries.length > 0) {
+    const summaries = blockSummaries.map((record) => `${record.blockId}: ${compactFallbackText(record.text)}`).join(" ");
+    return `${prefix} Completed block summaries: ${summaries}${authoredHistorySuffix(input)}`.slice(0, 1_000);
+  }
+
+  const accepted = latestByKey(input.records.filter((record): record is Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }> =>
+    record.type === "attempt_accepted" && record.lessonId === input.lessonId), (record) => record.blockId);
+  if (accepted.length > 0) {
+    const evidence = accepted.map((record) => `${record.blockId}: ${compactFallbackText(record.summary)}`).join(" ");
+    return `${prefix} Accepted evidence: ${evidence}${authoredHistorySuffix(input)}`.slice(0, 1_000);
+  }
+
+  const history = lessonAuthoredHistory(input);
+  return history.length > 0 ? `${prefix} History retained: ${history.join(" ")}`.slice(0, 1_000) : prefix;
 }
 
 function requiredText(text: string, label: string): string {
@@ -342,8 +387,13 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
   summarizeLesson(input: MainTutorContext & { lessonId: string; coveredThroughId: string }): Promise<string> {
     return this.#enqueue(async () => {
       const session = await this.#ensureSession(input);
-      const result = await session.compact(`Summarize only completed workbook lesson ${input.lessonId} through ${input.coveredThroughId}. Retain completed block goals, accepted evidence in concise form, and material learner context. Do not claim filesystem, shell, network, or workspace observations.`);
-      return result.summary;
+      try {
+        const result = await session.compact(`Summarize only completed workbook lesson ${input.lessonId} through ${input.coveredThroughId}. Retain completed block goals, accepted evidence in concise form, and material learner context. Do not claim filesystem, shell, network, or workspace observations.`);
+        return result.summary;
+      } catch (error) {
+        if (isNothingToCompactError(error)) return shortContextLessonSummary(input);
+        throw error;
+      }
     });
   }
 

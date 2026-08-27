@@ -296,6 +296,22 @@ describe("MainWorkbookTutor", () => {
     await expect(tutor.summarizeBlock({ records, lessonId: "lesson", blockId: "block", coveredThroughId: "complete-2" })).rejects.toThrow("compaction provider unavailable");
   });
 
+  it("records a usable lesson summary when Pi reports a short context needs no compaction", async () => {
+    const session = new FakeSession({ systemPrompt: "", customTools: [], tools: [], history: { summaries: [], turns: [] } satisfies MainTutorHistoryProjection });
+    const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", sessionFactory: async () => session });
+    session.compactError = new Error("Nothing to compact (session too small)");
+    const records: WorkbookTimelineRecord[] = [
+      message("authored-1", 1, "authored", "assistant", "## Orientation\n\nRead the authored narrative."),
+      { id: "summary-1", sequence: 2, at: "2026-08-21T00:00:02.000Z", type: "block_summarized", lessonId: "lesson", blockId: "block-a", text: "The learner completed the first practice block.", coveredThroughId: "complete-1" },
+      { id: "summary-2", sequence: 3, at: "2026-08-21T00:00:03.000Z", type: "block_summarized", lessonId: "lesson", blockId: "block-b", text: "The learner completed the second practice block.", coveredThroughId: "complete-2" },
+    ];
+
+    await expect(tutor.summarizeLesson({ records, lessonId: "lesson", coveredThroughId: "complete-lesson" })).resolves.toBe("Completed workbook lesson lesson. Completed block summaries: block-a: The learner completed the first practice block. block-b: The learner completed the second practice block. Authored history: block: ## Orientation Read the authored narrative.");
+
+    session.compactError = new Error("compaction provider unavailable");
+    await expect(tutor.summarizeLesson({ records, lessonId: "lesson", coveredThroughId: "complete-lesson-2" })).rejects.toThrow("compaction provider unavailable");
+  });
+
   it("rejects empty material review feedback instead of inventing generic feedback", async () => {
     const session = new FakeSession({ systemPrompt: "", customTools: [], tools: [], history: { summaries: [], turns: [] } satisfies MainTutorHistoryProjection });
     const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", sessionFactory: async () => session });

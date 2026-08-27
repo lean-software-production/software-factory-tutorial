@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkbook } from "../src/workbook/load.js";
 import { startWorkbookServer } from "../src/workbook/server.js";
 import { tutorialStatePath } from "../src/workbook/tutorial-state.js";
+import { DefaultMainWorkbookTutor, type WorkbookTutorSessionFactoryRequest } from "../src/workbook/tutor.js";
+import type { WorkbookTimelineRecord } from "../src/workbook/timeline.js";
 import { buildWorkbookBlockStream } from "../src/workbook/workbook-blocks.js";
 
 let dirs: string[] = [];
@@ -112,6 +114,54 @@ describe("workbook block progression", () => {
     } finally { await server.close(); }
   });
 
+  it("does not compact declared narratives, but still summarizes evaluated departures and benign lesson no-ops", async () => {
+    const dir = await fixture();
+    const compactInstructions: string[] = [];
+    const tutor = new DefaultMainWorkbookTutor({ workspace: dir, sessionFactory: async (request: WorkbookTutorSessionFactoryRequest) => ({
+      async prompt(prompt: string) {
+        if (prompt.includes("WORKBOOK ATTEMPT REVIEW")) {
+          await (request.customTools.find((tool: any) => tool.name === "accept_current_attempt") as any).execute("tool-call", {});
+          return "Accepted editor answer.";
+        }
+        return "Tutor reply.";
+      },
+      async compact(instruction: string) {
+        compactInstructions.push(instruction);
+        if (instruction.includes("completed workbook lesson")) throw new Error("Nothing to compact (session too small)");
+        return { summary: "Compacted edit block." };
+      },
+      dispose() {}
+    }) });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor, practiceCoach: fakePracticeCoach() });
+    try {
+      await complete(server.url, "workbook--introduction");
+      await complete(server.url, "part--validation-loop");
+      await complete(server.url, "lesson--001-first");
+      await complete(server.url, "lesson--001-first--orientation");
+      expect(compactInstructions).toEqual([]);
+
+      const draft = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", text: "The answer is 42." }) });
+      expect(draft.status).toBe(202);
+      await waitForState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted");
+      await complete(server.url, "lesson--001-first--edit-answer");
+      expect(compactInstructions.filter((instruction) => instruction.includes("completed workbook block"))).toHaveLength(1);
+      expect(compactInstructions[0]).toContain("lesson--001-first--edit-answer");
+
+      await complete(server.url, "lesson--001-first--finish");
+      const blockCompactions = compactInstructions.filter((instruction) => instruction.includes("completed workbook block"));
+      expect(blockCompactions).toHaveLength(1);
+      expect(blockCompactions.join("\n")).not.toContain("orientation");
+      expect(blockCompactions.join("\n")).not.toContain("finish");
+
+      const records = await timelineRecords(dir);
+      expect(records).toContainEqual(expect.objectContaining({ type: "block_summarized", lessonId: "001-first", blockId: "lesson--001-first--edit-answer", text: "Compacted edit block." }));
+      expect(records).toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
+      expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId: "lesson--001-first--orientation" }));
+      expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId: "lesson--001-first--finish" }));
+      expect(records).not.toContainEqual(expect.objectContaining({ type: "tutor_failed" }));
+    } finally { await server.close(); }
+  });
+
   it("promotes the same ready successor by button or tutor and duplicate crossings cannot skip", async () => {
     const dir = await fixture();
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor(), practiceCoach: fakePracticeCoach() });
@@ -157,9 +207,12 @@ async function postMessage(serverUrl: string, body: unknown) {
 
 function block(state: any, id: string) { return state.progress.blocks.find((candidate: any) => candidate.id === id); }
 function authoredCourseBlocks(state: any): string[] { return state.timeline.filter((record: any) => record.type === "message" && record.source === "authored" && record.presentation === "course").map((record: any) => record.blockId); }
-async function workAcceptedEvents(dir: string, blockId: string) {
+async function timelineRecords(dir: string): Promise<WorkbookTimelineRecord[]> {
   const text = await readFile(tutorialStatePath(dir, "workbook", "events.jsonl"), "utf8");
-  return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)).filter((record) => record.type === "work_accepted" && record.blockId === blockId);
+  return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as WorkbookTimelineRecord);
+}
+async function workAcceptedEvents(dir: string, blockId: string) {
+  return (await timelineRecords(dir)).filter((record) => record.type === "work_accepted" && record.blockId === blockId);
 }
 async function waitForState(serverUrl: string, predicate: (state: any) => boolean) {
   for (let index = 0; index < 50; index += 1) {

@@ -952,17 +952,18 @@ describe("workbook browser API", () => {
     });
     try {
       await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
       const failed = (await state(server.url)).timeline.find((record: any) => record.type === "tutor_failed" && record.operation === "block_summary");
-      expect(failed).toMatchObject({ lessonId: "001-first", blockId: "lesson--001-first--orientation" });
+      expect(failed).toMatchObject({ lessonId: "001-first", blockId: "lesson--001-first--edit-answer" });
 
       expect((await fetch(`${server.url}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId: failed.failureId }) })).status).toBe(202);
 
       const failures = (await privateTimeline(dir)).filter((record): record is Extract<WorkbookTimelineRecord, { type: "tutor_failed" }> => record.type === "tutor_failed" && record.operation === "block_summary");
       expect(failures).toHaveLength(2);
       for (const failure of failures) {
-        expect(failure).toMatchObject({ lessonId: "001-first", blockId: "lesson--001-first--orientation", requestId: expect.any(String) });
+        expect(failure).toMatchObject({ lessonId: "001-first", blockId: "lesson--001-first--edit-answer", requestId: expect.any(String) });
       }
-      const prefix = `Workbook tutor block_summary failed for 001-first/lesson--001-first--orientation (request ${failures[0]!.requestId}):`;
+      const prefix = `Workbook tutor block_summary failed for 001-first/lesson--001-first--edit-answer (request ${failures[0]!.requestId}):`;
       expect(logs).toContain(`${prefix} initial block summary failure`);
       expect(logs).toContain(`${prefix} retry block summary failure`);
     } finally { await server.close(); }

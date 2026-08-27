@@ -548,10 +548,12 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
 
 
   const summarizeDeparture = async (leaving: DeclaredWorkbookBlock, workflowId: string): Promise<void> => {
-    try { await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text: requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId: workflowId }), "block_summary"), coveredThroughId: workflowId }); }
-    catch (error) {
-      logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId }, error);
-      await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId, operation: "block_summary", publicMessage: TUTOR_UNAVAILABLE });
+    if (isEvaluatedBlock(leaving.block)) {
+      try { await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text: requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId: workflowId }), "block_summary"), coveredThroughId: workflowId }); }
+      catch (error) {
+        logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId }, error);
+        await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId, operation: "block_summary", publicMessage: TUTOR_UNAVAILABLE });
+      }
     }
     const projection = currentWorkbookProjection();
     const lessonComplete = stream.filter((block) => block.origin === "declared" && block.lessonId === leaving.lessonId).every((block) => projection.completedBlockIds.has(block.id));
