@@ -8,10 +8,14 @@ import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, resolve } from "node:path";
-import type { PublicCompleteBlockResult, PublicWorkbookLesson, PublicWorkbookState } from "../src/workbook/public-contract.js";
+import { formatDeclaredBlockText, formatLessonFrameText, formatWorkbookIntroductionText } from "../src/workbook/authored-text.js";
+import type { PublicCompleteBlockResult, PublicTimelineRecord, PublicWorkbookLesson, PublicWorkbookState } from "../src/workbook/public-contract.js";
 
 const webRoot = resolve(import.meta.dirname, "../dist/web-workbook");
 const mime: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" };
+
+const workbookTitle = "Smoke workbook";
+const workbookIntroduction = "Welcome to the v2 workbook smoke.";
 
 const lesson: PublicWorkbookLesson = {
   id: "01-smoke/01-current-rendering",
@@ -26,12 +30,33 @@ const lesson: PublicWorkbookLesson = {
   ],
 };
 
+/**
+ * The authored course rows the browser renders, over this double's own block ids. Their Markdown
+ * comes from the same formatters the server composes blocks with, so the smoke cannot drift from
+ * the text a real workbook sends. A row appears once its block is revealed, which is what makes
+ * the thread grow as the smoke walks the workbook.
+ */
+function authoredRecord(id: string, sequence: number, lessonId: string, blockId: string, text: string): PublicTimelineRecord {
+  return { type: "message", id, sequence, at: `2026-08-21T00:00:${String(sequence).padStart(2, "0")}.000Z`, lessonId, blockId, role: "assistant", source: "authored", presentation: "course", text };
+}
+
+const introductionRecord = authoredRecord("introduction", 1, "workbook--introduction", "workbook--introduction", formatWorkbookIntroductionText({ title: workbookTitle, markdown: workbookIntroduction }));
+const lessonFrameRecord = authoredRecord("lesson-frame", 2, lesson.id, `lesson--${lesson.id}`, formatLessonFrameText(lesson));
+const orientationRecord = authoredRecord("orientation", 3, lesson.id, "orientation", formatDeclaredBlockText(lesson.blocks[0]!));
+const practiceRecord = authoredRecord("practice", 4, lesson.id, "practice", formatDeclaredBlockText(lesson.blocks[1]!));
+
+function timeline(stage: "intro" | "lesson" | "practice" | "practice-feedback"): PublicTimelineRecord[] {
+  if (stage === "intro") return [introductionRecord];
+  if (stage === "lesson") return [introductionRecord, lessonFrameRecord, orientationRecord];
+  return [introductionRecord, lessonFrameRecord, orientationRecord, practiceRecord];
+}
+
 function state(stage: "intro" | "lesson" | "practice" | "practice-feedback"): PublicWorkbookState {
   const introductionComplete = stage !== "intro";
   const visibleLesson = introductionComplete ? lesson : undefined;
   return {
-    workbook: { title: "Smoke workbook" },
-    introduction: "Welcome to the v2 workbook smoke.",
+    workbook: { title: workbookTitle },
+    introduction: workbookIntroduction,
     introductionComplete,
     chapters: [{ id: lesson.id, title: lesson.title, part: "Part 1 — Smoke", partMarkdown: "Part copy.", partNumber: 1, lessonNumber: 1, lesson: visibleLesson }],
     progress: {
@@ -48,6 +73,7 @@ function state(stage: "intro" | "lesson" | "practice" | "practice-feedback"): Pu
       reflectionConversations: {},
     },
     adapter: { modelBackedHelp: false, note: "Smoke server." },
+    timeline: timeline(stage),
   };
 }
 

@@ -153,7 +153,7 @@ function activeBlockProgress(block: { id: string; type: string }, overrides: Par
 
 // HTTP mocks use the same complete response shape the browser validates in production.
 function workbookState(progress: Progress): State {
-  return { workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: true, chapters: [chapter()], progress, adapter: {} };
+  return { workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: true, chapters: [chapter()], progress, adapter: {}, timeline: [] };
 }
 
 let mountedRoot: Root | undefined;
@@ -1236,25 +1236,35 @@ describe("workbook lesson UI", () => {
     expect(lessonMarkup).not.toMatch(/<p class="eyebrow">Lesson 1\d/);
   });
 
-  it("renders each part roadmap once even when a part has multiple lessons", async () => {
+  it("renders each part preamble once even when a part has multiple lessons", async () => {
     const partALessonOne = { ...lesson, id: "part-a/lesson-one", title: "Part A Lesson One" };
     const partALessonTwo = { ...lesson, id: "part-a/lesson-two", title: "Part A Lesson Two" };
     const partBLessonOne = { ...lesson, id: "part-b/lesson-one", title: "Part B Lesson One" };
     const chapters: Chapter[] = [
-      { id: partALessonOne.id, title: partALessonOne.title, part: "Part A", partMarkdown: "Part A copy.", partNumber: 1, lessonNumber: 1, lesson: partALessonOne },
-      { id: partALessonTwo.id, title: partALessonTwo.title, part: "Part A", partMarkdown: "Part A copy.", partNumber: 1, lessonNumber: 2, lesson: partALessonTwo },
-      { id: partBLessonOne.id, title: partBLessonOne.title, part: "Part B", partMarkdown: "Part B copy.", partNumber: 2, lessonNumber: 3, lesson: partBLessonOne },
+      { id: partALessonOne.id, title: partALessonOne.title, part: "Part A", partId: "part-a", partMarkdown: "Part A copy.", partNumber: 1, lessonNumber: 1, lesson: partALessonOne },
+      { id: partALessonTwo.id, title: partALessonTwo.title, part: "Part A", partId: "part-a", partMarkdown: "Part A copy.", partNumber: 1, lessonNumber: 2, lesson: partALessonTwo },
+      { id: partBLessonOne.id, title: partBLessonOne.title, part: "Part B", partId: "part-b", partMarkdown: "Part B copy.", partNumber: 2, lessonNumber: 3, lesson: partBLessonOne },
     ];
     const appProgress: Progress = { ...progress, activeLessonId: partALessonOne.id, completedLessons: [] };
-    const state = { workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: true, chapters, progress: appProgress, adapter: {} };
+    // A part opens the thread once and its lessons follow it, so two lessons in one part still
+    // produce a single part preamble row.
+    const timeline = [
+      { type: "message", id: "part-a", sequence: 1, at: "2026-08-21T00:00:01.000Z", lessonId: "workbook:part:part-a", blockId: "part--part-a", role: "assistant", source: "authored", presentation: "course", text: "# Part A\n\nPart A copy." },
+      { type: "message", id: "part-a-lesson-one", sequence: 2, at: "2026-08-21T00:00:02.000Z", lessonId: partALessonOne.id, blockId: `lesson--${partALessonOne.id}`, role: "assistant", source: "authored", presentation: "course", text: "# Part A Lesson One\n\nDek paragraph." },
+      { type: "message", id: "part-a-lesson-two", sequence: 3, at: "2026-08-21T00:00:03.000Z", lessonId: partALessonTwo.id, blockId: `lesson--${partALessonTwo.id}`, role: "assistant", source: "authored", presentation: "course", text: "# Part A Lesson Two\n\nDek paragraph." },
+      { type: "message", id: "part-b", sequence: 4, at: "2026-08-21T00:00:04.000Z", lessonId: "workbook:part:part-b", blockId: "part--part-b", role: "assistant", source: "authored", presentation: "course", text: "# Part B\n\nPart B copy." },
+      { type: "message", id: "part-b-lesson-one", sequence: 5, at: "2026-08-21T00:00:05.000Z", lessonId: partBLessonOne.id, blockId: `lesson--${partBLessonOne.id}`, role: "assistant", source: "authored", presentation: "course", text: "# Part B Lesson One\n\nDek paragraph." },
+    ];
+    const state = { workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: true, chapters, progress: appProgress, adapter: {}, timeline };
     const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
     vi.stubGlobal("fetch", fetchMock);
 
     const container = await mount(createElement(App), stubAppShellGlobals);
 
-    expect(container.querySelectorAll(".part-chapter")).toHaveLength(2);
-    expect(container.textContent).toContain("Part A copy.");
-    expect(container.textContent).toContain("Part B copy.");
+    const occurrences = (text: string) => container.textContent!.split(text).length - 1;
+    expect(container.querySelectorAll(".timeline-part-transition")).toHaveLength(2);
+    expect(occurrences("Part A copy.")).toBe(1);
+    expect(occurrences("Part B copy.")).toBe(1);
   });
 
   it("scrolls to the active lesson's sanitized DOM id", () => {
