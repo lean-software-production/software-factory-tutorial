@@ -130,8 +130,9 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
       sseClients.add(response);
       sendSse(response, "timeline", workflow.timeline());
-      const unsubscribe = workflow.subscribe((record) => sendSse(response, "record", record));
-      request.on("close", () => { unsubscribe(); sseClients.delete(response); });
+      const unsubscribeRecords = workflow.subscribe((record) => sendSse(response, "record", record));
+      const unsubscribeState = workflow.subscribeState((event) => sendSse(response, "state", event));
+      request.on("close", () => { unsubscribeRecords(); unsubscribeState(); sseClients.delete(response); });
       return;
     }
     if (request.method === "GET" && isRoute(url.pathname, "state")) return sendJson(response, 200, await workflow.state());

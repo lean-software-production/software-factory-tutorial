@@ -26,7 +26,7 @@ const lesson: PublicWorkbookLesson = {
   ],
 };
 
-function state(stage: "intro" | "lesson" | "practice"): PublicWorkbookState {
+function state(stage: "intro" | "lesson" | "practice" | "practice-feedback"): PublicWorkbookState {
   const introductionComplete = stage !== "intro";
   const visibleLesson = introductionComplete ? lesson : undefined;
   return {
@@ -36,12 +36,12 @@ function state(stage: "intro" | "lesson" | "practice"): PublicWorkbookState {
     chapters: [{ id: lesson.id, title: lesson.title, part: "Part 1 — Smoke", partMarkdown: "Part copy.", partNumber: 1, lessonNumber: 1, lesson: visibleLesson }],
     progress: {
       activeLessonId: lesson.id,
-      activeBlockId: stage === "practice" ? "practice" : "orientation",
+      activeBlockId: stage === "practice" || stage === "practice-feedback" ? "practice" : "orientation",
       completedLessons: [],
-      blocks: stage === "practice"
+      blocks: stage === "practice" || stage === "practice-feedback"
         ? [
           { id: "orientation", type: "narrative", ready: true, active: false, completed: true, verified: false, emerged: true },
-          { id: "practice", type: "terminal-practice", ready: true, active: true, completed: false, verified: false, emerged: true },
+          { id: "practice", type: "terminal-practice", ready: true, active: true, completed: false, verified: false, emerged: true, checkpoint: stage === "practice-feedback" ? { status: "feedback", feedback: "SSE review feedback." } : { status: "reviewing" } },
         ]
         : [{ id: "orientation", type: "narrative", ready: true, active: true, completed: false, verified: false, emerged: true }],
       reflections: {},
@@ -74,12 +74,23 @@ async function main(): Promise<void> {
   try { playwright = await import(moduleName) as typeof playwright; }
   catch { throw new Error("Playwright is missing. Run `npm install`, then `npm run browser:install` from tutorial-engine."); }
 
-  let current: "intro" | "lesson" | "practice" = "intro";
+  let current: "intro" | "lesson" | "practice" | "practice-feedback" = "intro";
+  let stateRequests = 0;
+  const sseClients = new Set<ServerResponse>();
+  const sendSse = (response: ServerResponse, event: string, data: unknown): void => { if (!response.destroyed) response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
+  const broadcastSse = (event: string, data: unknown): void => { for (const client of sseClients) sendSse(client, event, data); };
   let resolveContinuation!: (body: unknown) => void;
   const continuationRequest = new Promise<unknown>((resolveContinuationRequest) => { resolveContinuation = resolveContinuationRequest; });
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (request.method === "GET" && url.pathname === "/api/workbook/state") return sendJson(response, state(current));
+    if (request.method === "GET" && url.pathname === "/api/workbook/state") { stateRequests += 1; return sendJson(response, state(current)); }
+    if (request.method === "GET" && url.pathname === "/api/workbook/timeline") {
+      response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
+      sseClients.add(response);
+      sendSse(response, "timeline", []);
+      request.on("close", () => sseClients.delete(response));
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/api/workbook/introduction") { current = "lesson"; return sendJson(response, completed(current, "lesson--01-smoke/01-current-rendering")); }
     if (request.method === "POST" && url.pathname === "/api/workbook/complete-block") {
       const body = await readJson(request) as { blockId?: string };
@@ -114,6 +125,14 @@ async function main(): Promise<void> {
     await page.getByRole("button", { name: "Continue" }).click({ force: true });
     await page.getByRole("heading", { name: "Practice" }).waitFor();
     await page.locator('[aria-label="Terminal disconnected"]').waitFor();
+    await page.getByText(/Checking/).waitFor();
+    const stateRequestsBeforeIdle = stateRequests;
+    await page.waitForTimeout(600);
+    if (stateRequests !== stateRequestsBeforeIdle) throw new Error(`Browser made ${stateRequests - stateRequestsBeforeIdle} unexpected /api/workbook/state request(s) without SSE.`);
+    current = "practice-feedback";
+    broadcastSse("state", { blockId: "practice", revision: 1, status: "feedback" });
+    await page.getByText("SSE review feedback.").waitFor();
+    if (stateRequests !== stateRequestsBeforeIdle + 1) throw new Error(`Browser should fetch state once for SSE; saw ${stateRequests - stateRequestsBeforeIdle}.`);
     const body = await Promise.race([continuationRequest, new Promise((_, reject) => setTimeout(() => reject(new Error("Browser did not post the workbook continuation request.")), 10_000))]);
     if (JSON.stringify(body) !== JSON.stringify({ blockId: "orientation" })) throw new Error(`Unexpected workbook continuation request: ${JSON.stringify(body)}`);
     console.log("Browser smoke passed: rendered the v2 workbook UI and observed /api/workbook/complete-block.");

@@ -836,6 +836,48 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("sends state SSE for async editor review feedback without a public timeline record", async () => {
+    const dir = await fixture();
+    const decision = deferred<TutorDecision>();
+    const mainTutor = new FakeMainTutor(decision.promise);
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor, practiceCoach: new FakePracticeCoach() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      const beforeTimeline = await timelineSnapshot(server.url);
+      const stateEvent = nextSseEvent(server.url, "state");
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "almost" })).status).toBe(202);
+      await waitForWorkbookState(server.url, () => mainTutor.reviews.length === 1, "editor review to reach the tutor");
+
+      decision.resolve({ outcome: "feedback", message: "Add the exact marker before this can continue." });
+      await expect(stateEvent).resolves.toMatchObject({ blockId: "lesson--001-first--edit-answer", revision: 1, status: "feedback" });
+      const feedback = await state(server.url);
+      expect(block(feedback, "lesson--001-first--edit-answer")?.checkpoint).toMatchObject({ status: "feedback", feedback: "Add the exact marker before this can continue." });
+      expect(await timelineSnapshot(server.url)).toEqual(beforeTimeline);
+    } finally { await server.close(); }
+  });
+
+  it("sends state SSE for async terminal review feedback without a public timeline record", async () => {
+    const dir = await fixture();
+    const editorTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const terminalDecision = deferred<TutorDecision>();
+    editorTutor.queue.push(terminalDecision.promise);
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: true, terminalPtyFactory: () => new ServerFakePty(), terminalDebounceMs: 1, mainTutor: editorTutor, practiceCoach: new FakePracticeCoach() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, editorTutor);
+      const beforeTimeline = await timelineSnapshot(server.url);
+      const stateEvent = nextSseEvent(server.url, "state");
+      await submitTerminalAttempt(server.url, "lesson--001-first--run-supplied-command");
+      await waitForWorkbookState(server.url, () => editorTutor.reviews.length >= 2, "terminal review to reach the tutor");
+
+      terminalDecision.resolve({ outcome: "feedback", message: "Run the supplied command from the workbook." });
+      await expect(stateEvent).resolves.toMatchObject({ blockId: "lesson--001-first--run-supplied-command", revision: 1, status: "feedback" });
+      const feedback = await state(server.url);
+      expect(block(feedback, "lesson--001-first--run-supplied-command")?.checkpoint).toMatchObject({ status: "feedback", feedback: "Run the supplied command from the workbook." });
+      expect(await timelineSnapshot(server.url)).toEqual(beforeTimeline);
+    } finally { await server.close(); }
+  });
+
   it("silently falls back to main terminal review when fast coach throws", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty();

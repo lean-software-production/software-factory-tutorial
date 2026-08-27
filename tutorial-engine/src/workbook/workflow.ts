@@ -275,12 +275,15 @@ export class WorkbookWorkflowCommandError extends Error {
   constructor(readonly status: 400 | 404 | 409, message: string) { super(message); }
 }
 
+export interface WorkbookWorkflowStateEvent { lessonId?: string; blockId?: string; revision?: number; status?: PublicCheckpoint["status"]; }
+
 export interface WorkbookWorkflow {
   start(): Promise<void>;
   close(): Promise<void>;
   state(): ReturnType<typeof publicState>;
   timeline(): PublicTimelineRecord[];
   subscribe(listener: (record: PublicTimelineRecord) => void): () => void;
+  subscribeState(listener: (event: WorkbookWorkflowStateEvent) => void): () => void;
   activeObservedBlock(): ActiveObservedTerminalBlock | undefined;
   submitAttempt(input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }): Promise<Attempt>;
   completeBlock(blockId: string): Promise<CompleteBlockResult>;
@@ -298,6 +301,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
   let closed = false;
   const reviewFinalizers = new Set<Promise<unknown>>();
   const ordinaryCommands = new Set<Promise<unknown>>();
+  const stateListeners = new Set<(event: WorkbookWorkflowStateEvent) => void>();
   let reloadGeneration = 0;
 
   const append = async (input: Parameters<WorkbookTimeline["append"]>[0]): Promise<WorkbookTimelineRecord> => {
@@ -384,6 +388,8 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     return trimmed.slice(0, 1_000);
   };
   const currentPublicState = () => publicState(loaded, learnerWorkspace, records, attempts);
+  const attemptStateEvent = (attempt: Attempt): WorkbookWorkflowStateEvent => ({ lessonId: attempt.lessonId, blockId: attempt.blockId, revision: attempt.version, status: attempt.status === "superseded" ? undefined : attempt.status });
+  const notifyStateChanged = (event: WorkbookWorkflowStateEvent): void => { if (!closed) for (const listener of stateListeners) listener(event); };
   const appendFailure = async (input: Omit<TutorFailure, "id" | "sequence" | "at" | "type"> & { operation: TutorFailure["operation"] }): Promise<void> => {
     await append({ type: "tutor_failed", ...input });
   };
@@ -442,8 +448,16 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
           const active = activeDeclaredBlock();
           const current = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
           if (!active || active.lessonId !== attempt.lessonId || active.id !== attempt.blockId || !current || current.id !== attempt.id || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(current.evidence, active.block)) return undefined;
-          if (advice.outcome === "working") { await attempts.markQuickWorking(current.id); return null; }
-          if (advice.outcome === "feedback") { await attempts.markQuickFeedback(current.id, requireTutorText(advice.text, "review")); return null; }
+          if (advice.outcome === "working") {
+            const updated = await attempts.markQuickWorking(current.id);
+            if (updated) notifyStateChanged(attemptStateEvent(updated));
+            return null;
+          }
+          if (advice.outcome === "feedback") {
+            const updated = await attempts.markQuickFeedback(current.id, requireTutorText(advice.text, "review"));
+            if (updated) notifyStateChanged(attemptStateEvent(updated));
+            return null;
+          }
           return { outcome: advice.outcome, text: requireTutorText(advice.text, "review") } as PracticeCoachHandoff;
         });
         if (routed === undefined || routed === null || !generationIsCurrent(generation)) return;
@@ -462,7 +476,10 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
         if (!generationIsCurrent(generation)) return;
         log.info(`Workbook tutor review failed for ${attempt.lessonId}/${attempt.blockId}: ${error instanceof Error ? error.message : String(error)}`);
         const feedback = await attempts.markFeedback(attempt.id, REVIEW_FAILURE_FEEDBACK);
-        if (feedback) await appendFailure({ lessonId: feedback.lessonId, blockId: feedback.blockId, requestId: feedback.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK });
+        if (feedback) {
+          try { await appendFailure({ lessonId: feedback.lessonId, blockId: feedback.blockId, requestId: feedback.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK }); }
+          finally { notifyStateChanged(attemptStateEvent(feedback)); }
+        }
       });
       trackFinalizer(failure);
       return;
@@ -474,7 +491,8 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
       const current = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
       if (!active || active.lessonId !== attempt.lessonId || active.id !== attempt.blockId || !current || current.id !== attempt.id || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(current.evidence, active.block)) return;
       if (decision.outcome === "working") {
-        await attempts.markWorking(current.id);
+        const updated = await attempts.markWorking(current.id);
+        if (updated) notifyStateChanged(attemptStateEvent(updated));
         return;
       }
 
@@ -482,8 +500,9 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
       try { message = requireTutorText(decision.message, "review"); }
       catch {
         log.info(`Workbook tutor review returned empty text for ${attempt.lessonId}/${attempt.blockId}.`);
-        await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
-        await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK });
+        const updated = await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
+        try { await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK }); }
+        finally { if (updated) notifyStateChanged(attemptStateEvent(updated)); }
         return;
       }
 
@@ -491,14 +510,16 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
         if (current.evidence.kind === "editor" && active.block.type === "editor-practice") {
           try {
             if (!await promoteCurrentEditorAttempt({ workspace: learnerWorkspace, attempts, lessonId: active.lessonId, block: { ...active.block, id: active.id }, attemptId: current.id })) {
-              await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
-              await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK });
+              const updated = await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
+              try { await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK }); }
+              finally { if (updated) notifyStateChanged(attemptStateEvent(updated)); }
               return;
             }
           } catch (error) {
             log.info(`Accepted editor attempt could not be promoted: ${error instanceof Error ? error.message : String(error)}`);
-            await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
-            await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK });
+            const updated = await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
+            try { await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK }); }
+            finally { if (updated) notifyStateChanged(attemptStateEvent(updated)); }
             return;
           }
         }
@@ -509,12 +530,14 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
         if (!accepted) return;
         await appendReviewMessage(accepted, message);
         await recordWorkAccepted(active);
+        notifyStateChanged(attemptStateEvent(accepted));
         return;
       }
 
       const feedback = await attempts.markFeedback(current.id, message);
       if (!feedback) return;
-      await appendReviewMessage(feedback, feedback.feedback ?? message);
+      try { await appendReviewMessage(feedback, feedback.feedback ?? message); }
+      finally { notifyStateChanged(attemptStateEvent(feedback)); }
     });
     trackFinalizer(finalizer);
   };
@@ -776,6 +799,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     state: currentPublicState,
     timeline: () => publicTimeline(loaded, records),
     subscribe: (listener) => timeline.subscribe((record) => { const publicRecord = publicTimelineRecord(record, loaded); if (publicRecord) listener(publicRecord); }),
+    subscribeState: (listener) => { stateListeners.add(listener); return () => stateListeners.delete(listener); },
     activeObservedBlock,
     submitAttempt,
     completeBlock: (blockId) => trackOrdinaryCommand(async () => {
