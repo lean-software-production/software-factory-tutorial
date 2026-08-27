@@ -593,6 +593,32 @@ function readySuccessorId(progress: Progress): string | undefined {
   return progress.blocks.find((block) => block.ready && !block.active && !block.completed)?.id ?? progress.readyBlocks?.[0];
 }
 
+/**
+ * Which block carries the tall scroll runway that lets the newest revealed block reach the top of
+ * the viewport. It belongs to the ready successor while the server reports one, and stays with that
+ * block after the learner continues into it: promotion drops the block out of readyBlockIds, and
+ * without the runway the page would lose the height it was already scrolled through.
+ *
+ * The server already says everything needed to place it, so this reads state rather than
+ * remembering renders. A block is where the runway goes when it is the ready successor, or when it
+ * is the uncompleted active block whose predecessor's work was accepted — which is exactly how it
+ * became a ready successor in the first place. Deriving it keeps App's render pure, and means a
+ * reload lands on the same layout as the promotion that preceded it.
+ */
+export function scrollRunwayBlockIds(state: State): string[] {
+  const ready = [...new Set(state.readyBlockIds ?? state.progress.readyBlocks ?? [])];
+  if (ready.length > 0) return ready;
+  if (state.progress.workbookComplete) return [];
+  const blocks = state.progress.blocks;
+  const activeIndex = blocks.findIndex((block) => block.id === state.progress.activeBlockId);
+  if (activeIndex < 1) return [];
+  const active = blocks[activeIndex]!;
+  const predecessor = blocks[activeIndex - 1]!;
+  if (active.completed) return [];
+  const predecessorAccepted = predecessor.workAccepted === true || (state.progress.workAcceptedBlocks?.includes(predecessor.id) ?? false);
+  return predecessorAccepted ? [active.id] : [];
+}
+
 function successorAfter(state: State, blockId: string): { successor?: PublicOrderedBlock; currentIndex: number; count: number } {
   const ordered = state.orderedBlocks ?? [];
   const index = ordered.findIndex((block) => block.id === blockId);
@@ -627,8 +653,6 @@ export function App() {
   const [terminalInsertion, setTerminalInsertion] = useState<(() => void) | undefined>();
   const [contentReloadError, setContentReloadError] = useState<string>();
   const scrollCompletionPending = useRef(false);
-  const previousReadyRunwayIds = useRef<Set<string>>(new Set());
-  const preservedRunwayIds = useRef<Set<string>>(new Set());
   const sseStateRequestSequence = useRef(0);
   const initialAnchorReconciled = useRef(false);
   const registerTerminalInsertion = useCallback((insertCommand: (() => void) | undefined) => {
@@ -755,12 +779,7 @@ export function App() {
   const activeContinuationEligible = !state.introductionComplete ? true : state.progress.canComplete ? state.progress.canComplete.blockId === effectiveActiveBlockId && state.progress.canComplete.eligible : Boolean(effectiveActiveBlockProgress?.active && effectiveActiveBlockProgress.ready && !effectiveActiveBlockProgress.completed && (activeBlock?.type === "narrative" || effectiveActiveBlockProgress.checkpoint?.status === "accepted"));
   const activeReflectionReviewing = Boolean(state.introductionComplete && activeBlock?.type === "reflection" && activeBlockProgress?.checkpoint?.status === "reviewing");
   const reflectionComposerDisabled = Boolean(state.introductionComplete && activeBlock?.type === "reflection" && ["reviewing", "accepted"].includes(activeBlockProgress?.checkpoint?.status ?? ""));
-  const currentReadyRunwayIds = new Set(state.readyBlockIds ?? state.progress.readyBlocks ?? []);
-  for (const id of previousReadyRunwayIds.current) if (!currentReadyRunwayIds.has(id) && state.progress.activeBlockId === id && !state.progress.workbookComplete) preservedRunwayIds.current.add(id);
-  if (currentReadyRunwayIds.size > 0) preservedRunwayIds.current.delete(state.progress.activeBlockId);
-  for (const id of [...preservedRunwayIds.current]) if (state.progress.completedBlocks?.includes(id) || state.progress.workbookComplete) preservedRunwayIds.current.delete(id);
-  previousReadyRunwayIds.current = currentReadyRunwayIds;
-  const stableRunwayIds = [...new Set([...currentReadyRunwayIds, ...preservedRunwayIds.current])];
+  const stableRunwayIds = scrollRunwayBlockIds(state);
   const activeContinueBlock: Block = activeBlock ?? { id: effectiveActiveBlockId, type: "narrative", title: state.currentBlock?.title ?? state.workbook.title, markdown: "" };
   const renderTimelineContinuation = (record: PublicTimelineRecord) => {
     if (record.type !== "message") return null;
