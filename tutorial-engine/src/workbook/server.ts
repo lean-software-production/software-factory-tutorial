@@ -6,6 +6,7 @@ import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import type { TutorialLogger } from "./runtime-log.js";
 import { createTutorialLogger } from "./runtime-log.js";
 import { createDockerPty, requireOpenCodeApiKey, WorkbookTerminalManager, type TerminalPtyFactory } from "./terminal.js";
+import { publicTerminalFrame } from "./public-terminal-contract.js";
 import { NO_RUNTIME_PROVISION, trustRuntimeProvision, type RuntimeProvisionProfile, type TrustedRuntimeProvision } from "./runtime-provision.js";
 import { AttemptStore } from "./attempts.js";
 import { FastPracticeCoach, type PracticeCoach } from "./practice-coach.js";
@@ -182,7 +183,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   if (wss && terminal) {
     wss.on("connection", (socket: WebSocket) => {
       const client = { send: (message: string) => { if (socket.readyState === socket.OPEN) socket.send(message); }, close: (code?: number, reason?: string) => socket.close(code, reason) };
-      if (!terminal.attach(client)) { socket.send(JSON.stringify({ type: "busy", message: "Another browser is already connected to this terminal." })); socket.close(1013, "Terminal already connected."); return; }
+      if (!terminal.attach(client)) { socket.send(publicTerminalFrame({ type: "busy", message: "Another browser is already connected to this terminal." })); socket.close(1013, "Terminal already connected."); return; }
       socket.on("message", (data) => { const message = parseTerminalMessage(data); if (message?.type === "input" || message?.type === "resize") terminal.receive(message); });
       socket.on("close", () => terminal.detach(client));
       socket.on("error", (error) => log.info(`Workbook terminal WebSocket error: ${error instanceof Error ? error.message : String(error)}`));
