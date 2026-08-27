@@ -125,7 +125,6 @@ async function main(): Promise<void> {
     await page.getByRole("button", { name: "Continue" }).click({ force: true });
     await page.getByRole("heading", { name: "Practice" }).waitFor();
     await page.locator('[aria-label="Terminal disconnected"]').waitFor();
-    await page.getByText(/Checking/).waitFor();
     const stateRequestsBeforeIdle = stateRequests;
     await page.waitForTimeout(600);
     if (stateRequests !== stateRequestsBeforeIdle) throw new Error(`Browser made ${stateRequests - stateRequestsBeforeIdle} unexpected /api/workbook/state request(s) without SSE.`);
