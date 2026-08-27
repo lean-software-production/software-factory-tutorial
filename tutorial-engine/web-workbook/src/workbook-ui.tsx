@@ -92,14 +92,16 @@ type ScrollTargetLookup = { getElementById(elementId: string): { scrollIntoView(
 
 export function scrollActiveLessonIntoView(doc: ScrollTargetLookup, activeLessonId: string) { doc.getElementById(lessonElementId(activeLessonId))?.scrollIntoView({ behavior: "smooth", block: "start" }); }
 let suppressPassiveHistoryUntil = 0;
-let passiveAnchorScrollSuppression: { anchorId: string; until: number } | undefined;
 function replaceUrlAnchor(anchorId: string) {
   suppressPassiveHistoryUntil = Date.now() + 450;
-  passiveAnchorScrollSuppression = { anchorId, until: suppressPassiveHistoryUntil };
   if (typeof history !== "undefined") history.replaceState(null, "", `#${anchorId}`);
 }
-function passiveAnchorScrollIsSuppressed(anchorId: string) {
-  return Boolean(passiveAnchorScrollSuppression?.anchorId === anchorId && Date.now() <= passiveAnchorScrollSuppression.until);
+
+function scheduleAnchorAnimationFrame(callback: FrameRequestCallback): () => void {
+  const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (frameCallback: FrameRequestCallback) => setTimeout(() => frameCallback(Date.now()), 0) as unknown as number;
+  const cancel = typeof cancelAnimationFrame === "function" ? cancelAnimationFrame : (handle: number) => clearTimeout(handle as unknown as ReturnType<typeof setTimeout>);
+  const handle = raf(callback);
+  return () => cancel(handle);
 }
 
 export function navigateToAnchor(anchorId: string, mode: "push" | "replace" | "none" = "push") {
@@ -107,10 +109,10 @@ export function navigateToAnchor(anchorId: string, mode: "push" | "replace" | "n
   const element = document.getElementById(anchorId);
   if (!element) return false;
   suppressPassiveHistoryUntil = Date.now() + 450;
-  element.scrollIntoView({ behavior: reducedMotionPreferred() ? "auto" : "smooth", block: "start" });
   const fragment = `#${anchorId}`;
   if (typeof history !== "undefined" && mode === "push") history.pushState(null, "", fragment);
   if (typeof history !== "undefined" && mode === "replace") history.replaceState(null, "", fragment);
+  element.scrollIntoView({ behavior: reducedMotionPreferred() ? "auto" : "smooth", block: "start" });
   if (mode === "push") {
     const heading = element.matches("h1,h2,h3,[tabindex]") ? element as HTMLElement : element.querySelector<HTMLElement>("h1,h2,h3,[tabindex]");
     heading?.focus?.({ preventScroll: true });
@@ -720,6 +722,7 @@ export function App() {
   const previousReadyRunwayIds = useRef<Set<string>>(new Set());
   const preservedRunwayIds = useRef<Set<string>>(new Set());
   const sseStateRequestSequence = useRef(0);
+  const initialAnchorReconciled = useRef(false);
   const registerTerminalInsertion = useCallback((insertCommand: (() => void) | undefined) => {
     setTerminalInsertion(() => insertCommand);
   }, []);
@@ -757,15 +760,16 @@ export function App() {
     if (!state) return;
     const fragment = typeof location === "undefined" ? "" : decodeURIComponent(location.hash.replace(/^#/, ""));
     const revealed = new Set(state.revealedBlockIds ?? state.progress.blocks.filter((block) => block.emerged).map((block) => block.id));
-    const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback: FrameRequestCallback) => setTimeout(callback, 0) as unknown as number;
-    if (!fragment) { raf(() => navigateToAnchor(state.progress.activeAnchorId ?? state.progress.activeBlockId, "replace")); return; }
-    if (revealed.has(fragment) || fragment === "workbook--complete" && state.progress.workbookComplete) {
-      if (passiveAnchorScrollIsSuppressed(fragment)) { passiveAnchorScrollSuppression = undefined; return; }
-      raf(() => navigateToAnchor(fragment, "none"));
-      return;
-    }
-    raf(() => navigateToAnchor(state.progress.activeAnchorId ?? state.progress.activeBlockId, "replace"));
-  }, [state?.workbook.title, state?.progress.activeAnchorId, state?.progress.workbookComplete, state?.revealedBlockIds?.join("|")]);
+    const fragmentIsValid = Boolean(fragment && (revealed.has(fragment) || fragment === "workbook--complete" && state.progress.workbookComplete));
+    const activeAnchor = state.progress.activeAnchorId ?? state.progress.activeBlockId;
+    const target = !fragment || !fragmentIsValid ? activeAnchor : !initialAnchorReconciled.current ? fragment : undefined;
+    const mode = !fragment || !fragmentIsValid ? "replace" : "none";
+    if (!target) return;
+    return scheduleAnchorAnimationFrame(() => {
+      initialAnchorReconciled.current = true;
+      navigateToAnchor(target, mode);
+    });
+  }, [state]);
   useEffect(() => { setTerminalInsertion(undefined); }, [state?.progress.activeLessonId, state?.progress.activeBlockId]);
   useEffect(() => {
     if (!state || state.progress.workbookComplete || typeof IntersectionObserver === "undefined") return;

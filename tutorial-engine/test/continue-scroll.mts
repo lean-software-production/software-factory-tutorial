@@ -240,9 +240,15 @@ async function main(): Promise<void> {
       check(Boolean(after.successorAnchorRect), `${label}: successor anchor geometry was unavailable`);
       check(Array.isArray(after.scrollIntoViewCalls), `${label}: scrollIntoView trace was unavailable`);
       const successorAnchorId = successor.anchorId ?? successor.id;
+      const scrollTargets = after.scrollIntoViewCalls.map((call: any) => call.target?.id ?? call.target?.text ?? call.target?.tagName);
       const successorScrollCalls = after.scrollIntoViewCalls.filter((call: any) => call.target?.id === successorAnchorId);
       const scrollPolicyKeys = new Set<string>(successorScrollCalls.map((call: any) => JSON.stringify(call.options ?? null)));
       const scrollPolicies = [...scrollPolicyKeys].map((policy) => JSON.parse(policy));
+      check(after.scrollIntoViewCalls.length === 1, `${label}: expected exactly one post-click scrollIntoView call, saw ${after.scrollIntoViewCalls.length} (${scrollTargets.join(" -> ")})`);
+      check(successorScrollCalls.length === 1, `${label}: expected the single post-click scroll target to be ${successorAnchorId}, saw ${scrollTargets.join(" -> ")}`);
+      check(after.hash === `#${successorAnchorId}`, `${label}: final hash ${after.hash} did not name successor #${successorAnchorId}`);
+      const successorTop = after.successorAnchorRect?.top;
+      check(typeof successorTop === "number" && successorTop >= -10 && successorTop <= 140, `${label}: successor rect top ${successorTop} was not near the reading line after Continue`);
       trace.push({
         transition: label,
         hrefEquivalentForLaterComparison: `#${successorAnchorId}`,

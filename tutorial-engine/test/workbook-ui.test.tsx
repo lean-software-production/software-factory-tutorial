@@ -60,7 +60,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
-import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, LessonView, completionAgeLabel, scrollActiveLessonIntoView, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
+import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, LessonView, completionAgeLabel, navigateToAnchor, scrollActiveLessonIntoView, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
 import { lessonAnchorHref, lessonElementId } from "../src/workbook/lesson-links.js";
 
 const progress: Progress = {
@@ -286,9 +286,24 @@ describe("workbook lesson UI", () => {
     expect(markup).not.toContain("<button");
   });
 
+  it("updates the URL fragment before scrolling an explicit anchor navigation", () => {
+    dom = new JSDOM("<!doctype html><html><body><section id=\"target\" tabindex=\"-1\"><h2>Target</h2></section></body></html>", { url: "http://localhost/workbook" });
+    vi.stubGlobal("window", dom.window as any);
+    vi.stubGlobal("document", dom.window.document as any);
+    vi.stubGlobal("location", dom.window.location);
+    vi.stubGlobal("history", dom.window.history);
+    const observedHashes: string[] = [];
+    dom.window.HTMLElement.prototype.scrollIntoView = function () { observedHashes.push(dom!.window.location.hash); };
+
+    expect(navigateToAnchor("target", "push")).toBe(true);
+
+    expect(observedHashes).toEqual(["#target"]);
+    expect(location.hash).toBe("#target");
+  });
+
   it("refreshes state in place on author hot-reload SSE and preserves the current URL anchor", async () => {
     const { completedState } = scrollPromotionFixture();
-    const reloadedState = { ...completedState, workbook: { title: "Reloaded Workbook" }, introduction: "Reloaded intro copy.", timeline: [{ ...completedState.timeline[0], text: "# Reloaded Workbook\n\nReloaded intro copy." }] } as any;
+    const reloadedState = { ...completedState, workbook: { title: "Reloaded Workbook" }, introduction: "Reloaded intro copy.", timeline: [{ ...completedState.timeline[0], text: "# Reloaded Workbook\n\nReloaded intro copy." }, ...completedState.timeline.slice(1)] } as any;
     FakeEventSource.reset();
     const fetchMock = vi.fn(async (input?: RequestInfo | URL) => ({ ok: true, json: async () => String(input).startsWith("/api/workbook/state") ? reloadedState : completedState }));
     const scrollIntoView = vi.fn();
@@ -317,12 +332,14 @@ describe("workbook lesson UI", () => {
     expect(container.textContent).toContain("workbook.md front matter is incomplete");
     expect(container.textContent).toContain("Workbook");
 
+    scrollIntoView.mockClear();
     await act(async () => { FakeEventSource.instances[0]!.emit("content-reloaded", { generation: 2 }); await Promise.resolve(); });
     expect(fetchMock).toHaveBeenCalledWith("/api/workbook/state");
     expect(container.textContent).toContain("Reloaded Workbook");
     expect(container.textContent).toContain("Reloaded intro copy.");
     expect(container.textContent).not.toContain("Author reload failed.");
     expect(location.hash).toBe("#part--validation-loop");
+    expect(scrollIntoView).not.toHaveBeenCalled();
     expect(replaceState).not.toHaveBeenCalledWith(null, "", "#workbook--introduction");
     expect(pushState).not.toHaveBeenCalled();
   });
