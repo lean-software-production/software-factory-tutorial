@@ -2130,12 +2130,17 @@ describe("workbook lesson UI", () => {
     await act(async () => { await Promise.resolve(); });
 
     expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(container.querySelector(".current-activity-band .terminal-feedback-overlay")?.textContent).toContain("Checking…");
+    expect(container.querySelector(".current-activity-band .terminal-feedback-overlay")).toBeNull();
+    const feedbackSlot = container.querySelector(".practice-feedback-slot")!;
+    expect(feedbackSlot.previousElementSibling).toBe(container.querySelector(".current-activity-band"));
+    expect(feedbackSlot.querySelector(".practice-feedback")?.textContent).toContain("Checking…");
 
     await act(async () => { await vi.advanceTimersByTimeAsync(250); });
 
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("api/workbook/state"))).toHaveLength(2);
-    expect(container.querySelector(".current-activity-band .terminal-feedback-overlay")?.textContent).toContain("The persisted review completed.");
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(container.querySelector(".current-activity-band .terminal-feedback-overlay")).toBeNull();
+    expect(feedbackSlot.querySelector(".practice-feedback")?.textContent).toContain("The persisted review completed.");
     expect(container.textContent).not.toContain("Terminal feedback:");
     expect(container.textContent).not.toContain("Checking…");
   });
