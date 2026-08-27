@@ -4,6 +4,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
+import { createPortal } from "react-dom";
 import { Markdown } from "./markdown.js";
 import { lessonElementId } from "../../src/workbook/lesson-links.js";
 import { ActivityBand } from "./activity-band.js";
@@ -410,7 +411,7 @@ function NarrativeBlock({ lessonId, block, state, refresh, continueLabel }: { le
   </section>;
 }
 
-function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = true, onTerminalInsertionChange, continueLabel }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; continueLabel?: string }) {
+function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = true, onTerminalInsertionChange, feedbackHost, continueLabel }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; feedbackHost?: HTMLElement | null; continueLabel?: string }) {
   const [observerFeedback, setObserverFeedback] = useState<string>();
   const [observerStatus, setObserverStatus] = useState<string>();
   const command = shellCommandFrom(block.markdown);
@@ -425,14 +426,18 @@ function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = 
     : undefined;
   const liveFeedback = observerFeedback ?? observerStatus ?? persistedFeedback;
   const showLiveTerminal = !state?.verified && !state?.completed;
+  const feedback = !accepted && liveFeedback && <aside className={`live-block-feedback${feedbackHost === undefined ? " terminal-feedback-overlay" : " practice-feedback"}`} aria-live="polite"><Markdown source="generated">{liveFeedback}</Markdown></aside>;
+  const feedbackInTerminal = feedbackHost === undefined ? feedback : null;
+  const feedbackOutsideBand = feedbackHost === undefined ? null : feedbackHost ? createPortal(feedback, feedbackHost) : null;
   useEffect(() => { setObserverFeedback(undefined); setObserverStatus(undefined); }, [block.id, state?.completed, state?.checkpoint?.status]);
   return <section id={blockElementId(lessonId, block.id)} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
     {showAuthoredContent && <><p className="section-label">Practice · embedded terminal</p><h2>{block.title}</h2><Markdown source="authored">{block.markdown}</Markdown></>}
-    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : showLiveTerminal && <div className={`terminal-live-surface${liveFeedback ? " has-feedback" : ""}`}>
+    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : showLiveTerminal && <div className={`terminal-live-surface${liveFeedback && feedbackHost === undefined ? " has-feedback" : ""}`}>
       <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={false} checkpointStatus={state?.checkpoint?.status} reviewKey={state?.revision} refresh={refresh} onAdvice={setObserverFeedback} onError={setObserverFeedback} onStatus={setObserverStatus} onTerminalInsertionChange={onTerminalInsertionChange} />
-      {liveFeedback && <aside className="live-block-feedback terminal-feedback-overlay" aria-live="polite"><Markdown source="generated">{liveFeedback}</Markdown></aside>}
+      {feedbackInTerminal}
     </div>}
-    {!accepted && liveFeedback && !showLiveTerminal && <aside className="live-block-feedback" aria-live="polite"><Markdown source="generated">{liveFeedback}</Markdown></aside>}
+    {!showLiveTerminal && feedbackInTerminal}
+    {feedbackOutsideBand}
   </section>;
 }
 
@@ -558,11 +563,11 @@ function ReflectionBlock({ lessonId, block, state, turns, refresh, continueLabel
   </section>;
 }
 
-export function BlockView({ lessonId, block, progress, refresh, showAuthoredContent = true, onTerminalInsertionChange, continueLabel }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; continueLabel?: string }) {
+export function BlockView({ lessonId, block, progress, refresh, showAuthoredContent = true, onTerminalInsertionChange, feedbackHost, continueLabel }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; feedbackHost?: HTMLElement | null; continueLabel?: string }) {
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
   if (block.type === "narrative") return <NarrativeBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} continueLabel={continueLabel} />;
-  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} onTerminalInsertionChange={onTerminalInsertionChange} continueLabel={continueLabel} />;
+  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} onTerminalInsertionChange={onTerminalInsertionChange} feedbackHost={feedbackHost} continueLabel={continueLabel} />;
   if (block.type === "editor-practice") return <EditorPracticeBlockView lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} continueLabel={continueLabel} />;
   return <ReflectionBlock lessonId={resolvedLessonId} block={block} state={state} turns={activeLessonValue(progress, resolvedLessonId, progress.reflectionConversations[block.id], [])} refresh={refresh} continueLabel={continueLabel} />;
 }
