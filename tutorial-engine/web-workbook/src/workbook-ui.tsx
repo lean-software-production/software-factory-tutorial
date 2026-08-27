@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { defaultKeymap } from "@codemirror/commands";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
@@ -91,31 +91,40 @@ function domSafe(value: string) { return value.replace(/[^A-Za-z0-9_-]+/g, "-");
 type ScrollTargetLookup = { getElementById(elementId: string): { scrollIntoView(options?: ScrollIntoViewOptions): void } | null };
 
 export function scrollActiveLessonIntoView(doc: ScrollTargetLookup, activeLessonId: string) { doc.getElementById(lessonElementId(activeLessonId))?.scrollIntoView({ behavior: "smooth", block: "start" }); }
+type NavigationMode = "push" | "replace" | "none";
+type ScheduleExplicitNavigation = (anchorId: string, mode?: NavigationMode) => void;
+const ExplicitNavigationContext = createContext<ScheduleExplicitNavigation | undefined>(undefined);
 let suppressPassiveHistoryUntil = 0;
-let passiveAnchorScrollSuppression: { anchorId: string; until: number } | undefined;
 function replaceUrlAnchor(anchorId: string) {
   suppressPassiveHistoryUntil = Date.now() + 450;
-  passiveAnchorScrollSuppression = { anchorId, until: suppressPassiveHistoryUntil };
   if (typeof history !== "undefined") history.replaceState(null, "", `#${anchorId}`);
 }
-function passiveAnchorScrollIsSuppressed(anchorId: string) {
-  return Boolean(passiveAnchorScrollSuppression?.anchorId === anchorId && Date.now() <= passiveAnchorScrollSuppression.until);
-}
 
-export function navigateToAnchor(anchorId: string, mode: "push" | "replace" | "none" = "push") {
+export function navigateToAnchor(anchorId: string, mode: NavigationMode = "push") {
   if (typeof document === "undefined") return false;
   const element = document.getElementById(anchorId);
   if (!element) return false;
   suppressPassiveHistoryUntil = Date.now() + 450;
-  element.scrollIntoView({ behavior: reducedMotionPreferred() ? "auto" : "smooth", block: "start" });
   const fragment = `#${anchorId}`;
   if (typeof history !== "undefined" && mode === "push") history.pushState(null, "", fragment);
   if (typeof history !== "undefined" && mode === "replace") history.replaceState(null, "", fragment);
+  element.scrollIntoView({ behavior: reducedMotionPreferred() ? "auto" : "smooth", block: "start" });
   if (mode === "push") {
     const heading = element.matches("h1,h2,h3,[tabindex]") ? element as HTMLElement : element.querySelector<HTMLElement>("h1,h2,h3,[tabindex]");
     heading?.focus?.({ preventScroll: true });
   }
   return true;
+}
+
+function useScheduleExplicitNavigation(): ScheduleExplicitNavigation {
+  const schedule = useContext(ExplicitNavigationContext);
+  return useCallback((anchorId: string, mode: NavigationMode = "push") => {
+    if (schedule) schedule(anchorId, mode);
+    else {
+      const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback: FrameRequestCallback) => setTimeout(callback, 0) as unknown as number;
+      raf(() => navigateToAnchor(anchorId, mode));
+    }
+  }, [schedule]);
 }
 function canonicalLessonAnchor(lessonId: string) { return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(lessonId) ? `lesson--${lessonId}` : lessonElementId(lessonId); }
 function blockElementId(lessonId: string, blockId: string) { return blockId.includes("--") ? blockId : `${lessonElementId(lessonId)}-block-${domSafe(blockId)}`; }
@@ -304,15 +313,16 @@ function useContinueOnce(block: Block, state: BlockProgress | undefined, refresh
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
   const active = Boolean(state?.active && !state.completed);
+  const scheduleExplicitNavigation = useScheduleExplicitNavigation();
   useEffect(() => { pendingRef.current = false; setPending(false); }, [block.id, state?.completed]);
-  const continueOnce = useCallback((historyMode: "push" | "none" = "push") => {
+  const continueOnce = useCallback((historyMode: NavigationMode = "push") => {
     if (!active || pendingRef.current) return;
     pendingRef.current = true;
     setPending(true);
     completeBlockRequest(block.id).then((result) => {
       refresh(stateFromCompletion(result));
       const target = navigationTargetFrom(result);
-      if (target) requestAnimationFrame(() => navigateToAnchor(target, historyMode));
+      if (target) scheduleExplicitNavigation(target, historyMode);
     }).catch((error) => {
       pendingRef.current = false;
       setPending(false);
@@ -321,11 +331,11 @@ function useContinueOnce(block: Block, state: BlockProgress | undefined, refresh
         if (next.progress.completedBlocks?.includes(block.id)) {
           refresh(next);
           const target = successorFromState(next, block.id);
-          if (target) requestAnimationFrame(() => navigateToAnchor(target, historyMode));
+          if (target) scheduleExplicitNavigation(target, historyMode);
         }
       }).catch(() => undefined);
     });
-  }, [active, block.id, refresh]);
+  }, [active, block.id, refresh, scheduleExplicitNavigation]);
   return { active, pending, continueOnce };
 }
 
@@ -379,11 +389,12 @@ function CheckpointEvidence({ checkpoint }: { checkpoint: PublicCheckpoint }) {
 export function AcceptedCheckpoint({ block, state, refresh, continueLabel }: { block: Block; state: BlockProgress; refresh(state: State): void; continueLabel?: string }) {
   const checkpoint = state.checkpoint;
   const [pending, setPending] = useState(false);
+  const scheduleExplicitNavigation = useScheduleExplicitNavigation();
   if (checkpoint?.status !== "accepted") return null;
   const continueAccepted = () => {
     if (pending) return;
     setPending(true);
-    completeBlockRequest(block.id).then((result) => { refresh(stateFromCompletion(result)); const target = navigationTargetFrom(result); if (target) requestAnimationFrame(() => navigateToAnchor(target, "push")); }).catch((error) => {
+    completeBlockRequest(block.id).then((result) => { refresh(stateFromCompletion(result)); const target = navigationTargetFrom(result); if (target) scheduleExplicitNavigation(target, "push"); }).catch((error) => {
       console.error(error);
       setPending(false);
     });
@@ -575,10 +586,11 @@ function WorkbookIntroduction({ state, refresh }: { state: State; refresh(state:
 
 function IntroductionContinue({ refresh, label = "Ready to continue" }: { refresh(state: State): void; label?: string }) {
   const [pending, setPending] = useState(false);
+  const scheduleExplicitNavigation = useScheduleExplicitNavigation();
   const continueIntroduction = () => {
     if (pending) return;
     setPending(true);
-    completeBlockRequest("workbook--introduction").then((result) => { refresh(stateFromCompletion(result)); const target = navigationTargetFrom(result); if (target) requestAnimationFrame(() => navigateToAnchor(target, "push")); }).catch((error) => {
+    completeBlockRequest("workbook--introduction").then((result) => { refresh(stateFromCompletion(result)); const target = navigationTargetFrom(result); if (target) scheduleExplicitNavigation(target, "push"); }).catch((error) => {
       console.error(error);
       setPending(false);
     });
@@ -720,8 +732,46 @@ export function App() {
   const previousReadyRunwayIds = useRef<Set<string>>(new Set());
   const preservedRunwayIds = useRef<Set<string>>(new Set());
   const sseStateRequestSequence = useRef(0);
+  const navigation = useRef<{ frame?: number; generation: number; explicitPending: boolean; skipPassiveAnchor?: string }>({ generation: 0, explicitPending: false });
+  const scheduleNavigationFrame = useCallback((anchorId: string, mode: NavigationMode) => {
+    const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback: FrameRequestCallback) => setTimeout(callback, 0) as unknown as number;
+    const cancel = typeof cancelAnimationFrame === "function" ? cancelAnimationFrame : (handle: number) => clearTimeout(handle as unknown as ReturnType<typeof setTimeout>);
+    const nextGeneration = ++navigation.current.generation;
+    if (navigation.current.frame !== undefined) cancel(navigation.current.frame);
+    navigation.current.frame = raf(() => {
+      navigation.current.frame = undefined;
+      if (nextGeneration !== navigation.current.generation) return;
+      navigation.current.explicitPending = false;
+      navigateToAnchor(anchorId, mode);
+    });
+  }, []);
+  const scheduleExplicitNavigation = useCallback<ScheduleExplicitNavigation>((anchorId, mode = "push") => {
+    navigation.current.explicitPending = true;
+    navigation.current.skipPassiveAnchor = anchorId;
+    scheduleNavigationFrame(anchorId, mode);
+  }, [scheduleNavigationFrame]);
+  const schedulePassiveNavigation = useCallback((anchorId: string, mode: NavigationMode) => {
+    if (navigation.current.explicitPending) return;
+    if (navigation.current.skipPassiveAnchor) {
+      if (navigation.current.skipPassiveAnchor === anchorId) {
+        navigation.current.skipPassiveAnchor = undefined;
+        return;
+      }
+      navigation.current.skipPassiveAnchor = undefined;
+    }
+    scheduleNavigationFrame(anchorId, mode);
+  }, [scheduleNavigationFrame]);
+  const suppressNextPassiveNavigation = useCallback((anchorId: string) => { navigation.current.skipPassiveAnchor = anchorId; }, []);
   const registerTerminalInsertion = useCallback((insertCommand: (() => void) | undefined) => {
     setTerminalInsertion(() => insertCommand);
+  }, []);
+  useEffect(() => () => {
+    if (navigation.current.frame !== undefined) {
+      const cancel = typeof cancelAnimationFrame === "function" ? cancelAnimationFrame : (handle: number) => clearTimeout(handle as unknown as ReturnType<typeof setTimeout>);
+      cancel(navigation.current.frame);
+      navigation.current.frame = undefined;
+    }
+    navigation.current.generation += 1;
   }, []);
   useEffect(() => { readWorkbookState().then(setState).catch((error) => console.error(error)); }, []);
   const hasInitialState = Boolean(state);
@@ -757,15 +807,14 @@ export function App() {
     if (!state) return;
     const fragment = typeof location === "undefined" ? "" : decodeURIComponent(location.hash.replace(/^#/, ""));
     const revealed = new Set(state.revealedBlockIds ?? state.progress.blocks.filter((block) => block.emerged).map((block) => block.id));
-    const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback: FrameRequestCallback) => setTimeout(callback, 0) as unknown as number;
-    if (!fragment) { raf(() => navigateToAnchor(state.progress.activeAnchorId ?? state.progress.activeBlockId, "replace")); return; }
+    const activeAnchor = state.progress.activeAnchorId ?? state.progress.activeBlockId;
+    if (!fragment) { schedulePassiveNavigation(activeAnchor, "replace"); return; }
     if (revealed.has(fragment) || fragment === "workbook--complete" && state.progress.workbookComplete) {
-      if (passiveAnchorScrollIsSuppressed(fragment)) { passiveAnchorScrollSuppression = undefined; return; }
-      raf(() => navigateToAnchor(fragment, "none"));
+      schedulePassiveNavigation(fragment, "none");
       return;
     }
-    raf(() => navigateToAnchor(state.progress.activeAnchorId ?? state.progress.activeBlockId, "replace"));
-  }, [state?.workbook.title, state?.progress.activeAnchorId, state?.progress.workbookComplete, state?.revealedBlockIds?.join("|")]);
+    schedulePassiveNavigation(activeAnchor, "replace");
+  }, [schedulePassiveNavigation, state?.workbook.title, state?.progress.activeAnchorId, state?.progress.workbookComplete, state?.revealedBlockIds?.join("|")]);
   useEffect(() => { setTerminalInsertion(undefined); }, [state?.progress.activeLessonId, state?.progress.activeBlockId]);
   useEffect(() => {
     if (!state || state.progress.workbookComplete || typeof IntersectionObserver === "undefined") return;
@@ -781,7 +830,7 @@ export function App() {
       completeBlockRequest(activeId).then((result) => {
         setState(stateFromCompletion(result));
         const target = navigationTargetFrom(result);
-        if (target) replaceUrlAnchor(target);
+        if (target) { replaceUrlAnchor(target); suppressNextPassiveNavigation(target); }
       }).catch((error) => {
         scrollCompletionPending.current = false;
         console.error(error);
@@ -836,7 +885,7 @@ export function App() {
     const before = state.progress.activeBlockId;
     return postTutorMessage(state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID, text, state.introductionComplete ? blockInView() : undefined).then((next) => {
       setState(next);
-      if (next.progress.activeBlockId !== before || next.progress.workbookComplete && !state.progress.workbookComplete) requestAnimationFrame(() => navigateToAnchor(next.progress.activeAnchorId ?? next.progress.activeBlockId, "push"));
+      if (next.progress.activeBlockId !== before || next.progress.workbookComplete && !state.progress.workbookComplete) scheduleExplicitNavigation(next.progress.activeAnchorId ?? next.progress.activeBlockId, "push");
     });
   };
   const activeContinuationEligible = !state.introductionComplete ? true : state.progress.canComplete ? state.progress.canComplete.blockId === effectiveActiveBlockId && state.progress.canComplete.eligible : Boolean(effectiveActiveBlockProgress?.active && effectiveActiveBlockProgress.ready && !effectiveActiveBlockProgress.completed && (activeBlock?.type === "narrative" || effectiveActiveBlockProgress.checkpoint?.status === "accepted"));
@@ -859,7 +908,7 @@ export function App() {
     if (!recordIsActive && blockProgress?.completed) return <ContinuationPageBreak completedAt={blockProgress.completedAt} />;
     return null;
   };
-  return <div className="shell">
+  return <ExplicitNavigationContext.Provider value={scheduleExplicitNavigation}><div className="shell">
     {contentReloadError && <aside className="author-reload-notice" aria-live="polite"><b>Author reload failed.</b> {contentReloadError}</aside>}
     <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
@@ -871,5 +920,5 @@ export function App() {
         {emerged.map((chapter, index) => <React.Fragment key={chapter.id}>{(index === 0 || chapter.part !== emerged[index - 1]!.part) && <PartChapter chapter={chapter} />}<LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}
       </>}
     </article></main>
-  </div>;
+  </div></ExplicitNavigationContext.Provider>;
 }

@@ -60,7 +60,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
-import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, LessonView, completionAgeLabel, scrollActiveLessonIntoView, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
+import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, LessonView, completionAgeLabel, navigateToAnchor, scrollActiveLessonIntoView, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
 import { lessonAnchorHref, lessonElementId } from "../src/workbook/lesson-links.js";
 
 const progress: Progress = {
@@ -284,6 +284,24 @@ describe("workbook lesson UI", () => {
     expect(markup).toContain(">Completed just now</time>");
     expect(markup).toContain('class="continuation-page-break"');
     expect(markup).not.toContain("<button");
+  });
+
+  it("updates the URL fragment before scrolling to an anchor", () => {
+    dom = new JSDOM("<!doctype html><html><body><section id=\"next-step\" tabindex=\"-1\">Next</section></body></html>", { url: "http://localhost/workbook#previous" });
+    vi.stubGlobal("window", dom.window as any);
+    vi.stubGlobal("document", dom.window.document as any);
+    vi.stubGlobal("history", dom.window.history);
+    vi.stubGlobal("location", dom.window.location);
+    const hashesDuringScroll: string[] = [];
+    const target = dom.window.document.getElementById("next-step") as HTMLElement;
+    target.scrollIntoView = vi.fn(() => { hashesDuringScroll.push(location.hash); });
+    target.focus = vi.fn();
+
+    expect(navigateToAnchor("next-step", "push")).toBe(true);
+
+    expect(hashesDuringScroll).toEqual(["#next-step"]);
+    expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    expect(target.focus).toHaveBeenCalledWith({ preventScroll: true });
   });
 
   it("refreshes state in place on author hot-reload SSE and preserves the current URL anchor", async () => {
