@@ -1,6 +1,7 @@
 import { WebSocket } from "ws";
+import { parsePublicTerminalMessage, type PublicTerminalLegacyFrame, type PublicTerminalMessage } from "../../tutorial-engine/src/workbook/public-terminal-contract.js";
 import { assertNoPrivateTutorState, recordEditorStatus, recordPublicState, recordReflectionTurn, recordTerminalTranscript } from "./session.js";
-import type { PublicWorkbookState, V2SessionTrace } from "./types.js";
+import type { PublicWorkbookState, V2SessionTrace, V2TerminalTranscriptEntry } from "./types.js";
 
 export type WorkbookApiState = PublicWorkbookState & { [key: string]: any };
 
@@ -254,33 +255,26 @@ export class V2WorkbookDriver {
           if (result instanceof Error) reject(result); else resolve(result);
         };
         ws.on("message", (data) => {
-          let message: any;
-          try { message = JSON.parse(data.toString()); }
-          catch { finish(new Error("Workbook terminal sent a non-JSON message.")); return; }
-          try { assertNoPrivateTutorState(message, "terminal message"); }
-          catch (error) { finish(error instanceof Error ? error : new Error(String(error))); return; }
+          const payload = data.toString();
+          let frame: PublicTerminalMessage | undefined;
+          try {
+            // The private-state check reads the raw object, not the narrowed frame: a frame this
+            // build has no branch for must still not be allowed to carry tutor guidance.
+            assertNoPrivateTutorState(JSON.parse(payload), "terminal message");
+            frame = parsePublicTerminalMessage(payload);
+          } catch (error) {
+            finish(error instanceof SyntaxError ? new Error("Workbook terminal sent a non-JSON message.") : error instanceof Error ? error : new Error(String(error)));
+            return;
+          }
+          if (frame === undefined) return;
 
-          if (message.type === "output" && typeof message.data === "string") {
-            recordTerminalTranscript(this.trace, { blockId, direction: "output", text: message.data });
-            return;
-          }
-          if (message.type === "observer-status") {
-            recordTerminalTranscript(this.trace, { blockId: message.blockId ?? blockId, direction: "observer", text: `status:${message.status ?? "unknown"}` });
-            return;
-          }
-          if (message.type === "advice" || message.type === "observer-error" || message.type === "terminal-error") {
-            recordTerminalTranscript(this.trace, { blockId: message.blockId ?? blockId, direction: "observer", text: String(message.message ?? message.type) });
-            return;
-          }
-          if (message.type === "attempt-status" && message.blockId === blockId) {
-            const status = typeof message.status === "string" ? message.status : "reviewing";
-            recordTerminalTranscript(this.trace, { blockId, direction: "observer", text: `status:${status}` });
-            if (!acceptedWaitStarted && status === "submitted") {
-              reviewStarted = true;
-              acceptedWaitStarted = true;
-              clearSubmissionTimer();
-              void this.#waitForAcceptedCheckpoint(blockId, label, reviewTimeoutMs).then(finish, (error) => finish(error instanceof Error ? error : new Error(String(error))));
-            }
+          const row = terminalTranscriptRow(frame, blockId);
+          if (row) recordTerminalTranscript(this.trace, row);
+          if (frame.type === "attempt-status" && frame.blockId === blockId && frame.status === "submitted" && !acceptedWaitStarted) {
+            reviewStarted = true;
+            acceptedWaitStarted = true;
+            clearSubmissionTimer();
+            void this.#waitForAcceptedCheckpoint(blockId, label, reviewTimeoutMs).then(finish, (error) => finish(error instanceof Error ? error : new Error(String(error))));
           }
         });
         ws.once("error", (error) => finish(error instanceof Error ? error : new Error(String(error))));
@@ -295,6 +289,29 @@ export class V2WorkbookDriver {
 
 export function createV2WorkbookDriver(options: V2WorkbookDriverOptions): V2WorkbookDriver {
   return new V2WorkbookDriver(options);
+}
+
+/**
+ * Turns one socket frame into the transcript row that records it. The switch is over the union
+ * `public-terminal-contract.ts` declares rather than over shapes described again here, so renaming
+ * or adding a frame stops this file compiling instead of quietly dropping the frame from the trace.
+ */
+function terminalTranscriptRow(frame: PublicTerminalMessage, blockId: string): V2TerminalTranscriptEntry | undefined {
+  switch (frame.type) {
+    case "output": return { blockId, direction: "output", text: frame.data };
+    case "attempt-status": return { blockId: frame.blockId ?? blockId, direction: "observer", text: `status:${frame.status}` };
+    case "attempt-error": return { blockId: frame.blockId, direction: "observer", text: frame.message };
+    case "terminal-error": return { blockId, direction: "observer", text: frame.message };
+    case "busy": return { blockId, direction: "observer", text: frame.message };
+    case "exit": return { blockId, direction: "observer", text: `exit:${frame.exitCode}${frame.signal === undefined ? "" : ` signal:${frame.signal}`}` };
+    default: {
+      // Only the frames no server sends are left. The annotation is the check: a new live frame
+      // reaches here as an unassignable type until it gets a case above.
+      const unsent: PublicTerminalLegacyFrame = frame;
+      void unsent;
+      return undefined;
+    }
+  }
 }
 
 function delay(ms: number): Promise<void> {
