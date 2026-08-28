@@ -51,6 +51,28 @@ describe("TimelineThread", () => {
     expect(markup).not.toContain("Private readiness");
   });
 
+  it("places a ready terminal practice surface under its own authored record", () => {
+    const markup = renderToStaticMarkup(createElement(TimelineThread, {
+      activeLessonId: "lesson",
+      activeBlockId: "orientation",
+      onSend: noopSend,
+      onRetry: noopRetry,
+      practiceSurfaceBlockId: "practice",
+      practiceSurface: createElement("output", { "aria-label": "Ready terminal canvas" }, "terminal canvas"),
+      records: [
+        { type: "message", id: "orientation", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson", blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation" },
+        { type: "message", id: "practice", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "practice", role: "assistant", source: "authored", presentation: "course", text: "## Practice" },
+      ]
+    }));
+
+    const orientationEnd = markup.indexOf("</section>");
+    const practiceStart = markup.indexOf('id="practice"');
+    const surface = markup.indexOf('aria-label="Ready terminal canvas"');
+    expect(orientationEnd).toBeLessThan(practiceStart);
+    expect(practiceStart).toBeLessThan(surface);
+    expect(markup.match(/Ready terminal canvas/g)).toHaveLength(1);
+  });
+
   it("only gives authored course records the Mermaid diagram path", () => {
     const diagram = "```mermaid\ngraph TD\n  A --> B\n```";
     const markup = renderToStaticMarkup(createElement(TimelineThread, {

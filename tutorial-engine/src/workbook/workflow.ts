@@ -332,8 +332,10 @@ async function publicState(loaded: LoadedWorkbook, learnerWorkspace: string, rec
   const chapters = loaded.chapters.map((chapter) => {
     const lessonPreambleRevealed = revealedBlockIds.has(lessonPreambleBlockIdForServer(chapter.lesson.id));
     if (!lessonPreambleRevealed) return { ...chapter, lesson: undefined };
-    const emergedBlocks = chapter.lesson.blocks.filter((block) => revealedBlockIds.has(declaredBlockId(chapter.lesson.id, block.id))).map((block) => publicBlock({ ...block, id: declaredBlockId(chapter.lesson.id, block.id) } as WorkbookBlock));
-    return { ...chapter, lesson: publicLesson({ ...chapter.lesson, blocks: emergedBlocks as WorkbookBlock[] }, emergedBlocks as WorkbookBlock[]) };
+    // A ready successor already has its authored timeline record. Its public block data is needed
+    // to render that record's practice surface, but later blocks remain absent until they render.
+    const renderedBlocks = chapter.lesson.blocks.filter((block) => renderedBlockIds.has(declaredBlockId(chapter.lesson.id, block.id))).map((block) => publicBlock({ ...block, id: declaredBlockId(chapter.lesson.id, block.id) } as WorkbookBlock));
+    return { ...chapter, lesson: publicLesson({ ...chapter.lesson, blocks: renderedBlocks as WorkbookBlock[] }, renderedBlocks as WorkbookBlock[]) };
   });
   const progress = { activeLessonId: current?.origin === "declared" ? current.lessonId : current?.chapter?.lesson.id ?? loaded.chapters[0]?.lesson.id ?? "", activeBlockId: workbookProjection.activeBlockId, activeAnchorId: workbookProjection.activeAnchorId, completedLessons, completedBlocks: [...workbookProjection.completedBlockIds], workAcceptedBlocks: [...workbookProjection.workAcceptedBlockIds], readyBlocks: [...workbookProjection.readyBlockIds], blocks, reflections, reflectionConversations, canComplete: current ? { blockId: current.id, ...canComplete } : { blockId: WORKBOOK_COMPLETE_ANCHOR_ID, eligible: false, reason: "complete" }, workbookComplete: workbookProjection.workbookComplete };
   const completionSummary = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "workbook_completion_summary" }> => record.type === "workbook_completion_summary");

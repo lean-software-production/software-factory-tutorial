@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import { BlockView, type Block, type Progress, type State } from "./workbook-ui.js";
 
 const CANVAS_INSET_PX = 24;
@@ -55,11 +55,12 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
   activeBlock: Block;
   progress: Progress;
   refresh(state: State): void;
-  onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void;
+  onTerminalInsertionChange?(blockId: string, insertCommand: (() => void) | undefined): void;
 }) {
   const bandRef = useRef<HTMLElement | null>(null);
   const focusedForBlock = useRef<string | undefined>(undefined);
-  useEffect(() => () => onTerminalInsertionChange?.(undefined), [activeBlock.id, onTerminalInsertionChange]);
+  const forwardTerminalInsertion = useCallback((insertCommand: (() => void) | undefined) => onTerminalInsertionChange?.(activeBlock.id, insertCommand), [activeBlock.id, onTerminalInsertionChange]);
+  useEffect(() => () => onTerminalInsertionChange?.(activeBlock.id, undefined), [activeBlock.id, onTerminalInsertionChange]);
   const activeProgress = progress.blocks.find((block) => block.id === activeBlock.id);
   useEffect(() => {
     focusedForBlock.current = undefined;
@@ -133,13 +134,16 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
     observer.observe(element);
     return () => observer.disconnect();
   }, [activeBlock.id, activeProgress?.active, activeProgress?.checkpoint?.status]);
+  const activePractical = Boolean(activeProgress?.active && ["terminal-practice", "editor-practice"].includes(activeBlock.type));
+  const readyTerminalPreload = Boolean(activeBlock.type === "terminal-practice" && activeProgress?.ready && !activeProgress.active && !activeProgress.completed);
   // Terminal completion is a browser-safe terminal object, not an AttemptStore checkpoint. Keep
-  // its frozen terminal and one completion card visible until the learner continues.
-  if (!activeProgress?.active || !["terminal-practice", "editor-practice"].includes(activeBlock.type) || activeProgress.checkpoint?.status === "accepted" && activeBlock.type !== "terminal-practice") return null;
+  // its frozen terminal and one completion card visible until the learner continues. A ready
+  // terminal may also occupy this one surface before it becomes active, so its canvas can persist.
+  if (!activePractical && !readyTerminalPreload || activeProgress?.checkpoint?.status === "accepted" && activeBlock.type !== "terminal-practice") return null;
 
   return <>
-    <section ref={bandRef} className="current-activity-band" data-activity-type={activeBlock.type} data-activity-layout="scroll-linked" aria-label="Current practice activity">
-      <BlockView lessonId={lessonId} block={activeBlock} progress={progress} refresh={refresh} onTerminalInsertionChange={onTerminalInsertionChange} />
+    <section ref={bandRef} className="current-activity-band" data-activity-type={activeBlock.type} data-activity-layout="scroll-linked" data-activity-preloaded={readyTerminalPreload ? "true" : undefined} aria-label="Activity">
+      <BlockView lessonId={lessonId} block={activeBlock} progress={progress} refresh={refresh} onTerminalInsertionChange={forwardTerminalInsertion} />
     </section>
   </>;
 }
