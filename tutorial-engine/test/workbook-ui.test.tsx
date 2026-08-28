@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const terminalDataListeners: Array<(data: string) => void> = [];
+const terminalFitCalls: string[] = [];
 
 vi.mock("@codemirror/state", () => ({
   EditorState: { create: (config: any) => config }
@@ -53,7 +54,7 @@ vi.mock("@xterm/xterm", () => ({
   }
 }));
 
-vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
+vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() { terminalFitCalls.push("fit"); } } }));
 
 vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/workbook/lesson-links.js")>();
@@ -151,6 +152,7 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   terminalDataListeners.splice(0);
+  terminalFitCalls.splice(0);
 });
 
 // Every test in this file renders a component into a fresh JSDOM document, so
@@ -1851,6 +1853,58 @@ describe("workbook lesson UI", () => {
     expect(eventCall).toBeTruthy();
     expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "orientation" });
     expect(container.textContent).toContain("Next");
+  });
+
+  it("refits the embedded terminal when its element changes size", async () => {
+    class FakeWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.CONNECTING;
+      sent: string[] = [];
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      constructor(_url: string) { FakeWebSocket.instances.push(this); }
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      send(message: string) { this.sent.push(message); }
+      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
+      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
+    }
+    class FakeResizeObserver {
+      static instances: FakeResizeObserver[] = [];
+      observed: Element[] = [];
+      disconnected = false;
+      constructor(private callback: ResizeObserverCallback) { FakeResizeObserver.instances.push(this); }
+      observe(element: Element) { this.observed.push(element); }
+      disconnect() { this.disconnected = true; }
+      trigger() { this.callback([], this as unknown as ResizeObserver); }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const container = await mount(createElement(BlockView, { block: lesson.blocks[1]!, progress: activeBlockProgress(lesson.blocks[1]!), refresh: vi.fn() }), (win) => {
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
+      Object.defineProperty(win, "ResizeObserver", { value: FakeResizeObserver, configurable: true });
+    });
+
+    const terminalNode = container.querySelector(".embedded-terminal")!;
+    expect(FakeResizeObserver.instances).toHaveLength(1);
+    expect(FakeResizeObserver.instances[0]!.observed).toContain(terminalNode);
+    expect(terminalFitCalls).toHaveLength(1);
+
+    const socket = FakeWebSocket.instances[0]!;
+    await act(async () => { socket.readyState = FakeWebSocket.OPEN; socket.emit("open"); });
+    expect(terminalFitCalls).toHaveLength(2);
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "resize", cols: 80, rows: 24 });
+
+    await act(async () => { FakeResizeObserver.instances[0]!.trigger(); });
+    expect(terminalFitCalls).toHaveLength(3);
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "resize", cols: 80, rows: 24 });
+
+    await act(async () => { mountedRoot!.unmount(); });
+    mountedRoot = undefined;
+    expect(FakeResizeObserver.instances[0]!.disconnected).toBe(true);
   });
 
   it("inserts an authored terminal command without Enter and removes the action when the socket closes", async () => {

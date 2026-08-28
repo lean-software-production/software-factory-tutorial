@@ -185,8 +185,12 @@ function EmbeddedTerminal({ block, command, active, refresh, onError, onTyping, 
     });
     ws.addEventListener("close", () => setConnected(false));
     ws.addEventListener("error", () => { setConnected(false); onError("Embedded terminal connection failed. Refresh the page and try again."); });
+    const ResizeObserverClass = window.ResizeObserver;
+    const resizeObserver = ResizeObserverClass ? new ResizeObserverClass(sendResize) : undefined;
+    resizeObserver?.observe(terminalElement.current);
     addEventListener("resize", sendResize);
     return () => {
+      resizeObserver?.disconnect();
       removeEventListener("resize", sendResize);
       dataDisposable.dispose();
       ws.close();
