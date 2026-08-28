@@ -21,15 +21,15 @@ Most command-line based coding agents give you this affordance:
 
 ```sh
 claude -p "What is the capital of France?"
+
 codex exec "What is the capital of France?"
-gemini -p "What is the capital of France?"
+
+agy -p "What is the capital of France?"
+
+pi -p "What is the capital of France?"
 ```
 
-Here's [Claude's docs](https://code.claude.com/docs/en/headless), the [Codex exec CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-exec), the [Gemini CLI documentation for headless mode](https://geminicli.com/docs/cli/tutorials/automation), and the [Pi coding agent's print mode docs](https://github.com/earendil-works/pi/tree/main/packages/coding-agent#modes).
+Here's [Claude's docs](https://code.claude.com/docs/en/headless), the [Codex exec CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-exec), the [Google AntiGravity documentation for headless mode](https://antigravity.google/docs/cli/headless/#run-a-single-prompt), and the [Pi coding agent's print mode docs](https://github.com/earendil-works/pi/tree/main/packages/coding-agent#modes).
 
 For this tutorial we'll use Pi, because as an independent open-source project it allows us to choose
 a model from any provider.
-
-You will use the tutor's embedded terminal. First, you will run a simple Pi prompt. Then you will run a supplied project-specific command. Finally, you will change only that job and observe what stays the same.
-
-An **agent** is a harness with a job to be done. The **harness** is ordinary software: it prepares the input, calls a model, and handles what comes back. The **job to be done** is what you hand it.
