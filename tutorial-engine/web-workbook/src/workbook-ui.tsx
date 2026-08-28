@@ -129,16 +129,43 @@ function terminalSocketUrl(): string {
   return url.href;
 }
 
-function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange }: { command?: string; active: boolean; onError(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+/**
+ * Capture only the rows the learner could see when the terminal stopped. xterm has already
+ * interpreted control and colour sequences by this point, so the frozen `<pre>` is a faithful,
+ * safe HTML representation rather than a replay of raw terminal bytes. Trailing empty rows are
+ * layout, not transcript: retaining them is what used to leave a large dark gap before success.
+ */
+export function visibleTerminalText(terminal: Terminal | null): string | undefined {
+  const buffer = terminal?.buffer?.active;
+  if (!buffer) return undefined;
+  const lines: string[] = [];
+  const lastRow = Math.min(buffer.length, buffer.viewportY + terminal.rows);
+  for (let row = buffer.viewportY; row < lastRow; row += 1) lines.push(buffer.getLine(row)?.translateToString(true) ?? "");
+  while (lines.at(-1) === "") lines.pop();
+  return lines.join("\n") || undefined;
+}
+
+function FrozenTerminal({ text }: { text?: string }) {
+  return <div className="frozen-terminal" aria-label="Frozen terminal session">
+    <pre className="frozen-terminal-output">{text ?? "Terminal completed."}</pre>
+  </div>;
+}
+
+function EmbeddedTerminal({ command, active, frozen = false, onError, onTerminalInsertionChange }: { command?: string; active: boolean; frozen?: boolean; onError(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
+  const frozenText = useRef<string | undefined>(undefined);
   const fit = useRef<FitAddon | null>(null);
   const socket = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
 
+  // `frozen` changes during the render that replaces xterm. Read its buffer before the effect
+  // below disposes it, then retain the snapshot through later feedback/state renders.
+  if (frozen && frozenText.current === undefined) frozenText.current = visibleTerminalText(terminal.current);
+
   useEffect(() => {
-    if (!active || !terminalElement.current) return;
+    if (!active || frozen || !terminalElement.current) return;
     const nextTerminal = new Terminal({ cursorBlink: true, convertEol: true, fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 16, theme: { background: "#101820" } });
     const nextFit = new FitAddon();
     nextTerminal.loadAddon(nextFit);
@@ -191,7 +218,7 @@ function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange 
       socket.current = null;
       setConnected(false);
     };
-  }, [active, onError]);
+  }, [active, frozen, onError]);
 
   const insertCommand = useCallback(() => {
     if (!command) return;
@@ -200,14 +227,15 @@ function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange 
   }, [command]);
 
   useEffect(() => {
-    if (!active || !command || !connected || socket.current?.readyState !== WebSocket.OPEN) {
+    if (!active || frozen || !command || !connected || socket.current?.readyState !== WebSocket.OPEN) {
       onTerminalInsertionChange?.(undefined);
       return;
     }
     onTerminalInsertionChange?.(insertCommand);
     return () => onTerminalInsertionChange?.(undefined);
-  }, [active, command, connected, connectionEpoch, insertCommand, onTerminalInsertionChange]);
+  }, [active, command, connected, connectionEpoch, frozen, insertCommand, onTerminalInsertionChange]);
 
+  if (frozen) return <FrozenTerminal text={frozenText.current} />;
   return <div className="embedded-terminal-panel">
     <span className={`terminal-connection-status${connected ? " connected" : ""}`} aria-label={connected ? "Terminal connected" : "Terminal disconnected"} />
     <div ref={terminalElement} className="embedded-terminal" aria-label="Embedded terminal" />
@@ -299,11 +327,14 @@ function TerminalBlock({ lessonId, block, state, onTerminalInsertionChange }: { 
   // transport error. It is never moved into the activity/timeline portal.
   const displayPanel = text ? <aside className={`live-block-feedback terminal-feedback-overlay${display.phase === "running" ? " running" : ""}`} aria-live="polite" role="status">{display.phase === "running" && <span className="terminal-running-spinner" aria-hidden="true" />}<Markdown source="generated">{text}</Markdown></aside> : null;
   return <section id={blockElementId(lessonId, block.id)} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
-    {complete ? <div className="frozen-terminal" aria-label="Frozen terminal session"><pre className="frozen-terminal-output">Terminal session frozen.</pre></div> : showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
+    {complete ? <div className="terminal-completion-surface">
+      <EmbeddedTerminal command={command} active={Boolean(state?.active)} frozen onError={setTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} />
+      {displayPanel}
+    </div> : showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
       <EmbeddedTerminal command={command} active={Boolean(state?.active)} onError={setTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} />
       {displayPanel}
     </div>}
-    {!showLiveTerminal && displayPanel}
+    {!showLiveTerminal && !complete && displayPanel}
   </section>;
 }
 

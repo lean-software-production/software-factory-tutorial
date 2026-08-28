@@ -71,7 +71,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
-import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
+import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, visibleTerminalText, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
 
 const progress: Progress = {
   activeLessonId: "part/lesson-one",
@@ -1987,6 +1987,25 @@ describe("workbook lesson UI", () => {
 
     await act(async () => { socket.readyState = FakeWebSocket.CLOSED; socket.emit("close"); });
     expect(container.querySelector(".timeline-do-it")).toBeNull();
+  });
+
+  it("captures the final visible terminal rows and joins them to terminal success", () => {
+    const lines = ["$ npm test", "PASS  calculator", "", ""];
+    const snapshot = visibleTerminalText({
+      rows: 4,
+      buffer: { active: { viewportY: 6, length: 10, getLine: (row: number) => ({ translateToString: () => lines[row - 6] }) } }
+    } as any);
+    const markup = html(createElement(BlockView, {
+      block: lesson.blocks[1]!,
+      progress: activeBlockProgress(lesson.blocks[1]!, { terminal: { phase: "complete", message: "Accepted by the Main Tutor." } } as any),
+      refresh: vi.fn(),
+    }));
+
+    expect(snapshot).toBe("$ npm test\nPASS  calculator");
+    expect(markup).toContain('class="terminal-completion-surface"');
+    expect(markup).toContain('class="frozen-terminal-output">Terminal completed.</pre>');
+    expect(markup).toContain("Accepted by the Main Tutor.");
+    expect(markup).not.toContain("Terminal session frozen.");
   });
 
   it("uses one terminal card for public states and never duplicates its DOM surface", async () => {
