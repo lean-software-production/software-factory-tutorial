@@ -41,6 +41,6 @@ main { position: relative; min-width: 0; background-color: #fafaf3; background-i
 .current-activity-band > .work-block { position: relative; left: var(--activity-left-offset); width: var(--activity-width); transition: left 80ms linear, width 80ms linear; }
 .current-activity-band .embedded-terminal { height: min(46vh, 380px); min-height: 240px; }
 .current-activity-band .editor-surface, .current-activity-band .editor-surface .cm-editor, .current-activity-band .editor-surface .cm-scroller, .current-activity-band .editor-surface .cm-content { min-height: min(46vh, 380px); }
-.current-activity-band .embedded-terminal-panel, .current-activity-band .editor-surface { opacity: .98; }.practice-feedback-slot:empty { display: none; }.practice-feedback-slot .practice-feedback { max-width: 720px; margin: 0 0 12px; }
+.current-activity-band .embedded-terminal-panel, .current-activity-band .editor-surface { opacity: .98; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .current-activity-band, .confetti-particle { transition: none; animation: none; } }
 @media (max-width: 840px) { .current-activity-band { --activity-left-offset: 0px; top: 46vh; width: min(var(--activity-inline-width), 100%); max-width: 100%; }.current-activity-band > .work-block { width: min(var(--activity-width), 100%); } .continuation-page-break { min-height: 10rem; } }

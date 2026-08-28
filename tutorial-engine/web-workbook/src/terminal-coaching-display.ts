@@ -1,5 +1,6 @@
 export type TerminalCoachingBlueField =
   | { kind: "empty"; text: "" }
+  | { kind: "submitting"; text: "Submitting command…" }
   | { kind: "running"; text: "Running" }
   | { kind: "feedback"; text: string; provisional: boolean; accepted: boolean };
 
@@ -19,6 +20,8 @@ export interface TerminalCoachingDisplayState {
 
 export type TerminalCoachingDisplayEvent =
   | { type: "typing" }
+  /** Xterm saw Enter. This is display-only until Bash publishes a submission fact. */
+  | { type: "local-command-submitted" }
   | { type: "command-submitted"; attemptId: string }
   | { type: "command-output"; attemptId: string }
   | { type: "useful-feedback"; attemptId: string; feedback: string }
@@ -35,6 +38,7 @@ const reviewingActivity: TerminalCoachingActivity = { kind: "reviewing", text: "
 const confirmingActivity: TerminalCoachingActivity = { kind: "confirming", text: "Looks good — confirming…", subtle: false };
 const retryingActivity: TerminalCoachingActivity = { kind: "retrying", text: "Review delayed — retrying automatically…", subtle: false };
 const emptyBlueField: TerminalCoachingBlueField = { kind: "empty", text: "" };
+const submittingBlueField: TerminalCoachingBlueField = { kind: "submitting", text: "Submitting command…" };
 const runningBlueField: TerminalCoachingBlueField = { kind: "running", text: "Running" };
 
 /** Creates display-only state. Bash's submitted-command fact activates an attempt. */
@@ -51,7 +55,13 @@ export function reduceTerminalCoachingDisplay(
   event: TerminalCoachingDisplayEvent
 ): TerminalCoachingDisplayState {
   if (event.type === "typing") return { ...state, activity: listeningActivity };
-  if (event.type === "command-submitted") return { currentAttemptId: event.attemptId, blueField: runningBlueField, activity: runningActivity };
+  // Enter is visible to xterm before Bash and the server can publish a durable submission. This
+  // deliberately changes no attempt identity: Bash remains the lifecycle authority, so the UI
+  // says only that it is submitting until Bash confirms that the command is running.
+  if (event.type === "local-command-submitted") return { ...state, blueField: submittingBlueField, activity: idleActivity };
+  // Reconcile the local busy card with Bash's durable submission without adding a second Running
+  // label beneath it.
+  if (event.type === "command-submitted") return { currentAttemptId: event.attemptId, blueField: runningBlueField, activity: idleActivity };
   if (event.attemptId !== state.currentAttemptId) return state;
 
   switch (event.type) {
@@ -68,7 +78,13 @@ export function reduceTerminalCoachingDisplay(
     case "coach-ready":
       return { ...state, activity: confirmingActivity };
     case "review-retry-scheduled":
-      return { ...state, activity: retryingActivity };
+      // A retry replaces the generic final feedback in the same highlighted surface. It must not
+      // leave a stale card above a second retrying line.
+      return {
+        ...state,
+        blueField: { kind: "feedback", text: retryingActivity.text, provisional: false, accepted: false },
+        activity: idleActivity
+      };
     case "final-feedback":
       return {
         ...state,

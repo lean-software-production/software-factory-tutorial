@@ -1936,7 +1936,7 @@ describe("workbook lesson UI", () => {
     });
 
     expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Running");
-    expect(container.querySelector(".terminal-coaching-activity")?.textContent).toContain("Running");
+    expect(container.querySelector(".terminal-coaching-activity")).toBeNull();
 
     await act(async () => { mountedRoot!.render(render(terminalState("running"))); });
     expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Running");
@@ -1962,7 +1962,10 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector(".terminal-coaching-activity")?.textContent).toContain("Looks good — confirming…");
 
     await act(async () => { mountedRoot!.render(render(terminalState("final-feedback", { status: "feedback", feedback: "Final feedback." }, true))); });
-    expect(container.querySelector(".terminal-coaching-activity")?.textContent).toContain("Review delayed — retrying automatically…");
+    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Review delayed — retrying automatically…");
+    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
+    expect(container.querySelector(".terminal-coaching-activity")).toBeNull();
+    expect(container.textContent).not.toContain("Final feedback.");
 
     await act(async () => { mountedRoot!.render(render(terminalState("accepted", { status: "accepted", successMessage: "Accepted feedback." }))); });
     expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Accepted feedback.");
@@ -1970,6 +1973,41 @@ describe("workbook lesson UI", () => {
     await act(async () => { mountedRoot!.render(render(final)); });
     expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Accepted feedback.");
     expect(container.textContent).not.toContain("Final feedback.");
+
+    await act(async () => { mountedRoot!.render(render(terminalState("final-feedback", { status: "feedback", feedback: "Stale delayed feedback." }, true))); });
+    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Accepted feedback.");
+    expect(container.textContent).not.toContain("Review delayed — retrying automatically…");
+  });
+
+  it("shows local submitting on Enter and upgrades to Running only after the public Bash submission", async () => {
+    class FakeWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 3;
+      readyState = FakeWebSocket.OPEN;
+      addEventListener() {}
+      send() {}
+      close() { this.readyState = FakeWebSocket.CLOSED; }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const render = (next: Progress) => createElement(BlockView, { block: lesson.blocks[1]!, progress: next, refresh: vi.fn() });
+    const container = await mount(render(activeBlockProgress(lesson.blocks[1]!)), (win) => {
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
+    });
+
+    await act(async () => { terminalDataListeners[0]!("p"); });
+    expect(container.querySelector(".terminal-coaching-activity")?.textContent).toContain("Listening for a command…");
+
+    await act(async () => { terminalDataListeners[0]!("\r"); });
+    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Submitting command…");
+    expect(container.querySelector(".terminal-coaching-activity")).toBeNull();
+
+    await act(async () => { mountedRoot!.render(render(activeBlockProgress(lesson.blocks[1]!, { terminalStatus: "submitted" } as any))); });
+    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Running");
+    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).not.toContain("Submitting command…");
+    expect(container.querySelector(".terminal-coaching-activity")).toBeNull();
   });
 
   it("keeps persisted terminal feedback visible while transient socket frames arrive", async () => {
@@ -2101,7 +2139,7 @@ describe("workbook lesson UI", () => {
     expect(refresh.mock.calls[0]![0].progress.activeBlockId).toBe("practice");
   });
 
-  it("refreshes a persisted reviewing terminal checkpoint from state SSE without polling", async () => {
+  it("keeps terminal feedback inline through the former ActivityBand portal-host update", async () => {
     vi.useFakeTimers();
     class FakeWebSocket {
       static CONNECTING = 0;
@@ -2137,10 +2175,10 @@ describe("workbook lesson UI", () => {
 
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(FakeEventSource.instances[0]!.listenerCount("state")).toBe(1);
-    expect(container.querySelector(".current-activity-band .terminal-feedback-overlay")).toBeNull();
-    const feedbackSlot = container.querySelector(".practice-feedback-slot")!;
-    expect(feedbackSlot.previousElementSibling).toBe(container.querySelector(".current-activity-band"));
-    expect(feedbackSlot.querySelector(".terminal-coaching-activity")?.textContent).toContain("Reviewing command result…");
+    const initialFeedback = container.querySelector(".current-activity-band .terminal-feedback-overlay");
+    expect(initialFeedback?.textContent).toContain("Running");
+    expect(container.querySelector(".practice-feedback-slot")).toBeNull();
+    expect(container.querySelector(".current-activity-band .terminal-coaching-activity")?.textContent).toContain("Reviewing command result…");
 
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("api/workbook/state"))).toHaveLength(1);
@@ -2149,8 +2187,10 @@ describe("workbook lesson UI", () => {
 
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("api/workbook/state"))).toHaveLength(2);
     expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(container.querySelector(".current-activity-band .terminal-feedback-overlay")).toBeNull();
-    expect(feedbackSlot.querySelector(".practice-feedback")?.textContent).toContain("The persisted review completed.");
+    const finalFeedback = container.querySelector(".current-activity-band .terminal-feedback-overlay");
+    expect(finalFeedback).toBe(initialFeedback);
+    expect(finalFeedback?.textContent).toContain("The persisted review completed.");
+    expect(container.querySelector(".practice-feedback-slot")).toBeNull();
     expect(container.textContent).not.toContain("Terminal feedback:");
     expect(container.textContent).not.toContain("Checking…");
   });

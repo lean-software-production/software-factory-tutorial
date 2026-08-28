@@ -34,10 +34,10 @@ describe("terminal coaching display reducer", () => {
     const previous = reduce([submit(), { type: "final-feedback", attemptId: "attempt-1", feedback: "Previous feedback" }, submit("attempt-2")]);
     expect(previous.currentAttemptId).toBe("attempt-2");
     expect(previous.blueField).toEqual({ kind: "running", text: "Running" });
-    expect(previous.activity).toEqual({ kind: "running", text: "Running", subtle: true });
+    expect(previous.activity).toEqual({ kind: "idle", text: "", subtle: false });
   });
 
-  it("shows preliminary useful feedback while retaining smaller running activity", () => {
+  it("shows interim useful feedback while retaining smaller running activity", () => {
     const state = reduce([submit(), usefulFeedback("The script wrote the evidence file.")]);
 
     expect(state.blueField).toEqual({
@@ -86,9 +86,23 @@ describe("terminal coaching display reducer", () => {
     expect(stale.currentAttemptId).toBe("attempt-2");
   });
 
-  it("reports automatic retrying when review is delayed", () => {
-    const state = reduce([submit(), { type: "review-retry-scheduled", attemptId: "attempt-1" }]);
+  it("shows submitting locally until Bash confirms the command is running", () => {
+    const submitting = reduceTerminalCoachingDisplay(createTerminalCoachingDisplayState(), { type: "local-command-submitted" });
 
-    expect(state.activity).toEqual({ kind: "retrying", text: "Review delayed — retrying automatically…", subtle: false });
+    expect(submitting.currentAttemptId).toBeUndefined();
+    expect(submitting.blueField).toEqual({ kind: "submitting", text: "Submitting command…" });
+    expect(submitting.activity).toEqual({ kind: "idle", text: "", subtle: false });
+
+    const running = reduceTerminalCoachingDisplay(submitting, submit());
+    expect(running.currentAttemptId).toBe("attempt-1");
+    expect(running.blueField).toEqual({ kind: "running", text: "Running" });
+    expect(running.activity).toEqual({ kind: "idle", text: "", subtle: false });
+  });
+
+  it("replaces final feedback with one highlighted delayed-review status", () => {
+    const state = reduce([submit(), { type: "final-feedback", attemptId: "attempt-1", feedback: "Generic final feedback" }, { type: "review-retry-scheduled", attemptId: "attempt-1" }]);
+
+    expect(state.blueField).toEqual({ kind: "feedback", text: "Review delayed — retrying automatically…", provisional: false, accepted: false });
+    expect(state.activity).toEqual({ kind: "idle", text: "", subtle: false });
   });
 });

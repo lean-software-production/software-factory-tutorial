@@ -19,6 +19,7 @@ import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTimelineRecord,
 
 const REVIEW_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please try another attempt in a moment.";
 const TUTOR_UNAVAILABLE = "The tutor is temporarily unavailable. Please retry.";
+export const PI_COMMAND_MISMATCH_FEEDBACK = "This step is about running Pi. Run the displayed Pi command in the embedded terminal.";
 const TERMINAL_RETRY_BASE_MS = 250;
 const TERMINAL_RETRY_MAX_MS = 8_000;
 
@@ -54,6 +55,14 @@ type WorkbookProjectionState = {
 
 function isEvaluatedBlock(block: WorkbookBlock): block is Extract<WorkbookBlock, { type: "editor-practice" | "terminal-practice" | "reflection" }> { return block.type === "editor-practice" || block.type === "terminal-practice" || block.type === "reflection"; }
 function evidenceMatchesBlock(evidence: AttemptEvidence, block: WorkbookBlock): boolean { return (evidence.kind === "editor" && block.type === "editor-practice") || (evidence.kind === "terminal" && block.type === "terminal-practice") || (evidence.kind === "reflection" && block.type === "reflection"); }
+
+/** This intentionally checks only the explicit Pi exercise, not general command equality. */
+export function piCommandMismatchFeedback(authoredMarkdown: string, submittedCommand: string): string | undefined {
+  const displayedPiCommand = [...authoredMarkdown.matchAll(/^```sh\s+command[^\n]*\n([\s\S]*?)^```/gmi)]
+    .some((match) => /^pi(?:\s|$)/.test(match[1]!.trim()));
+  const executable = submittedCommand.trim().match(/^(\S+)/)?.[1];
+  return displayedPiCommand && executable !== "pi" ? PI_COMMAND_MISMATCH_FEEDBACK : undefined;
+}
 function acceptsWorkImmediately(block: OrderedWorkbookBlock): boolean { return block.origin === "structural" || block.kind === "narrative"; }
 
 function publicBlock(block: WorkbookBlock): PublicWorkbookBlock { const { tutor: _privateTutor, ...visible } = block as WorkbookBlock & { tutor?: string }; return visible; }
@@ -707,7 +716,9 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
 
   // One workflow owns one embedded terminal session. Individual command attempts retain their own
   // IDs from the Bash observation protocol; their durable state stays in the main event log.
-  type TerminalAssessmentPhase = "preliminary" | "interim" | "result";
+  // A command submission is only Bash's start marker. Model work waits for either a settled
+  // running-output checkpoint or the completed-command evidence.
+  type TerminalAssessmentPhase = "interim" | "result";
   type TerminalAssessmentRequest = {
     phase: TerminalAssessmentPhase;
     attemptId: string;
@@ -723,6 +734,9 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
   const terminalSessionId = randomUUID();
   const terminalRetries = new Map<string, TerminalRetry>();
   const terminalAssessmentTasks = new Set<Promise<void>>();
+  const deterministicTerminalCorrection = (attemptId: string): Extract<WorkbookTimelineRecord, { type: "preliminary-coaching-received" }> | undefined =>
+    [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "preliminary-coaching-received" }> =>
+      record.type === "preliminary-coaching-received" && record.attemptId === attemptId && Boolean(record.deterministic) && record.outcome === "feedback" && Boolean(record.text));
 
   const trackTerminalAssessment = (task: Promise<void>): void => {
     terminalAssessmentTasks.add(task);
@@ -760,7 +774,6 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     if (records.some((record) => record.type === "attempt_accepted" && record.attemptId === request.attemptId) || records.some((record) => record.type === "work_accepted" && record.blockId === request.blockId)) return undefined;
     const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> =>
       record.type === "terminal-command-finished" && record.attemptId === request.attemptId);
-    if (request.phase === "preliminary") return finished ? undefined : active;
     if (request.phase === "interim") {
       if (finished || !request.checkpointId || !request.evidenceRef) return undefined;
       const latestCheckpoint = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-output-settled" }> =>
@@ -884,23 +897,21 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
       let retry = false;
       await transact(async () => {
         if (!terminalRequestIsCurrent(request)) return;
-        if (request.phase !== "result") {
+        if (request.phase === "interim") {
           if (advice.outcome === "feedback") {
             let text: string;
             try { text = requireTutorText(advice.text, "review"); }
             catch {
-              log.info(`Practice Coach returned empty ${request.phase} feedback for ${request.lessonId}/${request.blockId}.`);
+              log.info(`Practice Coach returned empty interim feedback for ${request.lessonId}/${request.blockId}.`);
               return;
             }
-            if (request.phase === "preliminary") await append({ type: "preliminary-coaching-received", attemptId: request.attemptId, outcome: "feedback", text });
-            else await append({ type: "interim-coaching-received", attemptId: request.attemptId, checkpointId: request.checkpointId!, outcome: "feedback", text });
+            await append({ type: "interim-coaching-received", attemptId: request.attemptId, checkpointId: request.checkpointId!, outcome: "feedback", text });
             notifyStateChanged({ lessonId: request.lessonId, blockId: request.blockId, status: "feedback" });
             return;
           }
           // Running assessments cannot unlock work. A positive Coach signal is deliberately
           // reduced to wait-for-result until the Bash completion marker arrives.
-          if (request.phase === "preliminary") await append({ type: "preliminary-coaching-received", attemptId: request.attemptId, outcome: "wait-for-result" });
-          else await append({ type: "interim-coaching-received", attemptId: request.attemptId, checkpointId: request.checkpointId!, outcome: "wait-for-result" });
+          await append({ type: "interim-coaching-received", attemptId: request.attemptId, checkpointId: request.checkpointId!, outcome: "wait-for-result" });
           notifyStateChanged({ lessonId: request.lessonId, blockId: request.blockId, status: "working" });
           return;
         }
@@ -936,6 +947,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
   };
 
   const observeTerminalFact = (fact: TerminalObservationFact): Promise<void> => trackOrdinaryCommand(async () => {
+    let submittedBlockId: string | undefined;
     const request = await transact(async (): Promise<TerminalAssessmentRequest | undefined> => {
       if (closed) return undefined;
       const active = activeDeclaredBlock();
@@ -951,8 +963,16 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
           command: fact.command,
           terminalSessionId
         });
-        notifyStateChanged({ lessonId: active.lessonId, blockId: active.id, status: "working" });
-        return { phase: "preliminary", attemptId: fact.attemptId, lessonId: active.lessonId, blockId: active.id, command: fact.command, rubric: active.block.tutor, generation: reloadGeneration };
+        const correction = piCommandMismatchFeedback(active.block.markdown, fact.command);
+        if (correction) {
+          // This narrowly scoped correction is prompt-free and immediately useful. Its marker
+          // lets completion and restart recovery retain the message without a Coach call.
+          await append({ type: "preliminary-coaching-received", attemptId: fact.attemptId, outcome: "feedback", text: correction, deterministic: true });
+        }
+        submittedBlockId = active.id;
+        notifyStateChanged({ lessonId: active.lessonId, blockId: active.id, status: correction ? "feedback" : "working" });
+        // Submitting alone has no settled evidence, so it must not consume a model assessment.
+        return undefined;
       }
 
       const submitted = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
@@ -972,6 +992,12 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
         // Write immutable evidence before its event can reference it.
         const evidenceRef = await terminalEvidence.writeRunning({ command: fact.evidence.command, interactions });
         await append({ type: "terminal-output-settled", attemptId: fact.attemptId, checkpointId, evidenceRef });
+        // The Pi-command correction is already authoritative. A slow wrong command still gets
+        // no interim Coach assessment while it runs.
+        if (deterministicTerminalCorrection(fact.attemptId)?.text) {
+          notifyStateChanged({ lessonId: active.lessonId, blockId: active.id, status: "feedback" });
+          return undefined;
+        }
         notifyStateChanged({ lessonId: active.lessonId, blockId: active.id, status: "working" });
         return { phase: "interim", attemptId: fact.attemptId, lessonId: active.lessonId, blockId: active.id, command: submitted.command, rubric: active.block.tutor, generation: reloadGeneration, checkpointId, evidenceRef };
       }
@@ -980,11 +1006,17 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
       // A final snapshot includes output that arrived after the last quiet checkpoint.
       const evidenceRef = await terminalEvidence.writeFinished({ command: fact.evidence.command, interactions, exitStatus: fact.evidence.exitStatus });
       await append({ type: "terminal-command-finished", attemptId: fact.attemptId, exitStatus: fact.evidence.exitStatus, evidenceRef });
+      const correction = deterministicTerminalCorrection(fact.attemptId);
+      if (correction?.text) {
+        await append({ type: "result-coaching-received", attemptId: fact.attemptId, outcome: "feedback", text: correction.text });
+        notifyStateChanged({ lessonId: active.lessonId, blockId: active.id, status: "feedback" });
+        return undefined;
+      }
       notifyStateChanged({ lessonId: active.lessonId, blockId: active.id, status: "reviewing" });
       return { phase: "result", attemptId: fact.attemptId, lessonId: active.lessonId, blockId: active.id, command: submitted.command, rubric: active.block.tutor, generation: reloadGeneration, evidenceRef };
     });
+    if (submittedBlockId) cancelTerminalRetriesForBlock(submittedBlockId, fact.attemptId);
     if (!request) return;
-    if (request.phase === "preliminary") cancelTerminalRetriesForBlock(request.blockId, request.attemptId);
     // Model calls begin only after their event write and timeline transaction have completed.
     launchTerminalAssessment(request);
   });
@@ -1011,6 +1043,14 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
       };
       const result = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "result-coaching-received" }> =>
         record.type === "result-coaching-received" && record.attemptId === submission.attemptId);
+      const correction = deterministicTerminalCorrection(submission.attemptId);
+      // Recover a process stop between the finish marker and the corrective result row without
+      // sending the known wrong executable to either model.
+      if (correction?.text) {
+        if (result?.outcome !== "feedback" || result.text !== correction.text) await append({ type: "result-coaching-received", attemptId: submission.attemptId, outcome: "feedback", text: correction.text });
+        notifyStateChanged({ lessonId: active.lessonId, blockId: active.id, status: "feedback" });
+        return undefined;
+      }
       if (result?.outcome === "feedback") return undefined;
       if ((result?.outcome === "ready" || result?.outcome === "interesting") && result.text) {
         return { request, handoff: { outcome: result.outcome, text: result.text } };

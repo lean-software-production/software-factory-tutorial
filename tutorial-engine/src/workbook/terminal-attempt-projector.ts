@@ -25,7 +25,7 @@ export type ProjectedTerminalAttempt = {
 };
 
 type Coaching = { outcome: TerminalCoachingOutcome; text?: string };
-const FINISHED_WORKING_FEEDBACK = "The command finished without showing the expected result. Run another command and try again.";
+const FINISHED_WORKING_FEEDBACK = "Review delayed — retrying automatically…";
 type Checkpoint = { checkpointId: string };
 type Attempt = {
   attemptId: string;

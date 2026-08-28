@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import { BlockView, type Block, type Progress, type State } from "./workbook-ui.js";
 
 const CANVAS_INSET_PX = 24;
@@ -58,7 +58,6 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
   onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void;
 }) {
   const bandRef = useRef<HTMLElement | null>(null);
-  const [feedbackHost, setFeedbackHost] = useState<HTMLDivElement | null>(null);
   const focusedForBlock = useRef<string | undefined>(undefined);
   useEffect(() => () => onTerminalInsertionChange?.(undefined), [activeBlock.id, onTerminalInsertionChange]);
   const activeProgress = progress.blocks.find((block) => block.id === activeBlock.id);
@@ -139,8 +138,7 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
 
   return <>
     <section ref={bandRef} className="current-activity-band" data-activity-type={activeBlock.type} data-activity-layout="scroll-linked" aria-label="Current practice activity">
-      <BlockView lessonId={lessonId} block={activeBlock} progress={progress} refresh={refresh} onTerminalInsertionChange={onTerminalInsertionChange} feedbackHost={feedbackHost} />
+      <BlockView lessonId={lessonId} block={activeBlock} progress={progress} refresh={refresh} onTerminalInsertionChange={onTerminalInsertionChange} />
     </section>
-    <div ref={setFeedbackHost} className="practice-feedback-slot" aria-live="polite" />
   </>;
 }

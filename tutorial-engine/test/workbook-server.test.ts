@@ -11,6 +11,7 @@ import { TerminalEvidenceRepository } from "../src/workbook/terminal-evidence.js
 import { SessionWorkspaceManager } from "../src/session-workspace.js";
 import { startWorkbookServer } from "../src/workbook/server.js";
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
+import { BlockView } from "../web-workbook/src/workbook-ui.js";
 import type { ContentWatchFactory } from "../src/workbook/content-watch.js";
 import type { TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
 import type { Attempt } from "../src/workbook/attempts.js";
@@ -1005,10 +1006,10 @@ describe("workbook browser API", () => {
       { outcome: "feedback", message: "Main tutor can still judge this terminal output." }
     );
     const blockTutor = new FakePracticeCoach();
-    // Preliminary working is non-authoritative. A completed-command working result and then a
-    // provider failure both visibly resolve to final feedback; retries use no real timer or model.
+    // A fast command skips model work at submission. Its completed-command working result and
+    // then a provider failure both visibly resolve to one delayed-review card; retries use no
+    // real timer or model.
     blockTutor.queue.push(
-      { outcome: "working" },
       { outcome: "working" },
       new Error("BLOCK_TUTOR_MODEL auth failed"),
       { outcome: "ready", text: "Retry handoff." }
@@ -1019,18 +1020,18 @@ describe("workbook browser API", () => {
       await acceptEditor(server.url, mainTutor);
       const command = "run lesson--001-first--run-supplied-command";
       pty.data?.(bashCommandMarker(command));
-      await waitForWorkbookState(server.url, () => blockTutor.assessments.length === 1, "preliminary Coach assessment");
       pty.data?.(`ran:${command}\r\n${bashFinishedMarker()}`);
       const delayed = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.terminalStatus === "final-feedback", "visible final feedback before retry");
-      expect(block(delayed, "lesson--001-first--run-supplied-command")?.checkpoint?.feedback).toMatch(/finished without showing/i);
+      expect(block(delayed, "lesson--001-first--run-supplied-command")?.checkpoint?.feedback).toBe("Review delayed — retrying automatically…");
+      expect(blockTutor.assessments).toHaveLength(1);
       expect(scheduler.pending).toBe(1);
       expect(mainTutor.reviews).toHaveLength(1);
 
       scheduler.runNext();
-      await waitForWorkbookState(server.url, () => blockTutor.assessments.length === 3 && scheduler.pending === 1, "Coach error schedules another retry");
+      await waitForWorkbookState(server.url, () => blockTutor.assessments.length === 2 && scheduler.pending === 1, "Coach error schedules another retry");
       scheduler.runNext();
       const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.feedback === "Main tutor can still judge this terminal output.", "main review after automatic retry");
-      expect(blockTutor.assessments).toHaveLength(4);
+      expect(blockTutor.assessments).toHaveLength(3);
       expect(mainTutor.reviews[1]!.practiceCoachHandoff).toEqual({ outcome: "ready", text: "Retry handoff." });
       expect(block(feedback, "lesson--001-first--run-supplied-command")?.checkpoint?.feedback).toBe("Main tutor can still judge this terminal output.");
       const settled = await state(server.url);
@@ -1051,7 +1052,8 @@ describe("workbook browser API", () => {
       await introduceAndOpenEditor(server.url);
       await acceptEditor(server.url, tutor);
       pty.data?.(bashCommandMarker("old command"));
-      await waitForWorkbookState(server.url, () => coach.assessments.length === 1, "old preliminary Coach call");
+      pty.data?.("old command is still running\r\n");
+      await waitForWorkbookState(server.url, () => coach.assessments.length === 1, "old settled-output Coach call");
       pty.data?.(bashCommandMarker("new command"));
       await waitForPrivateTimeline(dir, (records) => records.filter((record) => record.type === "terminal-command-submitted").length === 2, "new terminal command submission");
 
@@ -1059,7 +1061,7 @@ describe("workbook browser API", () => {
       await waitMs(30);
       const privateRecords = await privateTimeline(dir);
       const publicState = await state(server.url);
-      expect(privateRecords).not.toContainEqual(expect.objectContaining({ type: "preliminary-coaching-received", text: "Old command feedback must never appear." }));
+      expect(privateRecords).not.toContainEqual(expect.objectContaining({ type: "interim-coaching-received", text: "Old command feedback must never appear." }));
       expect(JSON.stringify(publicState)).not.toContain("Old command feedback must never appear.");
       expect(block(publicState, "lesson--001-first--run-supplied-command")?.terminalStatus).toBe("submitted");
     } finally { await server.close(); }
@@ -1267,7 +1269,8 @@ describe("workbook browser API", () => {
       { outcome: "feedback", message: "Run the supplied command, not your own." },
       { outcome: "accepted", message: "Terminal accepted." }
     );
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, mainTutor: tutor, practiceCoach: new FakePracticeCoach() });
+    const coach = new FakePracticeCoach();
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, mainTutor: tutor, practiceCoach: coach });
     try {
       await introduceAndOpenEditor(server.url);
       await acceptEditor(server.url, tutor);
@@ -1278,6 +1281,10 @@ describe("workbook browser API", () => {
         "the terminal result feedback recorded in the event log"
       );
       expect(recorded).toContainEqual(expect.objectContaining({ type: "result-coaching-received", outcome: "feedback", text: "Run the supplied command, not your own." }));
+      // The controlled PTY emits command, output, and finish together. A fast command therefore
+      // reaches only the final assessment, never the old submission-time preliminary model call.
+      expect(coach.assessments).toHaveLength(1);
+      expect(recorded.filter((record) => record.type === "preliminary-coaching-received" || record.type === "interim-coaching-received")).toEqual([]);
       const reviewed = await state(server.url);
 
       // The learner sees the latest result beside the terminal and never as a conversation turn.
@@ -1286,6 +1293,44 @@ describe("workbook browser API", () => {
     } finally {
       await server.close();
     }
+  });
+
+  it("corrects a non-Pi Bash command for a displayed Pi command without model work", async () => {
+    const dir = await fixture();
+    const terminalLesson = resolve(dir, "lessons/001-first");
+    await writeBlock(
+      terminalLesson,
+      "run-supplied-command",
+      "terminal-practice",
+      "Run Pi",
+      "Run the displayed command.\n\n```sh command\npi --help\n```",
+      "Observe Pi running."
+    );
+    const pty = new ServerFakePty();
+    const mainTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const coach = new FakePracticeCoach();
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, mainTutor, practiceCoach: coach });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, mainTutor);
+      const ws = await connect(server.url, server.url);
+      const output = waitFor(ws, (message) => message.type === "output" && message.data.includes("ran:ls -la"));
+      ws.send(JSON.stringify({ type: "input", data: "ls -la\r" }));
+      await output;
+
+      const corrected = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.feedback === "This step is about running Pi. Run the displayed Pi command in the embedded terminal.", "immediate Pi correction");
+      const activeBlock = corrected.chapters[0]!.lesson!.blocks.find((candidate: any) => candidate.id === "lesson--001-first--run-supplied-command")!;
+      const markup = renderToStaticMarkup(createElement(BlockView, { lessonId: "001-first", block: activeBlock, progress: corrected.progress, refresh: vi.fn() }));
+      expect(markup.split("This step is about running Pi. Run the displayed Pi command in the embedded terminal.").length - 1).toBe(1);
+      expect(JSON.stringify(corrected)).not.toContain("ls -la");
+      expect(coach.assessments).toHaveLength(0);
+      expect(mainTutor.reviews).toHaveLength(1); // the editor acceptance only
+      const records = await privateTimeline(dir);
+      expect(records).toContainEqual(expect.objectContaining({ type: "preliminary-coaching-received", outcome: "feedback", deterministic: true, text: "This step is about running Pi. Run the displayed Pi command in the embedded terminal." }));
+      expect(records).toContainEqual(expect.objectContaining({ type: "result-coaching-received", outcome: "feedback", text: "This step is about running Pi. Run the displayed Pi command in the embedded terminal." }));
+      expect(records).not.toContainEqual(expect.objectContaining({ type: "result-coaching-received", outcome: "wait-for-result" }));
+      ws.close();
+    } finally { await server.close(); }
   });
 
   it("submits terminal and reflection evidence through the common attempt reviewer", async () => {
@@ -1480,20 +1525,16 @@ describe("workbook browser API", () => {
     const pty = new ServerFakePty(false);
     const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
     const blockTutor = new FakePracticeCoach();
-    blockTutor.queue.push(
-      { outcome: "working" },
-      { outcome: "feedback", text: "The terminal output shows the command failed; fix the path and try again." }
-    );
+    blockTutor.queue.push({ outcome: "feedback", text: "The terminal output shows the command failed; fix the path and try again." });
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, mainTutor: tutor, practiceCoach: blockTutor });
     try {
       await introduceAndOpenEditor(server.url);
       await acceptEditor(server.url, tutor);
       const command = "run lesson--001-first--run-supplied-command";
       pty.data?.(bashCommandMarker(command));
-      await waitForWorkbookState(server.url, () => blockTutor.assessments.length === 1, "preliminary Coach assessment");
       pty.data?.(`ran:${command}\r\n${bashFinishedMarker()}`);
       const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.status === "feedback", "final Coach feedback");
-      expect(blockTutor.assessments).toHaveLength(2);
+      expect(blockTutor.assessments).toHaveLength(1);
       expect(tutor.reviews).toHaveLength(1);
       expect(block(feedback, "lesson--001-first--run-supplied-command")?.checkpoint?.feedback).toBe("The terminal output shows the command failed; fix the path and try again.");
       expect(block(feedback, "lesson--001-first--run-supplied-command")?.verified).toBe(false);
@@ -1513,19 +1554,17 @@ describe("workbook browser API", () => {
       { outcome: "accepted", message: "Terminal accepted by main." }
     );
     const blockTutor = new FakePracticeCoach();
-    // Positive running feedback still maps to wait-for-result; only the result assessment hands
-    // the completed command to the Main Tutor.
-    blockTutor.queue.push({ outcome: "working" }, { outcome, text: "Looks ready for main review." });
+    // Only the completed-command assessment hands a command to the Main Tutor.
+    blockTutor.queue.push({ outcome, text: "Looks ready for main review." });
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, mainTutor: tutor, practiceCoach: blockTutor });
     try {
       await introduceAndOpenEditor(server.url);
       await acceptEditor(server.url, tutor);
       const command = "run lesson--001-first--run-supplied-command";
       pty.data?.(bashCommandMarker(command));
-      await waitForWorkbookState(server.url, () => blockTutor.assessments.length === 1, "preliminary Coach assessment");
       pty.data?.(`ran:${command}\r\n${bashFinishedMarker()}`);
       const accepted = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.status === "accepted", "terminal accepted by Main Tutor after result handoff");
-      expect(blockTutor.assessments).toHaveLength(2);
+      expect(blockTutor.assessments).toHaveLength(1);
       expect(tutor.reviews).toHaveLength(2);
       expect(tutor.reviews[1]!.practiceCoachHandoff).toMatchObject({ outcome, text: "Looks ready for main review." });
       expect(block(accepted, "lesson--001-first--run-supplied-command")?.checkpoint?.successMessage).toBe("Terminal accepted by main.");

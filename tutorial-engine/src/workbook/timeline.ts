@@ -13,7 +13,7 @@ export type TerminalLifecycleInput =
   | { type: "terminal-command-submitted"; attemptId: string; lessonId: string; blockId: string; command: string; terminalSessionId: string }
   | { type: "terminal-output-settled"; attemptId: string; checkpointId: string; evidenceRef: string }
   | { type: "terminal-command-finished"; attemptId: string; exitStatus: number; evidenceRef: string }
-  | { type: "preliminary-coaching-received"; attemptId: string; outcome: TerminalCoachingOutcome; text?: string }
+  | { type: "preliminary-coaching-received"; attemptId: string; outcome: TerminalCoachingOutcome; text?: string; /** A workflow-owned correction that bypasses model review. */ deterministic?: boolean }
   | { type: "interim-coaching-received"; attemptId: string; checkpointId: string; outcome: TerminalCoachingOutcome; text?: string }
   | { type: "result-coaching-received"; attemptId: string; outcome: TerminalCoachingOutcome; text?: string };
 

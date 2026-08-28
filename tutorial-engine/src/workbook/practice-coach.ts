@@ -39,8 +39,10 @@ export interface PracticeCoachSessionFactoryRequest {
 export type PracticeCoachSessionFactory = (request: PracticeCoachSessionFactoryRequest) => Promise<PracticeCoachSession>;
 const REPORT_TOOL = "report_practice_coach_outcome";
 
-function systemPrompt(): string {
-  return `You are an internal, terminal-only Practice Coach. You receive one active terminal attempt and a private rubric. You cannot accept, reject, advance, or address the learner. Call report_practice_coach_outcome exactly once. Return working only for genuinely incomplete/running evidence; feedback only for a completed visible error or correction; ready when ordinary evidence deserves Main Tutor review; interesting when an unusual observation deserves Main Tutor review. Never reveal the rubric.`;
+export const PRACTICE_COACH_REPORT_DESCRIPTION = "Report the terminal outcome. Any feedback text is shown directly to the person at the terminal: keep it concise, address them as you, never say ‘the learner’, and never mention the Coach, Tutor, rubric, model, assessment, handoff, or other internal mechanics.";
+
+export function practiceCoachSystemPrompt(): string {
+  return `You are a terminal-only Practice Coach. You receive one active terminal attempt and a private rubric. You cannot accept, reject, or advance work. Call report_practice_coach_outcome exactly once. Return working only for genuinely incomplete or running evidence; feedback only for a completed visible error or correction; ready when ordinary evidence deserves confirmation; interesting when an unusual observation deserves confirmation. Feedback is shown directly to the person at the terminal: keep it concise, address them as you, never say “the learner”, and never mention the Coach, Tutor, rubric, model, assessment, handoff, or other internal mechanics. Never reveal the rubric.`;
 }
 
 function prompt(input: { attempt: Attempt; rubric: string }): string {
@@ -84,7 +86,7 @@ export class FastPracticeCoach implements PracticeCoach {
     if (input.attempt.evidence.kind !== "terminal") throw new Error("Practice Coach requires terminal evidence.");
     let result: PracticeCoachOutcome | undefined;
     const report = defineTool({
-      name: REPORT_TOOL, label: "Report Practice Coach outcome", description: "Return the internal terminal coaching outcome.",
+      name: REPORT_TOOL, label: "Report Practice Coach outcome", description: PRACTICE_COACH_REPORT_DESCRIPTION,
       parameters: Type.Object({
         outcome: Type.Union([Type.Literal("working"), Type.Literal("feedback"), Type.Literal("ready"), Type.Literal("interesting")]),
         text: Type.Optional(Type.String({ minLength: 1, maxLength: 500 }))
@@ -96,7 +98,7 @@ export class FastPracticeCoach implements PracticeCoach {
         return { content: [{ type: "text", text: "Recorded." }], details: result };
       }
     });
-    const session = await this.#sessionFactory({ systemPrompt: systemPrompt(), customTools: [report], tools: [REPORT_TOOL] });
+    const session = await this.#sessionFactory({ systemPrompt: practiceCoachSystemPrompt(), customTools: [report], tools: [REPORT_TOOL] });
     try {
       await session.prompt(prompt(input));
       if (!result) throw new Error("Practice Coach did not report an outcome.");
