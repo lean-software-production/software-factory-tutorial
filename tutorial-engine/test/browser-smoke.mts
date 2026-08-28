@@ -3,6 +3,9 @@
  * Real-browser smoke. It serves the built v2 workbook UI, drives the
  * browser through the current workbook API, and proves that lesson rendering and
  * continuation still work in Chromium.
+ *
+ * It builds that bundle first whenever the bundle on disk is missing or older than the sources vite
+ * reads, so this is safe to run on its own and a failure here is about the code.
  */
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
@@ -10,8 +13,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, resolve } from "node:path";
 import { formatDeclaredBlockText, formatLessonFrameText, formatWorkbookIntroductionText } from "../src/workbook/authored-text.js";
 import type { PublicCompleteBlockResult, PublicTimelineRecord, PublicWorkbookLesson, PublicWorkbookState } from "../src/workbook/public-contract.js";
+import { ENGINE_ROOT, WEB_BUNDLE_DIRECTORY, ensureFreshWebBundle } from "./support/web-bundle.js";
 
-const webRoot = resolve(import.meta.dirname, "../dist/web-workbook");
+const webRoot = resolve(ENGINE_ROOT, WEB_BUNDLE_DIRECTORY);
 const mime: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" };
 
 const workbookTitle = "Smoke workbook";
@@ -93,8 +97,11 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
 }
 
 async function main(): Promise<void> {
-  try { await access(resolve(webRoot, "index.html")); }
-  catch { throw new Error("Build the workbook UI first: npm run --workspace=tutorial-engine build:web:workbook"); }
+  // Before a single assertion runs, make the bundle this serves match the sources on disk. Run
+  // inside `npm run check` there is nothing to do, because `build:web:workbook` has just run; run
+  // on its own, this is what keeps a failure about the code rather than about which bundle was
+  // built last.
+  ensureFreshWebBundle();
   const moduleName = "playwright";
   let playwright: { chromium: { launch(): Promise<any> } };
   try { playwright = await import(moduleName) as typeof playwright; }
