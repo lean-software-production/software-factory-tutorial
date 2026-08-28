@@ -46,6 +46,13 @@ export interface ActiveObservedTerminalBlock {
   blockId: string;
 }
 
+export interface ActiveTerminalTranscriptContext {
+  lessonId: string;
+  blockId: string;
+  /** Private, bounded, session-memory-only transcript for Main Tutor context. */
+  transcript: string;
+}
+
 export interface WorkbookTerminalManagerOptions {
   workspace: string;
   runtimeProvision?: TrustedRuntimeProvision;
@@ -57,6 +64,7 @@ export interface WorkbookTerminalManagerOptions {
 }
 
 const MAX_REPLAY_BYTES = 64_000;
+const MAX_ACTIVE_TERMINAL_CONTEXT_BYTES = 64_000;
 const MAX_INPUT_BYTES = 16_384;
 const MAX_COLS = 500;
 const MAX_ROWS = 200;
@@ -229,6 +237,8 @@ export class WorkbookTerminalManager {
   #terminalShellProtocol = new TerminalShellProtocol();
   #terminalObservation: TerminalObservation | undefined;
   #terminalObservationBlockKey: string | undefined;
+  #activeTranscript = "";
+  #activeTranscriptBlockKey: string | undefined;
   readonly #getActiveBlock: () => ActiveObservedTerminalBlock | undefined;
   readonly #observationSink: (fact: TerminalObservationFact) => Promise<void> | void;
   readonly #ptyFactory: TerminalPtyFactory;
@@ -272,6 +282,7 @@ export class WorkbookTerminalManager {
     if (message.type === "input") {
       if (typeof message.data !== "string" || Buffer.byteLength(message.data, "utf8") > MAX_INPUT_BYTES) return;
       shell.write(message.data);
+      this.#appendActiveTranscript("input", message.data);
       this.#terminalObservation?.observeInteractiveInput(message.data);
       return;
     }
@@ -280,12 +291,21 @@ export class WorkbookTerminalManager {
     }
   }
 
+  activeTranscriptContext(): ActiveTerminalTranscriptContext | undefined {
+    const block = this.#getActiveBlock();
+    if (!block) return undefined;
+    if (this.#activeTranscriptBlockKey !== terminalKey(block) || !this.#activeTranscript) return undefined;
+    return { lessonId: block.lessonId, blockId: block.blockId, transcript: this.#activeTranscript };
+  }
+
   dispose(): void { this.#stopTerminal(); }
 
   #stopTerminal(): void {
     this.#terminalObservation?.close();
     this.#terminalObservation = undefined;
     this.#terminalObservationBlockKey = undefined;
+    this.#activeTranscript = "";
+    this.#activeTranscriptBlockKey = undefined;
     this.#client?.close(1001, "Workbook terminal stopped.");
     this.#client = undefined;
     const shell = this.#pty as DockerPty | undefined;
@@ -312,13 +332,28 @@ export class WorkbookTerminalManager {
       this.#terminalObservation?.close();
       this.#terminalObservation = undefined;
       this.#terminalObservationBlockKey = undefined;
+      this.#activeTranscript = "";
+      this.#activeTranscriptBlockKey = undefined;
     });
   }
 
   #forwardTerminalOutput(data: string): void {
     this.#replay = boundedAppend(this.#replay, data, MAX_REPLAY_BYTES);
+    this.#appendActiveTranscript("output", data);
     this.#client?.send(publicTerminalFrame({ type: "output", data }));
     this.#terminalObservation?.observeTerminalOutput(data);
+  }
+
+  #appendActiveTranscript(kind: "input" | "output", data: string): void {
+    if (!data) return;
+    const block = this.#getActiveBlock();
+    if (!block) return;
+    const key = terminalKey(block);
+    if (this.#activeTranscriptBlockKey !== key) {
+      this.#activeTranscriptBlockKey = key;
+      this.#activeTranscript = "";
+    }
+    this.#activeTranscript = boundedAppend(this.#activeTranscript, `[TERMINAL ${kind.toUpperCase()}]\n${data}`, MAX_ACTIVE_TERMINAL_CONTEXT_BYTES);
   }
 
   #observeCommandSubmitted(command: string): void {

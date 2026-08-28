@@ -831,9 +831,86 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("gives ordinary Main Tutor chat private active terminal context for a running command only", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty(false);
+    const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: tutor, practiceCoach: new FakePracticeCoach() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      const blockId = "lesson--001-first--run-supplied-command";
+      const ws = await connect(server.url, server.url);
+      const command = "printf private-running-context";
+      pty.data?.(bashCommandMarker(command));
+      ws.send(JSON.stringify({ type: "input", data: `${command}\r` }));
+      await waitForWorkbookState(server.url, () => pty.writes.includes(`${command}\r`), "terminal input to reach the pty");
+      pty.data?.("private-running-output\r\n");
+      await waitForPrivateTimeline(dir, (records) => records.some((record) => record.type === "terminal-command-submitted" && record.command === command), "running command submission");
 
+      const response = await postMessage(server.url, { blockId, text: "What does the terminal show?" });
+      expect(response.status).toBe(202);
+      const browserState = await response.json() as any;
+      const replyContext = tutor.replies.at(-1)!.activeContext as any;
+      expect(replyContext.terminal).toMatchObject({
+        transcript: expect.stringContaining(command),
+        latestCommand: { command, status: "running" }
+      });
+      expect(replyContext.terminal.transcript).toContain("private-running-output");
+      expect(replyContext.terminal.latestCommand.finishedEvidence).toBeUndefined();
+      expect(JSON.stringify(browserState)).not.toMatch(/private-running-context|private-running-output|workbook-command|evidenceRef|attemptId/);
+      expect(JSON.stringify(await timelineSnapshot(server.url))).not.toMatch(/private-running-context|private-running-output|workbook-command|evidenceRef|attemptId/);
+      ws.close();
+    } finally { await server.close(); }
+  });
 
+  it("gives ordinary Main Tutor chat private active terminal context for a finished command with evidence", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty(false);
+    const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const waitingCoach = deferred<Awaited<ReturnType<FakePracticeCoach["assess"]>>>();
+    const coach = new FakePracticeCoach();
+    coach.queue.push(waitingCoach.promise);
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: tutor, practiceCoach: coach });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      const blockId = "lesson--001-first--run-supplied-command";
+      const ws = await connect(server.url, server.url);
+      const command = "printf private-finished-context";
+      pty.data?.(bashCommandMarker(command));
+      ws.send(JSON.stringify({ type: "input", data: `${command}\r` }));
+      await waitForWorkbookState(server.url, () => pty.writes.includes(`${command}\r`), "terminal input to reach the pty");
+      pty.data?.(`private-finished-output\r\n${bashFinishedMarker(7)}`);
+      await waitForPrivateTimeline(dir, (records) => records.some((record) => record.type === "terminal-command-finished"), "finished command evidence");
 
+      const response = await postMessage(server.url, { blockId, text: "Why did that command fail?" });
+      expect(response.status).toBe(202);
+      const browserState = await response.json() as any;
+      const replyContext = tutor.replies.at(-1)!.activeContext as any;
+      expect(replyContext.terminal).toMatchObject({
+        transcript: expect.stringContaining("private-finished-output"),
+        latestCommand: {
+          command,
+          status: "finished",
+          exitStatus: 7,
+          finishedEvidence: {
+            kind: "finished",
+            command,
+            exitStatus: 7,
+            interactions: expect.arrayContaining([
+              { kind: "input", data: `${command}\r` },
+              { kind: "output", data: expect.stringContaining("private-finished-output") }
+            ])
+          }
+        }
+      });
+      expect(replyContext.terminal.latestCommand.evidenceRef).toMatch(/.+/);
+      expect(JSON.stringify(browserState)).not.toMatch(/private-finished-context|private-finished-output|workbook-command|evidenceRef|attemptId/);
+      expect(JSON.stringify(await timelineSnapshot(server.url))).not.toMatch(/private-finished-context|private-finished-output|workbook-command|evidenceRef|attemptId/);
+      ws.close();
+    } finally { await server.close(); }
+  });
 
   it("rejects legacy unexpected-output and help event actions on an active terminal block and appends no record", async () => {
     const dir = await fixture();
@@ -1032,6 +1109,10 @@ describe("workbook browser API", () => {
         expect.objectContaining({ type: "terminal-coach-handoff-recorded" }),
         expect.objectContaining({ type: "attempt_accepted", kind: "terminal", summary: "Accepted by Main Tutor." }),
       ]));
+      const terminalReviews = tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal");
+      expect(terminalReviews.length).toBeGreaterThan(0);
+      expect(terminalReviews.every((review) => review.activeContext?.terminal === undefined)).toBe(true);
+      expect(terminalReviews[0]!.attempt.evidence).toMatchObject({ kind: "terminal", transcript: expect.stringContaining('"kind":"finished"') });
     } finally { await server.close(); }
   });
 

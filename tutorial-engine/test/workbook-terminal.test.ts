@@ -26,7 +26,7 @@ class FakeClient implements TerminalClient {
 function marker(command: string): string { return `\x1b]633;workbook-command;${Buffer.from(command).toString("base64")}\x07`; }
 function finished(exitStatus = 0): string { return `\x1b]633;workbook-finished;${exitStatus}\x07`; }
 
-function setup() {
+function setup(getActiveBlock = () => ({ lessonId: "lesson", blockId: "practice" })) {
   const facts: TerminalObservationFact[] = [];
   const ptys: FakePty[] = [];
   const factory: TerminalPtyFactory = () => {
@@ -36,7 +36,7 @@ function setup() {
   };
   const manager = new WorkbookTerminalManager({
     workspace: "/tmp/workspace",
-    getActiveBlock: () => ({ lessonId: "lesson", blockId: "practice", command: "", context: "", expectedObservation: "private" }),
+    getActiveBlock,
     observationSink: async (fact) => { facts.push(fact); },
     ptyFactory: factory,
   });
@@ -76,6 +76,23 @@ describe("WorkbookTerminalManager", () => {
     expect(facts).toEqual([expect.objectContaining({ type: "terminal-command-submitted", command: "cat -n" })]);
     expect(JSON.stringify(client.messages)).toContain("waiting");
     expect(JSON.stringify(client.messages)).not.toContain("workbook-command");
+  });
+
+  it("keeps private active terminal transcript scoped to the current block", () => {
+    let active = { lessonId: "lesson", blockId: "practice" };
+    const { manager, ptys } = setup(() => active);
+    manager.attach(new FakeClient());
+    manager.receive({ type: "input", data: "private command\r" });
+    ptys[0]!.emit("private output\r\n");
+
+    expect(manager.activeTranscriptContext()).toEqual({
+      lessonId: "lesson",
+      blockId: "practice",
+      transcript: "[TERMINAL INPUT]\nprivate command\r[TERMINAL OUTPUT]\nprivate output\r\n"
+    });
+
+    active = { lessonId: "lesson", blockId: "other" };
+    expect(manager.activeTranscriptContext()).toBeUndefined();
   });
 
   it("captures one immutable final command fact and no output checkpoints", async () => {
