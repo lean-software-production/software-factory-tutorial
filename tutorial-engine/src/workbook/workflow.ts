@@ -303,7 +303,8 @@ async function publicState(loaded: LoadedWorkbook, learnerWorkspace: string, rec
           ...base,
           ...(lifecycleCheckpoint ? { checkpoint: lifecycleCheckpoint } : {}),
           verified: terminalAttempt?.state === "accepted",
-          ...(terminalAttempt ? { terminalStatus: terminalAttempt.state } : {})
+          ...(terminalAttempt ? { terminalStatus: terminalAttempt.state } : {}),
+          ...(terminalAttempt?.retrying ? { terminalReviewRetrying: true } : {})
         };
       }
       return { ...withCheckpoint, verified: currentAttempt?.status === "accepted", revision: currentAttempt?.version, terminalHtml: currentAttempt?.evidence.kind === "terminal" && currentAttempt.status === "accepted" ? currentAttempt.evidence.terminalHtml : undefined };

@@ -20,6 +20,8 @@ export type ProjectedTerminalAttempt = {
   state: TerminalAttemptState;
   feedback?: PublicTerminalFeedback;
   successMessage?: string;
+  /** This review is automatically scheduled to run again; no terminal contents are exposed. */
+  retrying?: boolean;
 };
 
 type Coaching = { outcome: TerminalCoachingOutcome; text?: string };
@@ -53,7 +55,7 @@ function resultProjection(attempt: Attempt): ProjectedTerminalAttempt {
   const result = attempt.result;
   if (!result) return { ...base, state: "reviewing-result" };
   if (result.outcome === "wait-for-result") {
-    return { ...base, state: "final-feedback", feedback: { outcome: "feedback", text: FINISHED_WORKING_FEEDBACK } };
+    return { ...base, state: "final-feedback", feedback: { outcome: "feedback", text: FINISHED_WORKING_FEEDBACK }, retrying: true };
   }
   if (result.outcome === "feedback") return { ...base, state: "final-feedback", feedback: feedback(result) };
   return { ...base, state: "awaiting-confirmation", feedback: result.text === undefined ? { outcome: result.outcome } : { outcome: result.outcome, text: result.text } };
