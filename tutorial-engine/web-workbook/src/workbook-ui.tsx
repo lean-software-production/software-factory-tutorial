@@ -139,7 +139,7 @@ function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange 
 
   useEffect(() => {
     if (!active || !terminalElement.current) return;
-    const nextTerminal = new Terminal({ cursorBlink: true, convertEol: true, fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', fontSize: 16, theme: { background: "#101820" } });
+    const nextTerminal = new Terminal({ cursorBlink: true, convertEol: true, fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 16, theme: { background: "#101820" } });
     const nextFit = new FitAddon();
     nextTerminal.loadAddon(nextFit);
     nextTerminal.open(terminalElement.current);
