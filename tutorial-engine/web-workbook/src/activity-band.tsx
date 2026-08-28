@@ -67,11 +67,14 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
   useEffect(() => {
     const element = bandRef.current;
     if (!element || typeof window === "undefined") return;
+    const previousSibling = element.previousElementSibling;
+    const inlineSource = previousSibling instanceof window.HTMLElement
+      ? previousSibling
+      : element.parentElement instanceof window.HTMLElement ? element.parentElement : null;
+    const main = element.closest("main") as HTMLElement | null;
     let ticking = false;
     const setActivityGeometry = () => {
       ticking = false;
-      const main = element.closest("main") as HTMLElement | null;
-      const inlineSource = element.previousElementSibling instanceof window.HTMLElement ? element.previousElementSibling : element.parentElement;
       const mainRect = main?.getBoundingClientRect();
       const inlineRect = inlineSource?.getBoundingClientRect();
       if (!mainRect || !inlineRect) return;
@@ -102,10 +105,8 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
     };
     const ResizeObserverClass = window.ResizeObserver;
     const resizeObserver = ResizeObserverClass ? new ResizeObserverClass(requestGeometry) : undefined;
-    resizeObserver?.observe(element);
-    if (element.previousElementSibling instanceof window.HTMLElement) resizeObserver?.observe(element.previousElementSibling);
-    const main = element.closest("main");
-    if (main instanceof window.HTMLElement) resizeObserver?.observe(main);
+    if (inlineSource) resizeObserver?.observe(inlineSource);
+    if (main instanceof window.HTMLElement && main !== inlineSource) resizeObserver?.observe(main);
     window.addEventListener("scroll", requestGeometry, { passive: true });
     window.addEventListener("resize", requestGeometry);
     requestGeometry();
