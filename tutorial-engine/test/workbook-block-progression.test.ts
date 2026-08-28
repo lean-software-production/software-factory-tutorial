@@ -95,7 +95,17 @@ describe("workbook block progression", () => {
 
       const draft = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", text: "The answer is 42." }) });
       expect(draft.status).toBe(202);
-      const accepted = await waitForState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted");
+      // The checkpoint status flips before the projection that follows it: workAcceptedBlocks, the
+      // ready successor and its authored course row are all filled afterwards. Waiting on the
+      // status alone let the assertions below read a state where only the status had landed, which
+      // is why this failed intermittently as "expected [] to have a length of 1". Each clause here
+      // waits for a value to ARRIVE; the assertions still check its exact shape, so a duplicate or
+      // a wrong successor is still a failure.
+      const accepted = await waitForState(server.url, (next) =>
+        block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted"
+        && next.progress.workAcceptedBlocks.includes("lesson--001-first--edit-answer")
+        && next.progress.readyBlocks.length > 0
+        && authoredCourseBlocks(next).includes("lesson--001-first--finish"));
       expect(accepted.progress.activeBlockId).toBe("lesson--001-first--edit-answer");
       expect(accepted.progress.workAcceptedBlocks.filter((id: string) => id === "lesson--001-first--edit-answer")).toHaveLength(1);
       expect(accepted.progress.readyBlocks).toEqual(["lesson--001-first--finish"]);
