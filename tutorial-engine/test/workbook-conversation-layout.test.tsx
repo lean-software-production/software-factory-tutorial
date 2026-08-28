@@ -97,6 +97,11 @@ describe("workbook fixed conversation layout", () => {
     expect(terminalElement).toContain("overflow: hidden");
   });
 
+  it("guards cascade: no state-override selector targets .terminal-live-surface.has-feedback .terminal-feedback-overlay", () => {
+    const badCascadeSelector = ".terminal-live-surface.has-feedback .terminal-feedback-overlay";
+    expect(workbookStyles).not.toContain(badCascadeSelector);
+  });
+
   it("visually attaches terminal feedback to the terminal bottom instead of overlaying output", () => {
     const terminalSurface = declarationsFor(".terminal-live-surface");
     const terminalBase = declarationsFor(".embedded-terminal-panel");
@@ -140,14 +145,11 @@ describe("workbook fixed conversation layout", () => {
     expect(liveSurfaceTailRule).toContain("content: \"\"");
     expect(liveSurfaceTailRule).toContain("top: -7px");
     expect(liveSurfaceTailRule).toContain("transform: rotate(45deg)");
-    // Ensure no feedback-state override selector suppresses the compact tip's right-aligned margin and asymmetric border-radius
-    const feedbackStateOverridePattern = /\.terminal-live-surface\.has-feedback[^{]*\.terminal-feedback-overlay[^{]*\{([^}]*)\}/g;
-    const feedbackStateMatches = [...workbookStyles.matchAll(feedbackStateOverridePattern)];
-    feedbackStateMatches.forEach(match => {
-      const declarations = match[1];
-      expect(declarations).not.toContain("margin: 0 0 12px");
-      expect(declarations).not.toContain("border-radius: 9px");
-    });
+    expect(liveSurfaceTailRule).toContain("width: 12px");
+    expect(liveSurfaceTailRule).toContain("height: 12px");
+    expect(liveSurfaceTailRule).toContain("right: 18px");
+    expect(liveSurfaceTailRule).toContain("background: rgb(234 241 253 / .96)");
+    expect(liveSurfaceTailRule).toMatch(/border\s*:/); // Guard that a border is declared
   });
 
   it("attaches editor feedback to the editor bottom the same way the terminal does", () => {
