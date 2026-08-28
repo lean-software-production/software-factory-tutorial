@@ -288,8 +288,8 @@ describe("WorkbookTerminalManager", () => {
     const args = dockerExecArguments("workbook-terminal-test");
 
     expect(args).toContain("PS1=$ ");
-    expect(args).toContain("PS0=\x1b]633;workbook-command;$(fc -ln -1 | base64 -w 0)\x07");
-    expect(args).toContain("PROMPT_COMMAND=status=$?; printf '\\033]633;workbook-finished;%s\\007' \"$status\"");
+    expect(args.some((argument) => argument.startsWith("PS0="))).toBe(false);
+    expect(args).toContain("PROMPT_COMMAND=status=$?; printf '\\033]633;workbook-finished;%s\\007' \"$status\"; trap 'command=$BASH_COMMAND; trap - DEBUG; printf \"\\033]633;workbook-command;\"; printf '%s' \"$command\" | base64 -w 0; printf \"\\007\"' DEBUG");
   });
 
   it("prestarts the terminal in the canonical workspace without opening a shell or writing a command", () => {
