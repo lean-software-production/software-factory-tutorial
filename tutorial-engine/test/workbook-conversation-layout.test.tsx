@@ -140,6 +140,14 @@ describe("workbook fixed conversation layout", () => {
     expect(liveSurfaceTailRule).toContain("content: \"\"");
     expect(liveSurfaceTailRule).toContain("top: -7px");
     expect(liveSurfaceTailRule).toContain("transform: rotate(45deg)");
+    // Ensure no feedback-state override selector suppresses the compact tip's right-aligned margin and asymmetric border-radius
+    const feedbackStateOverridePattern = /\.terminal-live-surface\.has-feedback[^{]*\.terminal-feedback-overlay[^{]*\{([^}]*)\}/g;
+    const feedbackStateMatches = [...workbookStyles.matchAll(feedbackStateOverridePattern)];
+    feedbackStateMatches.forEach(match => {
+      const declarations = match[1];
+      expect(declarations).not.toContain("margin: 0 0 12px");
+      expect(declarations).not.toContain("border-radius: 9px");
+    });
   });
 
   it("attaches editor feedback to the editor bottom the same way the terminal does", () => {
