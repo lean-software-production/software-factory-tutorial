@@ -33,3 +33,6 @@ Update the index below whenever you create a record or change its status.
 | [0009](0009-separate-authored-content-from-session-local-learner-state.md) | accepted | Separate authored content from session-local learner state |
 | [0010](0010-use-the-workbook-tutor-as-the-only-tutorial-interface.md) | accepted | Use the workbook tutor as the only tutorial interface |
 | [0011](0011-use-a-terminal-practice-coach-with-main-tutor-authority.md) | accepted | Use a terminal Practice Coach with Main Tutor authority |
+| [0012](0012-render-the-workbook-from-server-state-alone.md) | accepted | Render the workbook from server state alone |
+| [0013](0013-share-one-browser-safe-contract-for-terminal-socket-frames.md) | accepted | Share one browser-safe contract for terminal socket frames |
+| [0014](0014-address-the-workbook-server-relatively.md) | accepted | Address the workbook server relatively |
