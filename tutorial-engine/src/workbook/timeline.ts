@@ -6,16 +6,19 @@ import type { AttemptKind } from "./attempts.js";
 
 export type TimelineMetadata = { id: string; sequence: number; at: string };
 
-/** Outcomes reported by the terminal-only coach; they never carry terminal output. */
-export type TerminalCoachingOutcome = "wait-for-result" | "feedback" | "ready" | "interesting";
+/** Positive Practice Coach outcomes that are handed privately to the Main Tutor. */
+export type TerminalCoachHandoffOutcome = "ready" | "interesting";
 
+/**
+ * The durable terminal lifecycle. Command text, evidence references, and the Coach handoff stay
+ * in this private session log; the public projection exposes only a safe terminal phase and final
+ * learner message.
+ */
 export type TerminalLifecycleInput =
   | { type: "terminal-command-submitted"; attemptId: string; lessonId: string; blockId: string; command: string; terminalSessionId: string }
-  | { type: "terminal-output-settled"; attemptId: string; checkpointId: string; evidenceRef: string }
   | { type: "terminal-command-finished"; attemptId: string; exitStatus: number; evidenceRef: string }
-  | { type: "preliminary-coaching-received"; attemptId: string; outcome: TerminalCoachingOutcome; text?: string }
-  | { type: "interim-coaching-received"; attemptId: string; checkpointId: string; outcome: TerminalCoachingOutcome; text?: string }
-  | { type: "result-coaching-received"; attemptId: string; outcome: TerminalCoachingOutcome; text?: string };
+  | { type: "terminal-feedback-recorded"; attemptId: string; text: string }
+  | { type: "terminal-coach-handoff-recorded"; attemptId: string; outcome: TerminalCoachHandoffOutcome; text: string };
 
 export type TerminalLifecycleEvent = TerminalLifecycleInput & TimelineMetadata;
 

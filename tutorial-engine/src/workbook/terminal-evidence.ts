@@ -10,18 +10,14 @@ export const MAX_TERMINAL_INTERACTION_BYTES = 16_000;
 
 export type TerminalEvidenceRef = string;
 export type TerminalInteraction = { kind: "input" | "output"; data: string };
-export type RunningTerminalEvidence = {
-  kind: "running";
-  command: string;
-  interactions: TerminalInteraction[];
-};
+/** Immutable evidence exists only after Bash has reported that the command finished. */
 export type FinishedTerminalEvidence = {
   kind: "finished";
   command: string;
   interactions: TerminalInteraction[];
   exitStatus: number;
 };
-export type TerminalEvidence = RunningTerminalEvidence | FinishedTerminalEvidence;
+export type TerminalEvidence = FinishedTerminalEvidence;
 
 export type TerminalEvidenceReader = (evidenceRef: TerminalEvidenceRef) => TerminalEvidence | undefined;
 
@@ -67,22 +63,16 @@ function assertExitStatus(value: unknown): asserts value is number {
 
 /** Validates untrusted JSON before it is returned to a caller. */
 export function validateTerminalEvidence(value: unknown): TerminalEvidence {
-  if (!isRecord(value) || (value.kind !== "running" && value.kind !== "finished")) {
-    throw new Error("Terminal evidence is invalid.");
-  }
+  if (!isRecord(value) || value.kind !== "finished") throw new Error("Terminal evidence is invalid.");
   assertText(value.command, "Terminal evidence command", MAX_TERMINAL_COMMAND_BYTES);
   assertInteractions(value.interactions);
-  const interactions = value.interactions.map((interaction) => ({ ...interaction }));
-  if (value.kind === "finished") {
-    const exitStatus = value.exitStatus;
-    assertExitStatus(exitStatus);
-    const evidence: FinishedTerminalEvidence = { kind: "finished", command: value.command, interactions, exitStatus };
-    if (Buffer.byteLength(JSON.stringify(evidence), "utf8") > MAX_TERMINAL_EVIDENCE_BYTES) {
-      throw new Error("Terminal evidence exceeds the snapshot limit.");
-    }
-    return evidence;
-  }
-  const evidence: RunningTerminalEvidence = { kind: "running", command: value.command, interactions };
+  assertExitStatus(value.exitStatus);
+  const evidence: FinishedTerminalEvidence = {
+    kind: "finished",
+    command: value.command,
+    interactions: value.interactions.map((interaction) => ({ ...interaction })),
+    exitStatus: value.exitStatus,
+  };
   if (Buffer.byteLength(JSON.stringify(evidence), "utf8") > MAX_TERMINAL_EVIDENCE_BYTES) {
     throw new Error("Terminal evidence exceeds the snapshot limit.");
   }
@@ -100,10 +90,6 @@ export class TerminalEvidenceRepository {
     this.stateRoot = typeof input === "string" ? tutorialStatePath(resolve(input)) : resolve(input.stateRoot);
     this.evidenceDirectory = tutorialSessionStatePath(this.stateRoot, "workbook", "terminal-evidence");
     this.#createEvidenceRef = typeof input === "string" ? randomUUID : input.createEvidenceRef ?? randomUUID;
-  }
-
-  async writeRunning(input: Omit<RunningTerminalEvidence, "kind">): Promise<TerminalEvidenceRef> {
-    return this.#write({ kind: "running", ...input });
   }
 
   async writeFinished(input: Omit<FinishedTerminalEvidence, "kind">): Promise<TerminalEvidenceRef> {

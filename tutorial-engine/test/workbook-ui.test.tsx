@@ -1025,7 +1025,7 @@ describe("workbook lesson UI", () => {
     const diagram = "```mermaid\ngraph TD\n  A --> B\n```";
     const feedbackMarkup = html(createElement(BlockView, {
       block: { ...lesson.blocks[1]!, markdown: diagram },
-      progress: activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "feedback", feedback: diagram } } as any),
+      progress: activeBlockProgress(lesson.blocks[1]!, { terminal: { phase: "feedback", message: diagram } } as any),
       refresh: vi.fn()
     }));
 
@@ -1053,7 +1053,7 @@ describe("workbook lesson UI", () => {
 
   it("renders terminal feedback as Markdown for inline code and fenced shell blocks", () => {
     const terminalProgress = activeBlockProgress(lesson.blocks[1]!, {
-      checkpoint: { status: "feedback", feedback: "Run `npm test` again.\n\n```sh\nnpm test -- --runInBand\n```" }
+      terminal: { phase: "feedback", message: "Run `npm test` again.\n\n```sh\nnpm test -- --runInBand\n```" }
     } as any);
     const markup = html(createElement(BlockView, { block: lesson.blocks[1]!, progress: terminalProgress, refresh: vi.fn() }));
 
@@ -1963,336 +1963,81 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector(".timeline-do-it")).toBeNull();
   });
 
-  it("maps public terminal lifecycle state into stable coaching display state", async () => {
+  it("uses one terminal card for public states and never duplicates its DOM surface", async () => {
     class FakeWebSocket {
-      static CONNECTING = 0;
-      static OPEN = 1;
-      static CLOSED = 3;
+      static CONNECTING = 0; static OPEN = 1; static CLOSED = 3;
       readyState = FakeWebSocket.OPEN;
-      private listeners = new Map<string, Array<(event: any) => void>>();
-      constructor(_url: string) {}
-      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
-      send() {}
-      close() { this.readyState = FakeWebSocket.CLOSED; }
+      addEventListener() {} send() {} close() { this.readyState = FakeWebSocket.CLOSED; }
     }
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    const terminalState = (terminalStatus: any, checkpoint: any = undefined, terminalReviewRetrying = false) => activeBlockProgress(lesson.blocks[1]!, {
-      terminalStatus,
-      ...(checkpoint ? { checkpoint } : {}),
-      ...(terminalReviewRetrying ? { terminalReviewRetrying } : {}),
-    } as any);
-    const render = (next: Progress) => createElement(BlockView, { block: lesson.blocks[1]!, progress: next, refresh: vi.fn() });
-    const submitted = terminalState("submitted");
-    const container = await mount(render(submitted), (win) => {
+    const render = (terminal: any) => createElement(BlockView, {
+      block: lesson.blocks[1]!,
+      progress: activeBlockProgress(lesson.blocks[1]!, { ...(terminal ? { terminal } : {}) } as any),
+      refresh: vi.fn(),
+    });
+    const container = await mount(render({ phase: "checking" }), (win) => {
       vi.stubGlobal("location", win.location);
       vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
       vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
     });
-
-    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Running");
-    expect(container.querySelector(".terminal-coaching-activity")).toBeNull();
-
-    await act(async () => { mountedRoot!.render(render(terminalState("running"))); });
-    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Running");
-
-    await act(async () => { mountedRoot!.render(render(terminalState("interim-feedback", { status: "feedback", feedback: "Interim feedback." }))); });
-    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Interim feedback.");
-    await act(async () => { terminalDataListeners[0]!("e"); });
-    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Interim feedback.");
-    expect(container.querySelector(".terminal-coaching-activity")?.textContent).toContain("Listening for a command…");
-
-    await act(async () => { mountedRoot!.render(render(terminalState("reviewing-result", { status: "reviewing" }))); });
-    expect(container.querySelector(".terminal-coaching-activity")?.textContent).toContain("Reviewing command result…");
-
-    const final = terminalState("final-feedback", { status: "feedback", feedback: "Final feedback." });
-    await act(async () => { mountedRoot!.render(render(final)); });
-    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Final feedback.");
-
-    await act(async () => { mountedRoot!.render(render(terminalState("interim-feedback", { status: "feedback", feedback: "Stale interim feedback." }))); });
-    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Final feedback.");
-    expect(container.textContent).not.toContain("Stale interim feedback.");
-
-    await act(async () => { mountedRoot!.render(render(terminalState("awaiting-confirmation", { status: "reviewing" }))); });
-    expect(container.querySelector(".terminal-coaching-activity")?.textContent).toContain("Looks good — confirming…");
-
-    await act(async () => { mountedRoot!.render(render(terminalState("final-feedback", { status: "feedback", feedback: "Final feedback." }, true))); });
-    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Review delayed — retrying automatically…");
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
-    expect(container.querySelector(".terminal-coaching-activity")).toBeNull();
-    expect(container.textContent).not.toContain("Final feedback.");
+    expect(container.textContent).toContain("Checking…");
 
-    await act(async () => { mountedRoot!.render(render(terminalState("accepted", { status: "accepted", successMessage: "Accepted feedback." }))); });
-    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Accepted feedback.");
+    await act(async () => { mountedRoot!.render(render({ phase: "feedback", message: "Keep the final feedback." })); });
+    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
+    expect(container.textContent).toContain("Keep the final feedback.");
 
-    await act(async () => { mountedRoot!.render(render(final)); });
-    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Accepted feedback.");
-    expect(container.textContent).not.toContain("Final feedback.");
-
-    await act(async () => { mountedRoot!.render(render(terminalState("final-feedback", { status: "feedback", feedback: "Stale delayed feedback." }, true))); });
-    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Accepted feedback.");
-    expect(container.textContent).not.toContain("Review delayed — retrying automatically…");
+    await act(async () => { mountedRoot!.render(render({ phase: "complete", message: "Accepted by the Main Tutor." })); });
+    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
+    expect(container.textContent).toContain("Accepted by the Main Tutor.");
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   });
 
-  it("shows local submitting on Enter and upgrades to Running only after the public Bash submission", async () => {
+  it("hides feedback immediately on Enter and ignores stale polls until Bash projects Running", async () => {
     class FakeWebSocket {
-      static CONNECTING = 0;
-      static OPEN = 1;
-      static CLOSED = 3;
+      static CONNECTING = 0; static OPEN = 1; static CLOSED = 3;
       readyState = FakeWebSocket.OPEN;
-      addEventListener() {}
-      send() {}
-      close() { this.readyState = FakeWebSocket.CLOSED; }
+      addEventListener() {} send() {} close() { this.readyState = FakeWebSocket.CLOSED; }
     }
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    const render = (next: Progress) => createElement(BlockView, { block: lesson.blocks[1]!, progress: next, refresh: vi.fn() });
-    const container = await mount(render(activeBlockProgress(lesson.blocks[1]!)), (win) => {
+    const render = (terminal: any) => createElement(BlockView, {
+      block: lesson.blocks[1]!,
+      progress: activeBlockProgress(lesson.blocks[1]!, { ...(terminal ? { terminal } : {}) } as any),
+      refresh: vi.fn(),
+    });
+    const oldFeedback = { phase: "feedback", message: "Previous feedback must disappear." } as const;
+    const container = await mount(render(oldFeedback), (win) => {
       vi.stubGlobal("location", win.location);
       vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
       vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
     });
-
-    await act(async () => { terminalDataListeners[0]!("p"); });
-    expect(container.querySelector(".terminal-coaching-activity")?.textContent).toContain("Listening for a command…");
+    expect(container.textContent).toContain(oldFeedback.message);
 
     await act(async () => { terminalDataListeners[0]!("\r"); });
-    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Submitting command…");
-    expect(container.querySelector(".terminal-coaching-activity")).toBeNull();
-
-    await act(async () => { mountedRoot!.render(render(activeBlockProgress(lesson.blocks[1]!, { terminalStatus: "submitted" } as any))); });
-    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).toContain("Running");
-    expect(container.querySelector(".terminal-coaching-blue-field")?.textContent).not.toContain("Submitting command…");
-    expect(container.querySelector(".terminal-coaching-activity")).toBeNull();
-  });
-
-  it("keeps persisted terminal feedback visible while transient socket frames arrive", async () => {
-    class FakeWebSocket {
-      static CONNECTING = 0;
-      static OPEN = 1;
-      static CLOSED = 3;
-      static instances: FakeWebSocket[] = [];
-      readyState = FakeWebSocket.CONNECTING;
-      private listeners = new Map<string, Array<(event: any) => void>>();
-      constructor(_url: string) { FakeWebSocket.instances.push(this); }
-      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
-      send() {}
-      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
-      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
-    }
-    vi.stubGlobal("WebSocket", FakeWebSocket);
-    const terminalProgress = activeBlockProgress(lesson.blocks[1]!, {
-      checkpoint: { status: "feedback", feedback: "Persisted checkpoint feedback." }
-    } as any);
-    const container = await mount(createElement(BlockView, {
-      block: lesson.blocks[1]!, progress: terminalProgress, refresh: vi.fn()
-    }), (win) => {
-      vi.stubGlobal("location", win.location);
-      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
-      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
-    });
-    const socket = FakeWebSocket.instances[0]!;
-
+    expect(container.textContent).toContain("Sending…");
+    expect(container.textContent).not.toContain(oldFeedback.message);
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
-    expect(container.querySelectorAll(".terminal-feedback-overlay")).toHaveLength(1);
-    expect(container.querySelector(".terminal-live-surface.has-feedback")).toBeTruthy();
-    expect(container.querySelector(".terminal-feedback-overlay")?.textContent).toContain("Persisted checkpoint feedback.");
-    expect(container.textContent).not.toContain("Terminal feedback:");
 
-    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "attempt-status", blockId: "practice", status: "running" }) }); });
+    // A stale HTTP/SSE snapshot must not resurrect old feedback or completion while Sending gates
+    // the display. Only Bash's durable submitted record projects Running and opens the gate.
+    await act(async () => { mountedRoot!.render(render(oldFeedback)); });
+    await act(async () => { mountedRoot!.render(render({ phase: "complete", message: "Stale completion." })); });
+    expect(container.textContent).toContain("Sending…");
+    expect(container.textContent).not.toContain(oldFeedback.message);
+    expect(container.textContent).not.toContain("Stale completion.");
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
-    expect(container.textContent).toContain("Persisted checkpoint feedback.");
-    expect(container.textContent).not.toContain("Running — waiting for terminal output…");
 
-    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "attempt-status", blockId: "practice", status: "checking" }) }); });
+    await act(async () => { window.dispatchEvent(new window.CustomEvent("workbook-terminal-bash-submitted", { detail: { blockId: "practice" } })); });
+    expect(container.textContent).toContain("Running…");
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
-    expect(container.textContent).toContain("Persisted checkpoint feedback.");
-    expect(container.textContent).not.toContain("Checking…");
 
-    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "advice", blockId: "practice", message: "Observer advice." }) }); });
+    await act(async () => { mountedRoot!.render(render({ phase: "checking" })); });
+    expect(container.textContent).toContain("Checking…");
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
-    expect(container.textContent).toContain("Persisted checkpoint feedback.");
-    expect(container.textContent).not.toContain("Observer advice.");
-
-    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "attempt-error", blockId: "practice", message: "Terminal attempt error." }) }); });
-    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
-    expect(container.textContent).toContain("Persisted checkpoint feedback.");
-    expect(container.textContent).toContain("Terminal attempt error.");
-  });
-
-  it("keeps the terminal socket working after a malformed frame and an unknown frame type", async () => {
-    class FakeWebSocket {
-      static CONNECTING = 0;
-      static OPEN = 1;
-      static CLOSED = 3;
-      static instances: FakeWebSocket[] = [];
-      readyState = FakeWebSocket.CONNECTING;
-      private listeners = new Map<string, Array<(event: any) => void>>();
-      constructor(_url: string) { FakeWebSocket.instances.push(this); }
-      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
-      send() {}
-      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
-      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
-    }
-    vi.stubGlobal("WebSocket", FakeWebSocket);
-    const container = await mount(createElement(BlockView, {
-      block: lesson.blocks[1]!, progress: activeBlockProgress(lesson.blocks[1]!), refresh: vi.fn()
-    }), (win) => {
-      vi.stubGlobal("location", win.location);
-      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
-      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
-    });
-    const socket = FakeWebSocket.instances[0]!;
-
-    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "attempt-status", blockId: "practice", status: "running" }) }); });
-    expect(container.textContent).toBe("");
-
-    // A truncated frame is not JSON at all; the failure must not escape the listener.
-    await act(async () => { socket.emit("message", { data: "{\"type\":\"output\"" }); });
-    expect(container.textContent).toContain("unreadable message");
-
-    // A frame type this build does not know is ignored rather than rendered.
-    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "sentiment", blockId: "practice", message: "Frame from a newer server." }) }); });
-    expect(container.textContent).not.toContain("Frame from a newer server.");
-
-    // Both bad frames are behind us and the socket still delivers real ones.
-    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "attempt-error", blockId: "practice", message: "Attempt could not be submitted." }) }); });
-    expect(container.textContent).toContain("Attempt could not be submitted.");
-  });
-
-  it("refreshes only from a verified-complete frame whose state passes the public contract", async () => {
-    class FakeWebSocket {
-      static CONNECTING = 0;
-      static OPEN = 1;
-      static CLOSED = 3;
-      static instances: FakeWebSocket[] = [];
-      readyState = FakeWebSocket.CONNECTING;
-      private listeners = new Map<string, Array<(event: any) => void>>();
-      constructor(_url: string) { FakeWebSocket.instances.push(this); }
-      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
-      send() {}
-      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
-      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
-    }
-    vi.stubGlobal("WebSocket", FakeWebSocket);
-    const refresh = vi.fn();
-    const container = await mount(createElement(BlockView, {
-      block: lesson.blocks[1]!, progress: activeBlockProgress(lesson.blocks[1]!), refresh
-    }), (win) => {
-      vi.stubGlobal("location", win.location);
-      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
-      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
-    });
-    const socket = FakeWebSocket.instances[0]!;
-
-    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "verified-complete", blockId: "practice", state: { workbook: { title: "Workbook" } } }) }); });
-    expect(refresh).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("unreadable message");
-
-    const valid = workbookState(activeBlockProgress(lesson.blocks[1]!));
-    await act(async () => { socket.emit("message", { data: JSON.stringify({ type: "verified-complete", blockId: "practice", state: valid }) }); });
-    expect(refresh).toHaveBeenCalledTimes(1);
-    expect(refresh.mock.calls[0]![0].progress.activeBlockId).toBe("practice");
-  });
-
-  it("keeps terminal feedback inline through the former ActivityBand portal-host update", async () => {
-    vi.useFakeTimers();
-    class FakeWebSocket {
-      static CONNECTING = 0;
-      static OPEN = 1;
-      static CLOSED = 3;
-      static instances: FakeWebSocket[] = [];
-      readyState = FakeWebSocket.OPEN;
-      private listeners = new Map<string, Array<(event: any) => void>>();
-      constructor(_url: string) { FakeWebSocket.instances.push(this); }
-      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
-      send() {}
-      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
-      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
-    }
-    FakeEventSource.reset();
-    vi.stubGlobal("WebSocket", FakeWebSocket);
-    vi.stubGlobal("EventSource", FakeEventSource as any);
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
-    vi.stubGlobal("cancelAnimationFrame", () => undefined);
-    const initialProgress = activeBlockProgress(lesson.blocks[1]!, { terminalStatus: "reviewing-result", checkpoint: { status: "reviewing" } } as any);
-    const feedbackProgress = activeBlockProgress(lesson.blocks[1]!, { terminalStatus: "final-feedback", checkpoint: { status: "feedback", feedback: "The persisted review completed." } } as any);
-    const timeline = [
-      { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "practice", role: "assistant", source: "authored", presentation: "course", text: "## Practice\n\nRun the authored command." },
-      { type: "tutor_failed", id: "readiness-failed", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "practice", failureId: "failure-1", operation: "block-readiness", publicMessage: "Readiness tutor is unavailable; continue with the exercise." },
-    ];
-    const initialState = { workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: true, chapters: [chapter()], progress: initialProgress, adapter: {}, timeline } as any;
-    const feedbackState = { ...initialState, progress: feedbackProgress } as any;
-    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => fetchMock.mock.calls.length === 1 ? initialState : feedbackState }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const container = await mount(createElement(App), (win) => { stubAppShellGlobals(win); vi.stubGlobal("location", win.location); });
-    await act(async () => { await Promise.resolve(); });
-
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(FakeEventSource.instances[0]!.listenerCount("state")).toBe(1);
-    const initialFeedback = container.querySelector(".current-activity-band .terminal-feedback-overlay");
-    expect(initialFeedback?.textContent).toContain("Running");
-    expect(container.querySelector(".practice-feedback-slot")).toBeNull();
-    expect(container.querySelector(".current-activity-band .terminal-coaching-activity")?.textContent).toContain("Reviewing command result…");
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("api/workbook/state"))).toHaveLength(1);
-
-    await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: "practice", revision: 1, status: "feedback" }); await Promise.resolve(); });
-
-    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("api/workbook/state"))).toHaveLength(2);
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    const finalFeedback = container.querySelector(".current-activity-band .terminal-feedback-overlay");
-    expect(finalFeedback).toBe(initialFeedback);
-    expect(finalFeedback?.textContent).toContain("The persisted review completed.");
-    expect(container.querySelector(".practice-feedback-slot")).toBeNull();
-    expect(container.textContent).not.toContain("Terminal feedback:");
-    expect(container.textContent).not.toContain("Checking…");
-  });
-
-  it("does not start a terminal state poll after a submitted WebSocket status", async () => {
-    vi.useFakeTimers();
-    class FakeWebSocket {
-      static CONNECTING = 0;
-      static OPEN = 1;
-      static CLOSED = 3;
-      static instances: FakeWebSocket[] = [];
-      readyState = FakeWebSocket.OPEN;
-      private listeners = new Map<string, Array<(event: any) => void>>();
-      constructor(_url: string) { FakeWebSocket.instances.push(this); }
-      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
-      send() {}
-      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
-      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
-    }
-    vi.stubGlobal("WebSocket", FakeWebSocket);
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => workbookState(activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "feedback", feedback: "Server feedback." } } as any)) }));
-    vi.stubGlobal("fetch", fetchMock);
-    function Harness() {
-      const [current, setCurrent] = useState(activeBlockProgress(lesson.blocks[1]!, { terminalStatus: "reviewing-result", checkpoint: { status: "reviewing" } } as any));
-      return createElement(BlockView, { block: lesson.blocks[1]!, progress: current, refresh: (next: any) => setCurrent(next.progress) });
-    }
-    const container = await mount(createElement(Harness), (win) => {
-      vi.stubGlobal("location", win.location);
-      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
-      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
-    });
-    const socket = FakeWebSocket.instances[0]!;
-
-    await act(async () => {
-      socket.emit("message", { data: JSON.stringify({ type: "attempt-status", blockId: "practice", status: "submitted" }) });
-    });
-    expect(container.querySelector(".terminal-coaching-activity")?.textContent).toContain("Reviewing command result…");
-    expect(vi.getTimerCount()).toBe(0);
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(container.querySelector(".terminal-coaching-activity")?.textContent).toContain("Reviewing command result…");
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each([
-    ["terminal", lesson.blocks[1]!, activeBlockProgress(lesson.blocks[1]!, { terminalStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Terminal accepted.", evidence: { kind: "terminal", terminalHtml: "<pre class=\"frozen-terminal-output\">terminal transcript</pre>" } } } as any), "Terminal accepted."],
+    ["terminal", lesson.blocks[1]!, activeBlockProgress(lesson.blocks[1]!, { terminal: { phase: "complete", message: "Terminal accepted." } } as any), "Terminal accepted."],
     ["editor", editorBlock, activeEditorProgress({ editorStatus: undefined, checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted answer text" } } } as any), "Editor accepted."]
   ])("renders only the timeline continuation for accepted %s practice in timeline mode", async (_kind, block, acceptedProgress, acceptedText) => {
     const state = {

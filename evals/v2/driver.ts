@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import { parsePublicTerminalMessage, type PublicTerminalLegacyFrame, type PublicTerminalMessage } from "../../tutorial-engine/src/workbook/public-terminal-contract.js";
+import { parsePublicTerminalMessage, type PublicTerminalFrame } from "../../tutorial-engine/src/workbook/public-terminal-contract.js";
 import { assertNoPrivateTutorState, recordEditorStatus, recordPublicState, recordReflectionTurn, recordTerminalTranscript } from "./session.js";
 import type { PublicWorkbookState, V2SessionTrace, V2TerminalTranscriptEntry } from "./types.js";
 
@@ -218,10 +218,10 @@ export class V2WorkbookDriver {
     while (Date.now() <= deadline) {
       await delay(25);
       const state = await this.readState(`${label}:reviewed:${++attempt}`);
-      const block = state.progress?.blocks?.find((candidate: any) => candidate?.id === blockId);
-      if (block?.checkpoint?.status === "accepted") return state;
-      if (block?.checkpoint?.status === "feedback") {
-        const feedback = typeof block.checkpoint.feedback === "string" && block.checkpoint.feedback.trim().length > 0 ? `: ${block.checkpoint.feedback}` : ".";
+      const terminal = state.progress?.blocks?.find((candidate: any) => candidate?.id === blockId)?.terminal;
+      if (terminal?.phase === "complete") return state;
+      if (terminal?.phase === "feedback") {
+        const feedback = typeof terminal.message === "string" && terminal.message.trim().length > 0 ? `: ${terminal.message}` : ".";
         throw new Error(`Terminal attempt for ${blockId} received tutor feedback${feedback}`);
       }
     }
@@ -230,9 +230,6 @@ export class V2WorkbookDriver {
 
   async #submitTerminalInput(blockId: string, input: string, label: string, reviewTimeoutMs: number): Promise<WorkbookApiState> {
     const ws = new this.#WebSocket(`${this.serverUrl.replace(/^http/, "ws")}/api/workbook/terminal`, { headers: { Origin: this.serverUrl } });
-    let settled = false;
-    let reviewStarted = false;
-    let acceptedWaitStarted = false;
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`Timed out connecting to workbook terminal for ${blockId}.`)), this.#terminalTimeoutMs);
@@ -242,44 +239,30 @@ export class V2WorkbookDriver {
 
       recordTerminalTranscript(this.trace, { blockId, direction: "input", text: input });
       return await new Promise<WorkbookApiState>((resolve, reject) => {
-        let submissionTimer: NodeJS.Timeout | undefined = setTimeout(() => finish(new Error(`Timed out waiting for terminal attempt submission for ${blockId}.`)), reviewTimeoutMs);
-        const clearSubmissionTimer = () => {
-          if (!submissionTimer) return;
-          clearTimeout(submissionTimer);
-          submissionTimer = undefined;
-        };
+        let settled = false;
         const finish = (result: Error | WorkbookApiState) => {
           if (settled) return;
           settled = true;
-          clearSubmissionTimer();
           if (result instanceof Error) reject(result); else resolve(result);
         };
         ws.on("message", (data) => {
           const payload = data.toString();
-          let frame: PublicTerminalMessage | undefined;
+          let frame: PublicTerminalFrame | undefined;
           try {
-            // The private-state check reads the raw object, not the narrowed frame: a frame this
-            // build has no branch for must still not be allowed to carry tutor guidance.
             assertNoPrivateTutorState(JSON.parse(payload), "terminal message");
             frame = parsePublicTerminalMessage(payload);
           } catch (error) {
             finish(error instanceof SyntaxError ? new Error("Workbook terminal sent a non-JSON message.") : error instanceof Error ? error : new Error(String(error)));
             return;
           }
-          if (frame === undefined) return;
-
+          if (!frame) return;
           const row = terminalTranscriptRow(frame, blockId);
           if (row) recordTerminalTranscript(this.trace, row);
-          if (frame.type === "attempt-status" && frame.blockId === blockId && frame.status === "submitted" && !acceptedWaitStarted) {
-            reviewStarted = true;
-            acceptedWaitStarted = true;
-            clearSubmissionTimer();
-            void this.#waitForAcceptedCheckpoint(blockId, label, reviewTimeoutMs).then(finish, (error) => finish(error instanceof Error ? error : new Error(String(error))));
-          }
+          if (frame.type === "terminal-error" || frame.type === "busy") finish(new Error(frame.message));
         });
         ws.once("error", (error) => finish(error instanceof Error ? error : new Error(String(error))));
-        ws.once("close", () => { if (!settled && !reviewStarted) finish(new Error(`Workbook terminal closed before ${blockId} was reviewed.`)); });
         ws.send(JSON.stringify({ type: "input", data: input }));
+        void this.#waitForAcceptedCheckpoint(blockId, label, reviewTimeoutMs).then(finish, (error) => finish(error instanceof Error ? error : new Error(String(error))));
       });
     } finally {
       await closeWebSocket(ws);
@@ -296,21 +279,12 @@ export function createV2WorkbookDriver(options: V2WorkbookDriverOptions): V2Work
  * `public-terminal-contract.ts` declares rather than over shapes described again here, so renaming
  * or adding a frame stops this file compiling instead of quietly dropping the frame from the trace.
  */
-function terminalTranscriptRow(frame: PublicTerminalMessage, blockId: string): V2TerminalTranscriptEntry | undefined {
+function terminalTranscriptRow(frame: PublicTerminalFrame, blockId: string): V2TerminalTranscriptEntry | undefined {
   switch (frame.type) {
     case "output": return { blockId, direction: "output", text: frame.data };
-    case "attempt-status": return { blockId: frame.blockId ?? blockId, direction: "observer", text: `status:${frame.status}` };
-    case "attempt-error": return { blockId: frame.blockId, direction: "observer", text: frame.message };
     case "terminal-error": return { blockId, direction: "observer", text: frame.message };
     case "busy": return { blockId, direction: "observer", text: frame.message };
     case "exit": return { blockId, direction: "observer", text: `exit:${frame.exitCode}${frame.signal === undefined ? "" : ` signal:${frame.signal}`}` };
-    default: {
-      // Only the frames no server sends are left. The annotation is the check: a new live frame
-      // reaches here as an unassignable type until it gets a case above.
-      const unsent: PublicTerminalLegacyFrame = frame;
-      void unsent;
-      return undefined;
-    }
   }
 }
 

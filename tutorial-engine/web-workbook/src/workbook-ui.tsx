@@ -10,8 +10,8 @@ import { ActivityBand } from "./activity-band.js";
 import { TimelineThread } from "./timeline-thread.js";
 import { isPublicWorkbookState, parsePublicCompleteBlockResult, parsePublicWorkbookState } from "../../src/workbook/public-contract.js";
 import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookChapter, PublicWorkbookLesson, PublicWorkbookProgress, PublicWorkbookState } from "../../src/workbook/public-contract.js";
-import { parsePublicTerminalMessage, type PublicTerminalMessage } from "../../src/workbook/public-terminal-contract.js";
-import { createTerminalCoachingDisplayState, reduceTerminalCoachingDisplay, type TerminalCoachingDisplayEvent, type TerminalCoachingDisplayState } from "./terminal-coaching-display.js";
+import { parsePublicTerminalMessage, type PublicTerminalFrame } from "../../src/workbook/public-terminal-contract.js";
+import { createTerminalCoachingDisplayState, reduceTerminalCoachingDisplay, type TerminalCoachingDisplayState } from "./terminal-coaching-display.js";
 
 // A short local vocabulary for the contract types this module uses constantly. Only names that
 // earn their keep are kept: the seven aliases that nothing referenced are gone.
@@ -115,6 +115,7 @@ function shellCommandFrom(markdown: string): string | undefined {
 }
 
 const UNREADABLE_TERMINAL_FRAME = "The embedded terminal received an unreadable message from the workbook server. Refresh the page if the terminal stops responding.";
+const BASH_SUBMITTED_EVENT = "workbook-terminal-bash-submitted";
 
 /**
  * The terminal socket is addressed the way `request()` addresses HTTP: relative to the document's
@@ -129,7 +130,7 @@ function terminalSocketUrl(): string {
   return url.href;
 }
 
-function EmbeddedTerminal({ block, command, active, refresh, onError, onTyping, onLocalCommandSubmitted, onTerminalInsertionChange }: { block: Block; command?: string; active: boolean; refresh(state: State): void; onError(message: string): void; onTyping(): void; onLocalCommandSubmitted(): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+function EmbeddedTerminal({ command, active, onError, onLocalCommandSubmitted, onTerminalInsertionChange }: { command?: string; active: boolean; onError(message: string): void; onLocalCommandSubmitted(): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
@@ -154,32 +155,20 @@ function EmbeddedTerminal({ block, command, active, refresh, onError, onTyping, 
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: nextTerminal.cols, rows: nextTerminal.rows }));
     };
     const dataDisposable = nextTerminal.onData((data) => {
-      onTyping();
-      // Xterm receives Enter before Bash emits its authoritative command marker. Show only a
-      // local submitting status here; the later public submitted state is what says Running.
+      // Xterm receives Enter before Bash emits its authoritative submitted marker.
       if (/[\r\n]/.test(data)) onLocalCommandSubmitted();
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data }));
     });
     ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); sendResize(); });
     ws.addEventListener("message", (event) => {
-      let frame: PublicTerminalMessage | undefined;
+      let frame: PublicTerminalFrame | undefined;
       // An unreadable frame is reported and dropped: throwing here would leave the socket open
       // while the learner watched a terminal that had stopped answering.
       try { frame = parsePublicTerminalMessage(event.data); }
       catch { onError(UNREADABLE_TERMINAL_FRAME); return; }
       if (!frame) return;
       if (frame.type === "output") nextTerminal.write(frame.data);
-      // Socket frames transport terminal bytes only. Public workbook state carries the coaching
-      // lifecycle, so a delayed frame cannot replace persisted feedback or acceptance.
-      if (frame.type === "attempt-error" && frame.blockId === block.id) onError(frame.message);
-      if (frame.type === "verified-complete" && frame.blockId === block.id) {
-        // The only socket frame carrying server state, so it reaches React through the same
-        // validation the HTTP responses use rather than as an unchecked object.
-        let state: State;
-        try { state = parsePublicWorkbookState(frame.state); }
-        catch { onError(UNREADABLE_TERMINAL_FRAME); return; }
-        refresh(state);
-      }
+      // Socket frames are terminal transport only. Workbook state carries the learner lifecycle.
       if (frame.type === "busy" || frame.type === "terminal-error") onError(frame.message);
       if (frame.type === "exit") onError("The embedded shell exited. Refresh the page to start a new one.");
     });
@@ -200,7 +189,7 @@ function EmbeddedTerminal({ block, command, active, refresh, onError, onTyping, 
       socket.current = null;
       setConnected(false);
     };
-  }, [active, block.id, refresh, onError, onTyping, onLocalCommandSubmitted]);
+  }, [active, onError, onLocalCommandSubmitted]);
 
   const insertCommand = useCallback(() => {
     if (!command) return;
@@ -287,132 +276,43 @@ export function ContinueControls({ block, state, refresh, label }: { block: Bloc
   </div>;
 }
 
-type TerminalLifecycleStatus = NonNullable<BlockProgress["terminalStatus"]>;
-
-function terminalLifecycleRank(status: TerminalLifecycleStatus | undefined): number {
-  switch (status) {
-    case "submitted": return 0;
-    case "running": return 1;
-    case "interim-feedback": return 2;
-    case "reviewing-result": return 3;
-    case "final-feedback": return 4;
-    case "awaiting-confirmation": return 5;
-    case "accepted": return 6;
-    default: return -1;
-  }
-}
-
-function terminalDisplayEvent(status: TerminalLifecycleStatus | undefined, checkpoint: PublicCheckpoint | undefined, attemptId: string): TerminalCoachingDisplayEvent | undefined {
-  switch (status) {
-    case "running": return { type: "command-output", attemptId };
-    case "interim-feedback": return checkpoint?.feedback ? { type: "useful-feedback", attemptId, feedback: checkpoint.feedback } : { type: "command-output", attemptId };
-    case "reviewing-result": return { type: "command-finished", attemptId };
-    case "final-feedback": return checkpoint?.feedback ? { type: "final-feedback", attemptId, feedback: checkpoint.feedback } : undefined;
-    case "awaiting-confirmation": return { type: "coach-ready", attemptId };
-    case "accepted": return { type: "accepted", attemptId, feedback: checkpoint?.successMessage ?? "Accepted." };
-    default: return undefined;
-  }
-}
-
 function initialTerminalDisplay(state: BlockProgress | undefined): TerminalCoachingDisplayState {
-  const attemptId = "attempt-1";
-  let display = createTerminalCoachingDisplayState();
-  const status = state?.terminalStatus;
-  if (status || state?.checkpoint?.feedback || state?.checkpoint?.status === "accepted") {
-    display = reduceTerminalCoachingDisplay(display, { type: "command-submitted", attemptId });
-    const event = terminalDisplayEvent(status, state?.checkpoint, attemptId)
-      ?? (state?.checkpoint?.status === "accepted" ? { type: "accepted" as const, attemptId, feedback: state.checkpoint.successMessage ?? "Accepted." }
-        : state?.checkpoint?.feedback ? { type: "final-feedback" as const, attemptId, feedback: state.checkpoint.feedback }
-          : state?.checkpoint?.status === "reviewing" ? { type: "command-finished" as const, attemptId } : undefined);
-    if (state?.terminalReviewRetrying) display = reduceTerminalCoachingDisplay(display, { type: "review-retry-scheduled", attemptId });
-    else if (event) display = reduceTerminalCoachingDisplay(display, event);
-  }
-  return display;
+  return reduceTerminalCoachingDisplay(createTerminalCoachingDisplayState(), { type: "server-state", terminal: state?.terminal });
 }
 
-function TerminalBlock({ lessonId, block, state, refresh, onTerminalInsertionChange }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+function TerminalBlock({ lessonId, block, state, onTerminalInsertionChange }: { lessonId: string; block: Block; state: BlockProgress | undefined; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const command = shellCommandFrom(block.markdown);
   const [display, dispatch] = useReducer(reduceTerminalCoachingDisplay, state, initialTerminalDisplay);
   const [terminalError, setTerminalError] = useState<string>();
-  const attemptGeneration = useRef(display.currentAttemptId ? 1 : 0);
-  const attemptId = useRef(display.currentAttemptId);
-  const typingGeneration = useRef(0);
-  const attemptTypingGeneration = useRef(0);
-  const lifecycleRank = useRef(terminalLifecycleRank(state?.terminalStatus));
-
-  const startAttempt = useCallback(() => {
-    const nextAttemptId = `attempt-${++attemptGeneration.current}`;
-    attemptId.current = nextAttemptId;
-    attemptTypingGeneration.current = typingGeneration.current;
-    lifecycleRank.current = 0;
-    setTerminalError(undefined);
-    dispatch({ type: "command-submitted", attemptId: nextAttemptId });
-    return nextAttemptId;
-  }, []);
-  const onTyping = useCallback(() => {
-    typingGeneration.current += 1;
-    dispatch({ type: "typing" });
-  }, []);
-  const onLocalCommandSubmitted = useCallback(() => {
-    // This is deliberately UI-only. Bash's later submitted fact starts the durable attempt.
-    dispatch({ type: "local-command-submitted" });
-  }, []);
 
   useEffect(() => {
-    const status = state?.terminalStatus;
-    const rank = terminalLifecycleRank(status);
-    let currentAttemptId = attemptId.current;
-    if (status === "submitted") {
-      // Attempt IDs stay private. A locally monotonic generation lets us accept a real subsequent
-      // submission after terminal input, while ignoring a stale submitted snapshot after review.
-      if (!currentAttemptId || typingGeneration.current > attemptTypingGeneration.current) startAttempt();
-      return;
-    }
-    if (!status) {
-      // Sessions created before terminal lifecycle events still expose a checkpoint through the
-      // legacy AttemptStore projection. A block with no checkpoint is merely an untouched shell.
-      const legacyCheckpoint = state?.checkpoint;
-      if (!legacyCheckpoint || legacyCheckpoint.status === "working") return;
-      if (!currentAttemptId) currentAttemptId = startAttempt();
-      if (legacyCheckpoint.status === "feedback" && legacyCheckpoint.feedback) dispatch({ type: "final-feedback", attemptId: currentAttemptId, feedback: legacyCheckpoint.feedback });
-      else if (legacyCheckpoint.status === "reviewing") dispatch({ type: "command-finished", attemptId: currentAttemptId });
-      else if (legacyCheckpoint.status === "accepted") dispatch({ type: "accepted", attemptId: currentAttemptId, feedback: legacyCheckpoint.successMessage ?? "Accepted." });
-      return;
-    }
-    if (!currentAttemptId) currentAttemptId = startAttempt();
-    // A failed Main Tutor confirmation returns to final feedback before its scheduled retry. It is
-    // the only valid backwards lifecycle edge; do not let any other old snapshot regress display.
-    if (rank < lifecycleRank.current) {
-      // An old delayed-review snapshot cannot replace an accepted result. Before acceptance, it
-      // can still be the valid backwards edge from final feedback into its scheduled retry.
-      if (state?.terminalReviewRetrying && lifecycleRank.current < terminalLifecycleRank("accepted")) dispatch({ type: "review-retry-scheduled", attemptId: currentAttemptId });
-      return;
-    }
-    lifecycleRank.current = rank;
-    // A retry is its own durable learner-facing state. Do not briefly replace it with the
-    // generic final checkpoint before restoring the delayed-review card.
-    if (state?.terminalReviewRetrying) dispatch({ type: "review-retry-scheduled", attemptId: currentAttemptId });
-    else {
-      const event = terminalDisplayEvent(status, state?.checkpoint, currentAttemptId);
-      if (event) dispatch(event);
-    }
-  }, [state?.checkpoint, state?.terminalReviewRetrying, state?.terminalStatus, startAttempt]);
+    dispatch({ type: "server-state", terminal: state?.terminal });
+    // A later authoritative lifecycle state replaces a transport error in the same one card.
+    if (state?.terminal) setTerminalError(undefined);
+  }, [state?.terminal]);
+  useEffect(() => {
+    const submitted = (event: Event) => {
+      const blockId = (event as CustomEvent<{ blockId?: string }>).detail?.blockId;
+      if (blockId === state?.id) dispatch({ type: "bash-submitted" });
+    };
+    addEventListener(BASH_SUBMITTED_EVENT, submitted);
+    return () => removeEventListener(BASH_SUBMITTED_EVENT, submitted);
+  }, [state?.id]);
 
-  const accepted = state?.checkpoint?.status === "accepted" || display.blueField.kind === "feedback" && display.blueField.accepted;
-  const showLiveTerminal = !state?.verified && !state?.completed && !accepted;
-  const hasBlueField = display.blueField.kind !== "empty";
-  const hasActivity = display.activity.kind !== "idle";
-  // Terminal coaching stays welded to this surface for its complete lifecycle. In particular,
-  // it is never portalled into ActivityBand after a first render, which used to unmount and move
-  // the feedback node just as a useful result appeared.
-  const displayPanel = (hasBlueField || hasActivity || terminalError) && <>
-    {hasBlueField && <aside className="live-block-feedback terminal-coaching-blue-field terminal-feedback-overlay" aria-live="polite"><Markdown source="generated">{display.blueField.text}</Markdown></aside>}
-    {hasActivity && <p className={`terminal-coaching-activity${display.activity.subtle ? " subtle" : ""}`} role="status">{display.activity.text}</p>}
-    {terminalError && <p className="terminal-transport-error" role="status">{terminalError}</p>}
-  </>;
+  const onLocalCommandSubmitted = useCallback(() => {
+    setTerminalError(undefined);
+    dispatch({ type: "local-enter" });
+  }, []);
+
+  const complete = state?.terminal?.phase === "complete" || display.phase === "complete";
+  const showLiveTerminal = !state?.completed && !complete;
+  const text = terminalError ?? (display.phase === "idle" ? undefined : display.text);
+  // Exactly one in-place learner-facing node represents status, feedback, completion, or a
+  // transport error. It is never moved into the activity/timeline portal.
+  const displayPanel = text ? <aside className="live-block-feedback terminal-feedback-overlay" aria-live="polite" role="status"><Markdown source="generated">{text}</Markdown></aside> : null;
   return <section id={blockElementId(lessonId, block.id)} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
-    {state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : showLiveTerminal && <div className={`terminal-live-surface${hasBlueField ? " has-feedback" : ""}`}>
-      <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} refresh={refresh} onError={setTerminalError} onTyping={onTyping} onLocalCommandSubmitted={onLocalCommandSubmitted} onTerminalInsertionChange={onTerminalInsertionChange} />
+    {complete ? <div className="frozen-terminal" aria-label="Frozen terminal session"><pre className="frozen-terminal-output">Terminal session frozen.</pre></div> : showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
+      <EmbeddedTerminal command={command} active={Boolean(state?.active)} onError={setTerminalError} onLocalCommandSubmitted={onLocalCommandSubmitted} onTerminalInsertionChange={onTerminalInsertionChange} />
       {displayPanel}
     </div>}
     {!showLiveTerminal && displayPanel}
@@ -506,7 +406,7 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
 export function BlockView({ lessonId, block, progress, refresh, onTerminalInsertionChange }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
-  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} onTerminalInsertionChange={onTerminalInsertionChange} />;
+  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} onTerminalInsertionChange={onTerminalInsertionChange} />;
   if (block.type === "editor-practice") return <EditorPracticeBlockView lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
   return null;
 }
@@ -581,10 +481,11 @@ export function AcceptanceConfetti({ acceptedKey }: { acceptedKey: string | unde
 }
 
 function activeAcceptedKey(progress: Progress): string | undefined {
-  const accepted = progress.blocks.find((block) => block.active && !block.completed && block.checkpoint?.status === "accepted");
-  if (!accepted?.checkpoint) return undefined;
-  const evidence = accepted.checkpoint.evidence;
-  return `${progress.activeLessonId}/${accepted.id}/${evidence?.kind ?? "attempt"}/${accepted.checkpoint.successMessage ?? accepted.checkpoint.summary ?? "accepted"}`;
+  const accepted = progress.blocks.find((block) => block.active && !block.completed && (block.checkpoint?.status === "accepted" || block.terminal?.phase === "complete"));
+  if (!accepted) return undefined;
+  const evidence = accepted.checkpoint?.evidence;
+  const message = accepted.terminal?.phase === "complete" ? accepted.terminal.message : accepted.checkpoint?.successMessage ?? accepted.checkpoint?.summary ?? "accepted";
+  return `${progress.activeLessonId}/${accepted.id}/${evidence?.kind ?? "terminal"}/${message}`;
 }
 
 function readySuccessorId(progress: Progress): string | undefined {
@@ -674,7 +575,13 @@ export function App() {
       });
     };
     events.addEventListener("record", () => refreshFromSse());
-    events.addEventListener("state", () => refreshFromSse());
+    events.addEventListener("state", (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { blockId?: string; terminalPhase?: string };
+        if (payload.terminalPhase === "running" && payload.blockId) dispatchEvent(new CustomEvent(BASH_SUBMITTED_EVENT, { detail: { blockId: payload.blockId } }));
+      } catch { /* State refresh still validates its own response. */ }
+      refreshFromSse();
+    });
     events.addEventListener("content-reloaded", () => refreshFromSse({ contentReload: true }));
     events.addEventListener("content-reload-error", (event) => {
       try {
@@ -781,7 +688,7 @@ export function App() {
       if (next.progress.activeBlockId !== before || next.progress.workbookComplete && !state.progress.workbookComplete) requestAnimationFrame(() => navigateToAnchor(next.progress.activeAnchorId ?? next.progress.activeBlockId, "push"));
     });
   };
-  const activeContinuationEligible = !state.introductionComplete ? true : state.progress.canComplete ? state.progress.canComplete.blockId === effectiveActiveBlockId && state.progress.canComplete.eligible : Boolean(effectiveActiveBlockProgress?.active && effectiveActiveBlockProgress.ready && !effectiveActiveBlockProgress.completed && (activeBlock?.type === "narrative" || effectiveActiveBlockProgress.checkpoint?.status === "accepted"));
+  const activeContinuationEligible = !state.introductionComplete ? true : state.progress.canComplete ? state.progress.canComplete.blockId === effectiveActiveBlockId && state.progress.canComplete.eligible : Boolean(effectiveActiveBlockProgress?.active && effectiveActiveBlockProgress.ready && !effectiveActiveBlockProgress.completed && (activeBlock?.type === "narrative" || effectiveActiveBlockProgress.checkpoint?.status === "accepted" || effectiveActiveBlockProgress.terminal?.phase === "complete"));
   const activeReflectionReviewing = Boolean(state.introductionComplete && activeBlock?.type === "reflection" && activeBlockProgress?.checkpoint?.status === "reviewing");
   const reflectionComposerDisabled = Boolean(state.introductionComplete && activeBlock?.type === "reflection" && ["reviewing", "accepted"].includes(activeBlockProgress?.checkpoint?.status ?? ""));
   const stableRunwayIds = scrollRunwayBlockIds(state);

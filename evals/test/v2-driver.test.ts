@@ -37,7 +37,10 @@ class DriverFakePty implements TerminalPty {
 
   write(data: string): void {
     this.writes.push(data);
-    this.dataCallbacks.forEach((callback) => callback(`\r\nran:${data.replace(/\r/g, "\n")}`));
+    const command = data.replace(/[\r\n]+$/, "");
+    const submitted = `\x1b]633;workbook-command;${Buffer.from(command).toString("base64")}\x07`;
+    const finished = "\x1b]633;workbook-finished;0\x07";
+    this.dataCallbacks.forEach((callback) => callback(`${submitted}\r\nran:${data.replace(/\r/g, "\n")}${finished}`));
   }
 
   resize(): void {}
@@ -88,9 +91,6 @@ class DriverFakeWebSocket {
     queueMicrotask(() => {
       this.emit("message", Buffer.from(JSON.stringify({ type: "output", data: "command block complete\r\n" })));
     });
-    setTimeout(() => {
-      this.emit("message", Buffer.from(JSON.stringify({ type: "attempt-status", blockId: "lesson--001-live-session--exact-command", status: "submitted" })));
-    }, 50);
   }
 
   close(): void {
@@ -261,8 +261,8 @@ describe("v2 workbook driver", () => {
   it("uses a dedicated terminal review timeout for terminal submission and review", async () => {
     const trace = createEmptyV2SessionTrace("terminal-review-timeout-test");
     let stateReads = 0;
-    const reviewingState = { progress: { blocks: [{ id: "lesson--001-live-session--exact-command", checkpoint: { status: "reviewing" } }] } };
-    const acceptedState = { progress: { blocks: [{ id: "lesson--001-live-session--exact-command", checkpoint: { status: "accepted", successMessage: "Review accepted after the terminal I/O timeout." } }] } };
+    const reviewingState = { progress: { blocks: [{ id: "lesson--001-live-session--exact-command", terminal: { phase: "checking" } }] } };
+    const acceptedState = { progress: { blocks: [{ id: "lesson--001-live-session--exact-command", terminal: { phase: "complete", message: "Review accepted after the terminal I/O timeout." } }] } };
     const driver = new V2WorkbookDriver({
       serverUrl: "http://workbook.invalid",
       trace,
@@ -278,28 +278,20 @@ describe("v2 workbook driver", () => {
     const reviewed = await driver.submitTerminalCommand("lesson--001-live-session--exact-command", "echo command block complete", { complete: false });
 
     expect(stateReads).toBe(3);
-    expect(reviewed.progress.blocks[0]).toMatchObject({ checkpoint: { status: "accepted", successMessage: "Review accepted after the terminal I/O timeout." } });
+    expect(reviewed.progress.blocks[0]).toMatchObject({ terminal: { phase: "complete", message: "Review accepted after the terminal I/O timeout." } });
     expect(trace.terminalTranscript).toEqual(expect.arrayContaining([
       { blockId: "lesson--001-live-session--exact-command", direction: "input", text: "echo command block complete\r" },
-      { blockId: "lesson--001-live-session--exact-command", direction: "output", text: "command block complete\r\n" },
-      { blockId: "lesson--001-live-session--exact-command", direction: "observer", text: "status:submitted" }
+      { blockId: "lesson--001-live-session--exact-command", direction: "output", text: "command block complete\r\n" }
     ]));
   });
 
   it("records every terminal frame the server sends, not only the ones a scenario asserts on", async () => {
     const blockId = "lesson--001-live-session--exact-command";
-    // One of each frame in PublicTerminalFrame. Before attempts replaced the observer the driver
-    // matched names no server had sent since f55dcf1, so an errored or evicted terminal left a
-    // trace that read as a clean run.
+    // One of each terminal transport frame. Lifecycle state is in the public workbook state, not
+    // the socket trace.
     const frames: PublicTerminalFrame[] = [
       { type: "output", data: "ran:echo hi\r\n" },
-      { type: "attempt-status", blockId, status: "running" },
-      { type: "attempt-status", status: "checking" },
-      { type: "attempt-error", blockId, message: "Could not submit the terminal attempt." },
-      { type: "terminal-error", message: "The embedded terminal could not start on this machine." },
-      { type: "busy", message: "Another browser is already connected to this terminal." },
-      { type: "exit", exitCode: 137, signal: 9 },
-      { type: "attempt-status", blockId, status: "submitted" }
+      { type: "exit", exitCode: 137, signal: 9 }
     ];
     class ReplayWebSocket extends DriverFakeWebSocket {
       override send(): void {
@@ -307,7 +299,7 @@ describe("v2 workbook driver", () => {
       }
     }
     const trace = createEmptyV2SessionTrace("terminal-frame-coverage-test");
-    const accepted = { progress: { blocks: [{ id: blockId, checkpoint: { status: "accepted", successMessage: "ok" } }] } };
+    const accepted = { progress: { blocks: [{ id: blockId, terminal: { phase: "complete", message: "ok" } }] } };
     const driver = new V2WorkbookDriver({
       serverUrl: "http://workbook.invalid",
       trace,
@@ -320,13 +312,7 @@ describe("v2 workbook driver", () => {
     await driver.submitTerminalCommand(blockId, "echo hi", { complete: false });
 
     expect(trace.terminalTranscript.filter((entry) => entry.direction === "observer")).toEqual([
-      { blockId, direction: "observer", text: "status:running" },
-      { blockId, direction: "observer", text: "status:checking" },
-      { blockId, direction: "observer", text: "Could not submit the terminal attempt." },
-      { blockId, direction: "observer", text: "The embedded terminal could not start on this machine." },
-      { blockId, direction: "observer", text: "Another browser is already connected to this terminal." },
-      { blockId, direction: "observer", text: "exit:137 signal:9" },
-      { blockId, direction: "observer", text: "status:submitted" }
+      { blockId, direction: "observer", text: "exit:137 signal:9" }
     ]);
   });
 
@@ -370,8 +356,7 @@ describe("v2 workbook driver", () => {
       expect(workbookTutor.reviews.filter((review) => review.attempt.blockId.endsWith("--exact-command"))).toHaveLength(1);
       expect(trace.terminalTranscript).toEqual(expect.arrayContaining([
         expect.objectContaining({ blockId: "lesson--001-live-session--exact-command", direction: "input", text: `${exactCommand}\r` }),
-        expect.objectContaining({ blockId: "lesson--001-live-session--exact-command", direction: "output", text: expect.stringContaining("ran:mkdir") }),
-        expect.objectContaining({ blockId: "lesson--001-live-session--exact-command", direction: "observer", text: expect.stringContaining("status:submitted") })
+        expect.objectContaining({ blockId: "lesson--001-live-session--exact-command", direction: "output", text: expect.stringContaining("ran:mkdir") })
       ]));
       expect(trace.publicStates.map((state) => state.label)).toContain("terminal:exact-command:reviewed:1");
       expect(trace.publicStates.map((state) => state.label)).toContain("terminal:lesson--001-live-session--exact-command:complete");
