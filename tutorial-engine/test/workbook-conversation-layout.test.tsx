@@ -92,7 +92,8 @@ describe("workbook fixed conversation layout", () => {
     expect(copyButton).toContain("right: 9px");
     expect(codePre).toContain("font: 1rem/1.65");
     expect(terminalElement).toContain("height: 180px");
-    expect(terminalElement).toContain("padding: 6px 6px 18px");
+    expect(terminalElement).toContain("padding: 6px");
+    expect(terminalElement).not.toContain("padding: 6px 6px 18px");
     expect(terminalElement).toContain("overflow: hidden");
   });
 
