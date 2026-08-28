@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runWorkbookCli } from "../src/workbook/cli.js";
 import type { WorkbookServerOptions } from "../src/workbook/server.js";
 import { SessionWorkspaceManager, type TutorialSessionPaths } from "../src/session-workspace.js";
+import { WorkbookTimeline } from "../src/workbook/timeline.js";
 
 const roots: string[] = [];
 
@@ -18,11 +19,17 @@ async function write(path: string, content: string): Promise<void> {
 async function contentFixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "workbook-cli-content-"));
   roots.push(root);
-  await write(join(root, "workbook.md"), "---\ntitle: CLI fixture\n---\n# CLI fixture\n");
+  await write(join(root, "workbook.md"), ["---", "parts:", "  - id: validation-loop", "    lessons:", "      - 001-run-an-agent-headlessly", "      - 007-compose-and-branch", "      - 008-missing-seed", "---", "# CLI fixture", "", "Welcome."].join("\n"));
+  await write(join(root, "parts/validation-loop.md"), "---\n---\n# Validation loop\n\nPart preamble.\n");
+  for (const id of ["001-run-an-agent-headlessly", "007-compose-and-branch", "008-missing-seed"]) {
+    await write(join(root, `lessons/${id}/lesson.md`), "---\ndurationMinutes: 1\nblocks:\n  - read\n---\n# Lesson\n\nLesson dek.\n");
+    await write(join(root, `lessons/${id}/blocks/read.md`), "---\ntype: narrative\n---\n## Read\n\nRead this.\n");
+  }
   await write(join(root, "README.md"), "# CLI fixture\n");
   await write(join(root, "calculator/package.json"), "{\"type\":\"module\"}\n");
   await write(join(root, "calculator/src/index.ts"), "export const value = 1;\n");
   await write(join(root, "factory/refactor.md"), "factory seed\n");
+  await write(join(root, "docs/seeds/lesson-jump/007-compose-and-branch/factory/refactor.md"), "lesson 007 seed\n");
   return root;
 }
 
@@ -127,6 +134,39 @@ describe("workbook CLI", () => {
     expect(createLessonJumpSession).toHaveBeenCalledWith("/tmp/workbook", "007");
     expect(resolveSession).not.toHaveBeenCalled();
     expect(lines).toContain("Test-only lesson jump: 007 (previous blocks are skipped; exact 'move on' may skip this lesson's evaluated blocks).");
+  });
+
+  it.each(["001", "001-run-an-agent-headlessly"])("starts --lesson %s from the normal materialized workspace", async (lesson) => {
+    const contentRoot = await contentFixture();
+    const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
+
+    await runWorkbookCli([contentRoot, "--lesson", lesson, "--no-open"], {
+      startServer, installSignalHandlers: false, packageDirectory: "/pkg", logger: { info: vi.fn(), error: vi.fn() }, writeLine: () => undefined,
+    });
+
+    const session = startServer.mock.calls[0]![0].session as TutorialSessionPaths;
+    await expect(readFile(resolve(session.workspaceRoot, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
+    await expect(readFile(resolve(session.workspaceRoot, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
+    await expect(new WorkbookTimeline({ stateRoot: session.sessionRoot }).read()).resolves.toEqual([
+      expect.objectContaining({ type: "lesson_jump_started", lessonId: "001-run-an-agent-headlessly", testOnly: true }),
+      expect.objectContaining({ type: "block_skipped", reason: "lesson-jump-prerequisite" }),
+      expect.objectContaining({ type: "block_skipped", reason: "lesson-jump-prerequisite" }),
+    ]);
+  });
+
+  it("uses a later lesson's explicit seed and clearly rejects a missing later seed", async () => {
+    const contentRoot = await contentFixture();
+    const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
+
+    await runWorkbookCli([contentRoot, "--lesson", "007", "--no-open"], {
+      startServer, installSignalHandlers: false, packageDirectory: "/pkg", logger: { info: vi.fn(), error: vi.fn() }, writeLine: () => undefined,
+    });
+    const session = startServer.mock.calls[0]![0].session as TutorialSessionPaths;
+    await expect(readFile(resolve(session.workspaceRoot, "factory/refactor.md"), "utf8")).resolves.toBe("lesson 007 seed\n");
+
+    await expect(runWorkbookCli([contentRoot, "--lesson", "008", "--no-open"], {
+      startServer, installSignalHandlers: false, packageDirectory: "/pkg", logger: { info: vi.fn(), error: vi.fn() }, writeLine: () => undefined,
+    })).rejects.toThrow(/Lesson jump seed for '008-missing-seed'/);
   });
 
   it("passes an explicit --session ID through to reopening and prints the reopened workspace", async () => {
