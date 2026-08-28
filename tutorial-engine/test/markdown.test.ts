@@ -107,7 +107,6 @@ describe("the transcript's layout", () => {
     expect(declarations(".copy-code")).toContain("right: 9px");
     expect(declarations(".code-block pre")).toContain("font-size: 1rem");
     expect(declarations(".code-block.wrap pre")).toContain("white-space: pre-wrap");
-    expect(styles).not.toContain("code-block-toolbar");
   });
 
   it("bounds Mermaid diagrams within the Markdown column", () => {

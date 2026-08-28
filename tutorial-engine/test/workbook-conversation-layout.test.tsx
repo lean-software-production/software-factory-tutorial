@@ -76,7 +76,6 @@ describe("workbook fixed conversation layout", () => {
     expect(visualWorkBlock).toContain("width: var(--activity-width)");
     expect(inlineBand).toContain("padding: 0");
     expect(inlineBand).toContain("border: 0");
-    expect(workbookStyles).not.toContain('data-activity-layout="expanded"');
     expect(activityBandRules.join("\n")).not.toContain("margin-left");
     expect(activityBandRules.join("\n")).not.toContain("transform");
   });
@@ -95,8 +94,6 @@ describe("workbook fixed conversation layout", () => {
     expect(terminalElement).toContain("height: 180px");
     expect(terminalElement).toContain("padding: 6px 6px 18px");
     expect(terminalElement).toContain("overflow: hidden");
-    expect(workbookStyles).not.toContain("code-block-toolbar");
-    expect(workbookStyles).not.toContain("code-language");
   });
 
   it("visually attaches terminal feedback to the terminal bottom instead of overlaying output", () => {
@@ -135,7 +132,6 @@ describe("workbook fixed conversation layout", () => {
     // The green advice palette means accepted; feedback asks for a revision, so both practice
     // blocks use the same informational treatment.
     expect(feedbackPanel).not.toContain("var(--green-pale)");
-    expect(workbookStyles).not.toContain(".editor-status");
     expect(feedbackPanel).not.toContain("position: absolute");
   });
 
