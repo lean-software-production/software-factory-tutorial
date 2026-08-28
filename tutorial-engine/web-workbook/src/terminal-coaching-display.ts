@@ -55,9 +55,6 @@ export function reduceTerminalCoachingDisplay(
   if (event.attemptId !== state.currentAttemptId) return state;
 
   switch (event.type) {
-    case "command-submitted":
-    case "typing":
-      return state;
     case "command-output":
       return state;
     case "useful-feedback":
