@@ -8,6 +8,8 @@ import { createTutorialLogger } from "./runtime-log.js";
 import type { SubmitAttempt } from "./attempts.js";
 import { NO_RUNTIME_PROVISION, type TrustedRuntimeProvision } from "./runtime-provision.js";
 import { publicTerminalFrame } from "./public-terminal-contract.js";
+import { TerminalObservation, type TerminalObservationFact, type TerminalObservationScheduler } from "./terminal-observation.js";
+import { TerminalShellProtocol } from "./terminal-shell-protocol.js";
 export type { SubmitAttempt } from "./attempts.js";
 
 export type TerminalClient = { send(message: string): void; close(code?: number, reason?: string): void };
@@ -56,6 +58,8 @@ export interface WorkbookTerminalManagerOptions {
   runtimeProvision?: TrustedRuntimeProvision;
   getActiveBlock(): ActiveObservedTerminalBlock | undefined;
   submitAttempt: SubmitAttempt;
+  /** Receives Bash-authoritative command lifecycle facts instead of legacy attempt submissions. */
+  observationSink?: (fact: TerminalObservationFact) => void;
   ptyFactory?: TerminalPtyFactory;
   logger?: TutorialLogger;
   debounceMs?: number;
@@ -68,6 +72,15 @@ const DEFAULT_DEBOUNCE_MS = 700;
 const MAX_INPUT_BYTES = 16_384;
 const MAX_COLS = 500;
 const MAX_ROWS = 200;
+
+const terminalObservationScheduler: TerminalObservationScheduler = {
+  schedule(delayMs, callback): NodeJS.Timeout {
+    const timer = setTimeout(callback, delayMs);
+    timer.unref?.();
+    return timer;
+  },
+  cancel(handle): void { clearTimeout(handle as NodeJS.Timeout); }
+};
 
 function boundedAppend(previous: string, addition: string, limit: number): string {
   const next = previous + addition;
@@ -164,7 +177,7 @@ export function dockerRunArguments(options: DockerRunArgumentsOptions): string[]
 }
 
 export function dockerExecArguments(name: string): string[] {
-  return ["exec", "-it", "--env", "PS1=$ ", "--workdir", "/workspace", name, "/bin/bash", "--noprofile", "--norc", "-i"];
+  return ["exec", "-it", "--env", "PS1=$ ", "--env", "PROMPT_COMMAND=status=$?; printf '\\033]633;workbook-finished;%s\\007' \"$status\"; trap 'command=$BASH_COMMAND; trap - DEBUG; printf \"\\033]633;workbook-command;\"; printf '%s' \"$command\" | base64 -w 0; printf \"\\007\"' DEBUG", "--workdir", "/workspace", name, "/bin/bash", "--noprofile", "--norc", "-i"];
 }
 
 /** Starts a hardened, per-practice container; browser bytes can only reach docker exec. */
@@ -249,8 +262,12 @@ export class WorkbookTerminalManager {
   #observationGeneration = 0;
   #submittedGeneration = -1;
   #lastError = new Map<string, string>();
+  #terminalShellProtocol: TerminalShellProtocol | undefined;
+  #terminalObservation: TerminalObservation | undefined;
+  #terminalObservationBlockKey: string | undefined;
   readonly #getActiveBlock: () => ActiveObservedTerminalBlock | undefined;
   readonly #submitAttempt: SubmitAttempt;
+  readonly #observationSink: ((fact: TerminalObservationFact) => void) | undefined;
   readonly #ptyFactory: TerminalPtyFactory;
   readonly #log: TutorialLogger;
   readonly #debounceMs: number;
@@ -261,6 +278,8 @@ export class WorkbookTerminalManager {
     this.runtimeProvision = options.runtimeProvision ?? NO_RUNTIME_PROVISION;
     this.#getActiveBlock = options.getActiveBlock;
     this.#submitAttempt = options.submitAttempt;
+    this.#observationSink = options.observationSink;
+    this.#terminalShellProtocol = options.observationSink ? new TerminalShellProtocol() : undefined;
     this.#ptyFactory = options.ptyFactory ?? createDockerPty;
     this.#log = options.logger ?? createTutorialLogger();
     this.#debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
@@ -303,6 +322,10 @@ export class WorkbookTerminalManager {
       if (typeof message.data !== "string" || Buffer.byteLength(message.data, "utf8") > MAX_INPUT_BYTES) return;
       shell.write(message.data);
       this.#record("input", message.data);
+      if (this.#observationSink) {
+        this.#terminalObservation?.observeInteractiveInput(message.data);
+        return;
+      }
       if (this.#isSubmittedCommand(message.data)) {
         this.#commandPending = true;
         this.#observationGeneration++;
@@ -328,6 +351,9 @@ export class WorkbookTerminalManager {
   #stopTerminal(): void {
     if (this.#observeTimer) clearTimeout(this.#observeTimer);
     this.#observeTimer = undefined;
+    this.#terminalObservation?.close();
+    this.#terminalObservation = undefined;
+    this.#terminalObservationBlockKey = undefined;
     this.#client?.close(1001, "Workbook terminal stopped.");
     this.#client = undefined;
     const shell = this.#pty as DockerPty | undefined;
@@ -340,12 +366,23 @@ export class WorkbookTerminalManager {
 
   #ensurePty(): void {
     if (this.#pty) return;
+    if (this.#observationSink) this.#terminalShellProtocol = new TerminalShellProtocol();
     const instance = this.#ptyFactory({ cwd: this.workspace, runtimeProvision: this.runtimeProvision, cols: 90, rows: 24 });
     this.#pty = instance;
     instance.onData((data) => {
-      this.#replay = boundedAppend(this.#replay, data, MAX_REPLAY_BYTES);
-      this.#client?.send(publicTerminalFrame({ type: "output", data }));
-      this.#record("output", data);
+      if (this.#terminalShellProtocol) {
+        for (const event of this.#terminalShellProtocol.consume(data)) {
+          if (event.type === "output") {
+            this.#forwardTerminalOutput(event.data);
+          } else if (event.type === "command-submitted") {
+            this.#observeCommandSubmitted(event.command);
+          } else {
+            this.#terminalObservation?.observeCommandFinished({ exitStatus: event.exitStatus });
+          }
+        }
+        return;
+      }
+      this.#forwardTerminalOutput(data);
       if (this.#commandPending) {
         this.#observationGeneration++;
         this.#client?.send(publicTerminalFrame({ type: "attempt-status", blockId: this.#getActiveBlock()?.blockId, status: "running" }));
@@ -356,7 +393,36 @@ export class WorkbookTerminalManager {
       this.#client?.send(publicTerminalFrame({ type: "exit", exitCode, signal }));
       (instance as DockerPty).stopContainer?.();
       if (this.#pty === instance) this.#pty = undefined;
+      this.#terminalObservation?.close();
+      this.#terminalObservation = undefined;
+      this.#terminalObservationBlockKey = undefined;
     });
+  }
+
+  #forwardTerminalOutput(data: string): void {
+    this.#replay = boundedAppend(this.#replay, data, MAX_REPLAY_BYTES);
+    this.#client?.send(publicTerminalFrame({ type: "output", data }));
+    this.#record("output", data);
+    this.#terminalObservation?.observeTerminalOutput(data);
+  }
+
+  #observeCommandSubmitted(command: string): void {
+    const block = this.#getActiveBlock();
+    if (!block || !this.#observationSink) return;
+    const key = terminalKey(block);
+    let observation = this.#terminalObservation;
+    if (this.#terminalObservationBlockKey !== key || !observation) {
+      observation?.cancel();
+      this.#terminalObservationBlockKey = key;
+      observation = new TerminalObservation({
+        blockId: block.blockId,
+        scheduler: terminalObservationScheduler,
+        createAttemptId: randomUUID,
+        emit: this.#observationSink
+      });
+      this.#terminalObservation = observation;
+    }
+    observation.observeCommandSubmitted({ command });
   }
 
   #record(kind: "input" | "output", data: string): void {

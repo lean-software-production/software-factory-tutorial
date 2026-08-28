@@ -133,7 +133,9 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
     observer.observe(element);
     return () => observer.disconnect();
   }, [activeBlock.id, activeProgress?.active, activeProgress?.checkpoint?.status]);
-  if (!activeProgress?.active || activeProgress.checkpoint?.status === "accepted" || !["terminal-practice", "editor-practice"].includes(activeBlock.type)) return null;
+  // A terminal acceptance is public checkpoint feedback, not a timeline review message. Keep its
+  // frozen terminal and acceptance text visible until the learner continues.
+  if (!activeProgress?.active || !["terminal-practice", "editor-practice"].includes(activeBlock.type) || activeProgress.checkpoint?.status === "accepted" && activeBlock.type !== "terminal-practice") return null;
 
   return <>
     <section ref={bandRef} className="current-activity-band" data-activity-type={activeBlock.type} data-activity-layout="scroll-linked" aria-label="Current practice activity">

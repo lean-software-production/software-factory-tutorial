@@ -12,9 +12,10 @@ import { AttemptStore } from "./attempts.js";
 import { FastPracticeCoach, type PracticeCoach } from "./practice-coach.js";
 import { DefaultMainWorkbookTutor, type MainWorkbookTutor } from "./tutor.js";
 import { WorkbookTimeline } from "./timeline.js";
+import { TerminalEvidenceRepository } from "./terminal-evidence.js";
 import { tutorialStatePath } from "./tutorial-state.js";
 import { watchWorkbookContent, type ContentWatch, type ContentWatchFactory } from "./content-watch.js";
-import { createWorkbookWorkflow, WorkbookWorkflowCommandError } from "./workflow.js";
+import { createWorkbookWorkflow, WorkbookWorkflowCommandError, type TerminalAssessmentScheduler } from "./workflow.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
 const MIME_TYPES: Record<string, string> = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json; charset=utf-8" };
@@ -22,7 +23,7 @@ const MAX_BODY_BYTES = 16_384;
 const MAX_MESSAGE_BYTES = 4_000;
 
 export interface WorkbookRuntimeDescriptor { contentRoot: string; sessionRoot: string; workspaceRoot: string; runtimeProvision?: TrustedRuntimeProvision; }
-export interface WorkbookServerOptions { target: string; webRoot: string; session?: WorkbookRuntimeDescriptor; runtimeProvision?: RuntimeProvisionProfile; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; mainTutor?: MainWorkbookTutor; practiceCoach?: PracticeCoach; watchContent?: boolean; contentWatchFactory?: ContentWatchFactory; contentWatchDebounceMs?: number; }
+export interface WorkbookServerOptions { target: string; webRoot: string; session?: WorkbookRuntimeDescriptor; runtimeProvision?: RuntimeProvisionProfile; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; terminalAssessmentScheduler?: TerminalAssessmentScheduler; mainTutor?: MainWorkbookTutor; practiceCoach?: PracticeCoach; watchContent?: boolean; contentWatchFactory?: ContentWatchFactory; contentWatchDebounceMs?: number; }
 export interface StartedWorkbookServer { url: string; port: number; host: string; close(): Promise<void>; }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
@@ -88,16 +89,19 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
 
   const timeline = new WorkbookTimeline({ stateRoot: runtime.sessionRoot });
   const attempts = new AttemptStore({ stateRoot: runtime.sessionRoot });
+  const terminalEvidence = new TerminalEvidenceRepository({ stateRoot: runtime.sessionRoot });
   const mainTutor = options.mainTutor ?? new DefaultMainWorkbookTutor({ workspace: runtime.contentRoot, log });
   const practiceCoach = options.practiceCoach ?? new FastPracticeCoach({ workspace: runtime.workspaceRoot, log });
-  const workflow = await createWorkbookWorkflow({ contentRoot: runtime.contentRoot, learnerWorkspace: runtime.workspaceRoot, timeline, attempts, mainTutor, practiceCoach, log });
+  const workflow = await createWorkbookWorkflow({ contentRoot: runtime.contentRoot, learnerWorkspace: runtime.workspaceRoot, timeline, attempts, mainTutor, practiceCoach, terminalEvidence, terminalAssessmentScheduler: options.terminalAssessmentScheduler, log });
   await workflow.start();
 
   const terminal = embeddedTerminalEnabled ? new WorkbookTerminalManager({
     workspace: runtime.workspaceRoot,
     runtimeProvision: runtime.runtimeProvision,
     getActiveBlock: workflow.activeObservedBlock,
+    // Legacy transcript submission remains wired for compatibility with non-observation callers.
     submitAttempt: async (input) => { await workflow.submitAttempt(input); },
+    observationSink: workflow.observeTerminalFact,
     ptyFactory: options.terminalPtyFactory ?? createDockerPty,
     debounceMs: options.terminalDebounceMs,
     logger: log,

@@ -6,6 +6,19 @@ import type { AttemptKind } from "./attempts.js";
 
 export type TimelineMetadata = { id: string; sequence: number; at: string };
 
+/** Outcomes reported by the terminal-only coach; they never carry terminal output. */
+export type TerminalCoachingOutcome = "wait-for-result" | "feedback" | "ready" | "interesting";
+
+export type TerminalLifecycleInput =
+  | { type: "terminal-command-submitted"; attemptId: string; lessonId: string; blockId: string; command: string; terminalSessionId: string }
+  | { type: "terminal-output-settled"; attemptId: string; checkpointId: string; evidenceRef: string }
+  | { type: "terminal-command-finished"; attemptId: string; exitStatus: number; evidenceRef: string }
+  | { type: "preliminary-coaching-received"; attemptId: string; outcome: TerminalCoachingOutcome; text?: string }
+  | { type: "interim-coaching-received"; attemptId: string; checkpointId: string; outcome: TerminalCoachingOutcome; text?: string }
+  | { type: "result-coaching-received"; attemptId: string; outcome: TerminalCoachingOutcome; text?: string };
+
+export type TerminalLifecycleEvent = TerminalLifecycleInput & TimelineMetadata;
+
 export type WorkbookWorkflowInput =
   | { type: "session_started" }
   | { type: "lesson_jump_started"; lessonId: string }
@@ -75,9 +88,10 @@ export type WorkbookCompletionSummary = TimelineMetadata & {
   text: string;
 };
 
-export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TimelineMessage | BlockSummary | LessonSummary | TutorFailure | WorkbookCompletionSummary;
+export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TerminalLifecycleEvent | TimelineMessage | BlockSummary | LessonSummary | TutorFailure | WorkbookCompletionSummary;
 export type TimelineAppendInput =
   | WorkbookWorkflowInput
+  | TerminalLifecycleInput
   | Omit<TimelineMessage, keyof TimelineMetadata>
   | Omit<BlockSummary, keyof TimelineMetadata>
   | Omit<LessonSummary, keyof TimelineMetadata>

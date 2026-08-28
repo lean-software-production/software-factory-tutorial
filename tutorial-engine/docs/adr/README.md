@@ -36,3 +36,5 @@ Update the index below whenever you create a record or change its status.
 | [0012](0012-render-the-workbook-from-server-state-alone.md) | accepted | Render the workbook from server state alone |
 | [0013](0013-share-one-browser-safe-contract-for-terminal-socket-frames.md) | accepted | Share one browser-safe contract for terminal socket frames |
 | [0014](0014-address-the-workbook-server-relatively.md) | accepted | Address the workbook server relatively |
+| [0015](0015-model-behaviour-with-eventstorming.md) | accepted | Model behaviour with EventStorming |
+| [0016](0016-model-terminal-coaching-around-submitted-commands.md) | accepted | Model terminal coaching around submitted commands |

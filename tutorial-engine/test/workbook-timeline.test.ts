@@ -46,6 +46,22 @@ describe("WorkbookTimeline", () => {
     expect(await timeline.read()).toEqual([record]);
   });
 
+  it("appends terminal lifecycle records without terminal output", async () => {
+    const timeline = new WorkbookTimeline(await workspace());
+    const record = await timeline.append({
+      type: "terminal-command-submitted",
+      attemptId: "attempt-1",
+      lessonId: "lesson-1",
+      blockId: "block-1",
+      command: "npm test",
+      terminalSessionId: "terminal-session-1",
+    });
+
+    expect(record).toMatchObject({ type: "terminal-command-submitted", command: "npm test" });
+    expect("evidenceRef" in record).toBe(false);
+    expect(await timeline.read()).toEqual([record]);
+  });
+
   it("assigns deterministic IDs to pre-timeline workflow rows", async () => {
     const directory = await workspace();
     const timeline = new WorkbookTimeline(directory);

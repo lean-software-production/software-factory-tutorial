@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertDockerTerminalReady, createDockerPty, dockerContainerUser, dockerExecArguments, dockerRunArguments, WorkbookTerminalManager, type SubmitAttempt, type TerminalClient, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
+import { TERMINAL_OUTPUT_QUIET_MS, type TerminalObservationFact } from "../src/workbook/terminal-observation.js";
 import { trustRuntimeProvision } from "../src/workbook/runtime-provision.js";
 
 class FakePty implements TerminalPty {
@@ -30,7 +31,12 @@ class FakeClient implements TerminalClient {
   close(): void { this.closed = true; }
 }
 
-function setup(submitAttempt: SubmitAttempt = vi.fn(async () => undefined), debounceMs = 5, maxTranscriptBytes = 120) {
+function setup(
+  submitAttempt: SubmitAttempt = vi.fn(async () => undefined),
+  debounceMs = 5,
+  maxTranscriptBytes = 120,
+  observationSink?: (fact: TerminalObservationFact) => void
+) {
   let active: any = { lessonId: "lesson", blockId: "practice", command: "npm test", context: "root", expectedObservation: "tests pass" };
   const ptys: FakePty[] = [];
   const factory: TerminalPtyFactory = ({ cwd }) => { const pty = new FakePty(); pty.cwd = cwd; ptys.push(pty); return pty; };
@@ -38,11 +44,20 @@ function setup(submitAttempt: SubmitAttempt = vi.fn(async () => undefined), debo
     workspace: "/tmp/workspace",
     getActiveBlock: () => active,
     submitAttempt,
+    observationSink,
     ptyFactory: factory,
     debounceMs,
     maxTranscriptBytes
   });
   return { manager, ptys, setActive: (next: any) => { active = next; }, submitAttempt };
+}
+
+function commandMarker(command: string): string {
+  return `\x1b]633;workbook-command;${Buffer.from(command).toString("base64")}\x07`;
+}
+
+function finishedMarker(exitStatus: number): string {
+  return `\x1b]633;workbook-finished;${exitStatus}\x07`;
 }
 
 const redactingFakeDocker = "#!/bin/sh\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    OPENCODE_API_KEY=*) printf '%s\\n' 'OPENCODE_API_KEY=<redacted>' >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\" ;;\n    *) printf '%s\\n' \"$arg\" >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\" ;;\n  esac\ndone\nprintf '%s\\n' --- >> \"$WORKBOOK_TERMINAL_DOCKER_ARGS\"\n";
@@ -269,11 +284,12 @@ describe("WorkbookTerminalManager", () => {
     }
   });
 
-  it("starts a bare Bash prompt without resolving a container user", () => {
-    expect(dockerExecArguments("workbook-terminal-test")).toEqual([
-      "exec", "-it", "--env", "PS1=$ ", "--workdir", "/workspace", "workbook-terminal-test",
-      "/bin/bash", "--noprofile", "--norc", "-i"
-    ]);
+  it("passes private Bash prompt protocol environment", () => {
+    const args = dockerExecArguments("workbook-terminal-test");
+
+    expect(args).toContain("PS1=$ ");
+    expect(args.some((argument) => argument.startsWith("PS0="))).toBe(false);
+    expect(args).toContain("PROMPT_COMMAND=status=$?; printf '\\033]633;workbook-finished;%s\\007' \"$status\"; trap 'command=$BASH_COMMAND; trap - DEBUG; printf \"\\033]633;workbook-command;\"; printf '%s' \"$command\" | base64 -w 0; printf \"\\007\"' DEBUG");
   });
 
   it("prestarts the terminal in the canonical workspace without opening a shell or writing a command", () => {
@@ -376,6 +392,95 @@ describe("WorkbookTerminalManager", () => {
     if (firstEvidence.kind !== "terminal" || secondEvidence.kind !== "terminal") throw new Error("Expected terminal evidence.");
     expect(firstEvidence.transcript).not.toContain("late result");
     expect(secondEvidence.transcript).toContain("late result");
+  });
+
+  it("uses Bash markers for observation facts while keeping private protocol bytes out of terminal output", async () => {
+    vi.useFakeTimers();
+    const facts: TerminalObservationFact[] = [];
+    const submitAttempt = vi.fn<SubmitAttempt>(async () => undefined);
+    const { manager, ptys } = setup(submitAttempt, 5, 120, (fact) => facts.push(fact));
+    const client = new FakeClient();
+    manager.attach(client);
+
+    manager.receive({ type: "input", data: "typed before Bash accepts it\r" });
+    ptys[0]!.emitData("$ typed before Bash accepts it\r\n");
+    await vi.advanceTimersByTimeAsync(TERMINAL_OUTPUT_QUIET_MS + 1);
+    expect(facts).toEqual([]);
+    expect(submitAttempt).not.toHaveBeenCalled();
+
+    const exactCommand = "cat -n  ";
+    const marker = commandMarker(exactCommand);
+    ptys[0]!.emitData(`${marker.slice(0, 19)}`);
+    expect(facts).toEqual([]);
+    ptys[0]!.emitData(`${marker.slice(19)}waiting for input\r\n`);
+    manager.receive({ type: "input", data: "a line\r" });
+    ptys[0]!.emitData("     1\ta line\r\n");
+    await vi.advanceTimersByTimeAsync(TERMINAL_OUTPUT_QUIET_MS + 1);
+
+    expect(facts[0]).toEqual({
+      type: "terminal-command-submitted", blockId: "practice", attemptId: expect.any(String), command: exactCommand
+    });
+    const settled = facts.at(-1);
+    expect(settled).toMatchObject({ type: "terminal-output-settled", outputRevision: 2 });
+    if (!settled || settled.type !== "terminal-output-settled") throw new Error("Expected settled terminal output.");
+    expect(settled.evidence).toMatchObject({
+      command: exactCommand,
+      interactions: [
+        { type: "terminal-output", data: "waiting for input\r\n" },
+        { type: "interactive-input", data: "a line\r" },
+        { type: "terminal-output", data: "     1\ta line\r\n" }
+      ]
+    });
+    expect(submitAttempt).not.toHaveBeenCalled();
+    const clientOutput = client.messages.filter((message) => message.type === "output").map((message) => message.data).join("");
+    expect(clientOutput).toContain("waiting for input\r\n");
+    expect(clientOutput).not.toContain("workbook-command");
+    expect(manager.transcriptForTesting()).not.toContain("workbook-command");
+    expect(manager.frozenTerminalHtml()).not.toContain("workbook-command");
+    const replayClient = new FakeClient();
+    manager.detach(client);
+    expect(manager.attach(replayClient)).toBe(true);
+    expect(replayClient.messages[0]).toMatchObject({ type: "output", data: expect.stringContaining("waiting for input") });
+    expect(JSON.stringify(replayClient.messages)).not.toContain("workbook-command");
+  });
+
+  it("emits one settled fact per output burst, seals the command on finish, and ignores later data", async () => {
+    vi.useFakeTimers();
+    const facts: TerminalObservationFact[] = [];
+    const { manager, ptys } = setup(vi.fn(async () => undefined), 5, 120, (fact) => facts.push(fact));
+    const client = new FakeClient();
+    manager.attach(client);
+
+    ptys[0]!.emitData(commandMarker("watch command"));
+    ptys[0]!.emitData("first burst");
+    await vi.advanceTimersByTimeAsync(TERMINAL_OUTPUT_QUIET_MS + 1);
+    ptys[0]!.emitData("second burst");
+    await vi.advanceTimersByTimeAsync(TERMINAL_OUTPUT_QUIET_MS + 1);
+    ptys[0]!.emitData("unsettled before finish");
+    ptys[0]!.emitData(finishedMarker(130));
+    await vi.advanceTimersByTimeAsync(TERMINAL_OUTPUT_QUIET_MS + 1);
+    ptys[0]!.emitData("late shell prompt");
+    await vi.advanceTimersByTimeAsync(TERMINAL_OUTPUT_QUIET_MS + 1);
+
+    expect(facts.map((fact) => fact.type)).toEqual([
+      "terminal-command-submitted",
+      "terminal-output-settled",
+      "terminal-output-settled",
+      "terminal-command-finished"
+    ]);
+    expect(facts.filter((fact) => fact.type === "terminal-output-settled").map((fact) => fact.outputRevision)).toEqual([1, 2]);
+    const finished = facts.at(-1);
+    if (!finished || finished.type !== "terminal-command-finished") throw new Error("Expected finished terminal command.");
+    expect(finished.evidence.exitStatus).toBe(130);
+    expect(finished.evidence.interactions).toEqual([
+      { type: "terminal-output", data: "first burst" },
+      { type: "terminal-output", data: "second burst" },
+      { type: "terminal-output", data: "unsettled before finish" }
+    ]);
+    const clientOutput = client.messages.filter((message) => message.type === "output").map((message) => message.data).join("");
+    expect(clientOutput).toContain("late shell prompt");
+    expect(clientOutput).not.toContain("workbook-finished");
+    expect(manager.transcriptForTesting()).not.toContain("workbook-finished");
   });
 
   it("retains bounded terminal attempts as reflection evidence in memory", () => {
