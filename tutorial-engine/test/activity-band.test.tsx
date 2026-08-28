@@ -28,6 +28,22 @@ const completedEditorProgress: Progress = {
   reflectionConversations: {}
 };
 
+const terminalBlock: Block = {
+  id: "run-command",
+  type: "terminal-practice",
+  title: "Run the command",
+  markdown: "Run the command."
+};
+
+const completedTerminalProgress: Progress = {
+  activeLessonId: "part/lesson",
+  activeBlockId: terminalBlock.id,
+  completedLessons: [],
+  blocks: [{ id: terminalBlock.id, type: terminalBlock.type, ready: true, active: true, completed: true, verified: true, emerged: true }],
+  reflections: {},
+  reflectionConversations: {}
+};
+
 let dom: JSDOM | undefined;
 let root: Root | undefined;
 
@@ -56,15 +72,49 @@ function rect(left: number, width: number, top = 300) {
 }
 
 describe("ActivityBand stability", () => {
-  it("keeps terminal practice in the inline column while editor practice remains scroll-linked", () => {
+  it("keeps terminal practice inline while editor practice remains sticky and scroll-linked", () => {
     expect(existsSync(terminalTransitionStylesPath)).toBe(true);
     const terminalStyles = readFileSync(terminalTransitionStylesPath, "utf8");
     const workbookStyles = readFileSync(workbookStylesPath, "utf8");
     const mainSource = readFileSync(mainSourcePath, "utf8");
 
     expect(mainSource).toContain('import "./activity-band.css"');
+    expect(terminalStyles).toMatch(/\.current-activity-band\[data-activity-type="terminal-practice"\]\s*\{[^}]*position:\s*relative;[^}]*top:\s*auto;[^}]*transition:\s*none;/);
     expect(terminalStyles).toMatch(/\.current-activity-band\[data-activity-type="terminal-practice"\]\s*>\s*\.work-block\s*\{[^}]*left:\s*0;[^}]*width:\s*var\(--activity-inline-width\);[^}]*transition:\s*none;/);
+    expect(workbookStyles).toMatch(/\.current-activity-band\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;/);
+    expect(workbookStyles).toMatch(/\.current-activity-band\s*\{[^}]*top:\s*var\(--activity-top\);/);
     expect(workbookStyles).toMatch(/\.current-activity-band\s*>\s*\.work-block\s*\{[^}]*left:\s*var\(--activity-left-offset\);[^}]*width:\s*var\(--activity-width\);[^}]*transition:\s*left 80ms linear, width 80ms linear;/);
+  });
+
+  it("does not register terminal practice for scroll-linked geometry", async () => {
+    class FakeResizeObserver {
+      static instances: FakeResizeObserver[] = [];
+      constructor() { FakeResizeObserver.instances.push(this); }
+      observe() {}
+      disconnect() {}
+    }
+
+    const listenerTypes: string[] = [];
+    await mount(createElement("main", null,
+      createElement("div", { "data-inline-source": "" }),
+      createElement(ActivityBand, {
+        lessonId: "part/lesson",
+        activeBlock: terminalBlock,
+        progress: completedTerminalProgress,
+        refresh: vi.fn()
+      })
+    ), (window) => {
+      Object.defineProperty(window, "ResizeObserver", { value: FakeResizeObserver, configurable: true });
+      const addEventListener = window.addEventListener.bind(window) as (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => void;
+      window.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
+        listenerTypes.push(type);
+        addEventListener(type, listener, options);
+      }) as typeof window.addEventListener;
+    });
+
+    expect(FakeResizeObserver.instances).toHaveLength(0);
+    expect(listenerTypes).not.toContain("scroll");
+    expect(listenerTypes).not.toContain("resize");
   });
 
   it("observes the inline source and main, but never the band whose feedback can change height", async () => {

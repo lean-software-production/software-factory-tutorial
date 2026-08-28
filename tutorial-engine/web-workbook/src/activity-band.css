@@ -1,5 +1,10 @@
-/* A terminal refit follows its real container size. Keep it in the authored column while the
-   scroll-linked ActivityBand expands editor practice. */
+/* Terminals stay in their authored document position; only editor practice is scroll-linked. */
+.current-activity-band[data-activity-type="terminal-practice"] {
+  position: relative;
+  top: auto;
+  transition: none;
+}
+
 .current-activity-band[data-activity-type="terminal-practice"] > .work-block {
   left: 0;
   width: var(--activity-inline-width);
