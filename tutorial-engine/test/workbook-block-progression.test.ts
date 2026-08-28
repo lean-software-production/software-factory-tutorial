@@ -100,6 +100,10 @@ describe("workbook block progression", () => {
       expect(accepted.progress.workAcceptedBlocks.filter((id: string) => id === "lesson--001-first--edit-answer")).toHaveLength(1);
       expect(accepted.progress.readyBlocks).toEqual(["lesson--001-first--finish"]);
       expect(block(accepted, "lesson--001-first--finish")).toMatchObject({ ready: true, active: false, completed: false, emerged: true });
+      await waitForRecords(dir, (records) => records.some((record) => record.type === "work_accepted" && record.blockId === "lesson--001-first--edit-answer"), "the work_accepted record for the editor block");
+      // Exactly one, not merely at least one: the wait above only proves a record arrived, and a
+      // duplicated append is a real failure this catches — verified by appending twice, which gives
+      // "expected [ …(2) ] to have a length of 1".
       expect(await workAcceptedEvents(dir, "lesson--001-first--edit-answer")).toHaveLength(1);
       expect(authoredCourseBlocks(accepted).filter((id: string) => id === "lesson--001-first--finish")).toHaveLength(1);
 
@@ -153,7 +157,13 @@ describe("workbook block progression", () => {
       expect(blockCompactions.join("\n")).not.toContain("orientation");
       expect(blockCompactions.join("\n")).not.toContain("finish");
 
-      const records = await timelineRecords(dir);
+      // compactInstructions is filled when the fake's compact() is called; the summary records are
+      // appended after it returns, so read the log only once both are actually there.
+      const records = await waitForRecords(
+        dir,
+        (candidates) => candidates.some((record) => record.type === "block_summarized" && record.blockId === "lesson--001-first--edit-answer") && candidates.some((record) => record.type === "lesson_summarized"),
+        "the block and lesson summary records"
+      );
       expect(records).toContainEqual(expect.objectContaining({ type: "block_summarized", lessonId: "001-first", blockId: "lesson--001-first--edit-answer", text: "Compacted edit block." }));
       expect(records).toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
       expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId: "lesson--001-first--orientation" }));
@@ -213,6 +223,19 @@ async function timelineRecords(dir: string): Promise<WorkbookTimelineRecord[]> {
 }
 async function workAcceptedEvents(dir: string, blockId: string) {
   return (await timelineRecords(dir)).filter((record) => record.type === "work_accepted" && record.blockId === blockId);
+}
+/**
+ * Polls the on-disk event log. The server writes an attempt's checkpoint status before appending
+ * the matching record, and reads are served outside the timeline lock, so waiting on HTTP state and
+ * then reading the log can see the status without the row that follows it.
+ */
+async function waitForRecords(dir: string, predicate: (records: Awaited<ReturnType<typeof timelineRecords>>) => boolean, description: string) {
+  for (let index = 0; index < 50; index += 1) {
+    const records = await timelineRecords(dir).catch(() => []);
+    if (predicate(records)) return records;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+  }
+  throw new Error(`Timed out waiting for ${description}.`);
 }
 async function waitForState(serverUrl: string, predicate: (state: any) => boolean) {
   for (let index = 0; index < 50; index += 1) {
