@@ -18,7 +18,7 @@ export interface TerminalCoachingDisplayState {
 }
 
 export type TerminalCoachingDisplayEvent =
-  | { type: "typing"; attemptId: string }
+  | { type: "typing" }
   | { type: "command-submitted"; attemptId: string }
   | { type: "command-output"; attemptId: string }
   | { type: "useful-feedback"; attemptId: string; feedback: string }
@@ -37,34 +37,27 @@ const retryingActivity: TerminalCoachingActivity = { kind: "retrying", text: "Re
 const emptyBlueField: TerminalCoachingBlueField = { kind: "empty", text: "" };
 const runningBlueField: TerminalCoachingBlueField = { kind: "running", text: "Running" };
 
-/** Creates display-only state; callers activate each new attempt before forwarding its events. */
+/** Creates display-only state. Bash's submitted-command fact activates an attempt. */
 export function createTerminalCoachingDisplayState(): TerminalCoachingDisplayState {
   return { currentAttemptId: undefined, blueField: emptyBlueField, activity: idleActivity };
 }
 
-/** Activates a locally-created attempt without clearing the feedback already visible to the learner. */
-export function activateTerminalCoachingAttempt(
-  state: TerminalCoachingDisplayState,
-  attemptId: string
-): TerminalCoachingDisplayState {
-  return { ...state, currentAttemptId: attemptId, activity: idleActivity };
-}
-
 /**
- * Reduces terminal and coach events into the browser display. Events for any attempt other than the
- * active one are deliberately ignored, so late terminal output cannot overwrite a newer attempt.
+ * Reduces terminal and coach events into the browser display. A draft is local to the terminal, so
+ * it has no attempt identity; only Bash's submitted-command fact can replace the active attempt.
  */
 export function reduceTerminalCoachingDisplay(
   state: TerminalCoachingDisplayState,
   event: TerminalCoachingDisplayEvent
 ): TerminalCoachingDisplayState {
+  if (event.type === "typing") return { ...state, activity: listeningActivity };
+  if (event.type === "command-submitted") return { currentAttemptId: event.attemptId, blueField: runningBlueField, activity: runningActivity };
   if (event.attemptId !== state.currentAttemptId) return state;
 
   switch (event.type) {
-    case "typing":
-      return { ...state, activity: listeningActivity };
     case "command-submitted":
-      return { ...state, blueField: runningBlueField, activity: runningActivity };
+    case "typing":
+      return state;
     case "command-output":
       return state;
     case "useful-feedback":
