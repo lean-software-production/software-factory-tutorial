@@ -241,7 +241,7 @@ export class WorkbookTerminalManager {
     this.#log = options.logger ?? createTutorialLogger();
   }
 
-  start(): void { this.#ensurePty(); }
+  start(): void { this.#ensurePty(); this.#pty?.open?.(); }
 
   attach(client: TerminalClient): boolean {
     if (this.#client) return false;
