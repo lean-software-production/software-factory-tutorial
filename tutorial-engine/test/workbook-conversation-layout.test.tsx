@@ -85,6 +85,7 @@ describe("workbook fixed conversation layout", () => {
     const copyButton = declarationsFor(".copy-code");
     const codePre = declarationsFor(".code-block pre");
     const terminalElement = declarationsFor(".embedded-terminal");
+    const frozenTerminalOutput = declarationsFor(".frozen-terminal-output");
 
     expect(workbookUiSource).toContain("fontSize: 16");
     expect(codeBlock).toContain("position: relative");
@@ -95,6 +96,8 @@ describe("workbook fixed conversation layout", () => {
     expect(terminalElement).toContain("padding: 6px");
     expect(terminalElement).not.toContain("padding: 6px 6px 18px");
     expect(terminalElement).toContain("overflow: hidden");
+    expect(frozenTerminalOutput).toContain("padding: 6px");
+    expect(frozenTerminalOutput).toContain("font: 16px/1.2 var(--font-mono)");
   });
 
   it("guards cascade: no state-override selector targets .terminal-live-surface.has-feedback .terminal-feedback-overlay", () => {
