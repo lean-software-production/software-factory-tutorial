@@ -844,7 +844,7 @@ describe("workbook lesson UI", () => {
 
     expect(markup).toContain("current-activity-band");
     expect(markup).toContain("data-activity-type=\"terminal-practice\"");
-    expect(markup).toContain("data-activity-layout=\"scroll-linked\"");
+    expect(markup).toContain("data-activity-layout=\"inline\"");
     expect(markup).toContain('class="terminal-connection-status"');
     expect(markup).toContain('aria-label="Terminal disconnected"');
     expect(markup).not.toContain("Terminal practice");
