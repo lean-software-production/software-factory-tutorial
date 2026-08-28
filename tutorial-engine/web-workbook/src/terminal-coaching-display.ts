@@ -11,8 +11,6 @@ export type TerminalCoachingDisplayState =
 
 export type TerminalCoachingDisplayEvent =
   | { type: "local-enter" }
-  /** The public SSE notification that Bash, not xterm input, accepted the command. */
-  | { type: "bash-submitted" }
   | { type: "server-state"; terminal: PublicTerminal | undefined };
 
 export function createTerminalCoachingDisplayState(): TerminalCoachingDisplayState {
@@ -20,16 +18,15 @@ export function createTerminalCoachingDisplayState(): TerminalCoachingDisplaySta
 }
 
 /**
- * The browser opens Sending synchronously on Enter. It remains a local gate until the server
- * projects Running from Bash's submitted marker; older feedback or completion snapshots cannot
- * replace that gate. Every non-idle phase becomes one in-place terminal message.
+ * The browser opens Sending synchronously on Enter. It remains a local gate until a current
+ * public Running projection from Bash's submitted marker arrives; older feedback or completion
+ * snapshots cannot replace that gate. Every non-idle phase becomes one in-place terminal message.
  */
 export function reduceTerminalCoachingDisplay(
   state: TerminalCoachingDisplayState,
   event: TerminalCoachingDisplayEvent,
 ): TerminalCoachingDisplayState {
   if (event.type === "local-enter") return { phase: "sending", text: "Sending…" };
-  if (event.type === "bash-submitted") return state.phase === "sending" ? { phase: "running", text: "Running…" } : state;
   if (state.phase === "sending" && event.terminal?.phase !== "running") return state;
   switch (event.terminal?.phase) {
     case "running": return { phase: "running", text: "Running…" };

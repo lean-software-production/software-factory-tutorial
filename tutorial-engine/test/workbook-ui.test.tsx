@@ -1993,7 +1993,7 @@ describe("workbook lesson UI", () => {
     expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   });
 
-  it("hides feedback immediately on Enter and ignores stale polls until Bash projects Running", async () => {
+  it("hides feedback immediately on Enter and ignores stale polls until current Running arrives", async () => {
     class FakeWebSocket {
       static CONNECTING = 0; static OPEN = 1; static CLOSED = 3;
       readyState = FakeWebSocket.OPEN;
@@ -2019,7 +2019,7 @@ describe("workbook lesson UI", () => {
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
 
     // A stale HTTP/SSE snapshot must not resurrect old feedback or completion while Sending gates
-    // the display. Only Bash's durable submitted record projects Running and opens the gate.
+    // the display. Only the current Bash-authoritative Running projection opens the gate.
     await act(async () => { mountedRoot!.render(render(oldFeedback)); });
     await act(async () => { mountedRoot!.render(render({ phase: "complete", message: "Stale completion." })); });
     expect(container.textContent).toContain("Sending…");
@@ -2027,7 +2027,7 @@ describe("workbook lesson UI", () => {
     expect(container.textContent).not.toContain("Stale completion.");
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
 
-    await act(async () => { window.dispatchEvent(new window.CustomEvent("workbook-terminal-bash-submitted", { detail: { blockId: "practice" } })); });
+    await act(async () => { mountedRoot!.render(render({ phase: "running" })); });
     expect(container.textContent).toContain("Running…");
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
 

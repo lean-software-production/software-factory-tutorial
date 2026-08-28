@@ -18,6 +18,7 @@ type Attempt = {
   terminalSessionId: string;
   finished: boolean;
   feedback?: string;
+  coachHandoffRecorded?: boolean;
   accepted?: string;
 };
 
@@ -60,12 +61,18 @@ export function projectTerminalAttempts(
         if (attempt?.finished && record.text.trim()) attempt.feedback = record.text;
         break;
       }
+      case "terminal-coach-handoff-recorded": {
+        const attempt = attempts.get(record.attemptId);
+        if (attempt?.finished && (record.outcome === "ready" || record.outcome === "interesting")) attempt.coachHandoffRecorded = true;
+        break;
+      }
       case "attempt_accepted": {
         const attempt = attempts.get(record.attemptId);
         if (
           attempt
           && record.kind === "terminal"
           && attempt.finished
+          && attempt.coachHandoffRecorded
           && attempt.lessonId === record.lessonId
           && attempt.blockId === record.blockId
         ) attempt.accepted = record.summary;

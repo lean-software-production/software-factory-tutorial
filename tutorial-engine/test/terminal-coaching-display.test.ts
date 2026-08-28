@@ -12,14 +12,13 @@ describe("terminal coaching display reducer", () => {
     expect(server({ phase: "complete", message: "Accepted." })).toEqual({ phase: "complete", text: "Accepted." });
   });
 
-  it("opens Sending immediately and ignores stale feedback and completion until Bash submits", () => {
+  it("opens Sending immediately and ignores stale feedback and completion until current Running arrives", () => {
     const feedback = server({ phase: "feedback", message: "Previous feedback." });
     const sending = reduceTerminalCoachingDisplay(feedback, { type: "local-enter" });
     const staleFeedback = reduceTerminalCoachingDisplay(sending, { type: "server-state", terminal: { phase: "feedback", message: "Previous feedback." } });
     const staleComplete = reduceTerminalCoachingDisplay(staleFeedback, { type: "server-state", terminal: { phase: "complete", message: "Previous completion." } });
 
     expect(staleComplete).toEqual({ phase: "sending", text: "Sending…" });
-    expect(reduceTerminalCoachingDisplay(staleComplete, { type: "bash-submitted" })).toEqual({ phase: "running", text: "Running…" });
     expect(reduceTerminalCoachingDisplay(staleComplete, { type: "server-state", terminal: { phase: "running" } })).toEqual({ phase: "running", text: "Running…" });
   });
 

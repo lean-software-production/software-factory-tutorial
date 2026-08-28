@@ -115,7 +115,6 @@ function shellCommandFrom(markdown: string): string | undefined {
 }
 
 const UNREADABLE_TERMINAL_FRAME = "The embedded terminal received an unreadable message from the workbook server. Refresh the page if the terminal stops responding.";
-const BASH_SUBMITTED_EVENT = "workbook-terminal-bash-submitted";
 
 /**
  * The terminal socket is addressed the way `request()` addresses HTTP: relative to the document's
@@ -290,15 +289,6 @@ function TerminalBlock({ lessonId, block, state, onTerminalInsertionChange }: { 
     // A later authoritative lifecycle state replaces a transport error in the same one card.
     if (state?.terminal) setTerminalError(undefined);
   }, [state?.terminal]);
-  useEffect(() => {
-    const submitted = (event: Event) => {
-      const blockId = (event as CustomEvent<{ blockId?: string }>).detail?.blockId;
-      if (blockId === state?.id) dispatch({ type: "bash-submitted" });
-    };
-    addEventListener(BASH_SUBMITTED_EVENT, submitted);
-    return () => removeEventListener(BASH_SUBMITTED_EVENT, submitted);
-  }, [state?.id]);
-
   const onLocalCommandSubmitted = useCallback(() => {
     setTerminalError(undefined);
     dispatch({ type: "local-enter" });
@@ -575,13 +565,7 @@ export function App() {
       });
     };
     events.addEventListener("record", () => refreshFromSse());
-    events.addEventListener("state", (event) => {
-      try {
-        const payload = JSON.parse((event as MessageEvent).data) as { blockId?: string; terminalPhase?: string };
-        if (payload.terminalPhase === "running" && payload.blockId) dispatchEvent(new CustomEvent(BASH_SUBMITTED_EVENT, { detail: { blockId: payload.blockId } }));
-      } catch { /* State refresh still validates its own response. */ }
-      refreshFromSse();
-    });
+    events.addEventListener("state", () => refreshFromSse());
     events.addEventListener("content-reloaded", () => refreshFromSse({ contentReload: true }));
     events.addEventListener("content-reload-error", (event) => {
       try {
