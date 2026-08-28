@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { defaultKeymap } from "@codemirror/commands";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
@@ -65,13 +65,6 @@ function successorFromState(state: State, completedBlockId: string): string | un
 }
 function progressFor(progress: Progress, id: string) { return progress.blocks.find((block) => block.id === id); }
 function domSafe(value: string) { return value.replace(/[^A-Za-z0-9_-]+/g, "-"); }
-/**
- * All this needs is a lookup that yields something scrollable. A real Document satisfies it, and so
- * can a test double, without having to be a whole HTMLElement.
- */
-type ScrollTargetLookup = { getElementById(elementId: string): { scrollIntoView(options?: ScrollIntoViewOptions): void } | null };
-
-export function scrollActiveLessonIntoView(doc: ScrollTargetLookup, activeLessonId: string) { doc.getElementById(lessonElementId(activeLessonId))?.scrollIntoView({ behavior: "smooth", block: "start" }); }
 let suppressPassiveHistoryUntil = 0;
 function replaceUrlAnchor(anchorId: string) {
   suppressPassiveHistoryUntil = Date.now() + 450;
@@ -454,29 +447,6 @@ export function BlockView({ lessonId, block, progress, refresh, showAuthoredCont
   return <ReflectionBlock lessonId={resolvedLessonId} block={block} state={state} turns={activeLessonValue(progress, resolvedLessonId, progress.reflectionConversations[block.id], [])} refresh={refresh} continueLabel={continueLabel} />;
 }
 
-function WorkbookIntroduction({ state, refresh }: { state: State; refresh(state: State): void }) {
-  return <section className="workbook-intro" aria-label="Workbook introduction">
-    <header><h1>{state.workbook.title}</h1></header>
-    <Markdown source="authored">{state.introduction}</Markdown>
-    {state.introductionComplete ? <p className="next-ready">The first lesson is ready below.</p> : <button className="button primary introduction-continue" onClick={() => completeBlockRequest("workbook--introduction").then((result) => refresh(stateFromCompletion(result)))}>{continueLabelFor(state, "workbook--introduction") ?? "Ready to continue"}</button>}
-  </section>;
-}
-
-function IntroductionContinue({ refresh, label = "Ready to continue" }: { refresh(state: State): void; label?: string }) {
-  const [pending, setPending] = useState(false);
-  const continueIntroduction = () => {
-    if (pending) return;
-    setPending(true);
-    completeBlockRequest("workbook--introduction").then((result) => { refresh(stateFromCompletion(result)); const target = navigationTargetFrom(result); if (target) requestAnimationFrame(() => navigateToAnchor(target, "push")); }).catch((error) => {
-      console.error(error);
-      setPending(false);
-    });
-  };
-  return <div className="continuation-controls introduction-continuation">
-    <button className="button primary introduction-continue" disabled={pending} onClick={continueIntroduction}>{pending ? "Continuing…" : label}</button>
-  </div>;
-}
-
 type PublicOrderedBlock = NonNullable<State["orderedBlocks"]>[number];
 
 function outlineBlocksForLesson(chapter: Chapter, orderedBlocks?: readonly PublicOrderedBlock[]) {
@@ -512,21 +482,6 @@ export function LessonRail({ title, chapters, progress, viewedLessonId, setViewe
       ? chapters.map(renderChapter)
       : parts.map((part) => <div key={part}>{renderedPartName(part)}{chapters.filter((chapter) => chapter.part === part).map(renderChapter)}</div>)}</nav>
   </aside>;
-}
-
-export function LessonView({ chapter, progress, refresh, renderBlocks = true, children }: { chapter: Chapter & { lesson: Lesson }; progress: Progress; refresh(state: State): void; renderBlocks?: boolean; children?: React.ReactNode }) {
-  return <article data-lesson-id={chapter.id} key={chapter.id} className="chapter">
-    <header id={lessonElementId(chapter.id)}><p className="eyebrow">Lesson {chapter.lessonNumber}</p><h1>{chapter.lesson.title}</h1><p className="dek">{chapter.lesson.dek}</p><div className="lesson-meta"><span className="chip duration">{chapter.lesson.durationMinutes} min</span></div></header>
-    <section className="opening"><p className="section-label">What you will learn</p><h2>What you will learn</h2><ul className="outcomes">{chapter.lesson.outcomes.map((outcome) => <li key={outcome}>{outcome}</li>)}</ul></section>
-    {chapter.lesson.introduction.trim() && <section className="lesson-introduction"><Markdown source="authored">{chapter.lesson.introduction}</Markdown></section>}
-    {renderBlocks && chapter.lesson.blocks.map((block) => <BlockView key={block.id} lessonId={chapter.id} block={block} progress={progress} refresh={refresh} />)}
-    {children}
-  </article>;
-}
-
-function PartChapter({ chapter }: { chapter: Chapter }) {
-  if (!chapter.part || !chapter.partMarkdown) return null;
-  return <section id={`part-${chapter.id}`} className="part-chapter" aria-label={chapter.part}><div><p className="part-title">{chapter.part}</p><div className="part-copy"><Markdown source="authored">{chapter.partMarkdown}</Markdown></div></div></section>;
 }
 
 function reducedMotionPreferred(): boolean {
@@ -733,16 +688,14 @@ export function App() {
     addEventListener("popstate", pop);
     return () => { removeEventListener("scroll", selectViewed); removeEventListener("popstate", pop); if (timer) clearTimeout(timer); };
   }, [state]);
-  const emerged = useMemo(() => state?.chapters.filter((chapter): chapter is Chapter & { lesson: Lesson } => Boolean(chapter.lesson)) ?? [], [state]);
   if (!state) return <p className="loading">Loading workbook…</p>;
   const viewedLesson = viewed ?? state.progress.activeLessonId;
-  const activeChapter = emerged.find((chapter) => chapter.id === state.progress.activeLessonId);
+  const activeChapter = state.chapters.find((chapter): chapter is Chapter & { lesson: Lesson } => chapter.id === state.progress.activeLessonId && Boolean(chapter.lesson));
   const activeBlock = activeChapter?.lesson.blocks.find((block) => block.id === state.progress.activeBlockId);
   const activeBlockProgress = state.progress.blocks.find((block) => block.id === state.progress.activeBlockId);
   const effectiveActiveLessonId = state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeLessonId : INTRODUCTION_LESSON_ID;
   const effectiveActiveBlockId = state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID;
   const effectiveActiveBlockProgress = state.progress.blocks.find((block) => block.id === effectiveActiveBlockId) ?? (!state.introductionComplete ? { id: INTRODUCTION_BLOCK_ID, type: "workbook-introduction", ready: true, active: true, completed: false, verified: false, emerged: true } as BlockProgress : activeBlockProgress);
-  const hasTimeline = state.timeline !== undefined;
   const blockInView = () => canonicalBlockInView(state);
   const sendTutorText = (text: string) => {
     if (state.introductionComplete && activeBlock?.type === "reflection") {
@@ -775,12 +728,7 @@ export function App() {
     <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
-      {hasTimeline ? <>
-        <TimelineThread records={state.timeline ?? []} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} readyBlockIds={stableRunwayIds} activeSurface={activeChapter && activeBlock ? <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
-      </> : <>
-        <WorkbookIntroduction state={state} refresh={setState} />
-        {emerged.map((chapter, index) => <React.Fragment key={chapter.id}>{(index === 0 || chapter.part !== emerged[index - 1]!.part) && <PartChapter chapter={chapter} />}<LessonView chapter={chapter} progress={state.progress} refresh={setState} /></React.Fragment>)}
-      </>}
+      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} readyBlockIds={stableRunwayIds} activeSurface={activeChapter && activeBlock ? <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
     </article></main>
   </div>;
 }
