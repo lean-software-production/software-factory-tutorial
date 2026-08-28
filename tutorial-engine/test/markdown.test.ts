@@ -21,6 +21,34 @@ describe("Markdown", () => {
     expect(markup).toContain("<td>Done</td>");
   });
 
+  it("renders canonical lesson outcomes as a numbered course-compass card without extra label text", () => {
+    const markup = renderToStaticMarkup(createElement(Markdown, {
+      source: "authored",
+      lessonFrame: true,
+      children: "# Build a doer\n\nGive an agent a job that changes the calculator.\n\n## What you will learn\n\n- Create a doer script.\n- Review the diff.\n\nA doer changes the work product."
+    }));
+
+    expect(markup).toContain('<section class="course-compass">');
+    expect(markup).toContain("<h2>What you will learn</h2>");
+    expect(markup).toContain("<ol>");
+    expect(markup).toContain("<li><p>Create a doer script.</p></li>");
+    expect(markup).toContain("<li><p>Review the diff.</p></li>");
+    expect(markup).not.toContain("Course compass");
+    expect(markup.indexOf("Build a doer")).toBeLessThan(markup.indexOf('class="course-compass"'));
+    expect(markup.indexOf('class="course-compass"')).toBeLessThan(markup.indexOf("A doer changes the work product."));
+  });
+
+  it("leaves noncanonical lesson-frame Markdown as ordinary Markdown", () => {
+    const markup = renderToStaticMarkup(createElement(Markdown, {
+      source: "authored",
+      lessonFrame: true,
+      children: "## What you will learn\n\n* Not the canonical outcome list."
+    }));
+
+    expect(markup).not.toContain('class="course-compass"');
+    expect(markup).toContain("<ul>");
+  });
+
   it("renders authored Mermaid fences as diagram containers but keeps generated Mermaid literal and copyable", () => {
     const authored = renderToStaticMarkup(createElement(Markdown, {
       source: "authored",

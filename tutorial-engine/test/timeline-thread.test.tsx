@@ -69,6 +69,24 @@ describe("TimelineThread", () => {
     expect(markup).toContain('aria-label="Copy code"');
   });
 
+  it("uses the course compass only for authored lesson frames", () => {
+    const lessonFrame = "# Build a doer\n\nA short dek.\n\n## What you will learn\n\n- Create a doer.\n\nIntroduction.";
+    const markup = renderToStaticMarkup(createElement(TimelineThread, {
+      activeLessonId: "lesson",
+      activeBlockId: "lesson--lesson",
+      onSend: noopSend,
+      onRetry: noopRetry,
+      records: [
+        { type: "message", id: "frame", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson--lesson", blockId: "lesson--lesson", role: "assistant", source: "authored", presentation: "course", text: lessonFrame },
+        { type: "message", id: "block", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson--lesson", blockId: "lesson--lesson--note", role: "assistant", source: "authored", presentation: "course", text: lessonFrame },
+      ] as any
+    }));
+
+    expect(markup.match(/class="course-compass"/g)).toHaveLength(1);
+    expect(markup).toContain("<ol><li><p>Create a doer.</p></li></ol>");
+    expect(markup).toContain("<ul>\n<li>Create a doer.</li>\n</ul>");
+  });
+
   it("renders assistant chat, hint, and review text as Markdown instead of literal syntax", () => {
     const markup = renderToStaticMarkup(createElement(TimelineThread, {
       activeLessonId: "lesson",

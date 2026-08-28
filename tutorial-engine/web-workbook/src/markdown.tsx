@@ -108,7 +108,32 @@ export function FileExcerptCodeBlock({ path, source }: { path: string; source: s
 }
 
 type MarkdownSource = "authored" | "generated";
+type LessonFrameParts = { before: string; outcomes: readonly string[]; after: string };
 type MermaidRender = { source: string; status: "loading" | "success" | "failed"; svg?: string };
+
+const lessonOutcomesMarker = "\n\n## What you will learn\n\n";
+
+/**
+ * Lesson frames are formatted by formatLessonFrameBody(). Keep this narrow parser at the display
+ * boundary: it turns only that stable shape into a component, while the saved authored Markdown
+ * remains unchanged for history and other consumers.
+ */
+function lessonFrameParts(markdown: string): LessonFrameParts | undefined {
+  const markerIndex = markdown.indexOf(lessonOutcomesMarker);
+  if (markerIndex < 0) return undefined;
+
+  const before = markdown.slice(0, markerIndex);
+  const afterMarker = markdown.slice(markerIndex + lessonOutcomesMarker.length);
+  const [outcomeSource, ...afterParts] = afterMarker.split("\n\n");
+  const outcomeMatches = outcomeSource?.split("\n").map((line) => line.match(/^- (.+)$/)?.[1]);
+  if (!outcomeMatches?.length || outcomeMatches.some((outcome) => outcome === undefined)) return undefined;
+
+  return {
+    before,
+    outcomes: outcomeMatches.filter((outcome): outcome is string => outcome !== undefined),
+    after: afterParts.join("\n\n")
+  };
+}
 
 let mermaidRenderer: Promise<(typeof import("mermaid"))["default"]> | undefined;
 
@@ -147,6 +172,18 @@ function MarkdownPre({ source, ...props }: ComponentPropsWithoutRef<"pre"> & { s
   return <CodeBlockFromPre {...props} />;
 }
 
-export function Markdown({ children, source = "generated" }: { children: string; source?: MarkdownSource }) {
-  return <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={{ pre: (props) => <MarkdownPre {...props} source={source} /> }}>{children}</ReactMarkdown></div>;
+export function Markdown({ children, source = "generated", lessonFrame = false }: { children: string; source?: MarkdownSource; lessonFrame?: boolean }) {
+  const renderMarkdown = (markdown: string) => <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={{ pre: (props) => <MarkdownPre {...props} source={source} /> }}>{markdown}</ReactMarkdown>;
+  const frame = lessonFrame ? lessonFrameParts(children) : undefined;
+
+  if (!frame) return <div className="markdown">{renderMarkdown(children)}</div>;
+
+  return <div className="markdown lesson-frame-markdown">
+    {frame.before && renderMarkdown(frame.before)}
+    <section className="course-compass">
+      <h2>What you will learn</h2>
+      <ol>{frame.outcomes.map((outcome, index) => <li key={index}>{renderMarkdown(outcome)}</li>)}</ol>
+    </section>
+    {frame.after && renderMarkdown(frame.after)}
+  </div>;
 }

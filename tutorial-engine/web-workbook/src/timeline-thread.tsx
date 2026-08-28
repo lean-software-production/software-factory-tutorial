@@ -12,6 +12,10 @@ function isAuthoredCourseRecord(record: TimelineThreadRecord): record is Timelin
   return record.type === "message" && record.presentation === "course" && record.source === "authored";
 }
 
+function isLessonFrameRecord(record: TimelineThreadRecord): record is TimelineMessageRecord {
+  return isAuthoredCourseRecord(record) && (record.blockId === "__lesson_frame__" || /^lesson--[a-z0-9]+(?:-[a-z0-9]+)*$/.test(record.blockId));
+}
+
 function belongsToAuthoredBlock(record: TimelineThreadRecord, authored: TimelineMessageRecord): boolean {
   return record.lessonId === authored.lessonId && record.blockId === authored.blockId;
 }
@@ -134,7 +138,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
         const lastMessage = ([...following].reverse().find((candidate): candidate is TimelineMessageRecord => candidate.type === "message") ?? record);
         if (active) renderedActiveBlock = true;
         nodes.push(<section key={record.id} id={record.blockId} className={`work-block active-block-region${active ? " is-active" : ""}`} tabIndex={-1} data-active-block={active ? "true" : undefined}>
-          <article className={`timeline-authored-content${transitionClass}`}><Markdown source="authored">{record.text}</Markdown></article>
+          <article className={`timeline-authored-content${transitionClass}`}><Markdown source="authored" lessonFrame={isLessonFrameRecord(record)}>{record.text}</Markdown></article>
           {active && activeSurface}
           {canInsertCommand && <button className="button primary timeline-do-it" onClick={() => { onDoItForMe?.(); setCommandInserted(true); }}>{commandInserted ? "Inserted — press Enter" : "Do it for me"}</button>}
           {following.map(renderConversationRecord)}
