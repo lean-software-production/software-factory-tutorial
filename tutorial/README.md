@@ -96,6 +96,20 @@ export PRACTICE_COACH_MODEL=<provider>/<model>
 Leave `PRACTICE_COACH_MODEL` unset and Pi chooses normally. Invalid or unauthenticated
 values fall back to that same Pi choice.
 
+### Practice Coach diagnostics
+
+To inspect the exact prompt sent to the internal Practice Coach for one launch, set this switch only
+for that launch:
+
+```sh
+PRACTICE_COACH_LOG_PROMPT=1 npm run tutorial:workbook
+```
+
+This writes the prompt to the launcher output and the local diagnostic file at
+`~/Library/Logs/SoftwareFactoryTutorial/tutorial-*.log` before it is sent. The prompt includes
+terminal evidence and the private rubric, so do not enable it during normal use or share the output
+or log. Leave the switch unset to keep that content out of diagnostics.
+
 ## Start the tutorial
 
 From the repository root, start the workbook:

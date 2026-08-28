@@ -38,6 +38,12 @@ export interface PracticeCoachSessionFactoryRequest {
 
 export type PracticeCoachSessionFactory = (request: PracticeCoachSessionFactoryRequest) => Promise<PracticeCoachSession>;
 const REPORT_TOOL = "report_practice_coach_outcome";
+export const PRACTICE_COACH_LOG_PROMPT_ENV = "PRACTICE_COACH_LOG_PROMPT";
+
+/** Prompt diagnostics are opt-in because the prompt contains private evidence and rubric text. */
+export function practiceCoachPromptLoggingEnabled(environment = process.env): boolean {
+  return environment[PRACTICE_COACH_LOG_PROMPT_ENV] === "1";
+}
 
 export const PRACTICE_COACH_REPORT_DESCRIPTION = "Report the terminal outcome. Any feedback text is shown directly to the person at the terminal: keep it concise, address them as you, never say ‘the learner’, and never mention the Coach, Tutor, rubric, model, assessment, handoff, or other internal mechanics.";
 
@@ -98,9 +104,13 @@ export class FastPracticeCoach implements PracticeCoach {
         return { content: [{ type: "text", text: "Recorded." }], details: result };
       }
     });
+    const outboundPrompt = prompt(input);
     const session = await this.#sessionFactory({ systemPrompt: practiceCoachSystemPrompt(), customTools: [report], tools: [REPORT_TOOL] });
     try {
-      await session.prompt(prompt(input));
+      if (practiceCoachPromptLoggingEnabled()) {
+        this.#log.info(`Practice Coach prompt begin\n${outboundPrompt}\nPractice Coach prompt end`);
+      }
+      await session.prompt(outboundPrompt);
       if (!result) throw new Error("Practice Coach did not report an outcome.");
       return result;
     } finally { session.dispose(); }
