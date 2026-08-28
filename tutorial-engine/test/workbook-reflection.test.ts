@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { appendTutorFeedback, submitReflectionAttempt, type ReflectionTurn } from "../src/workbook/reflection.js";
-import type { SubmitAttempt } from "../src/workbook/terminal.js";
+import type { SubmitAttempt } from "../src/workbook/attempts.js";
 
 const priorConversation: ReflectionTurn[] = [
   { role: "learner", text: "I tried the command." },

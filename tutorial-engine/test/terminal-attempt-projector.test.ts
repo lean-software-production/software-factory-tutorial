@@ -4,123 +4,57 @@ import type { TerminalEvidence, TerminalEvidenceReader } from "../src/workbook/t
 import type { TerminalLifecycleInput, WorkbookTimelineRecord, WorkbookWorkflowInput } from "../src/workbook/timeline.js";
 
 function record(input: TerminalLifecycleInput | WorkbookWorkflowInput, sequence: number): WorkbookTimelineRecord {
-  return { ...input, id: `event-${sequence}`, sequence, at: "2026-08-21T00:00:00.000Z" };
+  return { ...input, id: `event-${sequence}`, sequence, at: "2026-08-28T00:00:00.000Z" };
 }
+function reader(entries: Record<string, TerminalEvidence>): TerminalEvidenceReader { return (ref) => entries[ref]; }
+const finalEvidence = { finished: { kind: "finished" as const, command: "npm test", interactions: [], exitStatus: 0 } };
 
-function reader(entries: Record<string, TerminalEvidence>): TerminalEvidenceReader {
-  return (evidenceRef) => entries[evidenceRef];
+function submitted(attemptId = "attempt-1", session = "terminal-1") {
+  return record({ type: "terminal-command-submitted", attemptId, lessonId: "lesson", blockId: "block", command: "npm test", terminalSessionId: session }, 1);
 }
+function finished(attemptId = "attempt-1") { return record({ type: "terminal-command-finished", attemptId, exitStatus: 0, evidenceRef: "finished" }, 2); }
 
 describe("projectTerminalAttempts", () => {
-  it("projects ordered lifecycle records and lets a result supersede preliminary and interim coaching", () => {
-    const evidence = reader({
-      checkpoint: { kind: "running", command: "npm test", interactions: [{ kind: "output", data: "PASS" }] },
-      finished: { kind: "finished", command: "npm test", interactions: [{ kind: "output", data: "PASS" }], exitStatus: 0 },
-    });
-    const events: WorkbookTimelineRecord[] = [
-      record({ type: "terminal-command-submitted", attemptId: "attempt-1", lessonId: "lesson-1", blockId: "block-1", command: "npm test", terminalSessionId: "terminal-1" }, 1),
-      record({ type: "preliminary-coaching-received", attemptId: "attempt-1", outcome: "wait-for-result" }, 2),
-    ];
+  it("projects only running, checking, feedback, and complete without private fields", () => {
+    const events: WorkbookTimelineRecord[] = [submitted()];
+    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running" });
 
-    expect(projectTerminalAttempts(events, evidence).get("block-1")).toMatchObject({ state: "submitted" });
+    events.push(finished());
+    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "checking" });
 
-    events.push(record({ type: "terminal-output-settled", attemptId: "attempt-1", checkpointId: "checkpoint-1", evidenceRef: "checkpoint" }, 3));
-    expect(projectTerminalAttempts(events, evidence).get("block-1")).toMatchObject({ state: "running" });
+    events.push(record({ type: "terminal-feedback-recorded", attemptId: "attempt-1", text: "Fix the path." }, 3));
+    const feedback = projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block");
+    expect(feedback).toEqual({ state: "feedback", feedback: "Fix the path." });
+    expect(JSON.stringify(feedback)).not.toMatch(/attempt|command|evidence|rubric|handoff/i);
 
-    events.push(record({ type: "interim-coaching-received", attemptId: "attempt-1", checkpointId: "checkpoint-1", outcome: "feedback", text: "The test is still running." }, 4));
-    expect(projectTerminalAttempts(events, evidence).get("block-1")).toMatchObject({ state: "interim-feedback", feedback: { text: "The test is still running." } });
-
-    events.push(record({ type: "terminal-command-finished", attemptId: "attempt-1", exitStatus: 0, evidenceRef: "finished" }, 5));
-    expect(projectTerminalAttempts(events, evidence).get("block-1")).toMatchObject({ state: "reviewing-result" });
-
-    events.push(record({ type: "result-coaching-received", attemptId: "attempt-1", outcome: "feedback", text: "The command failed." }, 6));
-    const projected = projectTerminalAttempts(events, evidence).get("block-1");
-    expect(projected).toEqual({
-      attemptId: "attempt-1",
-      lessonId: "lesson-1",
-      blockId: "block-1",
-      state: "final-feedback",
-      feedback: { outcome: "feedback", text: "The command failed." },
-    });
-    expect(JSON.stringify(projected)).not.toContain("checkpoint");
-    expect(JSON.stringify(projected)).not.toContain("finished");
+    events.push(record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Accepted." }, 4));
+    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "complete", successMessage: "Accepted." });
   });
 
-  it("projects a completed ready result as awaiting Main Tutor confirmation", () => {
-    const evidence = reader({ finished: { kind: "finished", command: "npm test", interactions: [], exitStatus: 0 } });
+  it("does not project feedback or acceptance before valid Bash-finished evidence", () => {
     const events: WorkbookTimelineRecord[] = [
-      record({ type: "terminal-command-submitted", attemptId: "attempt-1", lessonId: "lesson-1", blockId: "block-1", command: "npm test", terminalSessionId: "terminal-1" }, 1),
-      record({ type: "terminal-command-finished", attemptId: "attempt-1", exitStatus: 0, evidenceRef: "finished" }, 2),
-      record({ type: "result-coaching-received", attemptId: "attempt-1", outcome: "ready", text: "Ready for review." }, 3),
+      submitted(),
+      record({ type: "terminal-feedback-recorded", attemptId: "attempt-1", text: "Too early." }, 2),
+      record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Too early." }, 3),
     ];
-
-    expect(projectTerminalAttempts(events, evidence).get("block-1")).toMatchObject({
-      state: "awaiting-confirmation",
-      feedback: { outcome: "ready", text: "Ready for review." },
-    });
+    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running" });
   });
 
-  it("projects a Main Tutor acceptance from the durable checkpoint after a ready handoff", () => {
-    const evidence = reader({ finished: { kind: "finished", command: "npm test", interactions: [], exitStatus: 0 } });
+  it("drops stale model output when a newer Bash command is current", () => {
     const events: WorkbookTimelineRecord[] = [
-      record({ type: "terminal-command-submitted", attemptId: "attempt-1", lessonId: "lesson-1", blockId: "block-1", command: "npm test", terminalSessionId: "terminal-1" }, 1),
-      record({ type: "terminal-command-finished", attemptId: "attempt-1", exitStatus: 0, evidenceRef: "finished" }, 2),
-      record({ type: "result-coaching-received", attemptId: "attempt-1", outcome: "ready", text: "Ready for confirmation." }, 3),
-      record({ type: "attempt_accepted", lessonId: "lesson-1", blockId: "block-1", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Confirmed by the Main Tutor." }, 4),
+      submitted("old"),
+      finished("old"),
+      record({ type: "terminal-feedback-recorded", attemptId: "old", text: "Old model result." }, 3),
+      submitted("new"),
+      record({ type: "terminal-feedback-recorded", attemptId: "new", text: "Too early." }, 5),
     ];
-
-    expect(projectTerminalAttempts(events, evidence).get("block-1")).toEqual({
-      attemptId: "attempt-1",
-      lessonId: "lesson-1",
-      blockId: "block-1",
-      state: "accepted",
-      successMessage: "Confirmed by the Main Tutor.",
-    });
+    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running" });
   });
 
-  it("turns a final wait-for-result outcome into one direct delayed-review status", () => {
-    const evidence = reader({ finished: { kind: "finished", command: "npm test", interactions: [], exitStatus: 0 } });
-    const events: WorkbookTimelineRecord[] = [
-      record({ type: "terminal-command-submitted", attemptId: "attempt-1", lessonId: "lesson-1", blockId: "block-1", command: "npm test", terminalSessionId: "terminal-1" }, 1),
-      record({ type: "terminal-command-finished", attemptId: "attempt-1", exitStatus: 0, evidenceRef: "finished" }, 2),
-      record({ type: "result-coaching-received", attemptId: "attempt-1", outcome: "wait-for-result" }, 3),
-    ];
+  it("reopens an unfinished prior terminal session idle while preserving completed work", () => {
+    expect(projectTerminalAttempts([submitted("old", "before-restart")], reader(finalEvidence), "after-restart").get("block")).toBeUndefined();
 
-    expect(projectTerminalAttempts(events, evidence).get("block-1")).toEqual({
-      attemptId: "attempt-1",
-      lessonId: "lesson-1",
-      blockId: "block-1",
-      state: "final-feedback",
-      retrying: true,
-      feedback: {
-        outcome: "feedback",
-        text: "Review delayed — retrying automatically…"
-      },
-    });
-  });
-
-  it("ignores stale coaching for unknown attempts, unknown checkpoints, and superseded attempts", () => {
-    const evidence = reader({
-      checkpoint: { kind: "running", command: "npm test", interactions: [] },
-      finished: { kind: "finished", command: "npm test", interactions: [], exitStatus: 0 },
-    });
-    const events: WorkbookTimelineRecord[] = [
-      record({ type: "preliminary-coaching-received", attemptId: "missing", outcome: "feedback", text: "Ignore me" }, 1),
-      record({ type: "terminal-command-submitted", attemptId: "attempt-1", lessonId: "lesson-1", blockId: "block-1", command: "npm test", terminalSessionId: "terminal-1" }, 2),
-      record({ type: "interim-coaching-received", attemptId: "attempt-1", checkpointId: "unknown", outcome: "feedback", text: "Stale checkpoint" }, 3),
-      record({ type: "interim-coaching-received", attemptId: "missing", checkpointId: "unknown", outcome: "feedback", text: "Unknown attempt" }, 4),
-      record({ type: "terminal-output-settled", attemptId: "attempt-1", checkpointId: "checkpoint-1", evidenceRef: "checkpoint" }, 5),
-      record({ type: "terminal-command-finished", attemptId: "attempt-1", exitStatus: 0, evidenceRef: "finished" }, 6),
-      record({ type: "result-coaching-received", attemptId: "attempt-1", outcome: "feedback", text: "Old result" }, 7),
-      record({ type: "terminal-command-submitted", attemptId: "attempt-2", lessonId: "lesson-1", blockId: "block-1", command: "npm test -- --run", terminalSessionId: "terminal-2" }, 8),
-      record({ type: "result-coaching-received", attemptId: "attempt-2", outcome: "feedback", text: "Result before finish" }, 9),
-    ];
-
-    expect(projectTerminalAttempts(events, evidence).get("block-1")).toEqual({
-      attemptId: "attempt-2",
-      lessonId: "lesson-1",
-      blockId: "block-1",
-      state: "submitted",
-    });
+    const completed = [submitted("old", "before-restart"), finished("old"), record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "old", version: 1, kind: "terminal", summary: "Already accepted." }, 3)];
+    expect(projectTerminalAttempts(completed, reader(finalEvidence), "after-restart").get("block")).toEqual({ state: "complete", successMessage: "Already accepted." });
   });
 });

@@ -132,8 +132,8 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
     observer.observe(element);
     return () => observer.disconnect();
   }, [activeBlock.id, activeProgress?.active, activeProgress?.checkpoint?.status]);
-  // A terminal acceptance is public checkpoint feedback, not a timeline review message. Keep its
-  // frozen terminal and acceptance text visible until the learner continues.
+  // Terminal completion is a browser-safe terminal object, not an AttemptStore checkpoint. Keep
+  // its frozen terminal and one completion card visible until the learner continues.
   if (!activeProgress?.active || !["terminal-practice", "editor-practice"].includes(activeBlock.type) || activeProgress.checkpoint?.status === "accepted" && activeBlock.type !== "terminal-practice") return null;
 
   return <>

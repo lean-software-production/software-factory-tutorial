@@ -99,11 +99,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     workspace: runtime.workspaceRoot,
     runtimeProvision: runtime.runtimeProvision,
     getActiveBlock: workflow.activeObservedBlock,
-    // Legacy transcript submission remains wired for compatibility with non-observation callers.
-    submitAttempt: async (input) => { await workflow.submitAttempt(input); },
     observationSink: workflow.observeTerminalFact,
     ptyFactory: options.terminalPtyFactory ?? createDockerPty,
-    debounceMs: options.terminalDebounceMs,
     logger: log,
   }) : undefined;
   try { terminal?.start(); }

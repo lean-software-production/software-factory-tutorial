@@ -70,7 +70,7 @@ function state(stage: "intro" | "lesson" | "practice" | "practice-feedback"): Pu
       blocks: stage === "practice" || stage === "practice-feedback"
         ? [
           { id: "orientation", type: "narrative", ready: true, active: false, completed: true, verified: false, emerged: true },
-          { id: "practice", type: "terminal-practice", ready: true, active: true, completed: false, verified: false, emerged: true, checkpoint: stage === "practice-feedback" ? { status: "feedback", feedback: "SSE review feedback." } : { status: "reviewing" } },
+          { id: "practice", type: "terminal-practice", ready: true, active: true, completed: false, verified: false, emerged: true, terminal: stage === "practice-feedback" ? { phase: "feedback", message: "SSE review feedback." } : { phase: "checking" } },
         ]
         : [{ id: "orientation", type: "narrative", ready: true, active: true, completed: false, verified: false, emerged: true }],
       reflections: {},

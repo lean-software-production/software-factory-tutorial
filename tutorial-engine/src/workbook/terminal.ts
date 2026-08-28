@@ -5,12 +5,10 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import * as pty from "node-pty";
 import type { TutorialLogger } from "./runtime-log.js";
 import { createTutorialLogger } from "./runtime-log.js";
-import type { SubmitAttempt } from "./attempts.js";
 import { NO_RUNTIME_PROVISION, type TrustedRuntimeProvision } from "./runtime-provision.js";
 import { publicTerminalFrame } from "./public-terminal-contract.js";
-import { TerminalObservation, type TerminalObservationFact, type TerminalObservationScheduler } from "./terminal-observation.js";
+import { TerminalObservation, type TerminalObservationFact } from "./terminal-observation.js";
 import { TerminalShellProtocol } from "./terminal-shell-protocol.js";
-export type { SubmitAttempt } from "./attempts.js";
 
 export type TerminalClient = { send(message: string): void; close(code?: number, reason?: string): void };
 export type TerminalMessage =
@@ -46,49 +44,27 @@ export interface DockerRunArgumentsOptions { workspace: string; name: string; ap
 export interface ActiveObservedTerminalBlock {
   lessonId: string;
   blockId: string;
-  command: string;
-  context: string;
-  expectedObservation: string;
 }
-
-export type PracticeTranscript = { lessonId: string; blockId: string; transcript: string };
 
 export interface WorkbookTerminalManagerOptions {
   workspace: string;
   runtimeProvision?: TrustedRuntimeProvision;
   getActiveBlock(): ActiveObservedTerminalBlock | undefined;
-  submitAttempt: SubmitAttempt;
-  /** Receives Bash-authoritative command lifecycle facts instead of legacy attempt submissions. */
-  observationSink?: (fact: TerminalObservationFact) => void;
+  /** Receives Bash-authoritative command lifecycle facts. */
+  observationSink(fact: TerminalObservationFact): Promise<void> | void;
   ptyFactory?: TerminalPtyFactory;
   logger?: TutorialLogger;
-  debounceMs?: number;
-  maxTranscriptBytes?: number;
 }
 
 const MAX_REPLAY_BYTES = 64_000;
-const DEFAULT_MAX_TRANSCRIPT_BYTES = 12_000;
-const DEFAULT_DEBOUNCE_MS = 700;
 const MAX_INPUT_BYTES = 16_384;
 const MAX_COLS = 500;
 const MAX_ROWS = 200;
-
-const terminalObservationScheduler: TerminalObservationScheduler = {
-  schedule(delayMs, callback): NodeJS.Timeout {
-    const timer = setTimeout(callback, delayMs);
-    timer.unref?.();
-    return timer;
-  },
-  cancel(handle): void { clearTimeout(handle as NodeJS.Timeout); }
-};
 
 function boundedAppend(previous: string, addition: string, limit: number): string {
   const next = previous + addition;
   return next.length > limit ? next.slice(-limit) : next;
 }
-function stripTerminalControls(text: string): string { return text.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|.)/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ""); }
-function escapeHtml(text: string): string { return text.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character]!); }
-
 function terminalKey(block: ActiveObservedTerminalBlock): string { return `${block.lessonId}:${block.blockId}`; }
 
 /** The tmpfs Pi state must be writable by the shell that runs inside the container. */
@@ -240,8 +216,7 @@ class PreparedDockerPty implements DockerPty {
  * Owns one shell in a hardened workbook container. The host workspace is mounted
  * read-only except for explicit learner-work roots and scratch .tmp/ directories.
  * Trusted runtime provision mounts, when supplied by the launcher, are read-only.
- * Terminal bytes are transient until a paused transcript is
- * submitted as immutable attempt evidence.
+ * Bash markers delimit the command evidence retained by the workflow.
  */
 export class WorkbookTerminalManager {
   readonly workspace: string;
@@ -249,41 +224,21 @@ export class WorkbookTerminalManager {
   #pty: TerminalPty | undefined;
   #client: TerminalClient | undefined;
   #replay = "";
-  #transcript = "";
-  #captureKey: string | undefined;
-  #practiceTranscripts = new Map<string, PracticeTranscript>();
-  #commandPending = false;
-  #observeTimer: NodeJS.Timeout | undefined;
-  #observationQueued = false;
-  #inFlight = false;
-  // Each entered command and its later output advances the evidence generation.
-  // A completed submission records the generation it froze, not the end of
-  // observation: terminal output can resume after a quiet interval.
-  #observationGeneration = 0;
-  #submittedGeneration = -1;
-  #lastError = new Map<string, string>();
-  #terminalShellProtocol: TerminalShellProtocol | undefined;
+  #terminalShellProtocol = new TerminalShellProtocol();
   #terminalObservation: TerminalObservation | undefined;
   #terminalObservationBlockKey: string | undefined;
   readonly #getActiveBlock: () => ActiveObservedTerminalBlock | undefined;
-  readonly #submitAttempt: SubmitAttempt;
-  readonly #observationSink: ((fact: TerminalObservationFact) => void) | undefined;
+  readonly #observationSink: (fact: TerminalObservationFact) => Promise<void> | void;
   readonly #ptyFactory: TerminalPtyFactory;
   readonly #log: TutorialLogger;
-  readonly #debounceMs: number;
-  readonly #maxTranscriptBytes: number;
 
   constructor(options: WorkbookTerminalManagerOptions) {
     this.workspace = resolve(options.workspace);
     this.runtimeProvision = options.runtimeProvision ?? NO_RUNTIME_PROVISION;
     this.#getActiveBlock = options.getActiveBlock;
-    this.#submitAttempt = options.submitAttempt;
     this.#observationSink = options.observationSink;
-    this.#terminalShellProtocol = options.observationSink ? new TerminalShellProtocol() : undefined;
     this.#ptyFactory = options.ptyFactory ?? createDockerPty;
     this.#log = options.logger ?? createTutorialLogger();
-    this.#debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
-    this.#maxTranscriptBytes = options.maxTranscriptBytes ?? DEFAULT_MAX_TRANSCRIPT_BYTES;
   }
 
   start(): void { this.#ensurePty(); }
@@ -302,12 +257,6 @@ export class WorkbookTerminalManager {
       return true;
     }
     if (this.#replay) client.send(publicTerminalFrame({ type: "output", data: this.#replay }));
-    const block = this.#getActiveBlock();
-    if (block) {
-      const key = terminalKey(block);
-      const error = this.#lastError.get(key);
-      if (error) client.send(publicTerminalFrame({ type: "attempt-error", blockId: block.blockId, message: error }));
-    }
     return true;
   }
 
@@ -321,21 +270,7 @@ export class WorkbookTerminalManager {
     if (message.type === "input") {
       if (typeof message.data !== "string" || Buffer.byteLength(message.data, "utf8") > MAX_INPUT_BYTES) return;
       shell.write(message.data);
-      this.#record("input", message.data);
-      if (this.#observationSink) {
-        this.#terminalObservation?.observeInteractiveInput(message.data);
-        return;
-      }
-      if (this.#isSubmittedCommand(message.data)) {
-        this.#commandPending = true;
-        this.#observationGeneration++;
-        this.#client?.send(publicTerminalFrame({ type: "attempt-status", blockId: this.#getActiveBlock()?.blockId, status: "running" }));
-        this.#scheduleObservation();
-      }
-      if (message.data.includes("\x03")) {
-        this.#commandPending = false;
-        this.#observationQueued = false;
-      }
+      this.#terminalObservation?.observeInteractiveInput(message.data);
       return;
     }
     if (message.type === "resize" && Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols > 0 && message.rows > 0) {
@@ -345,12 +280,7 @@ export class WorkbookTerminalManager {
 
   dispose(): void { this.#stopTerminal(); }
 
-  transcriptForTesting(): string { return this.#transcript; }
-  frozenTerminalHtml(): string { return `<pre class="frozen-terminal-output">${escapeHtml(stripTerminalControls(this.#replay || this.#transcript))}</pre>`; }
-
   #stopTerminal(): void {
-    if (this.#observeTimer) clearTimeout(this.#observeTimer);
-    this.#observeTimer = undefined;
     this.#terminalObservation?.close();
     this.#terminalObservation = undefined;
     this.#terminalObservationBlockKey = undefined;
@@ -361,32 +291,16 @@ export class WorkbookTerminalManager {
     this.#pty = undefined;
   }
 
-  /** Bounded, in-memory evidence for the later reflection discussion. */
-  practiceTranscripts(): PracticeTranscript[] { return [...this.#practiceTranscripts.values()]; }
-
   #ensurePty(): void {
     if (this.#pty) return;
-    if (this.#observationSink) this.#terminalShellProtocol = new TerminalShellProtocol();
+    this.#terminalShellProtocol = new TerminalShellProtocol();
     const instance = this.#ptyFactory({ cwd: this.workspace, runtimeProvision: this.runtimeProvision, cols: 90, rows: 24 });
     this.#pty = instance;
     instance.onData((data) => {
-      if (this.#terminalShellProtocol) {
-        for (const event of this.#terminalShellProtocol.consume(data)) {
-          if (event.type === "output") {
-            this.#forwardTerminalOutput(event.data);
-          } else if (event.type === "command-submitted") {
-            this.#observeCommandSubmitted(event.command);
-          } else {
-            this.#terminalObservation?.observeCommandFinished({ exitStatus: event.exitStatus });
-          }
-        }
-        return;
-      }
-      this.#forwardTerminalOutput(data);
-      if (this.#commandPending) {
-        this.#observationGeneration++;
-        this.#client?.send(publicTerminalFrame({ type: "attempt-status", blockId: this.#getActiveBlock()?.blockId, status: "running" }));
-        this.#scheduleObservation();
+      for (const event of this.#terminalShellProtocol.consume(data)) {
+        if (event.type === "output") this.#forwardTerminalOutput(event.data);
+        else if (event.type === "command-submitted") this.#observeCommandSubmitted(event.command);
+        else this.#terminalObservation?.observeCommandFinished({ exitStatus: event.exitStatus });
       }
     });
     instance.onExit(({ exitCode, signal }) => {
@@ -402,13 +316,12 @@ export class WorkbookTerminalManager {
   #forwardTerminalOutput(data: string): void {
     this.#replay = boundedAppend(this.#replay, data, MAX_REPLAY_BYTES);
     this.#client?.send(publicTerminalFrame({ type: "output", data }));
-    this.#record("output", data);
     this.#terminalObservation?.observeTerminalOutput(data);
   }
 
   #observeCommandSubmitted(command: string): void {
     const block = this.#getActiveBlock();
-    if (!block || !this.#observationSink) return;
+    if (!block) return;
     const key = terminalKey(block);
     let observation = this.#terminalObservation;
     if (this.#terminalObservationBlockKey !== key || !observation) {
@@ -416,91 +329,15 @@ export class WorkbookTerminalManager {
       this.#terminalObservationBlockKey = key;
       observation = new TerminalObservation({
         blockId: block.blockId,
-        scheduler: terminalObservationScheduler,
         createAttemptId: randomUUID,
-        emit: this.#observationSink
+        emit: (fact) => {
+          void Promise.resolve(this.#observationSink(fact)).catch((error) => {
+            this.#log.info(`Terminal observation failed: ${error instanceof Error ? error.message : String(error)}`);
+          });
+        }
       });
       this.#terminalObservation = observation;
     }
     observation.observeCommandSubmitted({ command });
-  }
-
-  #record(kind: "input" | "output", data: string): void {
-    const block = this.#getActiveBlock();
-    if (!block) return;
-    const key = terminalKey(block);
-    if (this.#captureKey !== key) {
-      this.#captureKey = key;
-      this.#transcript = this.#practiceTranscripts.get(key)?.transcript ?? "";
-      this.#commandPending = false;
-      this.#observationQueued = false;
-      this.#observationGeneration = 0;
-      this.#submittedGeneration = -1;
-    }
-    const label = kind === "input" ? "LEARNER INPUT" : "TERMINAL OUTPUT";
-    this.#transcript = boundedAppend(this.#transcript, `\n[${label}]\n${data}`, this.#maxTranscriptBytes);
-    this.#practiceTranscripts.set(key, { lessonId: block.lessonId, blockId: block.blockId, transcript: this.#transcript });
-  }
-
-  #isSubmittedCommand(data: string): boolean {
-    // xterm sends the command text and its Enter key as separate input events.
-    // A bare carriage return therefore still submits the visible input already
-    // recorded above; the attempt can be feedback if it has no useful evidence.
-    return /[\r\n]/.test(data);
-  }
-
-  #scheduleObservation(): void {
-    if (this.#observeTimer) clearTimeout(this.#observeTimer);
-    this.#observeTimer = setTimeout(() => void this.#submitPausedAttempt(), this.#debounceMs);
-    this.#observeTimer.unref?.();
-  }
-
-  async #submitPausedAttempt(): Promise<void> {
-    this.#observeTimer = undefined;
-    if (!this.#commandPending) return;
-    if (this.#inFlight) {
-      // The quiet period has already elapsed. Submit this newer generation as
-      // soon as the immutable older snapshot has been handed to the workflow.
-      this.#observationQueued = true;
-      return;
-    }
-    const block = this.#getActiveBlock();
-    if (!block) return;
-    const key = terminalKey(block);
-    if (this.#captureKey !== key || !this.#transcript.trim()) return;
-    const generation = this.#observationGeneration;
-    if (generation <= this.#submittedGeneration) return;
-    const transcript = this.#transcript.slice(-this.#maxTranscriptBytes);
-    const terminalHtml = this.frozenTerminalHtml();
-    let submitNewestGeneration = false;
-    this.#inFlight = true;
-    this.#client?.send(publicTerminalFrame({ type: "attempt-status", blockId: block.blockId, status: "checking" }));
-    try {
-      await this.#submitAttempt({
-        lessonId: block.lessonId,
-        blockId: block.blockId,
-        privateGuidance: block.expectedObservation,
-        evidence: { kind: "terminal", transcript, terminalHtml }
-      });
-      const stillActive = this.#getActiveBlock();
-      if (!stillActive || terminalKey(stillActive) !== key) return;
-      this.#submittedGeneration = generation;
-      this.#lastError.delete(key);
-      submitNewestGeneration = this.#commandPending && this.#captureKey === key && this.#observationGeneration > generation;
-      if (!submitNewestGeneration) this.#client?.send(publicTerminalFrame({ type: "attempt-status", blockId: block.blockId, status: "submitted" }));
-    } catch (error) {
-      const message = "Could not submit the terminal attempt. Keep working in the embedded terminal; your next command will be checked again.";
-      this.#lastError.set(key, message);
-      this.#log.info(`Terminal attempt submission failed for ${key}: ${error instanceof Error ? error.message : String(error)}`);
-      this.#client?.send(publicTerminalFrame({ type: "attempt-error", blockId: block.blockId, message }));
-    } finally {
-      this.#inFlight = false;
-      if (submitNewestGeneration && this.#commandPending && this.#captureKey === key) {
-        if (this.#observationQueued) {
-          this.#observationQueued = false;
-          void this.#submitPausedAttempt();
-        } else if (!this.#observeTimer) this.#scheduleObservation();
-      }
-    }
   }
 }
