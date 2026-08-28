@@ -659,7 +659,7 @@ export function App() {
   const effectiveActiveBlockProgress = state.progress.blocks.find((block) => block.id === effectiveActiveBlockId) ?? (!state.introductionComplete ? { id: INTRODUCTION_BLOCK_ID, type: "workbook-introduction", ready: true, active: true, completed: false, verified: false, emerged: true } as BlockProgress : activeBlockProgress);
   const blockInView = () => canonicalBlockInView(state);
   const sendTutorText = (text: string) => {
-    if (state.introductionComplete && activeBlock?.type === "reflection" && !(state.adapter.testOnlyJump && text.trim() === "move on")) {
+    if (state.introductionComplete && activeBlock?.type === "reflection") {
       const turns = state.progress.reflectionConversations[activeBlock.id] ?? [];
       return post(activeBlock.id, { action: turns.length > 0 ? "reflection-follow-up" : "reflection-submit", response: text }).then((next) => setState(stateFromCompletion(next)));
     }

@@ -22,10 +22,7 @@ export function resolveLessonJump(loaded: LoadedWorkbook, selector: string): Les
   return { lessonId, preambleBlockId: lessonPreambleBlockId(lessonId) };
 }
 
-/**
- * Make a fresh session a deliberately test-only view of one lesson. Previous blocks are compact
- * completion records, not replayed authored messages, so they cannot fill the tutor's history.
- */
+/** Mark prior blocks complete in a fresh session, leaving the target lesson preamble active. */
 export async function initializeLessonJump(sessionRoot: string, loaded: LoadedWorkbook, target: LessonJumpTarget): Promise<void> {
   const timeline = new WorkbookTimeline({ stateRoot: sessionRoot });
   if ((await timeline.read()).length > 0) throw new LessonJumpError("A lesson jump can only initialize a fresh session.");
@@ -33,10 +30,8 @@ export async function initializeLessonJump(sessionRoot: string, loaded: LoadedWo
   const targetIndex = stream.findIndex((block) => block.id === target.preambleBlockId);
   if (targetIndex < 0) throw new LessonJumpError(`Lesson '${target.lessonId}' has no preamble block.`);
   await timeline.run(async () => {
-    await timeline.appendWithinRun({ type: "lesson_jump_started", lessonId: target.lessonId, selector: target.lessonId, testOnly: true });
-    for (const block of stream.slice(0, targetIndex)) {
-      await timeline.appendWithinRun({ type: "block_skipped", lessonId: block.lessonId, blockId: block.id, reason: "lesson-jump-prerequisite" });
-    }
+    await timeline.appendWithinRun({ type: "lesson_jump_started", lessonId: target.lessonId });
+    for (const block of stream.slice(0, targetIndex)) await timeline.appendWithinRun({ type: "block_completed", blockId: block.id });
   });
 }
 

@@ -17,7 +17,7 @@ function loaded(): any {
 }
 
 describe("lesson jumps", () => {
-  it("resolves a numeric prefix and records compact, distinct skipped prerequisites before the target preamble", async () => {
+  it("resolves a numeric prefix and records completed prerequisites before the target preamble", async () => {
     const workbook = loaded();
     const target = resolveLessonJump(workbook, "007");
     expect(target).toEqual({ lessonId: "007-compose-and-branch", preambleBlockId: "lesson--007-compose-and-branch" });
@@ -26,11 +26,12 @@ describe("lesson jumps", () => {
     await initializeLessonJump(root, workbook, target);
 
     const records = await new WorkbookTimeline({ stateRoot: root }).read();
-    expect(records[0]).toMatchObject({ type: "lesson_jump_started", lessonId: target.lessonId, testOnly: true });
-    expect(records.filter((record) => record.type === "block_skipped").map((record: any) => record.blockId)).toEqual([
+    expect(records[0]).toMatchObject({ type: "lesson_jump_started", lessonId: target.lessonId });
+    expect(records.filter((record) => record.type === "block_completed").map((record: any) => record.blockId)).toEqual([
       "workbook--introduction", "lesson--006-before", "lesson--006-before--read"
     ]);
     expect(records.some((record) => record.type === "message")).toBe(false);
+    expect(records.some((record) => record.type === "block_completed" && record.blockId === target.preambleBlockId)).toBe(false);
   });
 
   it("rejects unknown and ambiguous selectors", () => {

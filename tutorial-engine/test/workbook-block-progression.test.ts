@@ -7,6 +7,7 @@ import { startWorkbookServer } from "../src/workbook/server.js";
 import { tutorialStatePath } from "../src/workbook/tutorial-state.js";
 import { DefaultMainWorkbookTutor, type WorkbookTutorSessionFactoryRequest } from "../src/workbook/tutor.js";
 import { WorkbookTimeline, type WorkbookTimelineRecord } from "../src/workbook/timeline.js";
+import { initializeLessonJump, resolveLessonJump } from "../src/workbook/lesson-jump.js";
 import { buildWorkbookBlockStream } from "../src/workbook/workbook-blocks.js";
 
 let dirs: string[] = [];
@@ -128,23 +129,27 @@ describe("workbook block progression", () => {
     } finally { await server.close(); }
   });
 
-  it("accepts exact move on as a skipped evaluated block only in a persisted lesson-jump session", async () => {
+  it("renders completed jump prerequisites and keeps the target evaluation evidence-gated", async () => {
     const dir = await fixture();
-    const timeline = new WorkbookTimeline(dir);
-    await timeline.append({ type: "lesson_jump_started", lessonId: "001-first", selector: "001", testOnly: true });
-    for (const blockId of ["workbook--introduction", "part--validation-loop", "lesson--001-first", "lesson--001-first--orientation"]) {
-      await timeline.append({ type: "block_skipped", lessonId: "001-first", blockId, reason: "lesson-jump-prerequisite" });
-    }
+    const loaded = await loadWorkbook(dir);
+    await initializeLessonJump(tutorialStatePath(dir), loaded, resolveLessonJump(loaded, "001"));
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor(undefined, { outcome: "complete-block", blockId: "lesson--001-first--edit-answer" }), practiceCoach: fakePracticeCoach() });
     try {
       const opened = await fetch(`${server.url}/api/workbook/state`).then((response) => response.json() as any);
-      expect(opened.progress.activeBlockId).toBe("lesson--001-first--edit-answer");
-      expect(opened.adapter.testOnlyJump).toBe(true);
+      expect(opened.progress.activeBlockId).toBe("lesson--001-first");
+      expect(opened.progress.completedBlocks).toEqual(["workbook--introduction", "part--validation-loop"]);
+      expect(opened.timeline.filter((record: any) => record.type === "message" && record.source === "authored").map((record: any) => record.blockId)).toEqual([
+        "workbook--introduction", "part--validation-loop", "lesson--001-first", "lesson--001-first--orientation"
+      ]);
+      expect(opened.adapter).not.toHaveProperty("testOnlyJump");
+
+      await complete(server.url, "lesson--001-first");
+      await complete(server.url, "lesson--001-first--orientation");
       expect((await complete(server.url, "lesson--001-first--edit-answer"))).toMatchObject({ outcome: "rejected", reason: "ineligible" });
 
-      const advanced = await postMessage(server.url, { blockId: "lesson--001-first--edit-answer", text: "move on" }).then((response) => response.json() as any);
-      expect(advanced.progress.activeBlockId).toBe("lesson--001-first--finish");
-      expect((await timelineRecords(dir)).filter((record) => record.type === "block_skipped" && record.blockId === "lesson--001-first--edit-answer")).toHaveLength(1);
+      const afterMoveOn = await postMessage(server.url, { blockId: "lesson--001-first--edit-answer", text: "move on" }).then((response) => response.json() as any);
+      expect(afterMoveOn.progress.activeBlockId).toBe("lesson--001-first--edit-answer");
+      expect(await timelineRecords(dir)).toEqual(expect.not.arrayContaining([expect.objectContaining({ type: "block_skipped" })]));
     } finally { await server.close(); }
   });
 

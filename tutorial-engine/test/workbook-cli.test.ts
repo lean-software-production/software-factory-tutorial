@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runWorkbookCli } from "../src/workbook/cli.js";
-import type { WorkbookServerOptions } from "../src/workbook/server.js";
+import { startWorkbookServer, type WorkbookServerOptions } from "../src/workbook/server.js";
 import { SessionWorkspaceManager, type TutorialSessionPaths } from "../src/session-workspace.js";
 import { WorkbookTimeline } from "../src/workbook/timeline.js";
 
@@ -29,7 +29,6 @@ async function contentFixture(): Promise<string> {
   await write(join(root, "calculator/package.json"), "{\"type\":\"module\"}\n");
   await write(join(root, "calculator/src/index.ts"), "export const value = 1;\n");
   await write(join(root, "factory/refactor.md"), "factory seed\n");
-  await write(join(root, "docs/seeds/lesson-jump/007-compose-and-branch/factory/refactor.md"), "lesson 007 seed\n");
   return root;
 }
 
@@ -120,7 +119,7 @@ describe("workbook CLI", () => {
     expect(startServer).toHaveBeenCalledWith(expect.objectContaining({ port: 4310, watchContent: true }));
   });
 
-  it("creates a distinct test-only session for --lesson rather than reopening one", async () => {
+  it("creates a distinct fresh session for --lesson rather than reopening one", async () => {
     const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
     const createLessonJumpSession = vi.fn(async () => sessionFixture("jump-007"));
     const resolveSession = vi.fn(async () => sessionFixture("must-not-reopen"));
@@ -133,40 +132,31 @@ describe("workbook CLI", () => {
 
     expect(createLessonJumpSession).toHaveBeenCalledWith("/tmp/workbook", "007");
     expect(resolveSession).not.toHaveBeenCalled();
-    expect(lines).toContain("Test-only lesson jump: 007 (previous blocks are skipped; exact 'move on' may skip this lesson's evaluated blocks).");
+    expect(lines).toContain("Lesson jump: 007 (prior blocks are marked completed).");
   });
 
-  it.each(["001", "001-run-an-agent-headlessly"])("starts --lesson %s from the normal materialized workspace", async (lesson) => {
+  it.each(["001", "001-run-an-agent-headlessly", "007", "007-compose-and-branch"])("starts --lesson %s from the normal materialized workspace at its target", async (lesson) => {
     const contentRoot = await contentFixture();
-    const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
+    await write(join(contentRoot, "web/index.html"), "<!doctype html><div id=\"root\"></div>");
+    const mainTutor = { restore: async () => {}, reply: async () => "Continue with the active block.", review: async () => ({ outcome: "feedback" as const, message: "Try again." }), summarizeBlock: async () => "", summarizeLesson: async () => "", dispose: () => {} };
+    const startServer = vi.fn(async (options: WorkbookServerOptions) => await startWorkbookServer({ ...options, webRoot: resolve(contentRoot, "web"), embeddedTerminal: false, mainTutor, practiceCoach: { assess: async () => ({ outcome: "ready" as const, text: "" }) } }));
 
-    await runWorkbookCli([contentRoot, "--lesson", lesson, "--no-open"], {
+    const server = await runWorkbookCli([contentRoot, "--lesson", lesson, "--no-open"], {
       startServer, installSignalHandlers: false, packageDirectory: "/pkg", logger: { info: vi.fn(), error: vi.fn() }, writeLine: () => undefined,
     });
 
-    const session = startServer.mock.calls[0]![0].session as TutorialSessionPaths;
-    await expect(readFile(resolve(session.workspaceRoot, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
-    await expect(readFile(resolve(session.workspaceRoot, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
-    await expect(new WorkbookTimeline({ stateRoot: session.sessionRoot }).read()).resolves.toEqual([
-      expect.objectContaining({ type: "lesson_jump_started", lessonId: "001-run-an-agent-headlessly", testOnly: true }),
-      expect.objectContaining({ type: "block_skipped", reason: "lesson-jump-prerequisite" }),
-      expect.objectContaining({ type: "block_skipped", reason: "lesson-jump-prerequisite" }),
-    ]);
-  });
-
-  it("uses a later lesson's explicit seed and clearly rejects a missing later seed", async () => {
-    const contentRoot = await contentFixture();
-    const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
-
-    await runWorkbookCli([contentRoot, "--lesson", "007", "--no-open"], {
-      startServer, installSignalHandlers: false, packageDirectory: "/pkg", logger: { info: vi.fn(), error: vi.fn() }, writeLine: () => undefined,
-    });
-    const session = startServer.mock.calls[0]![0].session as TutorialSessionPaths;
-    await expect(readFile(resolve(session.workspaceRoot, "factory/refactor.md"), "utf8")).resolves.toBe("lesson 007 seed\n");
-
-    await expect(runWorkbookCli([contentRoot, "--lesson", "008", "--no-open"], {
-      startServer, installSignalHandlers: false, packageDirectory: "/pkg", logger: { info: vi.fn(), error: vi.fn() }, writeLine: () => undefined,
-    })).rejects.toThrow(/Lesson jump seed for '008-missing-seed'/);
+    try {
+      const session = startServer.mock.calls[0]![0].session as TutorialSessionPaths;
+      await expect(readFile(resolve(session.workspaceRoot, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
+      await expect(readFile(resolve(session.workspaceRoot, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
+      const records = await new WorkbookTimeline({ stateRoot: session.sessionRoot }).read();
+      const target = lesson.startsWith("001") ? "001-run-an-agent-headlessly" : "007-compose-and-branch";
+      expect(records[0]).toMatchObject({ type: "lesson_jump_started", lessonId: target });
+      expect(records.filter((record) => record.type === "block_completed").length).toBeGreaterThanOrEqual(target.startsWith("001") ? 2 : 4);
+      expect(records.some((record) => record.type === "block_completed" && record.blockId === `lesson--${target}`)).toBe(false);
+      const state = await fetch(`${server!.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(state.progress.activeBlockId).toBe(`lesson--${target}`);
+    } finally { await server?.close(); }
   });
 
   it("passes an explicit --session ID through to reopening and prints the reopened workspace", async () => {

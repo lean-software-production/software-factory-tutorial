@@ -93,6 +93,6 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
   const [target, ...extra] = positional;
   if (!target) throw new ArgumentError("Name the tutorial directory to serve.");
   if (extra.length > 0) throw new ArgumentError(`Serve one tutorial directory at a time; got ${positional.length} (${positional.join(", ")}).`);
-  if (session && lesson) throw new ArgumentError("--lesson creates a fresh test-only session and cannot be used with --session.");
+  if (session && lesson) throw new ArgumentError("--lesson creates a fresh session and cannot be used with --session.");
   return { kind: "run", options: { target, port, host, noOpen, watch, session, lesson } };
 }

@@ -36,15 +36,10 @@ async function resolveWorkbookSession(target: string, sessionId?: string, runtim
   return runtimeProvision && runtimeProvision.workspaceMountTargets.length ? { ...paths, runtimeProvision } : paths;
 }
 
-const FIRST_FACTORY_LESSON_ID = "001-run-an-agent-headlessly";
-
 async function createLessonJumpSession(target: string, selector: string, runtimeProvision?: TrustedRuntimeProvision): Promise<TutorialSessionPaths> {
   const manager = await SessionWorkspaceManager.create(target);
   const jump = await loadAndResolveLessonJump(manager.contentRoot, selector);
-  // Lesson 001 begins with the authored factory. Every later factory lesson needs its
-  // post-prerequisite factory snapshot, whose absence must remain an error.
-  const factorySeedLessonId = jump.target.lessonId === FIRST_FACTORY_LESSON_ID ? undefined : jump.target.lessonId;
-  const session = await manager.createSession({ ...(factorySeedLessonId ? { factorySeedLessonId } : {}), ...(runtimeProvision ? { runtimeProvision } : {}) });
+  const session = await manager.createSession(runtimeProvision ? { runtimeProvision } : undefined);
   try { await initializeLessonJump(session.sessionRoot, jump.loaded, jump.target); }
   catch (error) {
     // A partially initialized jump must never look reopenable as an ordinary learner session.
@@ -59,7 +54,7 @@ function sessionLaunchLines(session: TutorialSessionPaths, reopened: boolean, le
   const action = reopened ? "Reopened tutorial session" : "Created tutorial session";
   return [
     `${action}: ${session.sessionId}`,
-    ...(lesson ? [`Test-only lesson jump: ${lesson} (previous blocks are skipped; exact 'move on' may skip this lesson's evaluated blocks).`] : []),
+    ...(lesson ? [`Lesson jump: ${lesson} (prior blocks are marked completed).`] : []),
     `Session state: ${session.sessionRoot}`,
     `Learner workspace: ${session.workspaceRoot}`,
     `Reopen with: npm run tutorial:workbook -- --session ${session.sessionId}`,

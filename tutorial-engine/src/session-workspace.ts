@@ -30,8 +30,6 @@ export interface CreateTutorialSessionOptions {
   now?: Date;
   randomBytes?: (size: number) => Buffer;
   runtimeProvision?: RuntimeProvisionInput;
-  /** Full authored lesson id whose docs/seeds/lesson-jump/<id>/factory overlay replaces factory/. */
-  factorySeedLessonId?: string;
 }
 
 function pad(value: number): string { return String(value).padStart(2, "0"); }
@@ -195,8 +193,6 @@ export class SessionWorkspaceManager {
   async createSession(options: CreateTutorialSessionOptions = {}): Promise<TutorialSessionPaths> {
     const runtimeProvision = options.runtimeProvision ? trustRuntimeProvision(options.runtimeProvision) : NO_RUNTIME_PROVISION;
     const sessionId = options.id === undefined ? createSessionId(options) : validateSessionId(options.id);
-    const seedRoot = options.factorySeedLessonId === undefined ? undefined : resolve(this.contentRoot, "docs", "seeds", "lesson-jump", options.factorySeedLessonId, "factory");
-    if (seedRoot) await requireDirectoryInside(seedRoot, `Lesson jump seed for '${options.factorySeedLessonId}'`, this.contentRoot);
     const paths = this.pathsFor(sessionId);
     await ensureSessionStateDirectory(this.contentRoot);
     if (await pathExists(paths.sessionRoot)) throw new SessionWorkspaceError(`Session '${sessionId}' already exists.`);
@@ -205,11 +201,6 @@ export class SessionWorkspaceManager {
     try {
       for (const directory of MATERIALIZED_WORKSPACE_DIRECTORIES) {
         await copyAuthoredDirectory(resolve(this.contentRoot, directory), resolve(paths.workspaceRoot, directory), this.contentRoot);
-      }
-      if (seedRoot) {
-        const factory = resolve(paths.workspaceRoot, "factory");
-        await rm(factory, { recursive: true, force: true });
-        await copyAuthoredDirectory(seedRoot, factory, this.contentRoot);
       }
       for (const target of runtimeProvision.workspaceMountTargets) await ensureEmptyWorkspaceDirectory(paths.workspaceRoot, target);
       await initializeLocalRepository(paths.workspaceRoot, runtimeProvision.workspaceMountTargets);

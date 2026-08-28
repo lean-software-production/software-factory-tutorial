@@ -126,10 +126,32 @@ function canonicalCompletedId(record: WorkbookTimelineRecord): BlockId | undefin
     if (record.blockId.includes("--")) return record.blockId;
     if (record.lessonId) return declaredBlockId(record.lessonId, record.blockId);
   }
-  if (record.type === "block_skipped") return record.blockId;
   if (record.type === "workbook_introduction_completed") return WORKBOOK_INTRODUCTION_BLOCK_ID;
   if ((record.type === "block_continued" || record.type === "lesson_transitioned" || record.type === "reflection_completed" || record.type === "editor_practice_unlocked") && record.lessonId && record.blockId) return declaredBlockId(record.lessonId, record.blockId);
   return undefined;
+}
+
+function completedBlockTimeline(loaded: LoadedWorkbook, projection: WorkbookProjectionState, records: readonly WorkbookTimelineRecord[]): PublicTimelineRecord[] {
+  if (!records.some((record) => record.type === "lesson_jump_started")) return publicTimeline(loaded, records);
+  const existing = publicTimeline(loaded, records);
+  const authored = new Set(existing.flatMap((record) => record.type === "message" && record.source === "authored" && record.presentation === "course" ? [record.blockId] : []));
+  const completed = projection.stream.flatMap((block) => {
+    if (!projection.completedBlockIds.has(block.id) || authored.has(block.id)) return [];
+    const completion = [...records].reverse().find((record) => canonicalCompletedId(record) === block.id);
+    return [{
+      id: `completed:${block.id}`,
+      sequence: completion?.sequence ?? 0,
+      at: completion?.at ?? new Date(0).toISOString(),
+      type: "message" as const,
+      lessonId: block.lessonId,
+      blockId: block.id,
+      role: "assistant" as const,
+      source: "authored" as const,
+      presentation: "course" as const,
+      text: blockText(block, loaded.identity.title),
+    }];
+  });
+  return publicTimeline(loaded, [...records, ...completed]);
 }
 
 function canonicalWorkAcceptedId(record: WorkbookTimelineRecord): BlockId | undefined {
@@ -198,10 +220,6 @@ function publicOrderedBlock(block: OrderedWorkbookBlock, index: number): PublicW
   };
 }
 
-function isTestOnlyJump(records: readonly WorkbookTimelineRecord[]): boolean {
-  return records.some((record) => record.type === "lesson_jump_started" && record.testOnly === true);
-}
-
 async function publicState(loaded: LoadedWorkbook, learnerWorkspace: string, records: WorkbookTimelineRecord[], attempts: AttemptStore): Promise<PublicWorkbookState> {
   const stream = buildWorkbookBlockStream(loaded);
   const workbookProjection = projectWorkbookBlocks(stream, records);
@@ -210,8 +228,6 @@ async function publicState(loaded: LoadedWorkbook, learnerWorkspace: string, rec
     const lessonIds = [lessonPreambleBlockIdForServer(chapter.lesson.id), ...chapter.lesson.blocks.map((block) => declaredBlockId(chapter.lesson.id, block.id))];
     return lessonIds.every((id) => workbookProjection.completedBlockIds.has(id)) ? [chapter.lesson.id] : [];
   });
-  const testOnly = isTestOnlyJump(records);
-  // The browser never receives the test-only bypass; only the exact move-on message can use it.
   const canComplete = current ? canCompleteBlock(current, workbookProjection) : { eligible: false as const, reason: "complete" as const };
   const orderedBlocks = stream.map(publicOrderedBlock);
   const revealedBlockIds = new Set(stream.slice(0, workbookProjection.activeIndex + 1).map((block) => block.id));
@@ -259,13 +275,13 @@ async function publicState(loaded: LoadedWorkbook, learnerWorkspace: string, rec
   });
   const progress = { activeLessonId: current?.origin === "declared" ? current.lessonId : current?.chapter?.lesson.id ?? loaded.chapters[0]?.lesson.id ?? "", activeBlockId: workbookProjection.activeBlockId, activeAnchorId: workbookProjection.activeAnchorId, completedLessons, completedBlocks: [...workbookProjection.completedBlockIds], workAcceptedBlocks: [...workbookProjection.workAcceptedBlockIds], readyBlocks: [...workbookProjection.readyBlockIds], blocks, reflections, reflectionConversations, canComplete: current ? { blockId: current.id, ...canComplete } : { blockId: WORKBOOK_COMPLETE_ANCHOR_ID, eligible: false, reason: "complete" }, workbookComplete: workbookProjection.workbookComplete };
   const completionSummary = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "workbook_completion_summary" }> => record.type === "workbook_completion_summary");
-  return { workbook: loaded.identity, introduction: loaded.introduction, introductionComplete: workbookProjection.completedBlockIds.has(WORKBOOK_INTRODUCTION_BLOCK_ID), chapters, orderedBlocks, revealedBlockIds: [...revealedBlockIds], renderedBlockIds: [...renderedBlockIds], readyBlockIds: [...workbookProjection.readyBlockIds], currentBlock: current ? { ...publicOrderedBlock(current, workbookProjection.activeIndex), workAccepted: workbookProjection.workAcceptedBlockIds.has(current.id) } : undefined, completion: workbookProjection.workbookComplete ? { complete: true, anchorId: WORKBOOK_COMPLETE_ANCHOR_ID, summary: completionSummary?.text } : undefined, progress, timeline: publicTimeline(loaded, records), adapter: { modelBackedHelp: true, note: "Free-text help is block-scoped.", testOnlyJump: testOnly || undefined } };
+  return { workbook: loaded.identity, introduction: loaded.introduction, introductionComplete: workbookProjection.completedBlockIds.has(WORKBOOK_INTRODUCTION_BLOCK_ID), chapters, orderedBlocks, revealedBlockIds: [...revealedBlockIds], renderedBlockIds: [...renderedBlockIds], readyBlockIds: [...workbookProjection.readyBlockIds], currentBlock: current ? { ...publicOrderedBlock(current, workbookProjection.activeIndex), workAccepted: workbookProjection.workAcceptedBlockIds.has(current.id) } : undefined, completion: workbookProjection.workbookComplete ? { complete: true, anchorId: WORKBOOK_COMPLETE_ANCHOR_ID, summary: completionSummary?.text } : undefined, progress, timeline: completedBlockTimeline(loaded, workbookProjection, records), adapter: { modelBackedHelp: true, note: "Free-text help is block-scoped." } };
 }
 
 function lessonPreambleBlockIdForServer(lessonId: string): string { return `lesson--${lessonId}`; }
 
-function canCompleteBlock(block: OrderedWorkbookBlock, projection: WorkbookProjectionState, testOnly = false): { eligible: boolean; reason?: "ineligible" | "awaiting-acceptance" } {
-  return projection.workAcceptedBlockIds.has(block.id) || testOnly ? { eligible: true } : { eligible: false, reason: "awaiting-acceptance" };
+function canCompleteBlock(block: OrderedWorkbookBlock, projection: WorkbookProjectionState): { eligible: boolean; reason?: "ineligible" | "awaiting-acceptance" } {
+  return projection.workAcceptedBlockIds.has(block.id) ? { eligible: true } : { eligible: false, reason: "awaiting-acceptance" };
 }
 
 export interface WorkbookWorkflowDependencies {
@@ -382,9 +398,8 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
   const mainContext = async (): Promise<MainTutorContext> => {
     const projection = currentWorkbookProjection();
     const active = projection.current;
-    const testOnly = isTestOnlyJump(records);
-    const completeStatus = active ? canCompleteBlock(active, projection, testOnly) : { eligible: false };
-    return { records: projectedTimelineRecords(loaded, records), activeContext: await activeBlockContext(), completionTool: active && completeStatus.eligible ? { blockId: active.id, ...(testOnly ? { exactIntent: "move on" as const } : {}) } : undefined };
+    const completeStatus = active ? canCompleteBlock(active, projection) : { eligible: false };
+    return { records: projectedTimelineRecords(loaded, records), activeContext: await activeBlockContext(), completionTool: active && completeStatus.eligible ? { blockId: active.id } : undefined };
   };
   const mainContextForTarget = async (_lessonId: string, blockId: string): Promise<MainTutorContext> => {
     const active = activeOrderedBlock();
@@ -607,7 +622,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     }
   };
 
-  const completeBlock = async (blockId: string, allowTestSkip = false): Promise<CompleteBlockResult> => {
+  const completeBlock = async (blockId: string): Promise<CompleteBlockResult> => {
     const projection = currentWorkbookProjection();
     const stateBefore = async () => await currentPublicState();
     if (projection.completedBlockIds.has(blockId)) return { outcome: "already-completed", state: await stateBefore() };
@@ -615,15 +630,11 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     if (!requested) return { outcome: "rejected", state: await stateBefore(), reason: "unrevealed" };
     if (!isRendered(projection, requested.id) && requested.id !== projection.current?.id) return { outcome: "rejected", state: await stateBefore(), reason: "unrevealed" };
     if (projection.current?.id !== requested.id) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
-    const testOnly = isTestOnlyJump(records) && allowTestSkip;
-    const eligibility = canCompleteBlock(requested, projection, testOnly);
+    const eligibility = canCompleteBlock(requested, projection);
     if (!eligibility.eligible) return { outcome: "rejected", state: await stateBefore(), reason: "ineligible" };
-    const skipped = testOnly && requested.origin === "declared" && isEvaluatedBlock(requested.block) && !projection.workAcceptedBlockIds.has(requested.id);
-    const written = skipped
-      ? await append({ type: "block_skipped", lessonId: requested.lessonId, blockId: requested.id, reason: "move-on" })
-      : await append({ type: "block_completed", blockId: requested.id });
+    const written = await append({ type: "block_completed", blockId: requested.id });
     const nextProjection = currentWorkbookProjection();
-    if (requested.origin === "declared" && !skipped) await summarizeDeparture(requested, written.id);
+    if (requested.origin === "declared") await summarizeDeparture(requested, written.id);
     if (!nextProjection.current) await requestCompletionSummary(written.id);
     if (nextProjection.current) await ensureActiveWorkAcceptance();
     return { outcome: "completed", state: await currentPublicState(), navigationTarget: successorAnchor(stream, requested.id) };
@@ -679,15 +690,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
       if (!target) throw new WorkbookWorkflowCommandError(409, "This block is not active yet.");
       const visibleBlock = blockInView && (isNavigable(projection, blockInView) || blockInView === WORKBOOK_COMPLETE_ANCHOR_ID && projection.workbookComplete) ? blockInView : undefined;
       const learnerMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "user", source: "learner", presentation: "chat", text, blockInView: visibleBlock }) as TimelineMessage;
-      // A jump is test-only, but it is not a global bypass: this exact command is the only
-      // evidence-free crossing, and the server enforces it before a tutor can interpret prose.
-      const moveOn = isTestOnlyJump(records) && text.trim() === "move on";
-      return { generation: reloadGeneration, target, learnerMessage, moveOn, tutorContext: await mainContextForTarget(target.lessonId, target.blockId) };
-    });
-    if (snapshot.moveOn) return await transact(async () => {
-      if (!generationIsCurrent(snapshot.generation) || activeOrderedBlock()?.id !== snapshot.target.blockId) return await currentPublicState();
-      await completeBlock(snapshot.target.blockId, true);
-      return await currentPublicState();
+      return { generation: reloadGeneration, target, learnerMessage, tutorContext: await mainContextForTarget(target.lessonId, target.blockId) };
     });
     let reply: Awaited<ReturnType<MainWorkbookTutor["reply"]>> | undefined;
     let providerError: unknown;
@@ -706,9 +709,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
         return await currentPublicState();
       }
       if (typeof reply !== "string" && reply!.outcome === "complete-block") {
-        // A normal session keeps its established tutor completion behaviour. A jump has the
-        // stricter server-side command above, so conversational near-misses cannot skip work.
-        if (!isTestOnlyJump(records)) await completeBlock(reply!.blockId);
+        await completeBlock(reply!.blockId);
         return await currentPublicState();
       }
       try {
