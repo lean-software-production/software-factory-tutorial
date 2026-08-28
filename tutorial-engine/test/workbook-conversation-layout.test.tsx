@@ -105,10 +105,10 @@ describe("workbook fixed conversation layout", () => {
     const feedbackMarkdownTail = declarationsFor(".live-block-feedback .markdown > :last-child");
 
     expect(terminalSurface).toContain("position: relative");
-    expect(terminalWithFeedback).toContain("border-bottom: 0");
-    expect(terminalWithFeedback).toContain("border-radius: 9px 9px 0 0");
+    expect(terminalWithFeedback).not.toContain("border-bottom: 0");
+    expect(terminalWithFeedback).not.toContain("border-radius: 9px 9px 0 0");
     expect(feedbackPanel).toContain("margin: 0 0 12px");
-    expect(feedbackPanel).toContain("border-radius: 0 0 9px 9px");
+    expect(feedbackPanel).toContain("border-radius: 9px");
     expect(feedbackMarkdownBody).toContain("font: inherit");
     expect(feedbackMarkdownTail).toContain("margin-bottom: 0");
     expect(feedbackPanel).not.toContain("position: absolute");
