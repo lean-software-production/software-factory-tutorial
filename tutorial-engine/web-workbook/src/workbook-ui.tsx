@@ -150,13 +150,18 @@ function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange 
     const ws = new WebSocket(terminalSocketUrl());
     socket.current = ws;
     const sendResize = () => {
+      const dimensions = nextFit.proposeDimensions();
+      if (!dimensions || dimensions.cols === nextTerminal.cols && dimensions.rows === nextTerminal.rows) return;
       nextFit.fit();
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: nextTerminal.cols, rows: nextTerminal.rows }));
+    };
+    const sendCurrentDimensions = () => {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: nextTerminal.cols, rows: nextTerminal.rows }));
     };
     const dataDisposable = nextTerminal.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data }));
     });
-    ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); sendResize(); });
+    ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); sendCurrentDimensions(); });
     ws.addEventListener("message", (event) => {
       let frame: PublicTerminalFrame | undefined;
       // An unreadable frame is reported and dropped: throwing here would leave the socket open

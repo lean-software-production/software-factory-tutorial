@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const terminalDataListeners: Array<(data: string) => void> = [];
 const terminalFitCalls: string[] = [];
+let terminalProposedDimensions: { cols: number; rows: number } | undefined = { cols: 80, rows: 24 };
 
 vi.mock("@codemirror/state", () => ({
   EditorState: { create: (config: any) => config }
@@ -46,7 +47,7 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     cols = 80;
     rows = 24;
-    loadAddon() {}
+    loadAddon(addon: { terminal?: { cols: number; rows: number } }) { addon.terminal = this; }
     open() {}
     onData(listener: (data: string) => void) { terminalDataListeners.push(listener); return { dispose() { const index = terminalDataListeners.indexOf(listener); if (index >= 0) terminalDataListeners.splice(index, 1); } }; }
     write() {}
@@ -54,7 +55,14 @@ vi.mock("@xterm/xterm", () => ({
   }
 }));
 
-vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() { terminalFitCalls.push("fit"); } } }));
+vi.mock("@xterm/addon-fit", () => ({ FitAddon: class {
+  terminal?: { cols: number; rows: number };
+  fit() {
+    terminalFitCalls.push("fit");
+    if (this.terminal && terminalProposedDimensions) Object.assign(this.terminal, terminalProposedDimensions);
+  }
+  proposeDimensions() { return terminalProposedDimensions; }
+} }));
 
 vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/workbook/lesson-links.js")>();
@@ -153,6 +161,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   terminalDataListeners.splice(0);
   terminalFitCalls.splice(0);
+  terminalProposedDimensions = { cols: 80, rows: 24 };
 });
 
 // Every test in this file renders a component into a fresh JSDOM document, so
@@ -1855,7 +1864,7 @@ describe("workbook lesson UI", () => {
     expect(container.textContent).toContain("Next");
   });
 
-  it("refits the embedded terminal when its element changes size", async () => {
+  it("refits the embedded terminal only when its proposed grid changes", async () => {
     class FakeWebSocket {
       static CONNECTING = 0;
       static OPEN = 1;
@@ -1895,12 +1904,29 @@ describe("workbook lesson UI", () => {
 
     const socket = FakeWebSocket.instances[0]!;
     await act(async () => { socket.readyState = FakeWebSocket.OPEN; socket.emit("open"); });
-    expect(terminalFitCalls).toHaveLength(2);
-    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "resize", cols: 80, rows: 24 });
+    expect(terminalFitCalls).toHaveLength(1);
+    expect(socket.sent.map((message) => JSON.parse(message))).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
 
     await act(async () => { FakeResizeObserver.instances[0]!.trigger(); });
-    expect(terminalFitCalls).toHaveLength(3);
-    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "resize", cols: 80, rows: 24 });
+    expect(terminalFitCalls).toHaveLength(1);
+    expect(socket.sent).toHaveLength(1);
+
+    await act(async () => { window.dispatchEvent(new window.Event("resize")); });
+    expect(terminalFitCalls).toHaveLength(1);
+    expect(socket.sent).toHaveLength(1);
+
+    terminalProposedDimensions = { cols: 100, rows: 30 };
+    await act(async () => { FakeResizeObserver.instances[0]!.trigger(); });
+    expect(terminalFitCalls).toHaveLength(2);
+    expect(socket.sent.map((message) => JSON.parse(message))).toEqual([
+      { type: "resize", cols: 80, rows: 24 },
+      { type: "resize", cols: 100, rows: 30 },
+    ]);
+
+    terminalProposedDimensions = undefined;
+    await act(async () => { window.dispatchEvent(new window.Event("resize")); });
+    expect(terminalFitCalls).toHaveLength(2);
+    expect(socket.sent).toHaveLength(2);
 
     await act(async () => { mountedRoot!.unmount(); });
     mountedRoot = undefined;
