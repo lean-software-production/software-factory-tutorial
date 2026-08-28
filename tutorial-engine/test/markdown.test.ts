@@ -21,7 +21,7 @@ describe("Markdown", () => {
     expect(markup).toContain("<td>Done</td>");
   });
 
-  it("renders canonical lesson outcomes as a numbered course-compass card without extra label text", () => {
+  it("renders canonical lesson outcomes as a bulleted course-compass card without extra label text", () => {
     const markup = renderToStaticMarkup(createElement(Markdown, {
       source: "authored",
       lessonFrame: true,
@@ -30,7 +30,7 @@ describe("Markdown", () => {
 
     expect(markup).toContain('<section class="course-compass">');
     expect(markup).toContain("<h2>What you will learn</h2>");
-    expect(markup).toContain("<ol>");
+    expect(markup).toContain("<ul>");
     expect(markup).toContain("<li><p>Create a doer script.</p></li>");
     expect(markup).toContain("<li><p>Review the diff.</p></li>");
     expect(markup).not.toContain("Course compass");

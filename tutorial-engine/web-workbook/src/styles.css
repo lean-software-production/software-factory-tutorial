@@ -48,11 +48,11 @@ main { position: relative; min-width: 0; background-color: #fafaf3; background-i
 /* Lesson-frame outcomes */
 .course-compass { max-width: 720px; margin: 38px 0 42px; padding: 22px 24px 20px; border-left: 4px solid var(--blue); border-radius: 0 10px 10px 0; background: #f1f5fc; box-shadow: 0 3px 10px rgb(32 50 65 / .06); }
 .course-compass h2 { margin: 0 0 18px; }
-.course-compass ol { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; counter-reset: course-outcome; }
-.course-compass li { display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: 10px; margin: 0; counter-increment: course-outcome; }
-.course-compass li::before { padding-top: .28rem; color: var(--blue); content: counter(course-outcome, decimal-leading-zero); font-size: .68rem; font-weight: 800; letter-spacing: .04em; line-height: 1.4; }
+.course-compass ul { display: grid; gap: 12px; margin: 0; padding-left: 1.35rem; }
+.course-compass li { margin: 0; }
+.course-compass li::marker { color: var(--blue); }
 .work-block .course-compass li p { margin: 0; }
-@media (max-width: 840px) { .course-compass { margin: 30px 0 34px; padding: 19px 18px 18px; }.course-compass ol { gap: 10px; }.course-compass li { grid-template-columns: 1.8rem minmax(0, 1fr); gap: 8px; } }
+@media (max-width: 840px) { .course-compass { margin: 30px 0 34px; padding: 19px 18px 18px; }.course-compass ul { gap: 10px; } }
 
 /* Workbook block progression layout */
 .active-block-region { display: grid; gap: 14px; }

@@ -83,7 +83,7 @@ describe("TimelineThread", () => {
     }));
 
     expect(markup.match(/class="course-compass"/g)).toHaveLength(1);
-    expect(markup).toContain("<ol><li><p>Create a doer.</p></li></ol>");
+    expect(markup).toContain("<ul><li><p>Create a doer.</p></li></ul>");
     expect(markup).toContain("<ul>\n<li>Create a doer.</li>\n</ul>");
   });
 

@@ -182,7 +182,7 @@ export function Markdown({ children, source = "generated", lessonFrame = false }
     {frame.before && renderMarkdown(frame.before)}
     <section className="course-compass">
       <h2>What you will learn</h2>
-      <ol>{frame.outcomes.map((outcome, index) => <li key={index}>{renderMarkdown(outcome)}</li>)}</ol>
+      <ul>{frame.outcomes.map((outcome, index) => <li key={index}>{renderMarkdown(outcome)}</li>)}</ul>
     </section>
     {frame.after && renderMarkdown(frame.after)}
   </div>;
