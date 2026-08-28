@@ -13,13 +13,46 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Paths whose contents can change what the workbook looks like or how it responds to scrolling. */
+/**
+ * Everything that decides what the screenshots contain.
+ *
+ * The test this gates serves the *real* workbook server to Chromium, so the visual surface is
+ * wider than the client. It is the client, the server code that composes the text the client
+ * renders, the fixture that text is composed from, the configuration that builds the bundle, the
+ * image that supplies the fonts and Chromium's system libraries, and the pinned versions of the
+ * libraries that do the drawing.
+ *
+ * The test to apply when extending this list is therefore not "is this UI code?" but "could
+ * changing this move a pixel in an approved screenshot?". If it could, it belongs here — a skipped
+ * run is supposed to mean nothing visual changed, not that one directory was left alone.
+ */
 const VISUAL_SURFACE = [
+  // The client under test: components, styles, and the scroll behaviour itself.
   "tutorial-engine/web-workbook/",
+  // The harness, the approved screenshots, and the workbook the fixture server is fed.
   "tutorial-engine/test/visual-affordances.mts",
   "tutorial-engine/test/visual/",
   "tutorial-engine/test/fixtures/visual-workbook/",
   "tutorial-engine/test/support/fake-tutors.ts",
+  // The server's text composition. The harness calls startWorkbookServer, so what the browser
+  // shows is the server's own projection: change how a block's markdown is loaded, composed, or
+  // ordered and the screenshot changes with no diff under web-workbook/ at all.
+  "tutorial-engine/src/workbook/authored-text.ts",
+  "tutorial-engine/src/workbook/workbook-blocks.ts",
+  "tutorial-engine/src/workbook/load.ts",
+  "tutorial-engine/src/workbook/workflow.ts",
+  // Build configuration for the bundle the browser loads.
+  "tutorial-engine/vite.config.ts",
+  // Fonts and Chromium's shared libraries decide how text rasterises.
+  ".devcontainer/Dockerfile",
+  // The libraries that draw: @xterm/xterm the terminal band, @codemirror/view the editor band,
+  // highlight.js and rehype-highlight the code colours, react-dom the DOM, mermaid the diagrams,
+  // and playwright which Chromium takes the shot. They are pinned to exact versions in this file
+  // so that bumping one is an edit here, which this guard sees, rather than a change confined to
+  // package-lock.json, which it deliberately does not watch: listing the lockfile would fire the
+  // suite on every dependency change, and most of them cannot move a pixel.
+  "tutorial-engine/package.json",
+  // The guard itself: a change to what counts as visual is worth one confirming run.
   "scripts/check-visual.mjs",
 ];
 
