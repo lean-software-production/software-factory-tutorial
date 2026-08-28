@@ -74,6 +74,16 @@ npm test       # unit tests
 npm run check  # TypeScript, unit tests, browser build, and browser smoke
 ```
 
+`npm run browser:smoke` is safe to run on its own. It serves the built bundle in
+`dist/web-workbook/`, so before it starts Chromium it compares that bundle against everything vite
+reads to produce it — `web-workbook/`, `src/`, `vite.config.ts`, `package.json` — and builds it when
+it is missing or older than any of them. A smoke failure is therefore about the code, not about
+which bundle happened to be on disk. Inside `npm run check` the preceding `build:web:workbook` has
+already made the bundle current, so the check still builds it exactly once and the smoke adds only
+a directory sweep. The other browser scripts under `test/` — `continue-scroll.mts`,
+`tutor-chat-scroll.mts`, `visual-affordances.mts` — serve the same directory and only check that it
+exists, so run `npm run build:web:workbook` before driving one of those by hand.
+
 ## Release checks
 
 Playwright is a declared development dependency, but Chromium itself is downloaded separately.
