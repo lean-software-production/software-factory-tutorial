@@ -60,6 +60,26 @@ describe("projectTerminalAttempts", () => {
     });
   });
 
+  it("turns a final working outcome into visible feedback", () => {
+    const evidence = reader({ finished: { kind: "finished", command: "npm test", interactions: [], exitStatus: 0 } });
+    const events: WorkbookTimelineRecord[] = [
+      record({ type: "terminal-command-submitted", attemptId: "attempt-1", lessonId: "lesson-1", blockId: "block-1", command: "npm test", terminalSessionId: "terminal-1" }, 1),
+      record({ type: "terminal-command-finished", attemptId: "attempt-1", exitStatus: 0, evidenceRef: "finished" }, 2),
+      record({ type: "result-coaching-received", attemptId: "attempt-1", outcome: "working" }, 3),
+    ];
+
+    expect(projectTerminalAttempts(events, evidence).get("block-1")).toEqual({
+      attemptId: "attempt-1",
+      lessonId: "lesson-1",
+      blockId: "block-1",
+      state: "final-feedback",
+      feedback: {
+        outcome: "feedback",
+        text: "The command finished without showing the expected result. Run another command and try again."
+      },
+    });
+  });
+
   it("ignores stale coaching for unknown attempts, unknown checkpoints, and superseded attempts", () => {
     const evidence = reader({
       checkpoint: { kind: "running", command: "npm test", interactions: [] },

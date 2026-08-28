@@ -21,6 +21,7 @@ export type ProjectedTerminalAttempt = {
 };
 
 type Coaching = { outcome: TerminalCoachingOutcome; text?: string };
+const FINISHED_WORKING_FEEDBACK = "The command finished without showing the expected result. Run another command and try again.";
 type Checkpoint = { checkpointId: string };
 type Attempt = {
   attemptId: string;
@@ -46,7 +47,10 @@ function feedback(outcome: Coaching | undefined): PublicTerminalFeedback | undef
 function resultProjection(attempt: Attempt): ProjectedTerminalAttempt {
   const base = { attemptId: attempt.attemptId, lessonId: attempt.lessonId, blockId: attempt.blockId };
   const result = attempt.result;
-  if (!result || result.outcome === "working") return { ...base, state: "reviewing-result" };
+  if (!result) return { ...base, state: "reviewing-result" };
+  if (result.outcome === "working") {
+    return { ...base, state: "final-feedback", feedback: { outcome: "feedback", text: FINISHED_WORKING_FEEDBACK } };
+  }
   if (result.outcome === "feedback") return { ...base, state: "final-feedback", feedback: feedback(result) };
   return { ...base, state: "accepted-ready", feedback: result.text === undefined ? { outcome: result.outcome } : { outcome: result.outcome, text: result.text } };
 }
