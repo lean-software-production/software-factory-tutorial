@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { publicTerminalFrame, type PublicTerminalFrame } from "../../tutorial-engine/src/workbook/public-terminal-contract.js";
 import type { TerminalPty } from "../../tutorial-engine/src/workbook/terminal.js";
 import type { TutorDecision } from "../../tutorial-engine/src/workbook/tutor.js";
 import { createV2WorkbookDriver, V2WorkbookDriver } from "../v2/driver.js";
@@ -96,6 +97,8 @@ class DriverFakeWebSocket {
     this.readyState = DriverFakeWebSocket.CLOSED;
     this.emit("close");
   }
+
+  protected emitMessage(payload: Buffer): void { this.emit("message", payload); }
 
   private emit(event: string, ...args: any[]): void {
     for (const handler of [...this.handlers.get(event) ?? []]) handler(...args);
@@ -281,6 +284,50 @@ describe("v2 workbook driver", () => {
       { blockId: "lesson--001-live-session--exact-command", direction: "output", text: "command block complete\r\n" },
       { blockId: "lesson--001-live-session--exact-command", direction: "observer", text: "status:submitted" }
     ]));
+  });
+
+  it("records every terminal frame the server sends, not only the ones a scenario asserts on", async () => {
+    const blockId = "lesson--001-live-session--exact-command";
+    // One of each frame in PublicTerminalFrame. Before attempts replaced the observer the driver
+    // matched names no server had sent since f55dcf1, so an errored or evicted terminal left a
+    // trace that read as a clean run.
+    const frames: PublicTerminalFrame[] = [
+      { type: "output", data: "ran:echo hi\r\n" },
+      { type: "attempt-status", blockId, status: "running" },
+      { type: "attempt-status", status: "checking" },
+      { type: "attempt-error", blockId, message: "Could not submit the terminal attempt." },
+      { type: "terminal-error", message: "The embedded terminal could not start on this machine." },
+      { type: "busy", message: "Another browser is already connected to this terminal." },
+      { type: "exit", exitCode: 137, signal: 9 },
+      { type: "attempt-status", blockId, status: "submitted" }
+    ];
+    class ReplayWebSocket extends DriverFakeWebSocket {
+      override send(): void {
+        frames.forEach((frame, index) => setTimeout(() => this.emitMessage(Buffer.from(publicTerminalFrame(frame))), (index + 1) * 5));
+      }
+    }
+    const trace = createEmptyV2SessionTrace("terminal-frame-coverage-test");
+    const accepted = { progress: { blocks: [{ id: blockId, checkpoint: { status: "accepted", successMessage: "ok" } }] } };
+    const driver = new V2WorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      terminalTimeoutMs: 200,
+      terminalReviewTimeoutMs: 2_000,
+      WebSocket: ReplayWebSocket as any,
+      fetch: async () => new Response(JSON.stringify(accepted), { status: 200 })
+    });
+
+    await driver.submitTerminalCommand(blockId, "echo hi", { complete: false });
+
+    expect(trace.terminalTranscript.filter((entry) => entry.direction === "observer")).toEqual([
+      { blockId, direction: "observer", text: "status:running" },
+      { blockId, direction: "observer", text: "status:checking" },
+      { blockId, direction: "observer", text: "Could not submit the terminal attempt." },
+      { blockId, direction: "observer", text: "The embedded terminal could not start on this machine." },
+      { blockId, direction: "observer", text: "Another browser is already connected to this terminal." },
+      { blockId, direction: "observer", text: "exit:137 signal:9" },
+      { blockId, direction: "observer", text: "status:submitted" }
+    ]);
   });
 
   it("submits reflections and records the public learner/tutor conversation", async () => {
