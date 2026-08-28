@@ -1,5 +1,7 @@
-/* A terminal refit follows its real container size. Do not manufacture intermediate sizes while
-   the scroll-linked ActivityBand changes width and position. Editors retain their transition. */
+/* A terminal refit follows its real container size. Keep it in the authored column while the
+   scroll-linked ActivityBand expands editor practice. */
 .current-activity-band[data-activity-type="terminal-practice"] > .work-block {
+  left: 0;
+  width: var(--activity-inline-width);
   transition: none;
 }

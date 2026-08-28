@@ -56,15 +56,15 @@ function rect(left: number, width: number, top = 300) {
 }
 
 describe("ActivityBand stability", () => {
-  it("disables terminal width and left transitions without changing editor transitions", () => {
+  it("keeps terminal practice in the inline column while editor practice remains scroll-linked", () => {
     expect(existsSync(terminalTransitionStylesPath)).toBe(true);
     const terminalStyles = readFileSync(terminalTransitionStylesPath, "utf8");
     const workbookStyles = readFileSync(workbookStylesPath, "utf8");
     const mainSource = readFileSync(mainSourcePath, "utf8");
 
     expect(mainSource).toContain('import "./activity-band.css"');
-    expect(terminalStyles).toMatch(/\.current-activity-band\[data-activity-type="terminal-practice"\]\s*>\s*\.work-block\s*\{[^}]*transition:\s*none;/);
-    expect(workbookStyles).toMatch(/\.current-activity-band\s*>\s*\.work-block\s*\{[^}]*transition:\s*left 80ms linear, width 80ms linear;/);
+    expect(terminalStyles).toMatch(/\.current-activity-band\[data-activity-type="terminal-practice"\]\s*>\s*\.work-block\s*\{[^}]*left:\s*0;[^}]*width:\s*var\(--activity-inline-width\);[^}]*transition:\s*none;/);
+    expect(workbookStyles).toMatch(/\.current-activity-band\s*>\s*\.work-block\s*\{[^}]*left:\s*var\(--activity-left-offset\);[^}]*width:\s*var\(--activity-width\);[^}]*transition:\s*left 80ms linear, width 80ms linear;/);
   });
 
   it("observes the inline source and main, but never the band whose feedback can change height", async () => {
