@@ -11,7 +11,6 @@ import { TerminalEvidenceRepository } from "../src/workbook/terminal-evidence.js
 import { SessionWorkspaceManager } from "../src/session-workspace.js";
 import { startWorkbookServer } from "../src/workbook/server.js";
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
-import { BlockView } from "../web-workbook/src/workbook-ui.js";
 import type { ContentWatchFactory } from "../src/workbook/content-watch.js";
 import type { TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
 import type { Attempt } from "../src/workbook/attempts.js";
@@ -1295,7 +1294,7 @@ describe("workbook browser API", () => {
     }
   });
 
-  it("corrects a non-Pi Bash command for a displayed Pi command without model work", async () => {
+  it("asks the Practice Coach only after either executable finishes", async () => {
     const dir = await fixture();
     const terminalLesson = resolve(dir, "lessons/001-first");
     await writeBlock(
@@ -1306,30 +1305,41 @@ describe("workbook browser API", () => {
       "Run the displayed command.\n\n```sh command\npi --help\n```",
       "Observe Pi running."
     );
-    const pty = new ServerFakePty();
+    const pty = new ServerFakePty(false);
     const mainTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
     const coach = new FakePracticeCoach();
+    coach.queue.push(
+      { outcome: "feedback", text: "Practice Coach assessed ls." },
+      { outcome: "feedback", text: "Practice Coach assessed Pi." }
+    );
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalDebounceMs: 1, mainTutor, practiceCoach: coach });
     try {
       await introduceAndOpenEditor(server.url);
       await acceptEditor(server.url, mainTutor);
-      const ws = await connect(server.url, server.url);
-      const output = waitFor(ws, (message) => message.type === "output" && message.data.includes("ran:ls -la"));
-      ws.send(JSON.stringify({ type: "input", data: "ls -la\r" }));
-      await output;
+      const blockId = "lesson--001-first--run-supplied-command";
 
-      const corrected = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.feedback === "This step is about running Pi. Run the displayed Pi command in the embedded terminal.", "immediate Pi correction");
-      const activeBlock = corrected.chapters[0]!.lesson!.blocks.find((candidate: any) => candidate.id === "lesson--001-first--run-supplied-command")!;
-      const markup = renderToStaticMarkup(createElement(BlockView, { lessonId: "001-first", block: activeBlock, progress: corrected.progress, refresh: vi.fn() }));
-      expect(markup.split("This step is about running Pi. Run the displayed Pi command in the embedded terminal.").length - 1).toBe(1);
-      expect(JSON.stringify(corrected)).not.toContain("ls -la");
-      expect(coach.assessments).toHaveLength(0);
+      for (const [command, feedback] of [["ls -la", "Practice Coach assessed ls."], ["pi --help", "Practice Coach assessed Pi."]] as const) {
+        pty.data?.(bashCommandMarker(command));
+        await waitForPrivateTimeline(dir, (records) => records.some((record) => record.type === "terminal-command-submitted" && record.command === command), `${command} submission recorded`);
+        expect(coach.assessments).toHaveLength(command === "ls -la" ? 0 : 1);
+        expect(block(await state(server.url), blockId)?.terminalStatus).toBe("submitted");
+
+        pty.data?.(`ran:${command}\r\n${bashFinishedMarker()}`);
+        await waitForWorkbookState(server.url, (next) => block(next, blockId)?.checkpoint?.feedback === feedback, `${command} Practice Coach feedback`);
+      }
+
+      expect(coach.assessments).toHaveLength(2);
+      expect(coach.assessments.map(({ attempt }) => {
+        if (attempt.evidence.kind !== "terminal") throw new Error("Practice Coach received non-terminal evidence.");
+        return JSON.parse(attempt.evidence.transcript).command;
+      })).toEqual(["ls -la", "pi --help"]);
       expect(mainTutor.reviews).toHaveLength(1); // the editor acceptance only
       const records = await privateTimeline(dir);
-      expect(records).toContainEqual(expect.objectContaining({ type: "preliminary-coaching-received", outcome: "feedback", deterministic: true, text: "This step is about running Pi. Run the displayed Pi command in the embedded terminal." }));
-      expect(records).toContainEqual(expect.objectContaining({ type: "result-coaching-received", outcome: "feedback", text: "This step is about running Pi. Run the displayed Pi command in the embedded terminal." }));
-      expect(records).not.toContainEqual(expect.objectContaining({ type: "result-coaching-received", outcome: "wait-for-result" }));
-      ws.close();
+      expect(records.filter((record) => record.type === "preliminary-coaching-received")).toEqual([]);
+      expect(records
+        .filter((record): record is Extract<WorkbookTimelineRecord, { type: "result-coaching-received" }> => record.type === "result-coaching-received" && record.outcome === "feedback")
+        .map((record) => record.text)
+      ).toEqual(["Practice Coach assessed ls.", "Practice Coach assessed Pi."]);
     } finally { await server.close(); }
   });
 
