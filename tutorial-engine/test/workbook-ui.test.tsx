@@ -1993,7 +1993,7 @@ describe("workbook lesson UI", () => {
     expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   });
 
-  it("hides feedback immediately on Enter and ignores stale polls until current Running arrives", async () => {
+  it("keeps the server state on Enter and replaces it only with Bash-authoritative state", async () => {
     class FakeWebSocket {
       static CONNECTING = 0; static OPEN = 1; static CLOSED = 3;
       readyState = FakeWebSocket.OPEN;
@@ -2005,7 +2005,7 @@ describe("workbook lesson UI", () => {
       progress: activeBlockProgress(lesson.blocks[1]!, { ...(terminal ? { terminal } : {}) } as any),
       refresh: vi.fn(),
     });
-    const oldFeedback = { phase: "feedback", message: "Previous feedback must disappear." } as const;
+    const oldFeedback = { phase: "feedback", message: "Previous feedback remains until Bash reports a new state." } as const;
     const container = await mount(render(oldFeedback), (win) => {
       vi.stubGlobal("location", win.location);
       vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
@@ -2014,25 +2014,18 @@ describe("workbook lesson UI", () => {
     expect(container.textContent).toContain(oldFeedback.message);
 
     await act(async () => { terminalDataListeners[0]!("\r"); });
-    expect(container.textContent).toContain("Sending…");
-    expect(container.textContent).not.toContain(oldFeedback.message);
-    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
-
-    // A stale HTTP/SSE snapshot must not resurrect old feedback or completion while Sending gates
-    // the display. Only the current Bash-authoritative Running projection opens the gate.
-    await act(async () => { mountedRoot!.render(render(oldFeedback)); });
-    await act(async () => { mountedRoot!.render(render({ phase: "complete", message: "Stale completion." })); });
-    expect(container.textContent).toContain("Sending…");
-    expect(container.textContent).not.toContain(oldFeedback.message);
-    expect(container.textContent).not.toContain("Stale completion.");
+    expect(container.textContent).toContain(oldFeedback.message);
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
 
     await act(async () => { mountedRoot!.render(render({ phase: "running" })); });
     expect(container.textContent).toContain("Running…");
+    expect(container.textContent).not.toContain(oldFeedback.message);
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
+    expect(container.querySelector(".terminal-running-spinner")?.getAttribute("aria-hidden")).toBe("true");
 
     await act(async () => { mountedRoot!.render(render({ phase: "checking" })); });
     expect(container.textContent).toContain("Checking…");
+    expect(container.querySelector(".terminal-running-spinner")).toBeNull();
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
   });
 

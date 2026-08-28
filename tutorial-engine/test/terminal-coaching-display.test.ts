@@ -4,7 +4,7 @@ import { createTerminalCoachingDisplayState, reduceTerminalCoachingDisplay } fro
 const server = (terminal: any) => reduceTerminalCoachingDisplay(createTerminalCoachingDisplayState(), { type: "server-state", terminal });
 
 describe("terminal coaching display reducer", () => {
-  it("has exactly the public lifecycle states", () => {
+  it("has exactly the server-authoritative lifecycle states", () => {
     expect(createTerminalCoachingDisplayState()).toEqual({ phase: "idle" });
     expect(server({ phase: "running" })).toEqual({ phase: "running", text: "Running…" });
     expect(server({ phase: "checking" })).toEqual({ phase: "checking", text: "Checking…" });
@@ -12,21 +12,12 @@ describe("terminal coaching display reducer", () => {
     expect(server({ phase: "complete", message: "Accepted." })).toEqual({ phase: "complete", text: "Accepted." });
   });
 
-  it("opens Sending immediately and ignores stale feedback and completion until current Running arrives", () => {
+  it("renders each server state directly without a local submission event", () => {
     const feedback = server({ phase: "feedback", message: "Previous feedback." });
-    const sending = reduceTerminalCoachingDisplay(feedback, { type: "local-enter" });
-    const staleFeedback = reduceTerminalCoachingDisplay(sending, { type: "server-state", terminal: { phase: "feedback", message: "Previous feedback." } });
-    const staleComplete = reduceTerminalCoachingDisplay(staleFeedback, { type: "server-state", terminal: { phase: "complete", message: "Previous completion." } });
 
-    expect(staleComplete).toEqual({ phase: "sending", text: "Sending…" });
-    expect(reduceTerminalCoachingDisplay(staleComplete, { type: "server-state", terminal: { phase: "running" } })).toEqual({ phase: "running", text: "Running…" });
-  });
-
-  it("lets a later Enter replace feedback and complete normally locks after Bash state", () => {
-    const feedback = server({ phase: "feedback", message: "Try again." });
-    expect(reduceTerminalCoachingDisplay(feedback, { type: "local-enter" })).toEqual({ phase: "sending", text: "Sending…" });
-
-    const complete = server({ phase: "complete", message: "Accepted." });
-    expect(reduceTerminalCoachingDisplay(complete, { type: "local-enter" })).toEqual({ phase: "sending", text: "Sending…" });
+    expect(reduceTerminalCoachingDisplay(feedback, { type: "server-state", terminal: { phase: "running" } })).toEqual({ phase: "running", text: "Running…" });
+    expect(reduceTerminalCoachingDisplay(feedback, { type: "server-state", terminal: { phase: "checking" } })).toEqual({ phase: "checking", text: "Checking…" });
+    expect(reduceTerminalCoachingDisplay(feedback, { type: "server-state", terminal: { phase: "feedback", message: "New feedback." } })).toEqual({ phase: "feedback", text: "New feedback." });
+    expect(reduceTerminalCoachingDisplay(feedback, { type: "server-state", terminal: { phase: "complete", message: "Accepted." } })).toEqual({ phase: "complete", text: "Accepted." });
   });
 });

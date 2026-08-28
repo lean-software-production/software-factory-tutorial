@@ -38,4 +38,5 @@ Update the index below whenever you create a record or change its status.
 | [0014](0014-address-the-workbook-server-relatively.md) | accepted | Address the workbook server relatively |
 | [0015](0015-model-behaviour-with-eventstorming.md) | accepted | Model behaviour with EventStorming |
 | [0016](0016-model-terminal-coaching-around-submitted-commands.md) | superseded | Model terminal coaching around submitted commands |
-| [0017](0017-simplify-terminal-learner-feedback.md) | accepted | Simplify terminal learner feedback |
+| [0017](0017-simplify-terminal-learner-feedback.md) | superseded | Simplify terminal learner feedback |
+| [0018](0018-use-bash-authoritative-terminal-display-states.md) | accepted | Use Bash-authoritative terminal display states |

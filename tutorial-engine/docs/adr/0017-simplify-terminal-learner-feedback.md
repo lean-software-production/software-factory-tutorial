@@ -4,7 +4,7 @@ Date: 2026-08-28
 
 ## Status
 
-accepted
+superseded
 
 Supersedes [16. Model terminal coaching around submitted commands](0016-model-terminal-coaching-around-submitted-commands.md).
 

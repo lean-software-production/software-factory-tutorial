@@ -129,7 +129,7 @@ function terminalSocketUrl(): string {
   return url.href;
 }
 
-function EmbeddedTerminal({ command, active, onError, onLocalCommandSubmitted, onTerminalInsertionChange }: { command?: string; active: boolean; onError(message: string): void; onLocalCommandSubmitted(): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange }: { command?: string; active: boolean; onError(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
@@ -154,8 +154,6 @@ function EmbeddedTerminal({ command, active, onError, onLocalCommandSubmitted, o
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: nextTerminal.cols, rows: nextTerminal.rows }));
     };
     const dataDisposable = nextTerminal.onData((data) => {
-      // Xterm receives Enter before Bash emits its authoritative submitted marker.
-      if (/[\r\n]/.test(data)) onLocalCommandSubmitted();
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data }));
     });
     ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); sendResize(); });
@@ -188,7 +186,7 @@ function EmbeddedTerminal({ command, active, onError, onLocalCommandSubmitted, o
       socket.current = null;
       setConnected(false);
     };
-  }, [active, onError, onLocalCommandSubmitted]);
+  }, [active, onError]);
 
   const insertCommand = useCallback(() => {
     if (!command) return;
@@ -289,20 +287,15 @@ function TerminalBlock({ lessonId, block, state, onTerminalInsertionChange }: { 
     // A later authoritative lifecycle state replaces a transport error in the same one card.
     if (state?.terminal) setTerminalError(undefined);
   }, [state?.terminal]);
-  const onLocalCommandSubmitted = useCallback(() => {
-    setTerminalError(undefined);
-    dispatch({ type: "local-enter" });
-  }, []);
-
   const complete = state?.terminal?.phase === "complete" || display.phase === "complete";
   const showLiveTerminal = !state?.completed && !complete;
   const text = terminalError ?? (display.phase === "idle" ? undefined : display.text);
   // Exactly one in-place learner-facing node represents status, feedback, completion, or a
   // transport error. It is never moved into the activity/timeline portal.
-  const displayPanel = text ? <aside className="live-block-feedback terminal-feedback-overlay" aria-live="polite" role="status"><Markdown source="generated">{text}</Markdown></aside> : null;
+  const displayPanel = text ? <aside className={`live-block-feedback terminal-feedback-overlay${display.phase === "running" ? " running" : ""}`} aria-live="polite" role="status">{display.phase === "running" && <span className="terminal-running-spinner" aria-hidden="true" />}<Markdown source="generated">{text}</Markdown></aside> : null;
   return <section id={blockElementId(lessonId, block.id)} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
     {complete ? <div className="frozen-terminal" aria-label="Frozen terminal session"><pre className="frozen-terminal-output">Terminal session frozen.</pre></div> : showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
-      <EmbeddedTerminal command={command} active={Boolean(state?.active)} onError={setTerminalError} onLocalCommandSubmitted={onLocalCommandSubmitted} onTerminalInsertionChange={onTerminalInsertionChange} />
+      <EmbeddedTerminal command={command} active={Boolean(state?.active)} onError={setTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} />
       {displayPanel}
     </div>}
     {!showLiveTerminal && displayPanel}
