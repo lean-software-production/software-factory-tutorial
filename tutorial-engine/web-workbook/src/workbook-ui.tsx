@@ -121,7 +121,7 @@ function shellCommandFrom(markdown: string): string | undefined {
 
 const UNREADABLE_TERMINAL_FRAME = "The embedded terminal received an unreadable message from the workbook server. Refresh the page if the terminal stops responding.";
 
-function EmbeddedTerminal({ block, command, active, completed, verified, refresh, onAdvice, onError, onStatus, onTerminalInsertionChange }: { block: Block; command?: string; active: boolean; completed: boolean; verified: boolean; refresh(state: State): void; onAdvice(message: string): void; onError(message: string): void; onStatus(message: string | undefined): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+function EmbeddedTerminal({ block, command, active, refresh, onAdvice, onError, onStatus, onTerminalInsertionChange }: { block: Block; command?: string; active: boolean; refresh(state: State): void; onAdvice(message: string): void; onError(message: string): void; onStatus(message: string | undefined): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
@@ -130,7 +130,7 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
   const [connectionEpoch, setConnectionEpoch] = useState(0);
 
   useEffect(() => {
-    if (!active || completed || !terminalElement.current) return;
+    if (!active || !terminalElement.current) return;
     const nextTerminal = new Terminal({ cursorBlink: true, convertEol: true, fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', fontSize: 16, theme: { background: "#101820" } });
     const nextFit = new FitAddon();
     nextTerminal.loadAddon(nextFit);
@@ -146,7 +146,7 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
       nextFit.fit();
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: nextTerminal.cols, rows: nextTerminal.rows }));
     };
-    const dataDisposable = nextTerminal.onData((data) => { if (!verified && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data })); });
+    const dataDisposable = nextTerminal.onData((data) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data })); });
     ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); sendResize(); });
     ws.addEventListener("message", (event) => {
       let frame: PublicTerminalMessage | undefined;
@@ -184,22 +184,22 @@ function EmbeddedTerminal({ block, command, active, completed, verified, refresh
       socket.current = null;
       setConnected(false);
     };
-  }, [active, completed, verified, block.id, refresh, onAdvice, onError, onStatus]);
+  }, [active, block.id, refresh, onAdvice, onError, onStatus]);
 
   const insertCommand = useCallback(() => {
     if (!command) return;
     const data = commandForInsertion(command);
-    if (!verified && socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({ type: "input", data }));
-  }, [command, verified]);
+    if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({ type: "input", data }));
+  }, [command]);
 
   useEffect(() => {
-    if (!active || !command || verified || !connected || socket.current?.readyState !== WebSocket.OPEN) {
+    if (!active || !command || !connected || socket.current?.readyState !== WebSocket.OPEN) {
       onTerminalInsertionChange?.(undefined);
       return;
     }
     onTerminalInsertionChange?.(insertCommand);
     return () => onTerminalInsertionChange?.(undefined);
-  }, [active, command, connected, connectionEpoch, insertCommand, onTerminalInsertionChange, verified]);
+  }, [active, command, connected, connectionEpoch, insertCommand, onTerminalInsertionChange]);
 
   return <div className="embedded-terminal-panel">
     <span className={`terminal-connection-status${connected ? " connected" : ""}`} aria-label={connected ? "Terminal connected" : "Terminal disconnected"} />
@@ -259,10 +259,10 @@ export function ContinuationPageBreak({ completedAt }: { completedAt?: string })
   return <div className="continuation-controls"><CompletionMarker completedAt={completedAt} /><div className="continuation-page-break" aria-hidden="true" /></div>;
 }
 
-export function ContinueControls({ block, state, refresh, label, preserveCompletedBreak = false }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void; label?: string; preserveCompletedBreak?: boolean }) {
+export function ContinueControls({ block, state, refresh, label }: { block: Block; state: BlockProgress | undefined; refresh(state: State): void; label?: string }) {
   const { active, pending, continueOnce } = useContinueOnce(block, state, refresh);
 
-  if (state?.completed) return preserveCompletedBreak ? <ContinuationPageBreak completedAt={state.completedAt} /> : <p className="next-ready">The next step has appeared below.</p>;
+  if (state?.completed) return <p className="next-ready">The next step has appeared below.</p>;
   if (!active) return null;
   const buttonLabel = label ?? (block.id === "workbook--introduction" ? "Ready to continue" : "Continue");
   return <div className="continuation-controls">
@@ -271,7 +271,7 @@ export function ContinueControls({ block, state, refresh, label, preserveComplet
   </div>;
 }
 
-function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = true, onTerminalInsertionChange, feedbackHost, continueLabel }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; feedbackHost?: HTMLElement | null; continueLabel?: string }) {
+function TerminalBlock({ lessonId, block, state, refresh, onTerminalInsertionChange, feedbackHost }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; feedbackHost?: HTMLElement | null }) {
   const [observerFeedback, setObserverFeedback] = useState<string>();
   const [observerStatus, setObserverStatus] = useState<string>();
   const command = shellCommandFrom(block.markdown);
@@ -291,9 +291,8 @@ function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = 
   const feedbackOutsideBand = feedbackHost === undefined ? null : feedbackHost ? createPortal(feedback, feedbackHost) : null;
   useEffect(() => { setObserverFeedback(undefined); setObserverStatus(undefined); }, [block.id, state?.completed, state?.checkpoint?.status]);
   return <section id={blockElementId(lessonId, block.id)} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
-    {showAuthoredContent && <><p className="section-label">Practice · embedded terminal</p><h2>{block.title}</h2><Markdown source="authored">{block.markdown}</Markdown></>}
     {state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : showLiveTerminal && <div className={`terminal-live-surface${liveFeedback && feedbackHost === undefined ? " has-feedback" : ""}`}>
-      <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={false} refresh={refresh} onAdvice={setObserverFeedback} onError={setObserverFeedback} onStatus={setObserverStatus} onTerminalInsertionChange={onTerminalInsertionChange} />
+      <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} refresh={refresh} onAdvice={setObserverFeedback} onError={setObserverFeedback} onStatus={setObserverStatus} onTerminalInsertionChange={onTerminalInsertionChange} />
       {feedbackInTerminal}
     </div>}
     {!showLiveTerminal && feedbackInTerminal}
@@ -310,7 +309,7 @@ function editorStatusText(state: BlockProgress | undefined, completed: boolean):
   return "Editing — changes are reviewed automatically after you pause.";
 }
 
-function EditorPracticeBlockView({ lessonId, block, state, refresh, showAuthoredContent = true, continueLabel }: { lessonId: string; block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void; showAuthoredContent?: boolean; continueLabel?: string }) {
+function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId: string; block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void }) {
   const editorElement = useRef<HTMLDivElement | null>(null);
   const editor = useRef<EditorView | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -367,7 +366,6 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh, showAuthored
   // bottom of the work surface. Feedback outranks the running status, which outranks nothing.
   const liveFeedback = localError ?? state?.checkpoint?.feedback ?? editorStatusText(state, completed);
   return <section id={blockElementId(lessonId, block.id)} className={`work-block editor-practice ${state?.active ? "is-active" : ""}`}>
-    {showAuthoredContent && <><p className="section-label">Practice · embedded editor</p><h2>{block.title}</h2><Markdown source="authored">{block.markdown}</Markdown></>}
     <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
     {canEdit && <div className={`editor-live-surface${liveFeedback ? " has-feedback" : ""}`}>
       <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />
@@ -379,11 +377,11 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh, showAuthored
   </section>;
 }
 
-export function BlockView({ lessonId, block, progress, refresh, showAuthoredContent = true, onTerminalInsertionChange, feedbackHost, continueLabel }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; feedbackHost?: HTMLElement | null; continueLabel?: string }) {
+export function BlockView({ lessonId, block, progress, refresh, onTerminalInsertionChange, feedbackHost }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; feedbackHost?: HTMLElement | null }) {
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
-  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} onTerminalInsertionChange={onTerminalInsertionChange} feedbackHost={feedbackHost} continueLabel={continueLabel} />;
-  if (block.type === "editor-practice") return <EditorPracticeBlockView lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} continueLabel={continueLabel} />;
+  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} onTerminalInsertionChange={onTerminalInsertionChange} feedbackHost={feedbackHost} />;
+  if (block.type === "editor-practice") return <EditorPracticeBlockView lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
   return null;
 }
 

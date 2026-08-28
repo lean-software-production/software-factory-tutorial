@@ -759,7 +759,6 @@ describe("workbook lesson UI", () => {
   it("renders an active editor-practice block without exposing private tutor text", () => {
     const markup = html(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress(), refresh: vi.fn() }));
 
-    expect(markup).toContain("Edit the answer");
     expect(markup).toContain("factory/answer.md");
     expect(markup).toContain("editor-surface");
     expect(markup).toContain("editor-feedback-overlay");
@@ -798,7 +797,6 @@ describe("workbook lesson UI", () => {
       refresh: vi.fn()
     }));
 
-    expect(inactiveMarkup).toContain("Edit the answer");
     expect(inactiveMarkup).toContain("factory/answer.md");
     expect(inactiveMarkup).not.toContain("editor-surface");
     expect(inactiveMarkup).not.toContain("editor-live-surface");
@@ -1018,7 +1016,7 @@ describe("workbook lesson UI", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("renders direct curriculum Mermaid as a diagram while live feedback remains copyable code", () => {
+  it("renders live practice feedback Mermaid as copyable code rather than a diagram", () => {
     const diagram = "```mermaid\ngraph TD\n  A --> B\n```";
     const feedbackMarkup = html(createElement(BlockView, {
       block: { ...lesson.blocks[1]!, markdown: diagram },
@@ -1026,7 +1024,7 @@ describe("workbook lesson UI", () => {
       refresh: vi.fn()
     }));
 
-    expect(feedbackMarkup.match(/class="mermaid-diagram"/g)).toHaveLength(1);
+    expect(feedbackMarkup).not.toContain('class="mermaid-diagram"');
     expect(feedbackMarkup).toContain('class="code-block"');
     expect(feedbackMarkup).toContain('aria-label="Copy code"');
   });
