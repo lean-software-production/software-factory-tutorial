@@ -831,6 +831,40 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("does not treat an unfinished command from an old terminal session as running in ordinary chat", async () => {
+    const dir = await fixture();
+    const oldPty = new ServerFakePty(false);
+    const firstTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => oldPty, mainTutor: firstTutor, practiceCoach: new FakePracticeCoach() });
+    const blockId = "lesson--001-first--run-supplied-command";
+    const staleCommand = "printf stale-old-session-context";
+    try {
+      await introduceAndOpenEditor(firstServer.url);
+      await acceptEditor(firstServer.url, firstTutor);
+      const ws = await connect(firstServer.url, firstServer.url);
+      oldPty.data?.(bashCommandMarker(staleCommand));
+      ws.send(JSON.stringify({ type: "input", data: `${staleCommand}\r` }));
+      await waitForPrivateTimeline(dir, (records) => records.some((record) => record.type === "terminal-command-submitted" && record.command === staleCommand), "old terminal session command submission");
+      ws.close();
+    } finally { await firstServer.close(); }
+
+    const newPty = new ServerFakePty(false);
+    const secondTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const secondServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => newPty, mainTutor: secondTutor, practiceCoach: new FakePracticeCoach() });
+    try {
+      const ws = await connect(secondServer.url, secondServer.url);
+      newPty.data?.("fresh-session-output\r\n");
+
+      const response = await postMessage(secondServer.url, { blockId, text: "What does the terminal show now?" });
+      expect(response.status).toBe(202);
+      const replyContext = secondTutor.replies.at(-1)!.activeContext as any;
+      expect(replyContext.terminal).toMatchObject({ transcript: expect.stringContaining("fresh-session-output") });
+      expect(replyContext.terminal.latestCommand).toBeUndefined();
+      expect(JSON.stringify(await response.json())).not.toMatch(/fresh-session-output|stale-old-session-context|workbook-command|evidenceRef|attemptId/);
+      ws.close();
+    } finally { await secondServer.close(); }
+  });
+
   it("gives ordinary Main Tutor chat private active terminal context for a running command only", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty(false);

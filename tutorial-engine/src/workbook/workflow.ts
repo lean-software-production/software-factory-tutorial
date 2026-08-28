@@ -455,11 +455,15 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     if (active.block.type !== "terminal-practice") return undefined;
     const transcriptContext = currentActiveTerminalContext?.();
     if (!transcriptContext || transcriptContext.lessonId !== active.lessonId || transcriptContext.blockId !== active.id) return undefined;
+    const finishedForAttempt = (attemptId: string) => records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> =>
+      record.type === "terminal-command-finished" && record.attemptId === attemptId);
     const submission = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
-      record.type === "terminal-command-submitted" && record.lessonId === active.lessonId && record.blockId === active.id);
+      record.type === "terminal-command-submitted" &&
+      record.lessonId === active.lessonId &&
+      record.blockId === active.id &&
+      (record.terminalSessionId === terminalSessionId || Boolean(finishedForAttempt(record.attemptId))));
     if (!submission) return { transcript: transcriptContext.transcript };
-    const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> =>
-      record.type === "terminal-command-finished" && record.attemptId === submission.attemptId);
+    const finished = finishedForAttempt(submission.attemptId);
     const runningCommand = { attemptId: submission.attemptId, command: submission.command, status: "running" as const };
     if (!finished) return { transcript: transcriptContext.transcript, latestCommand: runningCommand };
     const finishedEvidence = await terminalEvidence.read(finished.evidenceRef);
