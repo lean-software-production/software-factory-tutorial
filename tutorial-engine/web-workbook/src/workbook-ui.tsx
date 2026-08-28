@@ -10,20 +10,15 @@ import { lessonElementId } from "../../src/workbook/lesson-links.js";
 import { ActivityBand } from "./activity-band.js";
 import { TimelineThread } from "./timeline-thread.js";
 import { isPublicWorkbookState, parsePublicCompleteBlockResult, parsePublicWorkbookState } from "../../src/workbook/public-contract.js";
-import type { PublicAttemptKind, PublicCheckpoint, PublicCompleteBlockResult, PublicEditorStatus, PublicReflectionTurn, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookBlockType, PublicWorkbookChapter, PublicWorkbookLesson, PublicWorkbookProgress, PublicWorkbookState } from "../../src/workbook/public-contract.js";
+import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookChapter, PublicWorkbookLesson, PublicWorkbookProgress, PublicWorkbookState } from "../../src/workbook/public-contract.js";
 import { parsePublicTerminalMessage, type PublicTerminalMessage } from "../../src/workbook/public-terminal-contract.js";
 
-export type WorkbookBlockType = PublicWorkbookBlockType;
+// A short local vocabulary for the contract types this module uses constantly. Only names that
+// earn their keep are kept: the seven aliases that nothing referenced are gone.
 export type Block = PublicWorkbookBlock;
-export type NarrativeBlock = Extract<Block, { type: "narrative" }>;
-export type TerminalPracticeBlock = Extract<Block, { type: "terminal-practice" }>;
 export type EditorPracticeBlock = Extract<Block, { type: "editor-practice" }>;
-export type ReflectionBlock = Extract<Block, { type: "reflection" }>;
 export type Lesson = PublicWorkbookLesson;
 export type Chapter = PublicWorkbookChapter;
-export type AttemptKind = PublicAttemptKind;
-export type EditorStatus = PublicEditorStatus;
-export type ReflectionTurn = PublicReflectionTurn;
 export type { PublicCheckpoint, PublicTimelineRecord };
 export type BlockProgress = PublicWorkbookBlockProgress;
 export type Progress = PublicWorkbookProgress;
