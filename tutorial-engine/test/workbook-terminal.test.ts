@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WorkbookTerminalManager, dockerContainerUser, dockerExecArguments, type TerminalClient, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
+import { WorkbookTerminalManager, dockerContainerUser, dockerExecArguments, type ActiveObservedTerminalBlock, type TerminalClient, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
 import type { TerminalObservationFact } from "../src/workbook/terminal-observation.js";
 
 class FakePty implements TerminalPty {
@@ -26,9 +26,13 @@ class FakeClient implements TerminalClient {
 function marker(command: string): string { return `\x1b]633;workbook-command;${Buffer.from(command).toString("base64")}\x07`; }
 function finished(exitStatus = 0): string { return `\x1b]633;workbook-finished;${exitStatus}\x07`; }
 
-function setup() {
+const activePractice: ActiveObservedTerminalBlock = { lessonId: "lesson", blockId: "practice" };
+
+function setup(options: { initialActiveBlock?: ActiveObservedTerminalBlock } = {}) {
+  const initialActiveBlock = "initialActiveBlock" in options ? options.initialActiveBlock : activePractice;
   const facts: TerminalObservationFact[] = [];
   const ptys: FakePty[] = [];
+  const active = { block: initialActiveBlock };
   const factory: TerminalPtyFactory = () => {
     const pty = new FakePty();
     ptys.push(pty);
@@ -36,11 +40,11 @@ function setup() {
   };
   const manager = new WorkbookTerminalManager({
     workspace: "/tmp/workspace",
-    getActiveBlock: () => ({ lessonId: "lesson", blockId: "practice", command: "", context: "", expectedObservation: "private" }),
+    getActiveBlock: () => active.block,
     observationSink: async (fact) => { facts.push(fact); },
     ptyFactory: factory,
   });
-  return { manager, ptys, facts };
+  return { manager, ptys, facts, active };
 }
 
 describe("WorkbookTerminalManager", () => {
@@ -64,6 +68,26 @@ describe("WorkbookTerminalManager", () => {
     manager.receive({ type: "resize", cols: 999, rows: 999 });
     expect(ptys[0]?.writes).toEqual(["echo hi\r"]);
     expect(ptys[0]?.resizes).toEqual([[500, 200]]);
+  });
+
+  it("rejects preactive input and does not observe markers before a terminal block is active", async () => {
+    const { manager, ptys, facts, active } = setup({ initialActiveBlock: undefined });
+    manager.start();
+    manager.attach(new FakeClient());
+
+    manager.receive({ type: "input", data: "echo bypass\r" });
+    manager.receive({ type: "resize", cols: 100, rows: 30 });
+    ptys[0]!.emit(marker("preactive"));
+    await Promise.resolve();
+
+    expect(ptys[0]!.writes).toEqual([]);
+    expect(ptys[0]!.resizes).toEqual([[100, 30]]);
+    expect(facts).toEqual([]);
+
+    active.block = activePractice;
+    ptys[0]!.emit(marker("active command"));
+    await Promise.resolve();
+    expect(facts).toEqual([expect.objectContaining({ type: "terminal-command-submitted", command: "active command" })]);
   });
 
   it("creates no attempt before Bash submits and never puts marker bytes on the transport", async () => {

@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const terminalDataListeners: Array<(data: string) => void> = [];
+const terminalInstances: any[] = [];
 const terminalFitCalls: string[] = [];
 let terminalProposedDimensions: { cols: number; rows: number } | undefined = { cols: 80, rows: 24 };
 
@@ -47,9 +48,15 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     cols = 80;
     rows = 24;
+    options: { disableStdin?: boolean };
+    constructor(options: { disableStdin?: boolean } = {}) { this.options = { ...options }; terminalInstances.push(this); }
     loadAddon(addon: { terminal?: { cols: number; rows: number } }) { addon.terminal = this; }
     open() {}
-    onData(listener: (data: string) => void) { terminalDataListeners.push(listener); return { dispose() { const index = terminalDataListeners.indexOf(listener); if (index >= 0) terminalDataListeners.splice(index, 1); } }; }
+    onData(listener: (data: string) => void) {
+      const guarded = (data: string) => { if (!this.options.disableStdin) listener(data); };
+      terminalDataListeners.push(guarded);
+      return { dispose() { const index = terminalDataListeners.indexOf(guarded); if (index >= 0) terminalDataListeners.splice(index, 1); } };
+    }
     write() {}
     dispose() {}
   }
@@ -160,6 +167,7 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   terminalDataListeners.splice(0);
+  terminalInstances.splice(0);
   terminalFitCalls.splice(0);
   terminalProposedDimensions = { cols: 80, rows: 24 };
 });
@@ -1862,6 +1870,89 @@ describe("workbook lesson UI", () => {
     expect(eventCall).toBeTruthy();
     expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "orientation" });
     expect(container.textContent).toContain("Next");
+  });
+
+  it("keeps a ready terminal canvas under its authored record and enables that same session on promotion", async () => {
+    class FakeWebSocket {
+      static CONNECTING = 0; static OPEN = 1; static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.CONNECTING;
+      sent: string[] = [];
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      constructor(_url: string) { FakeWebSocket.instances.push(this); }
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      send(message: string) { this.sent.push(message); }
+      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
+      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalBlock = lesson.blocks[1]!;
+    const preloaded: Progress = {
+      ...progress,
+      activeBlockId: "orientation",
+      blocks: [
+        { id: "orientation", type: "narrative", ready: false, active: true, completed: false, verified: false, emerged: true, workAccepted: true },
+        { id: "practice", type: "terminal-practice", ready: true, active: false, completed: false, verified: false, emerged: true },
+      ],
+      readyBlocks: ["practice"],
+    };
+    const promoted: Progress = {
+      ...preloaded,
+      activeBlockId: "practice",
+      blocks: preloaded.blocks.map((block) => block.id === "orientation" ? { ...block, active: false, completed: true } : { ...block, ready: false, active: true }),
+      readyBlocks: [],
+    };
+    const insertion = vi.fn();
+    const records = [
+      { type: "message", id: "orientation", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation" },
+      { type: "message", id: "practice", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "practice", role: "assistant", source: "authored", presentation: "course", text: "## Practice" },
+    ] as const;
+    const render = (current: Progress) => createElement(TimelineThread, {
+      records,
+      activeLessonId: lesson.id,
+      activeBlockId: current.activeBlockId,
+      onSend: vi.fn(async () => undefined),
+      onRetry: vi.fn(async () => undefined),
+      practiceSurfaceBlockId: terminalBlock.id,
+      practiceSurface: createElement(ActivityBand, { lessonId: lesson.id, activeBlock: terminalBlock, progress: current, refresh: vi.fn(), onTerminalInsertionChange: insertion }),
+    });
+
+    const container = await mount(render(preloaded), (win) => {
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
+    });
+    const socket = FakeWebSocket.instances[0]!;
+    await act(async () => { socket.readyState = FakeWebSocket.OPEN; socket.emit("open"); });
+
+    const readyRecord = container.querySelector<HTMLElement>("#practice")!;
+    const orientationRecord = container.querySelector<HTMLElement>("#orientation")!;
+    const readyBand = readyRecord.querySelector<HTMLElement>(".current-activity-band")!;
+    const canvas = readyBand.querySelector<HTMLElement>(".embedded-terminal")!;
+    expect(readyBand.getAttribute("data-activity-preloaded")).toBe("true");
+    expect(orientationRecord.contains(readyBand)).toBe(false);
+    expect(canvas.getAttribute("aria-disabled")).toBe("true");
+    expect(canvas.hasAttribute("inert")).toBe(true);
+    expect(terminalInstances).toHaveLength(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(insertion.mock.calls.every(([, callback]) => callback === undefined)).toBe(true);
+
+    await act(async () => { terminalDataListeners[0]!("echo bypass\\r"); });
+    expect(socket.sent.map((message) => JSON.parse(message))).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+
+    await act(async () => { mountedRoot!.render(render(promoted)); });
+    const promotedCanvas = container.querySelector<HTMLElement>("#practice .embedded-terminal")!;
+    expect(promotedCanvas).toBe(canvas);
+    expect(container.querySelectorAll(".current-activity-band")).toHaveLength(1);
+    expect(terminalInstances).toHaveLength(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(terminalInstances[0]!.options.disableStdin).toBe(false);
+    expect(promotedCanvas.hasAttribute("inert")).toBe(false);
+    expect(promotedCanvas.getAttribute("aria-disabled")).toBeNull();
+    expect(insertion.mock.calls.at(-1)?.[1]).toEqual(expect.any(Function));
+
+    await act(async () => { terminalDataListeners[0]!("echo active\\r"); });
+    expect(socket.sent.map((message) => JSON.parse(message)).at(-1)).toEqual({ type: "input", data: "echo active\\r" });
   });
 
   it("refits the embedded terminal only when its proposed grid changes", async () => {

@@ -269,6 +269,10 @@ export class WorkbookTerminalManager {
     if (!shell) return;
     if (message.type === "input") {
       if (typeof message.data !== "string" || Buffer.byteLength(message.data, "utf8") > MAX_INPUT_BYTES) return;
+      // A browser may attach while its next terminal block is visibly preloaded. Transport output
+      // is harmless then, but input cannot reach the shell until the workflow makes a terminal
+      // block active; otherwise a preloaded canvas would bypass progression authority.
+      if (!this.#getActiveBlock()) return;
       shell.write(message.data);
       this.#terminalObservation?.observeInteractiveInput(message.data);
       return;

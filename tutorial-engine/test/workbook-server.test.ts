@@ -815,6 +815,29 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("projects only a ready terminal successor's authored block into public chapter content", async () => {
+    const dir = await fixture();
+    const mainTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor, practiceCoach: new FakePracticeCoach() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "factory acceptance marker" })).status).toBe(202);
+      const projected = await waitForWorkbookState(server.url, (next) =>
+        block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted"
+        && next.progress.readyBlocks.includes("lesson--001-first--run-supplied-command"), "ready terminal successor");
+
+      expect(projected.revealedBlockIds).not.toContain("lesson--001-first--run-supplied-command");
+      expect(projected.renderedBlockIds).toContain("lesson--001-first--run-supplied-command");
+      expect(projected.chapters.find((chapter: any) => chapter.id === "001-first")?.lesson.blocks.map((candidate: any) => candidate.id)).toEqual([
+        "lesson--001-first--orientation",
+        "lesson--001-first--edit-answer",
+        "lesson--001-first--run-supplied-command",
+      ]);
+      expect(projected.chapters[0].lesson.blocks.find((candidate: any) => candidate.id === "lesson--001-first--run-supplied-command")).toMatchObject({ type: "terminal-practice", markdown: "Run the supplied command." });
+      expect(JSON.stringify(projected.chapters)).not.toContain("Change the job and run again.");
+    } finally { await server.close(); }
+  });
+
   it("activates a terminal practice block without generating a main-tutor briefing", async () => {
     const dir = await fixture();
     const mainTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });

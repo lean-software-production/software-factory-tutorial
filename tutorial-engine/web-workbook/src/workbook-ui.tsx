@@ -151,6 +151,18 @@ function FrozenTerminal({ text, height }: { text?: string; height?: number }) {
   </div>;
 }
 
+/** xterm's mutable input option lets a ready canvas connect and render without accepting keystrokes. */
+function setTerminalInteractivity(terminal: Terminal | null, element: HTMLDivElement | null, interactive: boolean) {
+  if (terminal) terminal.options.disableStdin = !interactive;
+  if (!element) return;
+  element.toggleAttribute("inert", !interactive);
+  element.style.pointerEvents = interactive ? "" : "none";
+  if (interactive) element.removeAttribute("aria-disabled");
+  else element.setAttribute("aria-disabled", "true");
+  const helperTextarea = element.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
+  if (helperTextarea) helperTextarea.disabled = !interactive;
+}
+
 function EmbeddedTerminal({ command, active, frozen = false, onError, onTerminalInsertionChange }: { command?: string; active: boolean; frozen?: boolean; onError(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const terminalPanel = useRef<HTMLDivElement | null>(null);
   const terminalElement = useRef<HTMLDivElement | null>(null);
@@ -159,6 +171,7 @@ function EmbeddedTerminal({ command, active, frozen = false, onError, onTerminal
   const frozenHeight = useRef<number | undefined>(undefined);
   const fit = useRef<FitAddon | null>(null);
   const socket = useRef<WebSocket | null>(null);
+  const interactive = useRef(active);
   const [connected, setConnected] = useState(false);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
 
@@ -167,15 +180,23 @@ function EmbeddedTerminal({ command, active, frozen = false, onError, onTerminal
   if (frozen && frozenText.current === undefined) frozenText.current = visibleTerminalText(terminal.current);
   if (frozen && frozenHeight.current === undefined) frozenHeight.current = terminalPanel.current?.getBoundingClientRect().height;
 
+  // This changes input authority in place. It deliberately does not participate in the setup
+  // effect below, so promoting a ready terminal keeps its xterm instance and WebSocket alive.
   useEffect(() => {
-    if (!active || frozen || !terminalElement.current) return;
-    const nextTerminal = new Terminal({ cursorBlink: true, convertEol: true, fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 16, theme: { background: "#101820" } });
+    interactive.current = active;
+    setTerminalInteractivity(terminal.current, terminalElement.current, active);
+  }, [active]);
+
+  useEffect(() => {
+    if (frozen || !terminalElement.current) return;
+    const nextTerminal = new Terminal({ cursorBlink: true, convertEol: true, disableStdin: !interactive.current, fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 16, theme: { background: "#101820" } });
     const nextFit = new FitAddon();
     nextTerminal.loadAddon(nextFit);
     nextTerminal.open(terminalElement.current);
     nextFit.fit();
     terminal.current = nextTerminal;
     fit.current = nextFit;
+    setTerminalInteractivity(nextTerminal, terminalElement.current, interactive.current);
 
     const ws = new WebSocket(terminalSocketUrl());
     socket.current = ws;
@@ -189,7 +210,7 @@ function EmbeddedTerminal({ command, active, frozen = false, onError, onTerminal
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: nextTerminal.cols, rows: nextTerminal.rows }));
     };
     const dataDisposable = nextTerminal.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data }));
+      if (interactive.current && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data }));
     });
     ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); sendCurrentDimensions(); });
     ws.addEventListener("message", (event) => {
@@ -221,10 +242,10 @@ function EmbeddedTerminal({ command, active, frozen = false, onError, onTerminal
       socket.current = null;
       setConnected(false);
     };
-  }, [active, frozen, onError]);
+  }, [frozen, onError]);
 
   const insertCommand = useCallback(() => {
-    if (!command) return;
+    if (!interactive.current || !command) return;
     const data = commandForInsertion(command);
     if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({ type: "input", data }));
   }, [command]);
@@ -241,7 +262,7 @@ function EmbeddedTerminal({ command, active, frozen = false, onError, onTerminal
   if (frozen) return <FrozenTerminal text={frozenText.current} height={frozenHeight.current} />;
   return <div ref={terminalPanel} className="embedded-terminal-panel">
     <span className={`terminal-connection-status${connected ? " connected" : ""}`} aria-label={connected ? "Terminal connected" : "Terminal disconnected"} />
-    <div ref={terminalElement} className="embedded-terminal" aria-label="Embedded terminal" />
+    <div ref={terminalElement} className="embedded-terminal" aria-label="Embedded terminal" aria-disabled={active ? undefined : "true"} />
   </div>;
 }
 
@@ -325,6 +346,7 @@ function TerminalBlock({ lessonId, block, state, onTerminalInsertionChange }: { 
   }, [state?.terminal]);
   const complete = state?.terminal?.phase === "complete" || display.phase === "complete";
   const showLiveTerminal = !state?.completed && !complete;
+  const preloading = Boolean(state?.ready && !state.active && !state.completed);
   const text = terminalError ?? (display.phase === "idle" ? undefined : display.text);
   // Exactly one in-place learner-facing node represents status, feedback, completion, or a
   // transport error. It is never moved into the activity/timeline portal.
@@ -338,6 +360,7 @@ function TerminalBlock({ lessonId, block, state, onTerminalInsertionChange }: { 
       {displayPanel}
     </div>}
     {!showLiveTerminal && !complete && displayPanel}
+    {preloading && <p className="terminal-coaching-activity subtle">Preparing terminal…</p>}
   </section>;
 }
 
@@ -514,6 +537,28 @@ function readySuccessorId(progress: Progress): string | undefined {
   return progress.blocks.find((block) => block.ready && !block.active && !block.completed)?.id ?? progress.readyBlocks?.[0];
 }
 
+type PracticeSurfaceSource = { lessonId: string; block: Block };
+
+function renderedBlockSource(state: State, blockId: string): PracticeSurfaceSource | undefined {
+  for (const chapter of state.chapters) {
+    const block = chapter.lesson?.blocks.find((candidate) => candidate.id === blockId);
+    if (block) return { lessonId: chapter.id, block };
+  }
+  return undefined;
+}
+
+/** Select the sole practice surface without making non-ready authored content renderable. */
+function practiceSurfaceSource(state: State): PracticeSurfaceSource | undefined {
+  const active = progressFor(state.progress, state.progress.activeBlockId);
+  const activeSource = renderedBlockSource(state, state.progress.activeBlockId);
+  if (active?.active && !active.completed && activeSource && ["terminal-practice", "editor-practice"].includes(activeSource.block.type)) return activeSource;
+
+  const readyId = readySuccessorId(state.progress);
+  const ready = readyId ? progressFor(state.progress, readyId) : undefined;
+  if (!readyId || !ready?.ready || ready.active || ready.completed || ready.type !== "terminal-practice") return undefined;
+  return renderedBlockSource(state, readyId);
+}
+
 /**
  * Which block carries the tall scroll runway that lets the newest revealed block reach the top of
  * the viewport. It belongs to the ready successor while the server reports one, and stays with that
@@ -571,13 +616,13 @@ function CompletionPanel({ state, onRetry }: { state: State; onRetry(failureId: 
 export function App() {
   const [state, setState] = useState<State>();
   const [viewed, setViewed] = useState<string>();
-  const [terminalInsertion, setTerminalInsertion] = useState<(() => void) | undefined>();
+  const [terminalInsertion, setTerminalInsertion] = useState<{ blockId: string; insertCommand: () => void }>();
   const [contentReloadError, setContentReloadError] = useState<string>();
   const scrollCompletionPending = useRef(false);
   const sseStateRequestSequence = useRef(0);
   const initialAnchorReconciled = useRef(false);
-  const registerTerminalInsertion = useCallback((insertCommand: (() => void) | undefined) => {
-    setTerminalInsertion(() => insertCommand);
+  const registerTerminalInsertion = useCallback((blockId: string, insertCommand: (() => void) | undefined) => {
+    setTerminalInsertion((current) => insertCommand ? { blockId, insertCommand } : current?.blockId === blockId ? undefined : current);
   }, []);
   useEffect(() => { readWorkbookState().then(setState).catch((error) => console.error(error)); }, []);
   const hasInitialState = Boolean(state);
@@ -625,7 +670,6 @@ export function App() {
       navigateToAnchor(target, mode);
     });
   }, [state]);
-  useEffect(() => { setTerminalInsertion(undefined); }, [state?.progress.activeLessonId, state?.progress.activeBlockId]);
   // The four dependencies this effect used to carry — the active block, the completion flag, and
   // two `.join("|")` hashes of the ready-block arrays — were all approximating one question: has
   // the ready successor changed? It computes that id anyway, so hoisting it makes the dependency
@@ -688,6 +732,7 @@ export function App() {
   const viewedLesson = viewed ?? state.progress.activeLessonId;
   const activeChapter = state.chapters.find((chapter): chapter is Chapter & { lesson: Lesson } => chapter.id === state.progress.activeLessonId && Boolean(chapter.lesson));
   const activeBlock = activeChapter?.lesson.blocks.find((block) => block.id === state.progress.activeBlockId);
+  const activitySource = practiceSurfaceSource(state);
   const activeBlockProgress = state.progress.blocks.find((block) => block.id === state.progress.activeBlockId);
   const effectiveActiveLessonId = state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeLessonId : INTRODUCTION_LESSON_ID;
   const effectiveActiveBlockId = state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID;
@@ -724,7 +769,7 @@ export function App() {
     <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
-      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} readyBlockIds={stableRunwayIds} activeSurface={activeChapter && activeBlock ? <ActivityBand lessonId={activeChapter.id} activeBlock={activeBlock} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
+      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
     </article></main>
   </div>;
 }

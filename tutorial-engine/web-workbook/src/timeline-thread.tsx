@@ -27,7 +27,7 @@ function resizeComposerTextarea(textarea: HTMLTextAreaElement) {
   textarea.style.overflowY = textarea.scrollHeight > composerMaxHeightPx ? "auto" : "hidden";
 }
 
-export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, activeSurface, completionPanel, readyBlockIds = [], inputDisabled = false, activeReflectionReviewing = false }: {
+export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, practiceSurface, practiceSurfaceBlockId, completionPanel, readyBlockIds = [], inputDisabled = false, activeReflectionReviewing = false }: {
   records: readonly TimelineThreadRecord[];
   activeLessonId: string;
   activeBlockId: string;
@@ -35,7 +35,9 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   onRetry(failureId: string): Promise<void>;
   onDoItForMe?(): void;
   renderContinuation?(record: TimelineMessageRecord): React.ReactNode;
-  activeSurface?: React.ReactNode;
+  /** One live practice surface, anchored to its authored record whether ready or active. */
+  practiceSurface?: React.ReactNode;
+  practiceSurfaceBlockId?: string;
   completionPanel?: React.ReactNode;
   readyBlockIds?: readonly string[];
   inputDisabled?: boolean;
@@ -122,6 +124,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   const renderedRecords = (() => {
     const nodes: React.ReactNode[] = [];
     let renderedActiveBlock = false;
+    let renderedPracticeSurface = false;
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index];
       if (!record) continue;
@@ -137,9 +140,11 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
         const canInsertCommand = Boolean(onDoItForMe && record.id === activeAuthoredRecordId);
         const lastMessage = ([...following].reverse().find((candidate): candidate is TimelineMessageRecord => candidate.type === "message") ?? record);
         if (active) renderedActiveBlock = true;
+        const placesPracticeSurface = !renderedPracticeSurface && record.blockId === practiceSurfaceBlockId;
+        if (placesPracticeSurface) renderedPracticeSurface = true;
         nodes.push(<section key={record.id} id={record.blockId} className={`work-block active-block-region${active ? " is-active" : ""}`} tabIndex={-1} data-active-block={active ? "true" : undefined}>
           <article className={`timeline-authored-content${transitionClass}`}><Markdown source="authored" lessonFrame={isLessonFrameRecord(record)}>{record.text}</Markdown></article>
-          {active && activeSurface}
+          {placesPracticeSurface && practiceSurface}
           {canInsertCommand && <button className="button primary timeline-do-it" onClick={() => { onDoItForMe?.(); setCommandInserted(true); }}>{commandInserted ? "Inserted — press Enter" : "Do it for me"}</button>}
           {following.map(renderConversationRecord)}
           {active && reflectionReviewingNode}
