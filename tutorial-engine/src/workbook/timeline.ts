@@ -7,7 +7,7 @@ import type { AttemptKind } from "./attempts.js";
 export type TimelineMetadata = { id: string; sequence: number; at: string };
 
 /** Outcomes reported by the terminal-only coach; they never carry terminal output. */
-export type TerminalCoachingOutcome = "working" | "feedback" | "ready" | "interesting";
+export type TerminalCoachingOutcome = "wait-for-result" | "feedback" | "ready" | "interesting";
 
 export type TerminalLifecycleInput =
   | { type: "terminal-command-submitted"; attemptId: string; lessonId: string; blockId: string; command: string; terminalSessionId: string }

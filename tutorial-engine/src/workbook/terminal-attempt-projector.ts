@@ -48,7 +48,7 @@ function resultProjection(attempt: Attempt): ProjectedTerminalAttempt {
   const base = { attemptId: attempt.attemptId, lessonId: attempt.lessonId, blockId: attempt.blockId };
   const result = attempt.result;
   if (!result) return { ...base, state: "reviewing-result" };
-  if (result.outcome === "working") {
+  if (result.outcome === "wait-for-result") {
     return { ...base, state: "final-feedback", feedback: { outcome: "feedback", text: FINISHED_WORKING_FEEDBACK } };
   }
   if (result.outcome === "feedback") return { ...base, state: "final-feedback", feedback: feedback(result) };
