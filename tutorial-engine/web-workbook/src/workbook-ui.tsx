@@ -95,13 +95,7 @@ export function navigateToAnchor(anchorId: string, mode: "push" | "replace" | "n
 }
 function canonicalLessonAnchor(lessonId: string) { return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(lessonId) ? `lesson--${lessonId}` : lessonElementId(lessonId); }
 function blockElementId(lessonId: string, blockId: string) { return blockId.includes("--") ? blockId : `${lessonElementId(lessonId)}-block-${domSafe(blockId)}`; }
-function completedBlockState(block: Block): BlockProgress { return { id: block.id, type: block.type, ready: true, active: false, completed: true, verified: block.type === "terminal-practice", terminalHtml: block.type === "terminal-practice" ? "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" : undefined, editorStatus: block.type === "editor-practice" ? "unlocked" : undefined, emerged: true }; }
-function stateForBlock(progress: Progress, lessonId: string, block: Block): BlockProgress | undefined {
-  if (lessonId === progress.activeLessonId) return progressFor(progress, block.id);
-  if (progress.completedLessons.includes(lessonId)) return completedBlockState(block);
-  return undefined;
-}
-function activeLessonValue<T>(progress: Progress, lessonId: string, value: T | undefined, fallback: T): T { return lessonId === progress.activeLessonId ? value ?? fallback : fallback; }
+function stateForBlock(progress: Progress, lessonId: string, block: Block): BlockProgress | undefined { return lessonId === progress.activeLessonId ? progressFor(progress, block.id) : undefined; }
 function commandForInsertion(command = "") { return command.replace(/\\\r?\n\s*/g, " "); }
 
 const READING_LINE_TOP_PX = 120;
@@ -277,50 +271,6 @@ export function ContinueControls({ block, state, refresh, label, preserveComplet
   </div>;
 }
 
-function checkpointMessage(checkpoint: PublicCheckpoint): string {
-  return checkpoint.successMessage ?? checkpoint.summary ?? checkpoint.feedback ?? "Nice work — the tutor accepted this attempt.";
-}
-
-function CheckpointEvidence({ checkpoint }: { checkpoint: PublicCheckpoint }) {
-  const evidence = checkpoint.evidence;
-  if (!evidence) return null;
-  if (evidence.kind === "editor") return <pre className="accepted-evidence accepted-editor-evidence" aria-label="Accepted editor evidence"><code>{evidence.text ?? ""}</code></pre>;
-  if (evidence.kind === "terminal") return <div className="frozen-terminal accepted-evidence" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: evidence.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} />;
-  return <div className="reflection-thread accepted-evidence" aria-label="Accepted reflection evidence">{(evidence.conversation ?? []).map((turn, index) => <div key={index} className={`reflection-turn ${turn.role}`}><b>{turn.role === "learner" ? "You" : "Tutor"}</b><p>{turn.text}</p></div>)}</div>;
-}
-
-export function AcceptedCheckpoint({ block, state, refresh, continueLabel }: { block: Block; state: BlockProgress; refresh(state: State): void; continueLabel?: string }) {
-  const checkpoint = state.checkpoint;
-  const [pending, setPending] = useState(false);
-  if (checkpoint?.status !== "accepted") return null;
-  const continueAccepted = () => {
-    if (pending) return;
-    setPending(true);
-    completeBlockRequest(block.id).then((result) => { refresh(stateFromCompletion(result)); const target = navigationTargetFrom(result); if (target) requestAnimationFrame(() => navigateToAnchor(target, "push")); }).catch((error) => {
-      console.error(error);
-      setPending(false);
-    });
-  };
-  return <aside className="success-checkpoint accepted-checkpoint" aria-live="polite">
-    <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Accepted</p><h3>Nice work — accepted.</h3><p>{checkpointMessage(checkpoint)}</p><CheckpointEvidence checkpoint={checkpoint} /><button className="button primary" disabled={pending} onClick={continueAccepted}>{pending ? "Continuing…" : continueLabel ?? "Continue"}</button></div>
-  </aside>;
-}
-
-function AttemptCheckpointStatus({ state }: { state: BlockProgress | undefined }) {
-  const checkpoint = state?.checkpoint;
-  if (!checkpoint || checkpoint.status === "accepted") return null;
-  if (checkpoint.status === "feedback") return <aside className="advice" aria-live="polite"><b>Tutor feedback:</b> {checkpoint.feedback ?? "Keep going and try again."}</aside>;
-  return <aside className="observer-status" aria-live="polite">{checkpoint.status === "reviewing" ? "Reviewing your latest attempt…" : "Keep working — the tutor will review your evidence when you pause."}</aside>;
-}
-
-function NarrativeBlock({ lessonId, block, state, refresh, continueLabel }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; continueLabel?: string }) {
-  return <section id={blockElementId(lessonId, block.id)} className={`work-block narrative ${state?.active ? "is-active" : ""}`}>
-    <h2>{block.title}</h2>
-    <Markdown source="authored">{block.markdown}</Markdown>
-    <ContinueControls block={block} state={state} refresh={refresh} label={continueLabel} />
-  </section>;
-}
-
 function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = true, onTerminalInsertionChange, feedbackHost, continueLabel }: { lessonId: string; block: Block; state: BlockProgress | undefined; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; feedbackHost?: HTMLElement | null; continueLabel?: string }) {
   const [observerFeedback, setObserverFeedback] = useState<string>();
   const [observerStatus, setObserverStatus] = useState<string>();
@@ -342,7 +292,7 @@ function TerminalBlock({ lessonId, block, state, refresh, showAuthoredContent = 
   useEffect(() => { setObserverFeedback(undefined); setObserverStatus(undefined); }, [block.id, state?.completed, state?.checkpoint?.status]);
   return <section id={blockElementId(lessonId, block.id)} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
     {showAuthoredContent && <><p className="section-label">Practice · embedded terminal</p><h2>{block.title}</h2><Markdown source="authored">{block.markdown}</Markdown></>}
-    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : showLiveTerminal && <div className={`terminal-live-surface${liveFeedback && feedbackHost === undefined ? " has-feedback" : ""}`}>
+    {state?.verified ? <div className="frozen-terminal" aria-label="Frozen terminal session" dangerouslySetInnerHTML={{ __html: state.terminalHtml || "<pre class=\"frozen-terminal-output\">Terminal session frozen.</pre>" }} /> : showLiveTerminal && <div className={`terminal-live-surface${liveFeedback && feedbackHost === undefined ? " has-feedback" : ""}`}>
       <EmbeddedTerminal block={block} command={command} active={Boolean(state?.active)} completed={Boolean(state?.completed)} verified={false} refresh={refresh} onAdvice={setObserverFeedback} onError={setObserverFeedback} onStatus={setObserverStatus} onTerminalInsertionChange={onTerminalInsertionChange} />
       {feedbackInTerminal}
     </div>}
@@ -423,28 +373,18 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh, showAuthored
       <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />
       {liveFeedback && <aside className="live-block-feedback editor-feedback-overlay" aria-live="polite"><Markdown source="generated">{liveFeedback}</Markdown></aside>}
     </div>}
-    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : completed ? <aside className="success-checkpoint editor-unlocked" aria-live="polite">
+    {completed ? <aside className="success-checkpoint editor-unlocked" aria-live="polite">
       <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Unlocked</p><h3>Accepted revision unlocked the next step.</h3><p>{state?.checkpoint?.successMessage || "The latest accepted editor draft was written to the target file."}</p></div>
     </aside> : !canEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
-  </section>;
-}
-
-function ReflectionBlock({ lessonId, block, state, turns, refresh, continueLabel }: { lessonId: string; block: Block; state: BlockProgress | undefined; turns: ReflectionTurn[]; refresh(state: State): void; continueLabel?: string }) {
-  const accepted = state?.checkpoint?.status === "accepted";
-  const visibleTurns = accepted ? state?.checkpoint?.evidence?.conversation ?? turns : turns;
-  return <section id={blockElementId(lessonId, block.id)} className={`work-block reflection ${state?.active ? "is-active" : ""}`}><p className="section-label">Reflection · discuss it</p><h2>{block.title}</h2><div className="question"><Markdown source="authored">{block.markdown}</Markdown></div>
-    {visibleTurns.length > 0 && !accepted && <div className="reflection-thread" aria-live="polite">{visibleTurns.map((turn, index) => <div key={index} className={`reflection-turn ${turn.role}`}><b>{turn.role === "learner" ? "You" : "Tutor"}</b><p>{turn.text}</p></div>)}</div>}
-    {accepted && state ? <AcceptedCheckpoint block={block} state={state} refresh={refresh} continueLabel={continueLabel} /> : state?.completed ? <p className="next-ready">Reflection complete. The next step has appeared below.</p> : <AttemptCheckpointStatus state={state} />}
   </section>;
 }
 
 export function BlockView({ lessonId, block, progress, refresh, showAuthoredContent = true, onTerminalInsertionChange, feedbackHost, continueLabel }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; showAuthoredContent?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; feedbackHost?: HTMLElement | null; continueLabel?: string }) {
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
-  if (block.type === "narrative") return <NarrativeBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} continueLabel={continueLabel} />;
   if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} onTerminalInsertionChange={onTerminalInsertionChange} feedbackHost={feedbackHost} continueLabel={continueLabel} />;
   if (block.type === "editor-practice") return <EditorPracticeBlockView lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} showAuthoredContent={showAuthoredContent} continueLabel={continueLabel} />;
-  return <ReflectionBlock lessonId={resolvedLessonId} block={block} state={state} turns={activeLessonValue(progress, resolvedLessonId, progress.reflectionConversations[block.id], [])} refresh={refresh} continueLabel={continueLabel} />;
+  return null;
 }
 
 type PublicOrderedBlock = NonNullable<State["orderedBlocks"]>[number];

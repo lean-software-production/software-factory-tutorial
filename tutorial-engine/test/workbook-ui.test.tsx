@@ -813,48 +813,6 @@ describe("workbook lesson UI", () => {
     expect(completedMarkup).not.toMatch(/Editing —|Reviewing your latest revision/);
   });
 
-  it("renders shared accepted checkpoints with read-only evidence for editor, terminal, and reflection work", () => {
-    const editorMarkup = html(createElement(BlockView, {
-      block: editorBlock,
-      progress: activeEditorProgress({
-        editorStatus: undefined,
-        checkpoint: { status: "accepted", successMessage: "Tutor says the editor work is ready.", evidence: { kind: "editor", text: "accepted answer text" } }
-      } as any),
-      refresh: vi.fn()
-    }));
-    expect(editorMarkup).toContain("Tutor says the editor work is ready.");
-    expect(editorMarkup).toContain("accepted answer text");
-    expect(editorMarkup).toContain("Continue");
-    expect(editorMarkup).toContain("success-checkpoint");
-    expect(editorMarkup).not.toContain("editor-surface");
-
-    const terminalMarkup = html(createElement(BlockView, {
-      block: lesson.blocks[1]!,
-      progress: activeBlockProgress(lesson.blocks[1]!, {
-        checkpoint: { status: "accepted", successMessage: "Tutor accepted the terminal result.", evidence: { kind: "terminal", terminalHtml: "<pre class=\"frozen-terminal-output\">terminal transcript</pre>" } }
-      } as any),
-      refresh: vi.fn()
-    }));
-    expect(terminalMarkup).toContain("Tutor accepted the terminal result.");
-    expect(terminalMarkup).toContain("terminal transcript");
-    expect(terminalMarkup).toContain("Frozen terminal session");
-    expect(terminalMarkup).toContain("Continue");
-    expect(terminalMarkup).not.toContain("Embedded terminal");
-
-    const reflectionMarkup = html(createElement(BlockView, {
-      block: lesson.blocks[2]!,
-      progress: activeBlockProgress(lesson.blocks[2]!, {
-        checkpoint: { status: "accepted", successMessage: "Tutor accepted the reflection.", evidence: { kind: "reflection", conversation: [{ role: "learner", text: "My answer" }, { role: "tutor", text: "Tutor note" }] } }
-      } as any),
-      refresh: vi.fn()
-    }));
-    expect(reflectionMarkup).toContain("Tutor accepted the reflection.");
-    expect(reflectionMarkup).toContain("My answer");
-    expect(reflectionMarkup).toContain("Tutor note");
-    expect(reflectionMarkup).toContain("Continue");
-    expect(reflectionMarkup).not.toContain("Your reflection");
-  });
-
   it("renders a compact terminal activity without duplicating authored content", () => {
     const terminalBlock = lesson.blocks[1]!;
     const markup = html(createElement(ActivityBand, {
@@ -926,18 +884,15 @@ describe("workbook lesson UI", () => {
 
   it("does not show checkpoint Continue for nonaccepted evaluated blocks", () => {
     const terminalMarkup = html(createElement(BlockView, { block: lesson.blocks[1]!, progress: activeBlockProgress(lesson.blocks[1]!), refresh: vi.fn() }));
-    const reflectionMarkup = html(createElement(BlockView, { block: lesson.blocks[2]!, progress: activeBlockProgress(lesson.blocks[2]!), refresh: vi.fn() }));
     const editorMarkup = html(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ checkpoint: { status: "feedback", feedback: "Try again.", evidence: { kind: "editor", text: "draft" } } } as any), refresh: vi.fn() }));
 
     expect(terminalMarkup).not.toContain("success-checkpoint");
     expect(terminalMarkup).not.toContain("Continue");
-    expect(reflectionMarkup).not.toContain("success-checkpoint");
-    expect(reflectionMarkup).not.toContain("Continue");
     expect(editorMarkup).not.toContain("success-checkpoint");
     expect(editorMarkup).not.toContain("Continue");
   });
 
-  it("keeps a focused editor through feedback refreshes and removes it only after acceptance", async () => {
+  it("keeps a focused editor through feedback refreshes", async () => {
     const refresh = vi.fn();
     const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: "" } as any), refresh }));
     const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
@@ -951,14 +906,6 @@ describe("workbook lesson UI", () => {
     const refreshedEditor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']");
     expect(refreshedEditor).not.toBeNull();
     expect(document.activeElement).toBe(refreshedEditor);
-
-    await act(async () => {
-      mountedRoot!.render(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 2, editorStatus: undefined, checkpoint: { status: "accepted", successMessage: "Accepted.", evidence: { kind: "editor", text: "accepted text" } } } as any), refresh }));
-    });
-
-    expect(container.querySelector("[role='textbox'][contenteditable='true']")).toBeNull();
-    expect(container.textContent).toContain("Accepted.");
-    expect(container.textContent).toContain("accepted text");
   });
 
   it("shows one-second pointer-inert confetti only for new accepted keys and respects reduced motion", async () => {
@@ -1073,45 +1020,15 @@ describe("workbook lesson UI", () => {
 
   it("renders direct curriculum Mermaid as a diagram while live feedback remains copyable code", () => {
     const diagram = "```mermaid\ngraph TD\n  A --> B\n```";
-    const curriculumMarkup = html(createElement(BlockView, {
-      block: { ...lesson.blocks[0]!, markdown: diagram },
-      progress,
-      refresh: vi.fn()
-    }));
     const feedbackMarkup = html(createElement(BlockView, {
       block: { ...lesson.blocks[1]!, markdown: diagram },
       progress: activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "feedback", feedback: diagram } } as any),
       refresh: vi.fn()
     }));
 
-    expect(curriculumMarkup).toContain('class="mermaid-diagram"');
-    expect(curriculumMarkup).not.toContain('class="code-block"');
     expect(feedbackMarkup.match(/class="mermaid-diagram"/g)).toHaveLength(1);
     expect(feedbackMarkup).toContain('class="code-block"');
     expect(feedbackMarkup).toContain('aria-label="Copy code"');
-  });
-
-  it("shows continuation controls and page breaks for active narrative blocks", () => {
-    const activeNarrative = html(createElement(BlockView, { block: lesson.blocks[0]!, progress, refresh: vi.fn() }));
-    expect(activeNarrative).toContain("Continue");
-    expect(activeNarrative).toContain('class="continuation-page-break"');
-    expect(activeNarrative).not.toContain('block-end-sentinel');
-
-    const activeTransitionProgress = { ...progress, activeBlockId: "transition", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "transition", ready: true, emerged: true })) };
-    const activeTransition = html(createElement(BlockView, { block: lesson.blocks[3]!, progress: activeTransitionProgress, refresh: vi.fn() }));
-    expect(activeTransition).toContain("Continue");
-    expect(activeTransition).toContain('class="continuation-page-break"');
-    expect(activeTransition).not.toContain('block-end-sentinel');
-
-    const activeTerminalProgress = { ...progress, activeBlockId: "practice", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "practice", ready: true, emerged: true })) };
-    const activeTerminal = html(createElement(BlockView, { block: lesson.blocks[1]!, progress: activeTerminalProgress, refresh: vi.fn() }));
-    expect(activeTerminal).not.toContain('class="continuation-page-break"');
-    expect(activeTerminal).not.toContain('block-end-sentinel');
-
-    const activeReflectionProgress = { ...progress, activeBlockId: "reflect", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "reflect", ready: true, emerged: true })) };
-    const activeReflection = html(createElement(BlockView, { block: lesson.blocks[2]!, progress: activeReflectionProgress, refresh: vi.fn() }));
-    expect(activeReflection).not.toContain('class="continuation-page-break"');
-    expect(activeReflection).not.toContain('block-end-sentinel');
   });
 
   it("keeps the embedded terminal as the only terminal path and extracts only authored command fences", () => {
