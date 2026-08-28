@@ -352,10 +352,18 @@ function TerminalBlock({ lessonId, block, state, refresh, onTerminalInsertionCha
     if (status === "submitted") {
       // Attempt IDs stay private. A locally monotonic generation lets us accept a real subsequent
       // submission after terminal input, while ignoring a stale submitted snapshot after review.
-      if (!currentAttemptId || typingGeneration.current > attemptTypingGeneration.current) currentAttemptId = startAttempt();
+      if (!currentAttemptId || typingGeneration.current > attemptTypingGeneration.current) startAttempt();
       return;
     }
-    if (!status) return;
+    if (!status) {
+      // Sessions created before terminal lifecycle events still expose a checkpoint through the
+      // legacy AttemptStore projection. Continue to render that public feedback as a safe fallback.
+      if (!currentAttemptId) currentAttemptId = startAttempt();
+      if (state?.checkpoint?.status === "feedback" && state.checkpoint.feedback) dispatch({ type: "final-feedback", attemptId: currentAttemptId, feedback: state.checkpoint.feedback });
+      else if (state?.checkpoint?.status === "reviewing") dispatch({ type: "command-finished", attemptId: currentAttemptId });
+      else if (state?.checkpoint?.status === "accepted") dispatch({ type: "accepted", attemptId: currentAttemptId, feedback: state.checkpoint.successMessage ?? "Accepted." });
+      return;
+    }
     if (!currentAttemptId) currentAttemptId = startAttempt();
     // A failed Main Tutor confirmation returns to final feedback before its scheduled retry. It is
     // the only valid backwards lifecycle edge; do not let any other old snapshot regress display.
@@ -367,7 +375,7 @@ function TerminalBlock({ lessonId, block, state, refresh, onTerminalInsertionCha
     const event = terminalDisplayEvent(status, state?.checkpoint, currentAttemptId);
     if (event) dispatch(event);
     if (state?.terminalReviewRetrying) dispatch({ type: "review-retry-scheduled", attemptId: currentAttemptId });
-  }, [state?.checkpoint?.feedback, state?.checkpoint?.successMessage, state?.terminalReviewRetrying, state?.terminalStatus, startAttempt]);
+  }, [state?.checkpoint, state?.terminalReviewRetrying, state?.terminalStatus, startAttempt]);
 
   const accepted = state?.checkpoint?.status === "accepted" || display.blueField.kind === "feedback" && display.blueField.accepted;
   const showLiveTerminal = !state?.verified && !state?.completed && !accepted;

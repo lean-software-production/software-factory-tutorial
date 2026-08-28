@@ -91,6 +91,7 @@ describe("projectTerminalAttempts", () => {
       lessonId: "lesson-1",
       blockId: "block-1",
       state: "final-feedback",
+      retrying: true,
       feedback: {
         outcome: "feedback",
         text: "The command finished without showing the expected result. Run another command and try again."
