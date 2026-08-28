@@ -129,6 +129,19 @@ describe("workbook fixed conversation layout", () => {
     expect(feedbackPanel).not.toContain("blur");
   });
 
+  it("styles live terminal coaching as a compact right-aligned tip", () => {
+    const liveSurfaceRule = declarationsFor(".terminal-live-surface .terminal-feedback-overlay");
+    const liveSurfaceTailRule = declarationsFor(".terminal-live-surface .terminal-feedback-overlay::before");
+
+    expect(liveSurfaceRule).toContain("width: fit-content");
+    expect(liveSurfaceRule).toContain("max-width: min(620px, calc(100% - 24px))");
+    expect(liveSurfaceRule).toContain("margin: 12px 0 12px auto");
+    expect(liveSurfaceRule).toContain("border-radius: 12px 12px 4px 12px");
+    expect(liveSurfaceTailRule).toContain("content: \"\"");
+    expect(liveSurfaceTailRule).toContain("top: -7px");
+    expect(liveSurfaceTailRule).toContain("transform: rotate(45deg)");
+  });
+
   it("attaches editor feedback to the editor bottom the same way the terminal does", () => {
     const editorSurface = declarationsFor(".editor-live-surface");
     const editorWithFeedback = declarationsFor(".editor-live-surface.has-feedback .editor-surface");
