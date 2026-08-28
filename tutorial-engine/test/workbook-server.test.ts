@@ -826,6 +826,11 @@ describe("workbook browser API", () => {
       expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "unfinished" })).status).toBe(202);
       const working = await waitForWorkbookState(server.url, (next) => mainTutor.reviews.length === 1 && block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "working", "quiet working review");
       expect(block(working, "lesson--001-first--edit-answer")?.checkpoint?.status).toBe("working");
+      // A `working` outcome appends no review at all, so unlike the feedback and accepted paths
+      // there is no log entry to wait for — the guarantee IS the absence. Asserting it against the
+      // private log too is what distinguishes "nothing was written" from "the public projection
+      // hid something", which the public timeline alone cannot tell apart.
+      expect(await privateTimeline(dir)).not.toContainEqual(expect.objectContaining({ type: "message", source: "main_tutor", presentation: "review" }));
       expect(working.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
     } finally { await server.close(); }
   });
@@ -842,7 +847,12 @@ describe("workbook browser API", () => {
       expect(blockTutor.assessments).toHaveLength(0);
       expect(mainTutor.reviews[0]!.practiceCoachHandoff).toBeUndefined();
       expect(block(feedback, "lesson--001-first--edit-answer")?.checkpoint?.feedback).toBe("Add the exact marker before this can continue.");
-      expect(feedback.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
+      // The review message is appended to the log after the checkpoint status flips, so waiting on
+      // the status alone would let this assert before the record it forbids could exist. Wait for
+      // the log entry, then read state: now "absent from the public timeline" means the projection
+      // dropped it, not that nothing had been written yet.
+      await waitForPrivateTimeline(dir, (records) => records.some((record) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review" && record.text === "Add the exact marker before this can continue."), "the editor review recorded in the event log");
+      expect((await state(server.url)).timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
     } finally { await server.close(); }
   });
 
@@ -906,9 +916,14 @@ describe("workbook browser API", () => {
       expect(blockTutor.assessments).toHaveLength(1);
       expect(mainTutor.reviews[1]!.practiceCoachHandoff).toBeUndefined();
       expect(block(feedback, "lesson--001-first--run-supplied-command")?.checkpoint?.feedback).toBe("Main tutor can still judge this terminal output.");
-      expect(feedback.timeline.filter((record: any) => record.type === "tutor_failed" && record.operation === "readiness")).toEqual([]);
-      expect(JSON.stringify(feedback.timeline)).not.toContain("BLOCK_TUTOR_MODEL auth failed");
-      expect(feedback.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
+      // The fallback review is appended to the log after the checkpoint status flips. Wait for it,
+      // so the three assertions below describe a projection that ran rather than a write that had
+      // not happened yet — including the one saying the coach's provider error never leaks.
+      await waitForPrivateTimeline(dir, (records) => records.some((record) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review" && record.text === "Main tutor can still judge this terminal output."), "the fallback terminal review recorded in the event log");
+      const settled = await state(server.url);
+      expect(settled.timeline.filter((record: any) => record.type === "tutor_failed" && record.operation === "readiness")).toEqual([]);
+      expect(JSON.stringify(settled.timeline)).not.toContain("BLOCK_TUTOR_MODEL auth failed");
+      expect(settled.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
     } finally { await server.close(); }
   });
 
@@ -1070,6 +1085,9 @@ describe("workbook browser API", () => {
       expect(publicState.timeline).toEqual(expect.arrayContaining([
         expect.objectContaining({ type: "message", source: "authored", blockId: "lesson--001-first--edit-answer" })
       ]));
+      // The acceptance review IS in the log, so the public timeline lacking it means the projection
+      // dropped it. Without this the assertion below could pass simply because nothing was written.
+      expect(privateRecords).toContainEqual(expect.objectContaining({ type: "message", source: "main_tutor", presentation: "review", text: "Ready to continue." }));
       expect(publicState.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
       expect(publicState.timeline.some((record: any) => record.type === "block_summarized")).toBe(false);
       expect(JSON.stringify(continued)).not.toContain("attemptId");
@@ -1337,6 +1355,10 @@ describe("workbook browser API", () => {
       expect(tutor.reviews).toHaveLength(1);
       expect(block(feedback, "lesson--001-first--run-supplied-command")?.checkpoint?.feedback).toBe("The terminal output shows the command failed; fix the path and try again.");
       expect(block(feedback, "lesson--001-first--run-supplied-command")?.verified).toBe(false);
+      // Coach feedback is private quick-feedback state: no main review runs, so nothing is appended
+      // and there is no positive signal to wait for. Check the log as well as the projection, so
+      // this fails if a coach correction ever starts reaching the durable record.
+      expect(await privateTimeline(dir)).not.toContainEqual(expect.objectContaining({ type: "message", presentation: "review", text: "The terminal output shows the command failed; fix the path and try again." }));
       expect(feedback.timeline.filter((record: any) => record.type === "message" && record.presentation === "review")).toEqual([]);
     } finally { await server.close(); }
   });
