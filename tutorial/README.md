@@ -105,10 +105,12 @@ for that launch:
 PRACTICE_COACH_LOG_PROMPT=1 npm run tutorial:workbook
 ```
 
-This writes the prompt to the launcher output and the local diagnostic file at
-`~/Library/Logs/SoftwareFactoryTutorial/tutorial-*.log` before it is sent. The prompt includes
-terminal evidence and the private rubric, so do not enable it during normal use or share the output
-or log. Leave the switch unset to keep that content out of diagnostics.
+This writes the raw, exact prompt to the launcher output and the local diagnostic file at
+`~/Library/Logs/SoftwareFactoryTutorial/tutorial-*.log` before it is sent. It can include terminal
+output and the private rubric, including credentials, authorization headers, tokens, and
+environment-variable values. Do not enable it unless you accept that risk, and do not share the output
+or log. When you are finished, unset it with `unset PRACTICE_COACH_LOG_PROMPT`; leaving the switch
+unset keeps that content out of diagnostics.
 
 ## Start the tutorial
 
