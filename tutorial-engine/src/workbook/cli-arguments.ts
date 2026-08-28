@@ -4,7 +4,7 @@
  * never be mistaken for the tutorial directory however the flags are ordered.
  */
 
-export const USAGE = "Usage: tutorial-engine <tutorial-directory> [--session <id>] [--port 4310] [--host 0.0.0.0] [--watch] [--no-open]";
+export const USAGE = "Usage: tutorial-engine <tutorial-directory> [--session <id> | --lesson <id>] [--port 4310] [--host 0.0.0.0] [--watch] [--no-open]";
 
 export interface TutorialArguments {
   target: string;
@@ -13,6 +13,7 @@ export interface TutorialArguments {
   noOpen: boolean;
   watch: boolean;
   session?: string;
+  lesson?: string;
 }
 
 export type ParsedArguments = { kind: "run"; options: TutorialArguments } | { kind: "help" };
@@ -20,7 +21,7 @@ export type ParsedArguments = { kind: "run"; options: TutorialArguments } | { ki
 /** A misuse of the command line, reported with the usage line rather than a stack trace. */
 export class ArgumentError extends Error {}
 
-const VALUE_FLAGS = ["--port", "--host", "--session"] as const;
+const VALUE_FLAGS = ["--port", "--host", "--session", "--lesson"] as const;
 const BARE_FLAGS = ["--no-open", "--watch"] as const;
 
 function splitFlag(argument: string): { flag: string; inlineValue?: string } {
@@ -53,6 +54,7 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
   let noOpen = false;
   let watch = false;
   let session: string | undefined;
+  let lesson: string | undefined;
   let endOfFlags = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -75,7 +77,8 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
       if (value === undefined || value === "") throw new ArgumentError(`${flag} needs a value.`);
       if (flag === "--port") port = parsePort(value);
       else if (flag === "--host") host = parseHost(value);
-      else session = value;
+      else if (flag === "--session") session = value;
+      else lesson = value;
       continue;
     }
     if ((BARE_FLAGS as readonly string[]).includes(flag)) {
@@ -90,5 +93,6 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
   const [target, ...extra] = positional;
   if (!target) throw new ArgumentError("Name the tutorial directory to serve.");
   if (extra.length > 0) throw new ArgumentError(`Serve one tutorial directory at a time; got ${positional.length} (${positional.join(", ")}).`);
-  return { kind: "run", options: { target, port, host, noOpen, watch, session } };
+  if (session && lesson) throw new ArgumentError("--lesson creates a fresh test-only session and cannot be used with --session.");
+  return { kind: "run", options: { target, port, host, noOpen, watch, session, lesson } };
 }

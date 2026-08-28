@@ -8,7 +8,7 @@ export const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.ur
 export const tutorialDirectory = resolve(repositoryRoot, "tutorial");
 export const tutorialEngineDirectory = resolve(repositoryRoot, "tutorial-engine");
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-const WORKBOOK_USAGE = "Usage: tutorial-workbook [--session <id>] [--port 4310] [--host 0.0.0.0] [--no-open]";
+const WORKBOOK_USAGE = "Usage: tutorial-workbook [--session <id> | --lesson <id>] [--port 4310] [--host 0.0.0.0] [--watch] [--no-open]";
 
 export function trustedNodeRuntimeProvision(root = repositoryRoot) {
   return {

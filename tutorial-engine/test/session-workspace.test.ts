@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -96,6 +96,21 @@ describe("SessionWorkspaceManager", () => {
     for (const missing of ["README.md", "workbook.md", "docs", "lessons"]) {
       await expect(lstat(join(session.workspaceRoot, missing))).rejects.toThrow();
     }
+  });
+
+  it("overlays an authored lesson-jump factory seed before committing the local Git baseline", async () => {
+    const contentRoot = await contentFixture();
+    const seedScript = join(contentRoot, "docs/seeds/lesson-jump/007-example/factory/refactor/run.sh");
+    await write(seedScript, "#!/usr/bin/env bash\necho seeded\n");
+    await chmod(seedScript, 0o755);
+
+    const { workspaceRoot } = await (await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "jump-seeded", factorySeedLessonId: "007-example" });
+
+    await expect(readFile(join(workspaceRoot, "factory/refactor/run.sh"), "utf8")).resolves.toContain("seeded");
+    await expect(lstat(join(workspaceRoot, "factory/refactor.md"))).rejects.toThrow();
+    expect((await stat(join(workspaceRoot, "factory/refactor/run.sh"))).mode & 0o111).not.toBe(0);
+    expect(await git(workspaceRoot, "status", "--porcelain")).toBe("");
+    await expect((await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "missing-seed", factorySeedLessonId: "008-missing" })).rejects.toThrow(/Lesson jump seed/);
   });
 
   it("keeps authored content immutable when the learner workspace changes", async () => {

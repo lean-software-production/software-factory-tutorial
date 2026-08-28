@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomBytes as defaultRandomBytes } from "node:crypto";
-import { copyFile, lstat, mkdir, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { NO_RUNTIME_PROVISION, trustRuntimeProvision, type RuntimeProvisionInput, type SafeWorkspaceRelativePath, type TrustedRuntimeProvision } from "./workbook/runtime-provision.js";
@@ -30,6 +30,8 @@ export interface CreateTutorialSessionOptions {
   now?: Date;
   randomBytes?: (size: number) => Buffer;
   runtimeProvision?: RuntimeProvisionInput;
+  /** Full authored lesson id whose docs/seeds/lesson-jump/<id>/factory overlay replaces factory/. */
+  factorySeedLessonId?: string;
 }
 
 function pad(value: number): string { return String(value).padStart(2, "0"); }
@@ -106,6 +108,8 @@ async function copyAuthoredDirectory(source: string, destination: string, conten
     }
     if (entry.isFile()) {
       await copyFile(from, to);
+      // copyFile does not promise a portable executable-mode contract; learner scripts do.
+      await chmod(to, (await stat(from)).mode);
       continue;
     }
     throw new SessionWorkspaceError(`Refusing to materialize unsupported file type: ${from}`);
@@ -191,6 +195,8 @@ export class SessionWorkspaceManager {
   async createSession(options: CreateTutorialSessionOptions = {}): Promise<TutorialSessionPaths> {
     const runtimeProvision = options.runtimeProvision ? trustRuntimeProvision(options.runtimeProvision) : NO_RUNTIME_PROVISION;
     const sessionId = options.id === undefined ? createSessionId(options) : validateSessionId(options.id);
+    const seedRoot = options.factorySeedLessonId === undefined ? undefined : resolve(this.contentRoot, "docs", "seeds", "lesson-jump", options.factorySeedLessonId, "factory");
+    if (seedRoot) await requireDirectoryInside(seedRoot, `Lesson jump seed for '${options.factorySeedLessonId}'`, this.contentRoot);
     const paths = this.pathsFor(sessionId);
     await ensureSessionStateDirectory(this.contentRoot);
     if (await pathExists(paths.sessionRoot)) throw new SessionWorkspaceError(`Session '${sessionId}' already exists.`);
@@ -199,6 +205,11 @@ export class SessionWorkspaceManager {
     try {
       for (const directory of MATERIALIZED_WORKSPACE_DIRECTORIES) {
         await copyAuthoredDirectory(resolve(this.contentRoot, directory), resolve(paths.workspaceRoot, directory), this.contentRoot);
+      }
+      if (seedRoot) {
+        const factory = resolve(paths.workspaceRoot, "factory");
+        await rm(factory, { recursive: true, force: true });
+        await copyAuthoredDirectory(seedRoot, factory, this.contentRoot);
       }
       for (const target of runtimeProvision.workspaceMountTargets) await ensureEmptyWorkspaceDirectory(paths.workspaceRoot, target);
       await initializeLocalRepository(paths.workspaceRoot, runtimeProvision.workspaceMountTargets);

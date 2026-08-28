@@ -2204,6 +2204,28 @@ describe("workbook lesson UI", () => {
     expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: "reflect", action: "reflection-submit", response: "My reflection answer" });
   });
 
+  it("routes exact move on from a jump reflection to the tutor message endpoint", async () => {
+    const reflectionProgress: Progress = { ...progress, activeBlockId: "reflect", blocks: [{ id: "reflect", type: "reflection", ready: true, active: true, completed: false, verified: false, emerged: true }], reflectionConversations: {} };
+    const state = {
+      workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [lesson.blocks[2]!] } as any })], progress: reflectionProgress,
+      adapter: { testOnlyJump: true }, timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "reflect", role: "assistant", source: "authored", presentation: "course", text: "## Reflect" }]
+    } as any;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+    const textarea = container.querySelector<HTMLTextAreaElement>(".timeline-input textarea")!;
+    textarea.value = "move on";
+    await act(async () => { textarea.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    await act(async () => { container.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+
+    const messageCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/messages");
+    expect(messageCall).toBeTruthy();
+    expect(JSON.parse((messageCall![1] as RequestInit).body as string)).toMatchObject({ blockId: "reflect", text: "move on" });
+    expect(fetchMock.mock.calls.some(([url]) => url === "api/workbook/events")).toBe(false);
+  });
+
   it("renders accepted reflection continuation in the timeline and advances through the block event path", async () => {
     const reflectionProgress: Progress = {
       ...progress,

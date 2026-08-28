@@ -9,17 +9,17 @@ function run(argv: string[]) {
 
 describe("parseArguments", () => {
   it("serves the named directory on an ephemeral loopback port by default", () => {
-    expect(run(["/tutorials/factory"])).toEqual({ target: "/tutorials/factory", port: undefined, host: undefined, noOpen: false, watch: false, session: undefined });
+    expect(run(["/tutorials/factory"])).toEqual({ target: "/tutorials/factory", port: undefined, host: undefined, noOpen: false, watch: false, session: undefined, lesson: undefined });
   });
 
   it("reads the port, host, browser, and author watch flags", () => {
     expect(run(["/tutorials/factory", "--port", "4310", "--host", "0.0.0.0", "--watch", "--no-open"]))
-      .toEqual({ target: "/tutorials/factory", port: 4310, host: "0.0.0.0", noOpen: true, watch: true, session: undefined });
+      .toEqual({ target: "/tutorials/factory", port: 4310, host: "0.0.0.0", noOpen: true, watch: true, session: undefined, lesson: undefined });
   });
 
   it("accepts flags before the directory, because a flag value is never the target", () => {
     expect(run(["--host", "0.0.0.0", "--port", "4310", "/tutorials/factory"]))
-      .toEqual({ target: "/tutorials/factory", port: 4310, host: "0.0.0.0", noOpen: false, watch: false, session: undefined });
+      .toEqual({ target: "/tutorials/factory", port: 4310, host: "0.0.0.0", noOpen: false, watch: false, session: undefined, lesson: undefined });
   });
 
   it("accepts --flag=value", () => {
@@ -32,6 +32,12 @@ describe("parseArguments", () => {
       .toMatchObject({ target: "/tutorials/factory", session: "lesson-007" });
     expect(run(["--session=lesson-008", "/tutorials/factory"]))
       .toMatchObject({ target: "/tutorials/factory", session: "lesson-008" });
+  });
+
+  it("creates a test-only lesson jump from either value syntax and rejects a reopen conflict", () => {
+    expect(run(["/tutorials/factory", "--lesson", "007"])).toMatchObject({ lesson: "007", session: undefined });
+    expect(run(["--lesson=007", "/tutorials/factory"])).toMatchObject({ lesson: "007" });
+    expect(() => parseArguments(["/tutorials/factory", "--lesson", "007", "--session", "old-session"])).toThrow(/cannot be used with --session/);
   });
 
   it("treats everything after -- as a path, so directories may start with a dash", () => {
@@ -62,6 +68,7 @@ describe("parseArguments", () => {
     expect(() => parseArguments(["/tutorials/factory", "--host"])).toThrow(/--host needs a value/);
     expect(() => parseArguments(["/tutorials/factory", "--host="])).toThrow(/--host needs a value/);
     expect(() => parseArguments(["/tutorials/factory", "--session"])).toThrow(/--session needs a value/);
+    expect(() => parseArguments(["/tutorials/factory", "--lesson"])).toThrow(/--lesson needs a value/);
   });
 
   it("insists on a plain port number in range", () => {

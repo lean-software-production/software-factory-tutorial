@@ -8,6 +8,8 @@ export type TimelineMetadata = { id: string; sequence: number; at: string };
 
 export type WorkbookWorkflowInput =
   | { type: "session_started" }
+  | { type: "lesson_jump_started"; lessonId: string; selector: string; testOnly: true }
+  | { type: "block_skipped"; lessonId: string; blockId: string; reason: "lesson-jump-prerequisite" | "move-on" }
   | { type: "workbook_introduction_completed" }
   | { type: "attempt_accepted"; lessonId: string; blockId: string; attemptId: string; version: number; kind: AttemptKind; summary: string }
   | { type: "work_accepted"; blockId: string }

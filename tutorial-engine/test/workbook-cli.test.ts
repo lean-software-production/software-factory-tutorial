@@ -113,6 +113,22 @@ describe("workbook CLI", () => {
     expect(startServer).toHaveBeenCalledWith(expect.objectContaining({ port: 4310, watchContent: true }));
   });
 
+  it("creates a distinct test-only session for --lesson rather than reopening one", async () => {
+    const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
+    const createLessonJumpSession = vi.fn(async () => sessionFixture("jump-007"));
+    const resolveSession = vi.fn(async () => sessionFixture("must-not-reopen"));
+    const lines: string[] = [];
+
+    await runWorkbookCli(["/tmp/workbook", "--lesson=007", "--no-open"], {
+      startServer, createLessonJumpSession, resolveSession, installSignalHandlers: false,
+      packageDirectory: "/pkg", logger: { info: vi.fn(), error: vi.fn() }, writeLine: (line) => lines.push(line),
+    });
+
+    expect(createLessonJumpSession).toHaveBeenCalledWith("/tmp/workbook", "007");
+    expect(resolveSession).not.toHaveBeenCalled();
+    expect(lines).toContain("Test-only lesson jump: 007 (previous blocks are skipped; exact 'move on' may skip this lesson's evaluated blocks).");
+  });
+
   it("passes an explicit --session ID through to reopening and prints the reopened workspace", async () => {
     const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
     const resolveSession = vi.fn(async () => sessionFixture("lesson-007"));
