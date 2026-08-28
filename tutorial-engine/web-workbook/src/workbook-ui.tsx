@@ -121,6 +121,19 @@ function shellCommandFrom(markdown: string): string | undefined {
 
 const UNREADABLE_TERMINAL_FRAME = "The embedded terminal received an unreadable message from the workbook server. Refresh the page if the terminal stops responding.";
 
+/**
+ * The terminal socket is addressed the way `request()` addresses HTTP: relative to the document's
+ * base, with `api/workbook/` as the prefix this module owns. `WebSocket` accepts no relative URL,
+ * so the base is resolved here and only the scheme is swapped. Deriving the address from the base
+ * rather than from `location.host` plus an absolute path is what keeps a prefix the workbook is
+ * mounted under in the address, because an absolute path would drop it.
+ */
+function terminalSocketUrl(): string {
+  const url = new URL("api/workbook/terminal", document.baseURI);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.href;
+}
+
 function EmbeddedTerminal({ block, command, active, refresh, onAdvice, onError, onStatus, onTerminalInsertionChange }: { block: Block; command?: string; active: boolean; refresh(state: State): void; onAdvice(message: string): void; onError(message: string): void; onStatus(message: string | undefined): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
@@ -139,8 +152,7 @@ function EmbeddedTerminal({ block, command, active, refresh, onAdvice, onError, 
     terminal.current = nextTerminal;
     fit.current = nextFit;
 
-    const protocol = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${protocol}://${location.host}/api/workbook/terminal`);
+    const ws = new WebSocket(terminalSocketUrl());
     socket.current = ws;
     const sendResize = () => {
       nextFit.fit();

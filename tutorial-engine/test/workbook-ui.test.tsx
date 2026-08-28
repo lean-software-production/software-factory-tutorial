@@ -2389,4 +2389,50 @@ describe("workbook lesson UI", () => {
     expect(new Set(urls)).toEqual(new Set(["api/workbook/state", "api/workbook/messages", "api/workbook/retry", "api/workbook/complete-block"]));
     expect(FakeEventSource.instances[0]!.url).toBe("api/workbook/timeline");
   });
+
+  it("addresses the terminal socket relatively so a workbook mounted under a sub-path still reaches its own socket", async () => {
+    class FakeWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.CONNECTING;
+      readonly url: string;
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      constructor(url: string) { this.url = url; FakeWebSocket.instances.push(this); }
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      send() {}
+      close() { this.readyState = FakeWebSocket.CLOSED; this.emit("close"); }
+      emit(type: string, event: any = {}) { for (const listener of this.listeners.get(type) ?? []) listener(event); }
+    }
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter()],
+      progress: activeBlockProgress(lesson.blocks[1]!),
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "practice", role: "assistant", source: "authored", presentation: "course", text: "## Practice\n\nRun the authored command." }]
+    } as any;
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => state })));
+
+    const container = await mount(createElement(App), (win) => {
+      stubAppShellGlobals(win);
+      // The workbook is served under a prefix, on an origin whose scheme and host differ from the
+      // page the harness loads (http://localhost/workbook). The assertion below therefore fails on
+      // every part of an address rebuilt from `location` instead of from the document's base.
+      const base = win.document.createElement("base");
+      base.href = "https://workbook.example/courses/factory/";
+      win.document.head.append(base);
+      vi.stubGlobal("location", win.location);
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.querySelector(".terminal-connection-status")).toBeTruthy();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances[0]!.url).toBe("wss://workbook.example/courses/factory/api/workbook/terminal");
+  });
 });
