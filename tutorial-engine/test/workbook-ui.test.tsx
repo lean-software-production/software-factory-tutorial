@@ -60,8 +60,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
-import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, LessonView, completionAgeLabel, navigateToAnchor, scrollActiveLessonIntoView, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
-import { lessonAnchorHref, lessonElementId } from "../src/workbook/lesson-links.js";
+import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
 
 const progress: Progress = {
   activeLessonId: "part/lesson-one",
@@ -108,23 +107,6 @@ function html(element: ReturnType<typeof createElement>) {
 
 function chapter(overrides: Partial<Chapter> = {}): Chapter & { lesson: typeof lesson } {
   return { id: lesson.id, part: "Part One", partMarkdown: "Part copy.", partNumber: 1, lessonNumber: 1, title: lesson.title, lesson, ...overrides } as Chapter & { lesson: typeof lesson };
-}
-
-function progressWithActiveDuplicate(blockId: string): Progress {
-  return {
-    ...progress,
-    activeLessonId: "part/lesson-two",
-    activeBlockId: blockId,
-    completedLessons: ["part/lesson-one"],
-    blocks: progress.blocks.map((block) => ({
-      ...block,
-      active: block.id === blockId,
-      ready: block.id === blockId || block.completed,
-      completed: block.id === "orientation" && blockId !== "orientation",
-      verified: false,
-      emerged: block.id === blockId || block.completed,
-    })),
-  };
 }
 
 const editorBlock = withPrivateTutorText<EditorPracticeBlock>({
@@ -777,7 +759,6 @@ describe("workbook lesson UI", () => {
   it("renders an active editor-practice block without exposing private tutor text", () => {
     const markup = html(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress(), refresh: vi.fn() }));
 
-    expect(markup).toContain("Edit the answer");
     expect(markup).toContain("factory/answer.md");
     expect(markup).toContain("editor-surface");
     expect(markup).toContain("editor-feedback-overlay");
@@ -816,7 +797,6 @@ describe("workbook lesson UI", () => {
       refresh: vi.fn()
     }));
 
-    expect(inactiveMarkup).toContain("Edit the answer");
     expect(inactiveMarkup).toContain("factory/answer.md");
     expect(inactiveMarkup).not.toContain("editor-surface");
     expect(inactiveMarkup).not.toContain("editor-live-surface");
@@ -829,48 +809,6 @@ describe("workbook lesson UI", () => {
     expect(completedMarkup).not.toContain("editor-surface");
     expect(completedMarkup).not.toContain("role=\"status\"");
     expect(completedMarkup).not.toMatch(/Editing —|Reviewing your latest revision/);
-  });
-
-  it("renders shared accepted checkpoints with read-only evidence for editor, terminal, and reflection work", () => {
-    const editorMarkup = html(createElement(BlockView, {
-      block: editorBlock,
-      progress: activeEditorProgress({
-        editorStatus: undefined,
-        checkpoint: { status: "accepted", successMessage: "Tutor says the editor work is ready.", evidence: { kind: "editor", text: "accepted answer text" } }
-      } as any),
-      refresh: vi.fn()
-    }));
-    expect(editorMarkup).toContain("Tutor says the editor work is ready.");
-    expect(editorMarkup).toContain("accepted answer text");
-    expect(editorMarkup).toContain("Continue");
-    expect(editorMarkup).toContain("success-checkpoint");
-    expect(editorMarkup).not.toContain("editor-surface");
-
-    const terminalMarkup = html(createElement(BlockView, {
-      block: lesson.blocks[1]!,
-      progress: activeBlockProgress(lesson.blocks[1]!, {
-        checkpoint: { status: "accepted", successMessage: "Tutor accepted the terminal result.", evidence: { kind: "terminal", terminalHtml: "<pre class=\"frozen-terminal-output\">terminal transcript</pre>" } }
-      } as any),
-      refresh: vi.fn()
-    }));
-    expect(terminalMarkup).toContain("Tutor accepted the terminal result.");
-    expect(terminalMarkup).toContain("terminal transcript");
-    expect(terminalMarkup).toContain("Frozen terminal session");
-    expect(terminalMarkup).toContain("Continue");
-    expect(terminalMarkup).not.toContain("Embedded terminal");
-
-    const reflectionMarkup = html(createElement(BlockView, {
-      block: lesson.blocks[2]!,
-      progress: activeBlockProgress(lesson.blocks[2]!, {
-        checkpoint: { status: "accepted", successMessage: "Tutor accepted the reflection.", evidence: { kind: "reflection", conversation: [{ role: "learner", text: "My answer" }, { role: "tutor", text: "Tutor note" }] } }
-      } as any),
-      refresh: vi.fn()
-    }));
-    expect(reflectionMarkup).toContain("Tutor accepted the reflection.");
-    expect(reflectionMarkup).toContain("My answer");
-    expect(reflectionMarkup).toContain("Tutor note");
-    expect(reflectionMarkup).toContain("Continue");
-    expect(reflectionMarkup).not.toContain("Your reflection");
   });
 
   it("renders a compact terminal activity without duplicating authored content", () => {
@@ -944,18 +882,15 @@ describe("workbook lesson UI", () => {
 
   it("does not show checkpoint Continue for nonaccepted evaluated blocks", () => {
     const terminalMarkup = html(createElement(BlockView, { block: lesson.blocks[1]!, progress: activeBlockProgress(lesson.blocks[1]!), refresh: vi.fn() }));
-    const reflectionMarkup = html(createElement(BlockView, { block: lesson.blocks[2]!, progress: activeBlockProgress(lesson.blocks[2]!), refresh: vi.fn() }));
     const editorMarkup = html(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ checkpoint: { status: "feedback", feedback: "Try again.", evidence: { kind: "editor", text: "draft" } } } as any), refresh: vi.fn() }));
 
     expect(terminalMarkup).not.toContain("success-checkpoint");
     expect(terminalMarkup).not.toContain("Continue");
-    expect(reflectionMarkup).not.toContain("success-checkpoint");
-    expect(reflectionMarkup).not.toContain("Continue");
     expect(editorMarkup).not.toContain("success-checkpoint");
     expect(editorMarkup).not.toContain("Continue");
   });
 
-  it("keeps a focused editor through feedback refreshes and removes it only after acceptance", async () => {
+  it("keeps a focused editor through feedback refreshes", async () => {
     const refresh = vi.fn();
     const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: "" } as any), refresh }));
     const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
@@ -969,14 +904,6 @@ describe("workbook lesson UI", () => {
     const refreshedEditor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']");
     expect(refreshedEditor).not.toBeNull();
     expect(document.activeElement).toBe(refreshedEditor);
-
-    await act(async () => {
-      mountedRoot!.render(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 2, editorStatus: undefined, checkpoint: { status: "accepted", successMessage: "Accepted.", evidence: { kind: "editor", text: "accepted text" } } } as any), refresh }));
-    });
-
-    expect(container.querySelector("[role='textbox'][contenteditable='true']")).toBeNull();
-    expect(container.textContent).toContain("Accepted.");
-    expect(container.textContent).toContain("accepted text");
   });
 
   it("shows one-second pointer-inert confetti only for new accepted keys and respects reduced motion", async () => {
@@ -1089,64 +1016,17 @@ describe("workbook lesson UI", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("renders direct curriculum Mermaid as a diagram while live feedback remains copyable code", () => {
+  it("renders live practice feedback Mermaid as copyable code rather than a diagram", () => {
     const diagram = "```mermaid\ngraph TD\n  A --> B\n```";
-    const curriculumMarkup = html(createElement(BlockView, {
-      block: { ...lesson.blocks[0]!, markdown: diagram },
-      progress,
-      refresh: vi.fn()
-    }));
     const feedbackMarkup = html(createElement(BlockView, {
       block: { ...lesson.blocks[1]!, markdown: diagram },
       progress: activeBlockProgress(lesson.blocks[1]!, { checkpoint: { status: "feedback", feedback: diagram } } as any),
       refresh: vi.fn()
     }));
 
-    expect(curriculumMarkup).toContain('class="mermaid-diagram"');
-    expect(curriculumMarkup).not.toContain('class="code-block"');
-    expect(feedbackMarkup.match(/class="mermaid-diagram"/g)).toHaveLength(1);
+    expect(feedbackMarkup).not.toContain('class="mermaid-diagram"');
     expect(feedbackMarkup).toContain('class="code-block"');
     expect(feedbackMarkup).toContain('aria-label="Copy code"');
-  });
-
-  it("renders the Markdown manifest lesson header, fixed outcomes, introduction, and ordered Markdown blocks", () => {
-    const markup = html(createElement(LessonView, { chapter: chapter(), progress, refresh: vi.fn() }));
-
-    expect(markup).toContain('<header id="lesson-part-lesson-one"><p class="eyebrow">Lesson 1</p><h1>Markdown Lesson</h1><p class="dek">Dek paragraph.</p><div class="lesson-meta"><span class="chip duration">14 min</span></div></header>');
-    expect(markup).toContain("What you will learn");
-    expect(markup).toContain("Run the supplied command.");
-    expect(markup).toContain('class="lesson-introduction"');
-    expect(markup).toContain("Full <strong>lesson introduction</strong>.");
-    expect(markup.indexOf("Full <strong>lesson introduction</strong>.")).toBeGreaterThan(markup.indexOf("Run the supplied command."));
-    expect(markup.indexOf("Full <strong>lesson introduction</strong>.")).toBeLessThan(markup.indexOf("Orientation"));
-    expect(markup.indexOf("Orientation")).toBeLessThan(markup.indexOf("Practice"));
-    expect(markup).toContain("<strong>carefully</strong>");
-    expect(markup).toContain("<li>One</li>");
-    expect(markup).toContain('class="hljs language-sh"');
-    expect(markup).not.toContain("private");
-  });
-
-  it("shows continuation controls and page breaks for active narrative blocks", () => {
-    const activeNarrative = html(createElement(BlockView, { block: lesson.blocks[0]!, progress, refresh: vi.fn() }));
-    expect(activeNarrative).toContain("Continue");
-    expect(activeNarrative).toContain('class="continuation-page-break"');
-    expect(activeNarrative).not.toContain('block-end-sentinel');
-
-    const activeTransitionProgress = { ...progress, activeBlockId: "transition", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "transition", ready: true, emerged: true })) };
-    const activeTransition = html(createElement(BlockView, { block: lesson.blocks[3]!, progress: activeTransitionProgress, refresh: vi.fn() }));
-    expect(activeTransition).toContain("Continue");
-    expect(activeTransition).toContain('class="continuation-page-break"');
-    expect(activeTransition).not.toContain('block-end-sentinel');
-
-    const activeTerminalProgress = { ...progress, activeBlockId: "practice", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "practice", ready: true, emerged: true })) };
-    const activeTerminal = html(createElement(BlockView, { block: lesson.blocks[1]!, progress: activeTerminalProgress, refresh: vi.fn() }));
-    expect(activeTerminal).not.toContain('class="continuation-page-break"');
-    expect(activeTerminal).not.toContain('block-end-sentinel');
-
-    const activeReflectionProgress = { ...progress, activeBlockId: "reflect", blocks: progress.blocks.map((block) => ({ ...block, active: block.id === "reflect", ready: true, emerged: true })) };
-    const activeReflection = html(createElement(BlockView, { block: lesson.blocks[2]!, progress: activeReflectionProgress, refresh: vi.fn() }));
-    expect(activeReflection).not.toContain('class="continuation-page-break"');
-    expect(activeReflection).not.toContain('block-end-sentinel');
   });
 
   it("keeps the embedded terminal as the only terminal path and extracts only authored command fences", () => {
@@ -1217,7 +1097,7 @@ describe("workbook lesson UI", () => {
     expect(markup).toContain("aria-disabled=\"true\"");
   });
 
-  it("labels the rail rows and lesson header with global lesson numbers across parts", () => {
+  it("labels the rail rows with global lesson numbers across parts", () => {
     const chapterOne = chapter({ id: "part-one/lesson-one", part: "Part One", partNumber: 1, lessonNumber: 1 });
     const secondLesson = { ...lesson, id: "part-two/lesson-one", title: "Second Lesson" };
     const chapterTwo = chapter({ id: secondLesson.id, part: "Part Two", partNumber: 2, lessonNumber: 2, title: secondLesson.title, lesson: secondLesson });
@@ -1230,10 +1110,6 @@ describe("workbook lesson UI", () => {
     expect(railMarkup).toContain(">Lesson 1: Markdown Lesson</a>");
     expect(railMarkup).toContain(">Lesson 2: Second Lesson</a>");
     expect(railMarkup).not.toMatch(/Lesson 1\d/);
-
-    const lessonMarkup = html(createElement(LessonView, { chapter: chapterOne, progress: railProgress, refresh: vi.fn() }));
-    expect(lessonMarkup).toContain('<p class="eyebrow">Lesson 1</p>');
-    expect(lessonMarkup).not.toMatch(/<p class="eyebrow">Lesson 1\d/);
   });
 
   it("renders each part preamble once even when a part has multiple lessons", async () => {
@@ -1267,73 +1143,15 @@ describe("workbook lesson UI", () => {
     expect(occurrences("Part B copy.")).toBe(1);
   });
 
-  it("scrolls to the active lesson's sanitized DOM id", () => {
-    const scrollIntoView = vi.fn();
-    const getElementById = vi.fn((id: string) => id === "lesson-part-two-lesson-two" ? { scrollIntoView } : null);
-
-    scrollActiveLessonIntoView({ getElementById }, "part two/lesson#two");
-
-    expect(getElementById).toHaveBeenCalledWith("lesson-part-two-lesson-two");
-    expect(getElementById).not.toHaveBeenCalledWith("lesson-part two/lesson#two");
-    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
-  });
-
-  it("links lesson outlines to lesson-scoped safe block DOM ids", () => {
+  it("links rail lesson outlines to lesson-scoped safe block DOM ids", () => {
     const unsafeLesson = { ...lesson, id: "part two/lesson#two", blocks: [{ ...lesson.blocks[0]!, id: "repeat block?" }] };
     const chapters: Chapter[] = [{ id: unsafeLesson.id, title: "Unsafe", part: "Part Two", partMarkdown: "", partNumber: 2, lessonNumber: 1, lesson: unsafeLesson }];
     const railProgress = { ...progress, activeLessonId: unsafeLesson.id, activeBlockId: "repeat block?", blocks: [{ id: "repeat block?", type: "narrative", ready: true, active: true, completed: false, verified: false, emerged: true }] };
     const railMarkup = html(createElement(LessonRail, { title: "Workbook", chapters, progress: railProgress, viewedLessonId: unsafeLesson.id, setViewedLesson: vi.fn() }));
-    const lessonMarkup = html(createElement(LessonView, { chapter: chapters[0] as Chapter & { lesson: typeof unsafeLesson }, progress: railProgress, refresh: vi.fn() }));
 
     expect(railMarkup).toContain('href="#lesson-part-two-lesson-two"');
-    expect(lessonMarkup).toContain('id="lesson-part-two-lesson-two"');
     expect(railMarkup).toContain('href="#lesson-part-two-lesson-two-block-repeat-block-"');
-    expect(lessonMarkup).toContain('id="lesson-part-two-lesson-two-block-repeat-block-"');
     expect(railMarkup).not.toContain('href="#repeat block?"');
-  });
-
-  it("renders resolved lesson reference links and the lesson header using the shared lesson anchor helper", () => {
-    const targetId = "part/lesson-one";
-    const referencedBlock = { ...lesson.blocks[0]!, markdown: `See [Lesson 1: Markdown Lesson](${lessonAnchorHref(targetId)}) for background.` };
-    const referencedChapter = chapter({ lesson: { ...lesson, blocks: [referencedBlock] } });
-
-    const markup = html(createElement(LessonView, { chapter: referencedChapter, progress, refresh: vi.fn() }));
-
-    expect(markup).toContain('href="#lesson-part-lesson-one"');
-    expect(markup).toContain('<header id="lesson-part-lesson-one">');
-    expect(vi.mocked(lessonElementId)).toHaveBeenCalledWith(targetId);
-  });
-
-  it("does not let a completed lesson's duplicate narrative block continue the active lesson", () => {
-    const oldChapter = chapter();
-    const activeLesson = { ...lesson, id: "part/lesson-two", title: "Active Duplicate Lesson" };
-    const activeChapter = chapter({ id: activeLesson.id, lessonNumber: 2, title: activeLesson.title, lesson: activeLesson });
-    const duplicateProgress = progressWithActiveDuplicate("orientation");
-
-    const completedMarkup = html(createElement(LessonView, { chapter: oldChapter, progress: duplicateProgress, refresh: vi.fn() }));
-    const activeMarkup = html(createElement(LessonView, { chapter: activeChapter, progress: duplicateProgress, refresh: vi.fn() }));
-
-    expect(completedMarkup).not.toContain('class="continuation-controls"');
-    expect(completedMarkup).not.toContain('class="continuation-page-break"');
-    expect(activeMarkup).toContain('class="continuation-controls"');
-    expect(activeMarkup).toContain('class="continuation-page-break"');
-    expect(activeMarkup).not.toContain('block-end-sentinel');
-  });
-
-  it("renders a completed lesson's duplicate terminal block frozen instead of live", () => {
-    const oldChapter = chapter();
-    const activeLesson = { ...lesson, id: "part/lesson-two", title: "Active Duplicate Lesson" };
-    const activeChapter = chapter({ id: activeLesson.id, lessonNumber: 2, title: activeLesson.title, lesson: activeLesson });
-    const duplicateProgress = progressWithActiveDuplicate("practice");
-
-    const completedMarkup = html(createElement(LessonView, { chapter: oldChapter, progress: duplicateProgress, refresh: vi.fn() }));
-    const activeMarkup = html(createElement(LessonView, { chapter: activeChapter, progress: duplicateProgress, refresh: vi.fn() }));
-
-    expect(completedMarkup).toContain("Frozen terminal session");
-    expect(completedMarkup).not.toContain("Embedded terminal");
-    expect(completedMarkup).not.toContain("Insert command");
-    expect(activeMarkup).toContain("Embedded terminal");
-    expect(activeMarkup).toContain("terminal-connection-status");
   });
 
   it("completes only the active predecessor when the ready successor crosses the reading line", async () => {

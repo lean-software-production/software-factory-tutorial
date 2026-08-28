@@ -137,7 +137,7 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
 
   return <>
     <section ref={bandRef} className="current-activity-band" data-activity-type={activeBlock.type} data-activity-layout="scroll-linked" aria-label="Current practice activity">
-      <BlockView lessonId={lessonId} block={activeBlock} progress={progress} refresh={refresh} showAuthoredContent={false} onTerminalInsertionChange={onTerminalInsertionChange} feedbackHost={feedbackHost} />
+      <BlockView lessonId={lessonId} block={activeBlock} progress={progress} refresh={refresh} onTerminalInsertionChange={onTerminalInsertionChange} feedbackHost={feedbackHost} />
     </section>
     <div ref={setFeedbackHost} className="practice-feedback-slot" aria-live="polite" />
   </>;
