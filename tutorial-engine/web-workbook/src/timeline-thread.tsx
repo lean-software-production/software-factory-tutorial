@@ -113,6 +113,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   const reflectionReviewingNode = activeReflectionReviewing ? <aside className="timeline-message tutor thinking" role="status" aria-live="polite" aria-label="Tutor is thinking"><b>Tutor</b><span className="tutor-thinking-dots" aria-hidden="true"><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /></span><span className="tutor-thinking-label">Thinking</span></aside> : null;
   const renderedRecords = (() => {
     const nodes: React.ReactNode[] = [];
+    let renderedActiveBlock = false;
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index];
       if (!record) continue;
@@ -127,6 +128,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
           : "";
         const canInsertCommand = Boolean(onDoItForMe && record.id === activeAuthoredRecordId);
         const lastMessage = ([...following].reverse().find((candidate): candidate is TimelineMessageRecord => candidate.type === "message") ?? record);
+        if (active) renderedActiveBlock = true;
         nodes.push(<section key={record.id} id={record.blockId} className={`work-block active-block-region${active ? " is-active" : ""}`} tabIndex={-1} data-active-block={active ? "true" : undefined}>
           <article className={`timeline-authored-content${transitionClass}`}><Markdown source="authored">{record.text}</Markdown></article>
           {active && activeSurface}
@@ -141,7 +143,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
       const hasAuthoredBlock = records.some((candidate) => isAuthoredCourseRecord(candidate) && belongsToAuthoredBlock(record, candidate));
       if (!hasAuthoredBlock) nodes.push(renderConversationRecord(record));
     }
-    if (!nodes.some((node: any) => node?.props?.["data-active-block"] === "true")) nodes.push(reflectionReviewingNode);
+    if (!renderedActiveBlock) nodes.push(reflectionReviewingNode);
     return nodes;
   })();
   return <section className="timeline-thread has-fixed-composer" aria-label="Tutor conversation">

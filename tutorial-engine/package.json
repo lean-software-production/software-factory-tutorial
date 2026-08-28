@@ -21,13 +21,16 @@
     "browser:install": "playwright install chromium",
     "browser:install:ci": "playwright install --with-deps chromium",
     "browser:smoke": "tsx test/browser-smoke.mts",
-    "check": "tsc --noEmit && tsc -p tsconfig.check.json && npm run test && npm run build:web:workbook && npm run browser:smoke",
+    "check": "npm run lint && tsc --noEmit && tsc -p tsconfig.check.json && npm run test && npm run build:web:workbook && npm run browser:smoke",
     "postinstall": "node scripts/fix-node-pty-helper.mjs",
     "prepublishOnly": "npm run build && npm run check",
     "dev:workbook": "npm run build:web:workbook && tsx src/workbook/cli.ts",
     "check:workbook": "tsx src/workbook/check.ts",
     "build:web:workbook": "vite build",
-    "build:workbook-terminal": "docker build --tag lean-software-production/workbook-terminal:latest --file docker/workbook-terminal.Dockerfile ."
+    "build:workbook-terminal": "docker build --tag lean-software-production/workbook-terminal:latest --file docker/workbook-terminal.Dockerfile .",
+    "lint": "eslint web-workbook/src",
+    "format:css": "prettier --write 'web-workbook/src/**/*.css'",
+    "check:format": "prettier --check 'web-workbook/src/**/*.css'"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
@@ -52,14 +55,19 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^24.12.0",
     "@types/react": "^19.2.8",
     "@types/react-dom": "^19.2.3",
+    "eslint": "^10.9.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "jsdom": "^29.1.1",
     "playwright": "^1.62.1",
+    "prettier": "^3.9.6",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.68.0",
     "vitest": "^4.1.0"
   }
 }

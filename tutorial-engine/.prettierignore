@@ -1,0 +1,14 @@
+# Stylesheets are the only thing this repository formats. The dense one-line style in its .ts and
+# .tsx is a deliberate choice that three independent contributors reproduced correctly on first
+# contact, so a formatter run over them would rewrite the codebase to settle a question nobody
+# asked. Listing what is never formatted, rather than what is, means `prettier --write .` is safe.
+**/*.ts
+**/*.tsx
+**/*.mts
+**/*.js
+**/*.mjs
+**/*.json
+**/*.md
+**/*.yml
+dist/
+node_modules/
