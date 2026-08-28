@@ -291,7 +291,9 @@ function TerminalBlock({ lessonId, block, state, refresh, onTerminalInsertionCha
         ? "Checking…"
         : undefined
     : undefined;
-  const liveFeedback = observerFeedback ?? observerStatus ?? persistedFeedback;
+  // A status only describes the transport's current activity. Once the server has persisted
+  // learner-facing feedback, keep it visible until a newer attempt replaces that checkpoint.
+  const liveFeedback = observerFeedback ?? persistedFeedback ?? observerStatus;
   const showLiveTerminal = !state?.verified && !state?.completed;
   const feedback = !accepted && liveFeedback && <aside className={`live-block-feedback${feedbackHost === undefined ? " terminal-feedback-overlay" : " practice-feedback"}`} aria-live="polite"><Markdown source="generated">{liveFeedback}</Markdown></aside>;
   const feedbackInTerminal = feedbackHost === undefined ? feedback : null;
