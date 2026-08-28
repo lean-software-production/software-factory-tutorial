@@ -2032,7 +2032,11 @@ describe("workbook lesson UI", () => {
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
     expect(container.textContent).toContain("Keep the final feedback.");
 
+    const terminalPanel = container.querySelector(".embedded-terminal-panel")!;
+    vi.spyOn(terminalPanel, "getBoundingClientRect").mockReturnValue({ height: 240 } as DOMRect);
+
     await act(async () => { mountedRoot!.render(render({ phase: "complete", message: "Accepted by the Main Tutor." })); });
+    expect(container.querySelector(".frozen-terminal")?.getAttribute("style")).toContain("min-height: 240px");
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
     expect(container.textContent).toContain("Accepted by the Main Tutor.");
     expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);

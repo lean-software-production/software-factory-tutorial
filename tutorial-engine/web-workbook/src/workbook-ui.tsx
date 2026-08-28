@@ -145,24 +145,27 @@ export function visibleTerminalText(terminal: Terminal | null): string | undefin
   return lines.join("\n") || undefined;
 }
 
-function FrozenTerminal({ text }: { text?: string }) {
-  return <div className="frozen-terminal" aria-label="Frozen terminal session">
+function FrozenTerminal({ text, height }: { text?: string; height?: number }) {
+  return <div className="frozen-terminal" aria-label="Frozen terminal session" style={height ? { minHeight: height } : undefined}>
     <pre className="frozen-terminal-output">{text ?? "Terminal completed."}</pre>
   </div>;
 }
 
 function EmbeddedTerminal({ command, active, frozen = false, onError, onTerminalInsertionChange }: { command?: string; active: boolean; frozen?: boolean; onError(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+  const terminalPanel = useRef<HTMLDivElement | null>(null);
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
   const frozenText = useRef<string | undefined>(undefined);
+  const frozenHeight = useRef<number | undefined>(undefined);
   const fit = useRef<FitAddon | null>(null);
   const socket = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
 
-  // `frozen` changes during the render that replaces xterm. Read its buffer before the effect
-  // below disposes it, then retain the snapshot through later feedback/state renders.
+  // `frozen` changes during the render that replaces xterm. Read its buffer and measured panel
+  // height before the effect below disposes it, then retain both through later state renders.
   if (frozen && frozenText.current === undefined) frozenText.current = visibleTerminalText(terminal.current);
+  if (frozen && frozenHeight.current === undefined) frozenHeight.current = terminalPanel.current?.getBoundingClientRect().height;
 
   useEffect(() => {
     if (!active || frozen || !terminalElement.current) return;
@@ -235,8 +238,8 @@ function EmbeddedTerminal({ command, active, frozen = false, onError, onTerminal
     return () => onTerminalInsertionChange?.(undefined);
   }, [active, command, connected, connectionEpoch, frozen, insertCommand, onTerminalInsertionChange]);
 
-  if (frozen) return <FrozenTerminal text={frozenText.current} />;
-  return <div className="embedded-terminal-panel">
+  if (frozen) return <FrozenTerminal text={frozenText.current} height={frozenHeight.current} />;
+  return <div ref={terminalPanel} className="embedded-terminal-panel">
     <span className={`terminal-connection-status${connected ? " connected" : ""}`} aria-label={connected ? "Terminal connected" : "Terminal disconnected"} />
     <div ref={terminalElement} className="embedded-terminal" aria-label="Embedded terminal" />
   </div>;
