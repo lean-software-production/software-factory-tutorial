@@ -14,12 +14,16 @@ export type TerminalInteraction =
   | { readonly type: "interactive-input"; readonly data: string }
   | { readonly type: "terminal-output"; readonly data: string };
 
-/** All information needed to understand one completed command without terminal state. */
-export interface TerminalCommandEvidence {
+/** Evidence captured at a stable point in one command's terminal interaction. */
+export interface TerminalCommandCheckpointEvidence {
   readonly blockId: string;
   readonly attemptId: string;
   readonly command: string;
   readonly interactions: readonly TerminalInteraction[];
+}
+
+/** All information needed to understand one completed command without terminal state. */
+export interface TerminalCommandEvidence extends TerminalCommandCheckpointEvidence {
   readonly exitStatus: number;
 }
 
@@ -36,6 +40,7 @@ export interface TerminalOutputSettledFact {
   readonly attemptId: string;
   /** Monotonically increases only when this attempt receives non-empty output. */
   readonly outputRevision: number;
+  readonly evidence: TerminalCommandCheckpointEvidence;
 }
 
 export interface TerminalCommandFinishedFact {
@@ -133,13 +138,7 @@ export class TerminalObservation {
       type: "terminal-command-finished",
       blockId: this.#blockId,
       attemptId: attempt.attemptId,
-      evidence: {
-        blockId: this.#blockId,
-        attemptId: attempt.attemptId,
-        command: attempt.command,
-        interactions: attempt.interactions.map((interaction) => ({ ...interaction })),
-        exitStatus: marker.exitStatus
-      }
+      evidence: { ...this.#checkpointEvidence(attempt), exitStatus: marker.exitStatus }
     });
   }
 
@@ -164,9 +163,19 @@ export class TerminalObservation {
         type: "terminal-output-settled",
         blockId: this.#blockId,
         attemptId: attempt.attemptId,
-        outputRevision
+        outputRevision,
+        evidence: this.#checkpointEvidence(attempt)
       });
     });
+  }
+
+  #checkpointEvidence(attempt: ActiveAttempt): TerminalCommandCheckpointEvidence {
+    return {
+      blockId: this.#blockId,
+      attemptId: attempt.attemptId,
+      command: attempt.command,
+      interactions: attempt.interactions.map((interaction) => ({ ...interaction }))
+    };
   }
 
   #cancelQuietTimer(attempt: ActiveAttempt): void {

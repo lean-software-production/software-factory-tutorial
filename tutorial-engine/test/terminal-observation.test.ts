@@ -85,7 +85,16 @@ describe("TerminalObservation", () => {
       type: "terminal-output-settled",
       blockId: "lesson-003:practice-command",
       attemptId: "attempt-1",
-      outputRevision: 2
+      outputRevision: 2,
+      evidence: {
+        blockId: "lesson-003:practice-command",
+        attemptId: "attempt-1",
+        command: "npm test",
+        interactions: [
+          { type: "terminal-output", data: "first chunk" },
+          { type: "terminal-output", data: "second chunk" }
+        ]
+      }
     }]);
 
     observation.observeTerminalOutput("third chunk");
