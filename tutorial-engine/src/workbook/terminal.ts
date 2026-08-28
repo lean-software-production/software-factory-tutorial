@@ -164,7 +164,7 @@ export function dockerRunArguments(options: DockerRunArgumentsOptions): string[]
 }
 
 export function dockerExecArguments(name: string): string[] {
-  return ["exec", "-it", "--env", "PS1=$ ", "--workdir", "/workspace", name, "/bin/bash", "--noprofile", "--norc", "-i"];
+  return ["exec", "-it", "--env", "PS1=$ ", "--env", "PS0=\x1b]633;workbook-command;$(fc -ln -1 | base64 -w 0)\x07", "--env", "PROMPT_COMMAND=status=$?; printf '\\033]633;workbook-finished;%s\\007' \"$status\"", "--workdir", "/workspace", name, "/bin/bash", "--noprofile", "--norc", "-i"];
 }
 
 /** Starts a hardened, per-practice container; browser bytes can only reach docker exec. */

@@ -269,11 +269,12 @@ describe("WorkbookTerminalManager", () => {
     }
   });
 
-  it("starts a bare Bash prompt without resolving a container user", () => {
-    expect(dockerExecArguments("workbook-terminal-test")).toEqual([
-      "exec", "-it", "--env", "PS1=$ ", "--workdir", "/workspace", "workbook-terminal-test",
-      "/bin/bash", "--noprofile", "--norc", "-i"
-    ]);
+  it("passes private Bash prompt protocol environment", () => {
+    const args = dockerExecArguments("workbook-terminal-test");
+
+    expect(args).toContain("PS1=$ ");
+    expect(args).toContain("PS0=\x1b]633;workbook-command;$(fc -ln -1 | base64 -w 0)\x07");
+    expect(args).toContain("PROMPT_COMMAND=status=$?; printf '\\033]633;workbook-finished;%s\\007' \"$status\"");
   });
 
   it("prestarts the terminal in the canonical workspace without opening a shell or writing a command", () => {
