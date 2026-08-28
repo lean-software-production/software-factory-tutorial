@@ -3,6 +3,8 @@ export type PublicWorkbookBlockType = "narrative" | "terminal-practice" | "edito
 export type PublicWorkbookBlockKind = PublicWorkbookBlockType | "workbook-introduction" | "part-preamble" | "lesson-preamble";
 export type PublicAttemptKind = "editor" | "terminal" | "reflection";
 export type PublicEditorStatus = "editing" | "waiting" | "reviewing" | "feedback" | "unlocked";
+/** Lifecycle state for terminal blocks. It contains no command, evidence reference, or attempt ID. */
+export type PublicTerminalStatus = "submitted" | "running" | "interim-feedback" | "reviewing-result" | "final-feedback" | "awaiting-confirmation" | "accepted";
 export type PublicWorkbookBlock =
   | { id: string; type: "narrative"; title: string; markdown: string }
   | { id: string; type: "terminal-practice"; title: string; markdown: string }
@@ -12,7 +14,7 @@ export interface PublicWorkbookLesson { id: string; title: string; dek: string; 
 export interface PublicWorkbookChapter { id: string; title: string; partId?: string; part?: string; partMarkdown?: string; partNumber?: number; lessonNumber: number; lesson?: PublicWorkbookLesson; }
 export type PublicReflectionTurn = { role: "learner" | "tutor"; text: string };
 export interface PublicCheckpoint { status: "working" | "reviewing" | "feedback" | "accepted"; feedback?: string; successMessage?: string; summary?: string; evidence?: { kind: PublicAttemptKind; text?: string; terminalHtml?: string; conversation?: PublicReflectionTurn[] }; }
-export interface PublicWorkbookBlockProgress { id: string; type?: PublicWorkbookBlockKind | string; anchorId?: string; origin?: string; kind?: PublicWorkbookBlockKind | string; title?: string; ready: boolean; active: boolean; completed: boolean; completedAt?: string; verified: boolean; emerged: boolean; workAccepted?: boolean; checkpoint?: PublicCheckpoint; terminalHtml?: string; revision?: number; draftText?: string; editorStatus?: PublicEditorStatus; }
+export interface PublicWorkbookBlockProgress { id: string; type?: PublicWorkbookBlockKind | string; anchorId?: string; origin?: string; kind?: PublicWorkbookBlockKind | string; title?: string; ready: boolean; active: boolean; completed: boolean; completedAt?: string; verified: boolean; emerged: boolean; workAccepted?: boolean; checkpoint?: PublicCheckpoint; terminalHtml?: string; terminalStatus?: PublicTerminalStatus; revision?: number; draftText?: string; editorStatus?: PublicEditorStatus; }
 export interface PublicWorkbookProgress { activeLessonId: string; activeBlockId: string; activeAnchorId?: string; completedLessons: string[]; completedBlocks?: string[]; workAcceptedBlocks?: string[]; readyBlocks?: string[]; blocks: PublicWorkbookBlockProgress[]; reflections: Record<string, string>; reflectionConversations: Record<string, PublicReflectionTurn[]>; canComplete?: { blockId: string; eligible: boolean; reason?: string }; workbookComplete?: boolean; }
 export interface PublicWorkbookOrderedBlock { id: string; anchorId: string; origin: string; kind: PublicWorkbookBlockKind | string; title: string; lessonId: string; declaredId?: string; order?: number; }
 export type PublicTimelineMessage = { type: "message"; id: string; sequence: number; at: string; lessonId: string; blockId: string; role: "assistant" | "user"; source: "authored" | "learner" | "main_tutor"; presentation: "course" | "chat" | "review"; text: string; blockInView?: string; };

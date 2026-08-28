@@ -7,7 +7,8 @@ export type TerminalAttemptState =
   | "interim-feedback"
   | "reviewing-result"
   | "final-feedback"
-  | "awaiting-confirmation";
+  | "awaiting-confirmation"
+  | "accepted";
 
 /** Learner-facing coaching only. Evidence references and captured terminal bytes never leave this projection. */
 export type PublicTerminalFeedback = { outcome: TerminalCoachingOutcome; text?: string };
@@ -18,6 +19,7 @@ export type ProjectedTerminalAttempt = {
   blockId: string;
   state: TerminalAttemptState;
   feedback?: PublicTerminalFeedback;
+  successMessage?: string;
 };
 
 type Coaching = { outcome: TerminalCoachingOutcome; text?: string };
@@ -29,10 +31,12 @@ type Attempt = {
   blockId: string;
   command: string;
   checkpoints: Map<string, Checkpoint>;
+  latestCheckpointId?: string;
   preliminary?: Coaching;
   interim?: Coaching;
   finished: boolean;
   result?: Coaching;
+  accepted?: { summary: string };
 };
 
 function coaching(record: { outcome: TerminalCoachingOutcome; text?: string }): Coaching {
@@ -56,6 +60,15 @@ function resultProjection(attempt: Attempt): ProjectedTerminalAttempt {
 }
 
 function projectAttempt(attempt: Attempt): ProjectedTerminalAttempt {
+  if (attempt.accepted) {
+    return {
+      attemptId: attempt.attemptId,
+      lessonId: attempt.lessonId,
+      blockId: attempt.blockId,
+      state: "accepted",
+      successMessage: attempt.accepted.summary,
+    };
+  }
   if (attempt.result) return resultProjection(attempt);
   const base = { attemptId: attempt.attemptId, lessonId: attempt.lessonId, blockId: attempt.blockId };
   if (attempt.finished) return { ...base, state: "reviewing-result" };
@@ -96,6 +109,7 @@ export function projectTerminalAttempts(
         const evidence = attempt && !attempt.finished ? readEvidence(record.evidenceRef) : undefined;
         if (!attempt || evidence?.kind !== "running" || evidence.command !== attempt.command) break;
         attempt.checkpoints.set(record.checkpointId, { checkpointId: record.checkpointId });
+        attempt.latestCheckpointId = record.checkpointId;
         break;
       }
       case "terminal-command-finished": {
@@ -112,12 +126,27 @@ export function projectTerminalAttempts(
       }
       case "interim-coaching-received": {
         const attempt = attempts.get(record.attemptId);
-        if (attempt && !attempt.finished && attempt.checkpoints.has(record.checkpointId)) attempt.interim = coaching(record);
+        if (attempt && !attempt.finished && attempt.latestCheckpointId === record.checkpointId) attempt.interim = coaching(record);
         break;
       }
       case "result-coaching-received": {
         const attempt = attempts.get(record.attemptId);
         if (attempt?.finished) attempt.result = coaching(record);
+        break;
+      }
+      case "attempt_accepted": {
+        const attempt = attempts.get(record.attemptId);
+        // A terminal acceptance is valid only after the terminal Coach has explicitly handed this
+        // finished command to the Main Tutor. This keeps the lifecycle projection authoritative
+        // even though the durable acceptance commit is a shared workbook event.
+        if (
+          attempt
+          && record.kind === "terminal"
+          && attempt.finished
+          && attempt.lessonId === record.lessonId
+          && attempt.blockId === record.blockId
+          && (attempt.result?.outcome === "ready" || attempt.result?.outcome === "interesting")
+        ) attempt.accepted = { summary: record.summary };
         break;
       }
       default:
