@@ -23,6 +23,10 @@ ARG NPM_VERSION=11.19.0
 ARG PI_VERSION=0.83.0
 # Go release installed below; pin it with its matching SHA-256 per architecture.
 ARG ADRGEN_VERSION=0.4.1-beta
+# Governs only the apt package list `install-deps` resolves, never a browser binary.
+# Keep roughly in step with tutorial-engine's playwright devDependency; an exact match
+# is not required, because the browser itself is downloaded by post-create.sh.
+ARG PLAYWRIGHT_VERSION=1.62.1
 
 # -----------------------------------------------------------------------------
 # Layer 1: OS utilities
@@ -88,7 +92,22 @@ RUN case "${TARGETARCH}" in \
     && rm "/tmp/${archive}" /tmp/adrgen
 
 # -----------------------------------------------------------------------------
-# Layer 5: state-volume mount point
+# Layer 5: Chromium system libraries
+# -----------------------------------------------------------------------------
+# `npm run check` ends in a Chromium smoke test, and Chromium needs shared
+# libraries the base image does not carry — libnspr4, libnss3, libgbm, libatk
+# and about ten more. Without them it cannot start at all, so the smoke does not
+# fail, it simply never runs, and a browser regression reaches a participant.
+#
+# `install-deps` asks Playwright for the apt package list rather than hard-coding
+# library names that drift with each Chromium roll. It installs no browser:
+# that download belongs to the Playwright the workspace resolves, so
+# post-create.sh does it and the binary always matches the package.
+RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install-deps chromium \
+    && rm -rf /var/lib/apt/lists/* /root/.npm
+
+# -----------------------------------------------------------------------------
+# Layer 6: state-volume mount point
 # -----------------------------------------------------------------------------
 # Created here, owned by vscode, so the named volume Docker initialises from it
 # inherits that ownership. Without this the fresh volume is root-owned and
@@ -96,7 +115,7 @@ RUN case "${TARGETARCH}" in \
 RUN install -d -o vscode -g vscode /home/vscode/.tutorial-state
 
 # -----------------------------------------------------------------------------
-# Layer 6: Environment defaults
+# Layer 7: Environment defaults
 # -----------------------------------------------------------------------------
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \

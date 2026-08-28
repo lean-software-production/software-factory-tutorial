@@ -12,15 +12,22 @@ runs fine on a host that already meets the learner prerequisites in
 | Node.js | 24.19.0 | `package.json` requires `>=24.2.0 <25`: below 24.2 the setup preflight silently no-ops, and Node 23 warns on stderr in a way that fails the calculator's tests |
 | npm | 11.19.0 | Node 24 already bundles npm 11; pinning keeps the image reproducible |
 | Pi CLI | 0.83.0 | The tutor engine's SDK and the factory doer the lessons call as `pi -p` |
+| Chromium libraries | Playwright 1.62.1's list | `npm run check` ends in a Chromium smoke test, and the base image carries none of the ~14 shared libraries it needs to start |
 
-Nothing else. No Python, no Bun, no second coding agent — the tutorial needs none
-of them.
+Chromium itself is not in the image. `post-create.sh` downloads it, so the binary
+matches the Playwright version the workspace resolves rather than one pinned when the
+image was built.
+
+Nothing else. No Bun, no second coding agent — the tutorial needs neither. (`python3`
+and a C++ toolchain are present, but only because `node-pty` has no Node 24 prebuild
+and npm compiles it from source.)
 
 ## Using it
 
 Open the repository in VS Code and choose **Dev Containers: Reopen in Container**,
 or `devcontainer up --workspace-folder .` with the CLI. `post-create.sh` runs
-`npm install` once the container exists, so the first lesson doesn't wait on it.
+`npm install` and downloads Chromium once the container exists, so neither the first
+lesson nor `npm run check` waits on them.
 
 Then authenticate Pi and start the tutor from the repository root:
 

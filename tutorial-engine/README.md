@@ -77,11 +77,17 @@ npm run check  # TypeScript, unit tests, browser build, and browser smoke
 ## Release checks
 
 Playwright is a declared development dependency, but Chromium itself is downloaded separately.
-After `npm install`, provision it once on a development machine:
+The devcontainer handles this: its image carries Chromium's system libraries and `post-create.sh`
+downloads the browser, so `npm run check` works in a fresh container with no extra step. On a host
+outside the container, provision it once after `npm install`:
 
 ```sh
 npm run browser:install
 ```
+
+If Chromium is present but fails to start with a missing shared library such as `libnspr4.so`, the
+system dependencies are absent rather than the browser; `npm run browser:install:ci` installs both
+and needs root.
 
 `npm run check` is the deterministic package gate: it type-checks the engine and workbook UI, runs
 engine tests, builds the workbook browser bundle, and runs the Chromium smoke test. `prepublishOnly`
