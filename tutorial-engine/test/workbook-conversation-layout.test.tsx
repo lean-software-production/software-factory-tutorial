@@ -100,7 +100,6 @@ describe("workbook fixed conversation layout", () => {
   it("visually attaches terminal feedback to the terminal bottom instead of overlaying output", () => {
     const terminalSurface = declarationsFor(".terminal-live-surface");
     const terminalBase = declarationsFor(".embedded-terminal-panel");
-    const terminalWithFeedback = declarationsFor(".terminal-live-surface.has-feedback .embedded-terminal-panel");
     const feedbackPanel = declarationsFor(".terminal-feedback-overlay");
     const feedbackMarkdownBody = declarationsFor(".live-block-feedback .markdown p, .live-block-feedback .markdown ul, .live-block-feedback .markdown ol");
     const feedbackMarkdownTail = declarationsFor(".live-block-feedback .markdown > :last-child");
@@ -108,9 +107,15 @@ describe("workbook fixed conversation layout", () => {
     expect(terminalSurface).toContain("position: relative");
     expect(terminalBase).toContain("margin: 4px 0 12px");
     expect(terminalBase).toContain("border-radius: 9px");
-    expect(terminalWithFeedback).not.toContain("border-bottom: 0");
-    expect(terminalWithFeedback).not.toContain("border-radius: 9px 9px 0 0");
-    expect(terminalWithFeedback).not.toContain("margin-bottom: 0");
+    // Ensure no terminal feedback-state override selectors set margin-bottom: 0, border-bottom: 0, or border-radius: 9px 9px 0 0
+    const terminalFeedbackOverridePattern = /\.terminal-live-surface\.has-feedback[^{]*\.embedded-terminal-panel[^{]*\{[^}]*\}/g;
+    const terminalFeedbackMatches = [...workbookStyles.matchAll(terminalFeedbackOverridePattern)];
+    terminalFeedbackMatches.forEach(match => {
+      const declarations = match[0];
+      expect(declarations).not.toContain("margin-bottom: 0");
+      expect(declarations).not.toContain("border-bottom: 0");
+      expect(declarations).not.toContain("border-radius: 9px 9px 0 0");
+    });
     expect(feedbackPanel).toContain("margin: 0 0 12px");
     expect(feedbackPanel).toContain("border-radius: 9px");
     expect(feedbackMarkdownBody).toContain("font: inherit");
