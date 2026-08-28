@@ -23,3 +23,7 @@ tutorial-engine/test/.tmp/
 .local/
 evals/reports/
 .yaks
+
+# Agent worktrees. Throwaway checkouts; ignoring only these keeps a shared
+# .claude/settings.json trackable if one is ever added.
+.claude/worktrees/
