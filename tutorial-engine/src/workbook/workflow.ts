@@ -460,8 +460,12 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     if (!submission) return { transcript: transcriptContext.transcript };
     const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> =>
       record.type === "terminal-command-finished" && record.attemptId === submission.attemptId);
-    if (!finished) return { transcript: transcriptContext.transcript, latestCommand: { attemptId: submission.attemptId, command: submission.command, status: "running" as const } };
+    const runningCommand = { attemptId: submission.attemptId, command: submission.command, status: "running" as const };
+    if (!finished) return { transcript: transcriptContext.transcript, latestCommand: runningCommand };
     const finishedEvidence = await terminalEvidence.read(finished.evidenceRef);
+    if (!finishedEvidence || finishedEvidence.kind !== "finished" || finishedEvidence.command !== submission.command || finishedEvidence.exitStatus !== finished.exitStatus) {
+      return { transcript: transcriptContext.transcript, latestCommand: runningCommand };
+    }
     return {
       transcript: transcriptContext.transcript,
       latestCommand: {

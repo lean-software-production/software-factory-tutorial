@@ -281,9 +281,9 @@ export class WorkbookTerminalManager {
     if (!shell) return;
     if (message.type === "input") {
       if (typeof message.data !== "string" || Buffer.byteLength(message.data, "utf8") > MAX_INPUT_BYTES) return;
-      shell.write(message.data);
       this.#appendActiveTranscript("input", message.data);
       this.#terminalObservation?.observeInteractiveInput(message.data);
+      shell.write(message.data);
       return;
     }
     if (message.type === "resize" && Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols > 0 && message.rows > 0) {

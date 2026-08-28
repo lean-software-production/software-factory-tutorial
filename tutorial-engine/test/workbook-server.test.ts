@@ -912,6 +912,45 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("treats the latest ordinary-chat terminal command as running when finished evidence is missing or inconsistent", async () => {
+    for (const scenario of ["missing", "inconsistent"] as const) {
+      const dir = await fixture();
+      const pty = new ServerFakePty(false);
+      const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+      const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: tutor, practiceCoach: new FakePracticeCoach() });
+      try {
+        await introduceAndOpenEditor(server.url);
+        await acceptEditor(server.url, tutor);
+        const blockId = "lesson--001-first--run-supplied-command";
+        const ws = await connect(server.url, server.url);
+        const command = `printf private-${scenario}-context`;
+        pty.data?.(bashCommandMarker(command));
+        ws.send(JSON.stringify({ type: "input", data: `${command}\r` }));
+        await waitForWorkbookState(server.url, () => pty.writes.includes(`${command}\r`), "terminal input to reach the pty");
+        pty.data?.(`private-${scenario}-output\r\n${bashFinishedMarker(7)}`);
+        const records = await waitForPrivateTimeline(dir, (latest) => latest.some((record) => record.type === "terminal-command-finished"), "finished command evidence");
+        const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished")!;
+        const evidence = new TerminalEvidenceRepository({ stateRoot: tutorialStatePath(dir) });
+        const evidencePath = resolve(evidence.evidenceDirectory, `${finished.evidenceRef}.json`);
+        if (scenario === "missing") await rm(evidencePath);
+        else await writeFile(evidencePath, `${JSON.stringify({ kind: "finished", command: "tampered command", exitStatus: 0, interactions: [{ kind: "output", data: "tampered output" }] })}\n`, "utf8");
+
+        const response = await postMessage(server.url, { blockId, text: `What happened in the ${scenario} terminal attempt?` });
+        expect(response.status).toBe(202);
+        const replyContext = tutor.replies.at(-1)!.activeContext as any;
+        expect(replyContext.terminal).toMatchObject({
+          transcript: expect.stringContaining(`private-${scenario}-output`),
+          latestCommand: { command, status: "running" }
+        });
+        expect(replyContext.terminal.latestCommand).not.toHaveProperty("exitStatus");
+        expect(replyContext.terminal.latestCommand).not.toHaveProperty("evidenceRef");
+        expect(replyContext.terminal.latestCommand).not.toHaveProperty("finishedEvidence");
+        expect(JSON.stringify(await response.json())).not.toMatch(/private-missing-context|private-inconsistent-context|private-missing-output|private-inconsistent-output|tampered output|evidenceRef|attemptId/);
+        ws.close();
+      } finally { await server.close(); }
+    }
+  });
+
   it("rejects legacy unexpected-output and help event actions on an active terminal block and appends no record", async () => {
     const dir = await fixture();
     const mainTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
