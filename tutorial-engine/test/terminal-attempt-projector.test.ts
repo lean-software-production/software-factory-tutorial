@@ -46,7 +46,7 @@ describe("projectTerminalAttempts", () => {
     expect(JSON.stringify(projected)).not.toContain("finished");
   });
 
-  it("projects a completed ready result as accepted-ready", () => {
+  it("projects a completed ready result as awaiting Main Tutor confirmation", () => {
     const evidence = reader({ finished: { kind: "finished", command: "npm test", interactions: [], exitStatus: 0 } });
     const events: WorkbookTimelineRecord[] = [
       record({ type: "terminal-command-submitted", attemptId: "attempt-1", lessonId: "lesson-1", blockId: "block-1", command: "npm test", terminalSessionId: "terminal-1" }, 1),
@@ -55,7 +55,7 @@ describe("projectTerminalAttempts", () => {
     ];
 
     expect(projectTerminalAttempts(events, evidence).get("block-1")).toMatchObject({
-      state: "accepted-ready",
+      state: "awaiting-confirmation",
       feedback: { outcome: "ready", text: "Ready for review." },
     });
   });

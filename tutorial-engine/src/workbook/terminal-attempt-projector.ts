@@ -7,7 +7,7 @@ export type TerminalAttemptState =
   | "interim-feedback"
   | "reviewing-result"
   | "final-feedback"
-  | "accepted-ready";
+  | "awaiting-confirmation";
 
 /** Learner-facing coaching only. Evidence references and captured terminal bytes never leave this projection. */
 export type PublicTerminalFeedback = { outcome: TerminalCoachingOutcome; text?: string };
@@ -52,7 +52,7 @@ function resultProjection(attempt: Attempt): ProjectedTerminalAttempt {
     return { ...base, state: "final-feedback", feedback: { outcome: "feedback", text: FINISHED_WORKING_FEEDBACK } };
   }
   if (result.outcome === "feedback") return { ...base, state: "final-feedback", feedback: feedback(result) };
-  return { ...base, state: "accepted-ready", feedback: result.text === undefined ? { outcome: result.outcome } : { outcome: result.outcome, text: result.text } };
+  return { ...base, state: "awaiting-confirmation", feedback: result.text === undefined ? { outcome: result.outcome } : { outcome: result.outcome, text: result.text } };
 }
 
 function projectAttempt(attempt: Attempt): ProjectedTerminalAttempt {
