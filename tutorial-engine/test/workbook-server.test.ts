@@ -240,6 +240,16 @@ async function waitForWorkbookState(serverUrl: string, predicate: (state: any) =
   }
   throw new Error(`Timed out waiting for ${description}. Last state: ${JSON.stringify(latest)}`);
 }
+async function waitForPrivateTimeline(workspaceOrSessionRoot: string, predicate: (records: WorkbookTimelineRecord[]) => boolean, description: string) {
+  const deadline = Date.now() + 1_500;
+  let latest: WorkbookTimelineRecord[] = [];
+  while (Date.now() < deadline) {
+    latest = await privateTimeline(workspaceOrSessionRoot).catch(() => latest);
+    if (predicate(latest)) return latest;
+    await waitMs(10);
+  }
+  throw new Error(`Timed out waiting for ${description}. Last records: ${JSON.stringify(latest)}`);
+}
 function block(state: any, blockId: string) { return state.progress.blocks.find((candidate: any) => candidate.id === blockId || candidate.declaredId === blockId || candidate.id.endsWith(`--${blockId}`)); }
 
 async function acceptEditor(serverUrl: string, tutor: FakeMainTutor, text = "factory acceptance marker") {
@@ -1106,11 +1116,15 @@ describe("workbook browser API", () => {
       await introduceAndOpenEditor(server.url);
       await acceptEditor(server.url, tutor);
       await submitTerminalAttempt(server.url, "lesson--001-first--run-supplied-command");
-      const reviewed = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--run-supplied-command")?.checkpoint?.status === "feedback", "terminal feedback");
-
-      // The event log keeps the whole review history for the block.
-      const logged = (await privateTimeline(dir)).filter((record): record is TimelineMessage => record.type === "message" && record.source === "main_tutor" && record.presentation === "review");
+      // The event log keeps the whole review history for the block. It is written after the
+      // checkpoint status flips, so wait for the log entry itself rather than for the status.
+      const logged = (await waitForPrivateTimeline(
+        dir,
+        (records) => records.some((record) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review" && record.text === "Run the supplied command, not your own."),
+        "the terminal review recorded in the event log"
+      )).filter((record): record is TimelineMessage => record.type === "message" && record.source === "main_tutor" && record.presentation === "review");
       expect(logged.map((record) => record.text)).toContain("Run the supplied command, not your own.");
+      const reviewed = await state(server.url);
 
       // The learner sees the latest one beside the terminal, through the checkpoint...
       expect(block(reviewed, "lesson--001-first--run-supplied-command")?.checkpoint).toMatchObject({ status: "feedback", feedback: "Run the supplied command, not your own." });
@@ -1156,7 +1170,7 @@ describe("workbook browser API", () => {
       expect(tutor.reviews[3]).toMatchObject({ privateGuidance: "Ask about harness and job.", attempt: { evidence: { kind: "reflection", response: "It checks the bounded doer by evidence.", conversation: [] } } });
       expect(JSON.stringify(reflection)).not.toContain("Ask about harness and job");
       reflectionDecision.resolve({ outcome: "feedback", message: "Name the exact boundary next." });
-      const feedbackState = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--reflection")?.checkpoint?.status === "feedback", "reflection feedback");
+      const feedbackState = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--reflection")?.checkpoint?.status === "feedback" && next.progress.reflectionConversations["lesson--001-first--reflection"]?.length === 2, "reflection feedback and the tutor turn it records");
       expect(block(feedbackState, "lesson--001-first--reflection")?.checkpoint?.feedback).toBe("Name the exact boundary next.");
       expect(feedbackState.progress.reflectionConversations["lesson--001-first--reflection"]).toEqual([
         { role: "learner", text: "It checks the bounded doer by evidence." },
@@ -1300,7 +1314,7 @@ describe("workbook browser API", () => {
     try {
       await introduceAndOpenEditor(server.url);
       expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "draft needing a real message" })).status).toBe(202);
-      const failed = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "feedback", "neutral empty feedback failure");
+      const failed = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "feedback" && next.timeline.at(-1)?.type === "tutor_failed", "neutral empty feedback failure recorded as the newest timeline record");
       expect(block(failed, "lesson--001-first--edit-answer")?.checkpoint?.feedback).toMatch(/temporarily unavailable|try again/i);
       expect(failed.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
       expect(failed.timeline.at(-1)).toMatchObject({ type: "tutor_failed", operation: "review" });
