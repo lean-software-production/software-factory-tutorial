@@ -11,7 +11,7 @@ class FakePty implements TerminalPty {
   write(data: string): void { this.writes.push(data); }
   resize(cols: number, rows: number): void { this.resizes.push([cols, rows]); }
   kill(): void {}
-  open(): void { this.opened += 1; }
+  open(): void { if (!this.opened) this.opened += 1; }
   onData(callback: (data: string) => void): void { this.#data.push(callback); }
   onExit(callback: (event: { exitCode: number }) => void): void { this.#exit.push(callback); }
   emit(data: string): void { this.#data.forEach((callback) => callback(data)); }
@@ -50,20 +50,26 @@ describe("WorkbookTerminalManager", () => {
     expect(dockerExecArguments("terminal").join(" ")).toContain("workbook-finished");
   });
 
-  it("prestarts one transport shell, forwards input, and bounds resize", () => {
+  it("opens one transport shell before attach, then forwards input and bounds resize", () => {
     const { manager, ptys } = setup();
     manager.start();
+    expect(ptys).toHaveLength(1);
+    expect(ptys[0]?.opened).toBe(1);
+
     const client = new FakeClient();
     expect(manager.attach(client)).toBe(true);
+    expect(ptys).toHaveLength(1);
+    expect(ptys[0]?.opened).toBe(1);
     manager.receive({ type: "input", data: "echo hi\r" });
     manager.receive({ type: "resize", cols: 999, rows: 999 });
-    expect(ptys[0]?.opened).toBe(1);
     expect(ptys[0]?.writes).toEqual(["echo hi\r"]);
     expect(ptys[0]?.resizes).toEqual([[500, 200]]);
   });
 
   it("creates no attempt before Bash submits and never puts marker bytes on the transport", async () => {
     const { manager, ptys, facts } = setup();
+    manager.start();
+    expect(facts).toEqual([]);
     const client = new FakeClient();
     manager.attach(client);
     manager.receive({ type: "input", data: "typed\r" });
