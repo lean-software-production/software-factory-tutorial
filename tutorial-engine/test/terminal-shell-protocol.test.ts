@@ -3,6 +3,7 @@ import { open, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { WORKBOOK_TERMINAL_PROMPT_COMMAND } from "../src/workbook/terminal.js";
 import { TerminalShellProtocol, type TerminalShellProtocolEvent } from "../src/workbook/terminal-shell-protocol.js";
 
 const commandMarker = (command: string) => `\x1b]633;workbook-command;${Buffer.from(command).toString("base64")}\x07`;
@@ -14,7 +15,7 @@ async function controlledBashOutput(commands: string): Promise<Buffer> {
   const outputPath = join(directory, "output");
   const output = await open(outputPath, "w");
   // Docker supplies GNU base64 (-w); this shim gives the local BSD utility the
-  // same no-wrap behaviour while preserving the command-marker trap under test.
+  // same no-wrap behaviour while preserving the production command-marker trap under test.
   await writeFile(rcfile, "base64() { command base64 | tr -d '\\n'; }\n");
   try {
     await new Promise<void>((resolve, reject) => {
@@ -23,7 +24,7 @@ async function controlledBashOutput(commands: string): Promise<Buffer> {
           ...process.env,
           HISTFILE: join(directory, "history"),
           PS1: "$ ",
-          PROMPT_COMMAND: "status=$?; printf '\\033]633;workbook-finished;%s\\007' \"$status\"; trap 'command=$BASH_COMMAND; trap - DEBUG; printf \"\\033]633;workbook-command;\"; printf '%s' \"$command\" | base64 -w 0; printf \"\\007\"' DEBUG"
+          PROMPT_COMMAND: WORKBOOK_TERMINAL_PROMPT_COMMAND
         },
         stdio: ["pipe", output.fd, output.fd]
       });
@@ -58,6 +59,27 @@ describe("TerminalShellProtocol", () => {
       { type: "command-finished", exitStatus: 0 },
       { type: "output", data: "$ " }
     ]);
+  });
+
+  it("preserves a complete authored multi-line pipeline from the production Bash hook", async () => {
+    const authoredCommand = ["printf 'question\\n' \\", "  | cat"].join("\n");
+    const expectedHistoryCommand = "printf 'question\\n'   | cat";
+    const events = parseEmittedBytes(await controlledBashOutput(`${authoredCommand}\n`));
+
+    expect(events.filter((event) => event.type === "command-submitted")).toEqual([
+      { type: "command-submitted", command: expectedHistoryCommand }
+    ]);
+
+    const commandIndex = events.findIndex((event) => event.type === "command-submitted" && event.command === expectedHistoryCommand);
+    const outputIndex = events.findIndex((event, index) => index > commandIndex && event.type === "output");
+    const finishIndex = events.findIndex((event, index) => index > outputIndex && event.type === "command-finished" && event.exitStatus === 0);
+    expect(commandIndex).toBeGreaterThanOrEqual(0);
+    expect(outputIndex).toBeGreaterThan(commandIndex);
+    expect(finishIndex).toBeGreaterThan(outputIndex);
+    expect(events.slice(outputIndex, finishIndex).filter((event) => event.type === "output").map((event) => event.data).join("")).toContain("question\n");
+
+    const normalOutput = events.filter((event) => event.type === "output").map((event) => event.data).join("");
+    expect(normalOutput).not.toContain("\x1b]633;workbook-");
   });
 
   it("decodes lifecycle facts from the equivalent controlled Bash setup without exposing private OSC output", async () => {

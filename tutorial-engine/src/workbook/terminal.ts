@@ -152,8 +152,10 @@ export function dockerRunArguments(options: DockerRunArgumentsOptions): string[]
   return args;
 }
 
+export const WORKBOOK_TERMINAL_PROMPT_COMMAND = "status=$?; printf '\\033]633;workbook-finished;%s\\007' \"$status\"; trap 'trap - DEBUG; __workbook_command_file=$(mktemp /tmp/workbook-command.XXXXXX 2>/dev/null || true); command=; if [ -n \"$__workbook_command_file\" ] && fc -ln -1 > \"$__workbook_command_file\" 2>/dev/null; then command=$(<\"$__workbook_command_file\"); fi; if [ -n \"$__workbook_command_file\" ]; then rm -f \"$__workbook_command_file\"; fi; command=${command#	}; command=${command# }; if [ -z \"$command\" ]; then command=$BASH_COMMAND; fi; printf \"\\033]633;workbook-command;\"; printf '%s' \"$command\" | base64 -w 0; printf \"\\007\"' DEBUG";
+
 export function dockerExecArguments(name: string): string[] {
-  return ["exec", "-it", "--env", "PS1=$ ", "--env", "PROMPT_COMMAND=status=$?; printf '\\033]633;workbook-finished;%s\\007' \"$status\"; trap 'command=$BASH_COMMAND; trap - DEBUG; printf \"\\033]633;workbook-command;\"; printf '%s' \"$command\" | base64 -w 0; printf \"\\007\"' DEBUG", "--workdir", "/workspace", name, "/bin/bash", "--noprofile", "--norc", "-i"];
+  return ["exec", "-it", "--env", "PS1=$ ", "--env", `PROMPT_COMMAND=${WORKBOOK_TERMINAL_PROMPT_COMMAND}`, "--workdir", "/workspace", name, "/bin/bash", "--noprofile", "--norc", "-i"];
 }
 
 /** Starts a hardened, per-practice container; browser bytes can only reach docker exec. */
