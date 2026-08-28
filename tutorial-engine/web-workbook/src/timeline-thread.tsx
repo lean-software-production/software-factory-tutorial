@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./markdown.js";
 import type { PublicTimelineMessage, PublicTimelineRecord } from "../../src/workbook/public-contract.js";
 
@@ -49,17 +49,21 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   const responseRecords = records.filter((record) => record.type === "tutor_failed" || (record.type === "message" && record.role === "assistant" && !isAuthoredCourseRecord(record)));
   const latestResponseId = responseRecords.at(-1)?.id;
   const responseIdsKey = responseRecords.map((record) => record.id).join("\u0000");
+  // `records` is a new array every render, so the set below is memoised on the ids it contains
+  // rather than on the array's identity. That lets the effect depend on exactly what it reads:
+  // previously it read responseRecords while depending on a key derived from it, which was correct
+  // but only provably so to a reader.
+  const responseIdSet = useMemo(() => new Set(responseIdsKey ? responseIdsKey.split("\u0000") : []), [responseIdsKey]);
   useLayoutEffect(() => {
-    const nextKnownResponseIds = new Set(responseRecords.map((record) => record.id));
     if (knownResponseIds.current === null) {
-      knownResponseIds.current = nextKnownResponseIds;
+      knownResponseIds.current = responseIdSet;
       return;
     }
     const shouldScroll = latestResponseId !== undefined && !knownResponseIds.current.has(latestResponseId);
-    knownResponseIds.current = nextKnownResponseIds;
+    knownResponseIds.current = responseIdSet;
     if (!shouldScroll) return;
     responseEntryRefs.current.get(latestResponseId)?.scrollIntoView({ behavior: "auto", block: "end" });
-  }, [latestResponseId, responseIdsKey]);
+  }, [latestResponseId, responseIdSet]);
   useLayoutEffect(() => {
     if (textareaRef.current) resizeComposerTextarea(textareaRef.current);
   }, [draft]);

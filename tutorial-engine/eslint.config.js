@@ -22,14 +22,13 @@ export default [
     },
     rules: {
       "react-hooks/rules-of-hooks": "error",
-      // A warning, not an error, and deliberately so. There are five violations in App and the
-      // editor/timeline effects, and each is a real design question rather than a slip: effects
-      // that intentionally read `state` without depending on all of it, and dependency arrays
-      // built with `.join("|")` to hand-roll a deep compare. Making them errors today would force
-      // either a rushed restructure or a row of disable comments, and a disable comment is how a
-      // finding stops being visible. As warnings they are printed on every lint run and tracked as
-      // their own piece of work.
-      "react-hooks/exhaustive-deps": "warn"
+      // An error. The five reports this rule opened were all real: an effect reading a filtered
+      // array while depending on a key derived from it, an editor seeded from a value that would
+      // have rebuilt it mid-typing, a title effect reading state it did not depend on, and a
+      // runway effect carrying two `.join("|")` hashes that stood in for one derived id. Each was
+      // fixed by making the effect depend on what it reads, so there is nothing left to downgrade
+      // the rule for.
+      "react-hooks/exhaustive-deps": "error"
     }
   }
 ];

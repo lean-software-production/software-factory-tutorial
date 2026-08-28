@@ -330,6 +330,13 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
 
   useEffect(() => { baseRevision.current = state?.revision ?? baseRevision.current; }, [block.id, state?.revision]);
   useEffect(() => { activeRef.current = canEdit; }, [canEdit]);
+  // The editor is seeded once, when it opens. draftText changes on every server review, so making
+  // the creation effect below depend on it would destroy and rebuild the view mid-typing and take
+  // the learner's cursor with it. Syncing through a ref lets that effect depend on stable values
+  // and still read the current draft. The sync is an effect, not a render-phase write, and is
+  // declared above the creation effect so it has run before the view is built.
+  const initialTextRef = useRef(initialText);
+  useEffect(() => { initialTextRef.current = initialText; }, [initialText]);
 
   useEffect(() => {
     if (!canEdit || !editorElement.current) return;
@@ -351,7 +358,7 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
     };
     const view = new EditorView({
       state: EditorState.create({
-        doc: initialText,
+        doc: initialTextRef.current,
         extensions: [
           keymap.of(defaultKeymap),
           EditorView.updateListener.of((update) => { if (update.docChanged) scheduleReview(update.state.doc.toString()); })
@@ -567,7 +574,8 @@ export function App() {
     });
     return () => events.close();
   }, [hasInitialState]);
-  useEffect(() => { if (state) document.title = state.workbook.title; }, [state?.workbook.title]);
+  const workbookTitle = state?.workbook.title;
+  useEffect(() => { if (workbookTitle) document.title = workbookTitle; }, [workbookTitle]);
   useEffect(() => {
     if (!state) return;
     const fragment = typeof location === "undefined" ? "" : decodeURIComponent(location.hash.replace(/^#/, ""));
@@ -583,10 +591,18 @@ export function App() {
     });
   }, [state]);
   useEffect(() => { setTerminalInsertion(undefined); }, [state?.progress.activeLessonId, state?.progress.activeBlockId]);
+  // The four dependencies this effect used to carry — the active block, the completion flag, and
+  // two `.join("|")` hashes of the ready-block arrays — were all approximating one question: has
+  // the ready successor changed? It computes that id anyway, so hoisting it makes the dependency
+  // exact instead of a hash of the inputs the id is derived from, and the effect re-runs when the
+  // successor actually moves rather than whenever either array is rebuilt.
+  const readySuccessorAnchorId = state ? readySuccessorId(state.progress) : undefined;
+  const runwayActiveBlockId = state?.progress.activeBlockId;
+  const runwayWorkbookComplete = state?.progress.workbookComplete;
   useEffect(() => {
-    if (!state || state.progress.workbookComplete || typeof IntersectionObserver === "undefined") return;
-    const readyId = readySuccessorId(state.progress);
-    const activeId = state.progress.activeBlockId;
+    if (runwayWorkbookComplete || typeof IntersectionObserver === "undefined") return;
+    const readyId = readySuccessorAnchorId;
+    const activeId = runwayActiveBlockId;
     if (!readyId || !activeId) return;
     const element = document.getElementById(readyId);
     if (!element) return;
@@ -617,7 +633,7 @@ export function App() {
       removeEventListener("scroll", checkReadySuccessorPosition);
       removeEventListener("resize", checkReadySuccessorPosition);
     };
-  }, [state?.progress.activeBlockId, state?.progress.workbookComplete, state?.readyBlockIds?.join("|"), state?.progress.readyBlocks?.join("|")]);
+  }, [readySuccessorAnchorId, runwayActiveBlockId, runwayWorkbookComplete]);
   useEffect(() => {
     if (!state) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
