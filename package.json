@@ -20,7 +20,7 @@
     "eval": "npm run eval:engine --",
     "check": "npm run test:onboarding && npm run --workspace=tutorial-engine check && npm run --workspace=tutorial-engine check:workbook && npm run --workspace=tutorial/workspaces/refactor-line/calculator test && npm run check:visual",
     "tutorial:workbook": "node scripts/tutorial-workbook.mjs",
-    "check:visual": "node scripts/check-visual.mjs",
+    "check:visual": "npm run --workspace=tutorial-engine test:visual",
     "approve:visual": "node scripts/approve-visual.mjs"
   },
   "dependencies": {

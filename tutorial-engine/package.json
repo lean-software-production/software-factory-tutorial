@@ -37,7 +37,7 @@
     "format:css": "prettier --write 'web-workbook/src/**/*.css'",
     "check:format": "prettier --check 'web-workbook/src/**/*.css'"
   },
-  "//rendering-pins": "The libraries below with exact versions are what draws the workbook: @xterm/* the terminal band, @codemirror/* the editor band, react/react-dom/react-markdown/remark-gfm the DOM, highlight.js and rehype-highlight the code colours, mermaid the diagrams, vite and @vitejs/plugin-react the bundle, and playwright the Chromium that screenshots it. A bump to any of them moves pixels in the approved screenshots, so they carry no range: upgrading one is an edit to this file, which scripts/check-visual.mjs watches, instead of a change confined to package-lock.json, which it does not.",
+  "//rendering-pins": "The libraries below with exact versions are what draws the workbook: @xterm/* the terminal band, @codemirror/* the editor band, react/react-dom/react-markdown/remark-gfm the DOM, highlight.js and rehype-highlight the code colours, mermaid the diagrams, vite and @vitejs/plugin-react the bundle, and playwright the Chromium that screenshots it. A bump to any of them can move pixels in the approved screenshots, so they carry no range: deterministic approvals require reviewing those upgrades as deliberate edits to this file instead of letting rendering drift through package-lock.json alone.",
   "dependencies": {
     "@codemirror/commands": "6.11.0",
     "@codemirror/state": "6.7.1",
