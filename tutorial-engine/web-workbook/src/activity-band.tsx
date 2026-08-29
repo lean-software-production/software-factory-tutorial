@@ -119,7 +119,7 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
     };
   }, [activeBlock.id, activeBlock.type]);
   useEffect(() => {
-    if (!activeProgress?.active || activeProgress.checkpoint?.status === "accepted" || typeof IntersectionObserver === "undefined") return;
+    if (activeBlock.type === "terminal-practice" || !activeProgress?.active || activeProgress.checkpoint?.status === "accepted" || typeof IntersectionObserver === "undefined") return;
     const element = bandRef.current;
     if (!element) return;
     let lastY = typeof scrollY === "number" ? scrollY : 0;
@@ -134,7 +134,7 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
     }, { rootMargin: "-100px 0px -45% 0px", threshold: 0.15 });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [activeBlock.id, activeProgress?.active, activeProgress?.checkpoint?.status]);
+  }, [activeBlock.id, activeBlock.type, activeProgress?.active, activeProgress?.checkpoint?.status]);
   const activePractical = Boolean(activeProgress?.active && ["terminal-practice", "editor-practice"].includes(activeBlock.type));
   const readyTerminalPreload = Boolean(activeBlock.type === "terminal-practice" && activeProgress?.ready && !activeProgress.active && !activeProgress.completed);
   // Terminal completion is a browser-safe terminal object, not an AttemptStore checkpoint. Keep

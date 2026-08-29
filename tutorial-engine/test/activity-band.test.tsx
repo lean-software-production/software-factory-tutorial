@@ -86,6 +86,35 @@ describe("ActivityBand stability", () => {
     expect(workbookStyles).toMatch(/\.current-activity-band\s*>\s*\.work-block\s*\{[^}]*left:\s*var\(--activity-left-offset\);[^}]*width:\s*var\(--activity-width\);[^}]*transition:\s*left 80ms linear, width 80ms linear;/);
   });
 
+  it("does not auto-focus terminal practice but keeps editor auto-focus", async () => {
+    class FakeIntersectionObserver {
+      static instances: FakeIntersectionObserver[] = [];
+      observed: Element[] = [];
+      constructor(_callback: IntersectionObserverCallback) { FakeIntersectionObserver.instances.push(this); }
+      observe(element: Element) { this.observed.push(element); }
+      disconnect() {}
+    }
+
+    const container = await mount(createElement(ActivityBand, {
+      lessonId: "part/lesson",
+      activeBlock: terminalBlock,
+      progress: completedTerminalProgress,
+      refresh: vi.fn()
+    }), () => vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver));
+
+    expect(FakeIntersectionObserver.instances).toHaveLength(0);
+
+    await act(async () => { root!.render(createElement(ActivityBand, {
+      lessonId: "part/lesson",
+      activeBlock: editorBlock,
+      progress: completedEditorProgress,
+      refresh: vi.fn()
+    })); });
+
+    expect(FakeIntersectionObserver.instances).toHaveLength(1);
+    expect(FakeIntersectionObserver.instances[0]!.observed).toEqual([container.querySelector(".current-activity-band")]);
+  });
+
   it("does not register terminal practice for scroll-linked geometry", async () => {
     class FakeResizeObserver {
       static instances: FakeResizeObserver[] = [];
