@@ -1,7 +1,10 @@
 # Approved screenshots
 
-These are approval tests. Each `.approved.png` is the blessed rendering; a failing run leaves a
-`.received.png` beside it, and `npm run approve:visual` renames one over the other.
+These are approval tests. `npm run check:visual` now always delegates to the engine-owned canonical
+validation command, `npm run --workspace=tutorial-engine test:visual`, which enters and validates in
+the approved devcontainer path. Each `.approved.png` is the blessed rendering; a failing run leaves
+a `.received.png` beside it. Review that image first, then run `npm run approve:visual` as a separate
+explicit action if the change is deliberate.
 
 ## Approve from the devcontainer, not your host
 

@@ -76,7 +76,8 @@ describe("evaluator package ownership", () => {
     expect(await exists(resolve(engineRoot, "evals/v2/scenarios.ts"))).toBe(true);
     expect(await exists(resolve(engineRoot, "evals/workbook/workbook.md"))).toBe(true);
     expect(await exists(resolve(engineRoot, "evals/test/v2-scenarios.test.ts"))).toBe(true);
-    expect(await exists(resolve(engineRoot, "test/check-visual-surface.test.ts"))).toBe(true);
+    expect(await exists(resolve(engineRoot, "test/check-visual-surface.test.ts"))).toBe(false);
+    expect(await exists(resolve(repoRoot, "scripts/check-visual.mjs"))).toBe(false);
     expect(await exists(resolve(repoRoot, "evals/run.ts"))).toBe(false);
     expect(gitignore).toContain("evals/reports/");
     expect(gitignore).toContain("tutorial-engine/evals/reports/");
