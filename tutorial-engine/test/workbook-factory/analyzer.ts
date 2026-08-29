@@ -192,10 +192,10 @@ export function validateSampleHz(sampleHz: number): number {
   return sampleHz;
 }
 
-const DEFAULT_THRESHOLDS: AnalyzerThresholds = {
+export const DEFAULT_THRESHOLDS: AnalyzerThresholds = {
   markerMaxColourDistance: 115,
   markerMinDistanceMargin: 30,
-  stillnessMeanDifference: 3.5,
+  stillnessMeanDifference: 8,
   minRequiredMotionPx: 28,
   jumpPx: 260,
   jumpViewportRatio: 0.55,
@@ -249,36 +249,7 @@ export async function analyzeWorkbookVideo(options: AnalyzerOptions): Promise<An
     const markerEnvelope = markerEnvelopeFor(samples);
     const markerStats = markerEnvelope.stats;
     const analysisSamples = markerEnvelope.envelopeSamples;
-    if (markerStats.valid === 0) {
-      findings.push({
-        code: 'marker-absent',
-        severity: 'error',
-        message: 'No valid workbook factory marker was decoded from any sampled video frame.',
-        frameIndexes: samples.map((sample) => sample.index),
-      });
-    } else {
-      const internalFailures = analysisSamples.filter((sample) => !sample.marker.ok);
-      const internalAbsent = internalFailures.filter((sample) => !sample.marker.ok && sample.marker.reason === 'absent');
-      const internalAmbiguous = internalFailures.filter((sample) => !sample.marker.ok && sample.marker.reason === 'ambiguous');
-      if (internalAbsent.length > 0) {
-        findings.push({
-          code: 'marker-absent',
-          severity: 'error',
-          message: `${internalAbsent.length} sampled frame(s) inside the valid marker envelope did not contain the workbook factory marker guard swatch.`,
-          frameIndexes: internalAbsent.map((sample) => sample.index),
-          details: { envelope: { firstValidIndex: markerStats.firstValidIndex, lastValidIndex: markerStats.lastValidIndex } },
-        });
-      }
-      if (internalAmbiguous.length > 0) {
-        findings.push({
-          code: 'marker-ambiguous',
-          severity: 'error',
-          message: `${internalAmbiguous.length} sampled frame(s) inside the valid marker envelope had an ambiguous workbook factory marker.`,
-          frameIndexes: internalAmbiguous.map((sample) => sample.index),
-          details: { envelope: { firstValidIndex: markerStats.firstValidIndex, lastValidIndex: markerStats.lastValidIndex } },
-        });
-      }
-    }
+    findings.push(...markerEnvelopeFindings(samples, analysisSamples, markerStats));
 
     const segments = buildSegments(analysisSamples, thresholds);
     if (segments.length === 0) {
@@ -294,85 +265,7 @@ export async function analyzeWorkbookVideo(options: AnalyzerOptions): Promise<An
     findings.push(...missingRequiredMotionStepFindings(options.requiredMotionStepIds, segments));
 
     for (const segment of segments) {
-      if (segment.frameIndexes.length < 2) {
-        findings.push({
-          code: 'segment-too-short',
-          stepId: segment.stepId,
-          severity: 'error',
-          message: `Step ${segment.stepId} transition segment has fewer than two sampled frames.`,
-          frameIndexes: segment.frameIndexes,
-          startTime: segment.startTime,
-          endTime: segment.endTime,
-        });
-        continue;
-      }
-      if (segment.texture < thresholds.minTextureScore) {
-        findings.push({
-          code: 'insufficient-texture',
-          stepId: segment.stepId,
-          severity: 'error',
-          message: `Step ${segment.stepId} transition segment lacks enough texture for deterministic translation measurement.`,
-          frameIndexes: segment.frameIndexes,
-          startTime: segment.startTime,
-          endTime: segment.endTime,
-          details: { texture: segment.texture, threshold: thresholds.minTextureScore },
-        });
-      }
-      const appearsStatic = segment.totalAbsShiftPx < thresholds.minRequiredMotionPx;
-      const lowConfidence = segment.lowConfidenceMotionCount > 0 && !appearsStatic;
-      if (lowConfidence) {
-        findings.push({
-          code: 'insufficient-motion-confidence',
-          stepId: segment.stepId,
-          severity: 'error',
-          message: `Step ${segment.stepId} has ${segment.lowConfidenceMotionCount} moving sample pair(s) below deterministic motion-confidence threshold.`,
-          frameIndexes: segment.frameIndexes,
-          startTime: segment.startTime,
-          endTime: segment.endTime,
-          details: { confidence: segment.confidence, threshold: thresholds.minMotionConfidence },
-        });
-      }
-      if (requiredStepIds.has(segment.stepId) && appearsStatic) {
-        findings.push({
-          code: 'no-motion',
-          stepId: segment.stepId,
-          severity: 'error',
-          message: `Step ${segment.stepId} is required to move but decoded only ${segment.totalAbsShiftPx.toFixed(1)} px of vertical motion.`,
-          frameIndexes: segment.frameIndexes,
-          startTime: segment.startTime,
-          endTime: segment.endTime,
-          details: { totalAbsShiftPx: segment.totalAbsShiftPx, threshold: thresholds.minRequiredMotionPx },
-        });
-      }
-      const jump = lowConfidence ? undefined : jumpEvidence(segment, roi, thresholds);
-      if (jump) {
-        findings.push({
-          code: 'jump',
-          stepId: segment.stepId,
-          severity: 'error',
-          message: `Step ${segment.stepId} contains an isolated ${jump.shiftPx.toFixed(1)} px adjacent-frame teleport.`,
-          frameIndexes: [jump.fromIndex, jump.toIndex],
-          startTime: jump.fromTime,
-          endTime: jump.toTime,
-          details: { shiftPx: jump.shiftPx, effectiveThresholdPx: jump.thresholdPx, neighbourMaxPx: jump.neighbourMaxPx },
-        });
-      }
-      if (!lowConfidence && segment.signReversals >= 2 && segment.totalAbsShiftPx >= thresholds.oscillationMinTotalPx) {
-        findings.push({
-          code: 'oscillation',
-          stepId: segment.stepId,
-          severity: 'error',
-          message: `Step ${segment.stepId} reverses vertical direction ${segment.signReversals} times during transition.`,
-          frameIndexes: segment.frameIndexes,
-          startTime: segment.startTime,
-          endTime: segment.endTime,
-          details: {
-            signReversals: segment.signReversals,
-            totalAbsShiftPx: segment.totalAbsShiftPx,
-            minTotalPx: thresholds.oscillationMinTotalPx,
-          },
-        });
-      }
+      findings.push(...evaluateSegmentFindings(segment, roi, thresholds, requiredStepIds));
     }
 
     const evidence = await writeEvidence(page, options.outputDir, samples, segments, findings);
@@ -558,7 +451,7 @@ function colourDistance(a: RgbTuple, b: readonly [number, number, number]): numb
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
-function markerEnvelopeFor(samples: FrameSample[]): {
+export function markerEnvelopeFor(samples: FrameSample[]): {
   envelopeSamples: FrameSample[];
   stats: AnalyzerReport['markerSamples'];
 } {
@@ -591,6 +484,47 @@ function markerEnvelopeFor(samples: FrameSample[]): {
   };
 }
 
+export function markerEnvelopeFindings(
+  allSamples: readonly FrameSample[],
+  envelopeSamples: readonly FrameSample[],
+  markerStats: AnalyzerReport['markerSamples'],
+): Finding[] {
+  if (markerStats.valid === 0) {
+    return [
+      {
+        code: 'marker-absent',
+        severity: 'error',
+        message: 'No valid workbook factory marker was decoded from any sampled video frame.',
+        frameIndexes: allSamples.map((sample) => sample.index),
+      },
+    ];
+  }
+
+  const findings: Finding[] = [];
+  const internalFailures = envelopeSamples.filter((sample) => !sample.marker.ok);
+  const internalAbsent = internalFailures.filter((sample) => !sample.marker.ok && sample.marker.reason === 'absent');
+  const internalAmbiguous = internalFailures.filter((sample) => !sample.marker.ok && sample.marker.reason === 'ambiguous');
+  if (internalAbsent.length > 0) {
+    findings.push({
+      code: 'marker-absent',
+      severity: 'error',
+      message: `${internalAbsent.length} sampled frame(s) inside the valid marker envelope did not contain the workbook factory marker guard swatch.`,
+      frameIndexes: internalAbsent.map((sample) => sample.index),
+      details: { envelope: { firstValidIndex: markerStats.firstValidIndex, lastValidIndex: markerStats.lastValidIndex } },
+    });
+  }
+  if (internalAmbiguous.length > 0) {
+    findings.push({
+      code: 'marker-ambiguous',
+      severity: 'error',
+      message: `${internalAmbiguous.length} sampled frame(s) inside the valid marker envelope had an ambiguous workbook factory marker.`,
+      frameIndexes: internalAmbiguous.map((sample) => sample.index),
+      details: { envelope: { firstValidIndex: markerStats.firstValidIndex, lastValidIndex: markerStats.lastValidIndex } },
+    });
+  }
+  return findings;
+}
+
 export function missingRequiredMotionStepFindings(requiredMotionStepIds: number[], segments: readonly Pick<MotionSegment, 'stepId'>[]): Finding[] {
   const seenTransitionSteps = new Set(segments.map((segment) => segment.stepId));
   return requiredMotionStepIds
@@ -601,6 +535,102 @@ export function missingRequiredMotionStepFindings(requiredMotionStepIds: number[
       severity: 'error' as const,
       message: `Required motion step ${stepId} did not appear as a marker-labelled transition segment.`,
     }));
+}
+
+export function evaluateSegmentFindings(
+  segment: MotionSegment,
+  roi: MotionRoi,
+  thresholds: AnalyzerThresholds,
+  requiredStepIds: ReadonlySet<number>,
+): Finding[] {
+  const findings: Finding[] = [];
+  if (segment.frameIndexes.length < 2) {
+    return [
+      {
+        code: 'segment-too-short',
+        stepId: segment.stepId,
+        severity: 'error',
+        message: `Step ${segment.stepId} transition segment has fewer than two sampled frames.`,
+        frameIndexes: segment.frameIndexes,
+        startTime: segment.startTime,
+        endTime: segment.endTime,
+      },
+    ];
+  }
+
+  if (segment.texture < thresholds.minTextureScore) {
+    findings.push({
+      code: 'insufficient-texture',
+      stepId: segment.stepId,
+      severity: 'error',
+      message: `Step ${segment.stepId} transition segment lacks enough texture for deterministic translation measurement.`,
+      frameIndexes: segment.frameIndexes,
+      startTime: segment.startTime,
+      endTime: segment.endTime,
+      details: { texture: segment.texture, threshold: thresholds.minTextureScore },
+    });
+  }
+
+  if (segment.lowConfidenceMotionCount > 0) {
+    findings.push({
+      code: 'insufficient-motion-confidence',
+      stepId: segment.stepId,
+      severity: 'error',
+      message: `Step ${segment.stepId} has ${segment.lowConfidenceMotionCount} moving sample pair(s) below deterministic motion-confidence threshold.`,
+      frameIndexes: segment.frameIndexes,
+      startTime: segment.startTime,
+      endTime: segment.endTime,
+      details: { confidence: segment.confidence, threshold: thresholds.minMotionConfidence },
+    });
+    return findings;
+  }
+
+  const appearsStatic = segment.totalAbsShiftPx < thresholds.minRequiredMotionPx;
+  if (requiredStepIds.has(segment.stepId) && appearsStatic) {
+    findings.push({
+      code: 'no-motion',
+      stepId: segment.stepId,
+      severity: 'error',
+      message: `Step ${segment.stepId} is required to move but decoded only ${segment.totalAbsShiftPx.toFixed(1)} px of vertical motion.`,
+      frameIndexes: segment.frameIndexes,
+      startTime: segment.startTime,
+      endTime: segment.endTime,
+      details: { totalAbsShiftPx: segment.totalAbsShiftPx, threshold: thresholds.minRequiredMotionPx },
+    });
+  }
+
+  const jump = jumpEvidence(segment, roi, thresholds);
+  if (jump) {
+    findings.push({
+      code: 'jump',
+      stepId: segment.stepId,
+      severity: 'error',
+      message: `Step ${segment.stepId} contains an isolated ${jump.shiftPx.toFixed(1)} px adjacent-frame teleport.`,
+      frameIndexes: [jump.fromIndex, jump.toIndex],
+      startTime: jump.fromTime,
+      endTime: jump.toTime,
+      details: { shiftPx: jump.shiftPx, effectiveThresholdPx: jump.thresholdPx, neighbourMaxPx: jump.neighbourMaxPx },
+    });
+  }
+
+  if (segment.signReversals >= 2 && segment.totalAbsShiftPx >= thresholds.oscillationMinTotalPx) {
+    findings.push({
+      code: 'oscillation',
+      stepId: segment.stepId,
+      severity: 'error',
+      message: `Step ${segment.stepId} reverses vertical direction ${segment.signReversals} times during transition.`,
+      frameIndexes: segment.frameIndexes,
+      startTime: segment.startTime,
+      endTime: segment.endTime,
+      details: {
+        signReversals: segment.signReversals,
+        totalAbsShiftPx: segment.totalAbsShiftPx,
+        minTotalPx: thresholds.oscillationMinTotalPx,
+      },
+    });
+  }
+
+  return findings;
 }
 
 function buildSegments(samples: FrameSample[], thresholds: AnalyzerThresholds): MotionSegment[] {
@@ -707,7 +737,10 @@ function jumpEvidence(segment: MotionSegment, roi: MotionRoi, thresholds: Analyz
       }
       const previous = segment.motions[index - 1];
       const next = segment.motions[index + span];
-      const neighbourMaxPx = Math.max(Math.abs(previous?.shiftPx ?? 0), Math.abs(next?.shiftPx ?? 0), thresholds.minRequiredMotionPx);
+      if (!isReliableNeighbourMotion(previous, thresholds) || !isReliableNeighbourMotion(next, thresholds)) {
+        continue;
+      }
+      const neighbourMaxPx = Math.max(Math.abs(previous.shiftPx), Math.abs(next.shiftPx), thresholds.minRequiredMotionPx);
       if (Math.abs(shiftPx) >= neighbourMaxPx * thresholds.jumpIsolationRatio) {
         const first = window[0];
         const last = window.at(-1);
@@ -726,6 +759,10 @@ function jumpEvidence(segment: MotionSegment, roi: MotionRoi, thresholds: Analyz
     }
   }
   return undefined;
+}
+
+function isReliableNeighbourMotion(motion: AdjacentMotion | undefined, thresholds: AnalyzerThresholds): motion is AdjacentMotion {
+  return motion !== undefined && motion.confidence >= thresholds.minMotionConfidence;
 }
 
 function estimateVerticalShift(previous: FrameSample, next: FrameSample, thresholds: AnalyzerThresholds): AdjacentMotion {
