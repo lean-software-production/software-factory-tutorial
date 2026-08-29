@@ -1,0 +1,42 @@
+{
+  "schema": "workbook-evaluator-prerequisite-seeds/v1",
+  "owner": "evals/workbook",
+  "workspace": "refactor-line",
+  "runtime": {
+    "canonical": "Linux workbook terminal/Docker",
+    "linePath": "factory/refactor",
+    "operatorLineArgument": "refactor"
+  },
+  "seeds": [
+    {
+      "id": "lesson-003-prerequisites",
+      "description": "Factory files a learner has authored by the end of Lesson 002.",
+      "sourceLessons": ["002-build-a-doer"],
+      "claimsLearnerProgress": false,
+      "materialization": { "target": "refactor-line workspace root", "mode": "copy as disposable input" }
+    },
+    {
+      "id": "lesson-004-prerequisites",
+      "description": "Factory files a learner has authored by the end of Lesson 003.",
+      "sourceLessons": ["002-build-a-doer", "003-build-a-validator"],
+      "claimsLearnerProgress": false,
+      "materialization": { "target": "refactor-line workspace root", "mode": "copy as disposable input" }
+    },
+    {
+      "id": "completed-factory-lesson-013",
+      "description": "Canonical factory source after Lesson 012, for entering Lesson 013 honestly without generated run state.",
+      "sourceLessons": [
+        "005-join-them-into-a-line",
+        "006-read-only-validator",
+        "007-compose-and-branch",
+        "008-take-the-pause-off",
+        "009-record-what-happened",
+        "010-watch-it-while-it-runs",
+        "011-ask-what-happened",
+        "012-talk-to-a-station"
+      ],
+      "claimsLearnerProgress": false,
+      "materialization": { "target": "refactor-line workspace root", "mode": "copy as disposable input" }
+    }
+  ]
+}
