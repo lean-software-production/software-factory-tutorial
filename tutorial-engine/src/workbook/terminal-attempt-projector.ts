@@ -73,6 +73,7 @@ export function projectTerminalAttempts(
           && record.kind === "terminal"
           && attempt.finished
           && attempt.coachHandoffRecorded
+          && attempt.feedback === undefined
           && attempt.lessonId === record.lessonId
           && attempt.blockId === record.blockId
         ) attempt.accepted = record.summary;

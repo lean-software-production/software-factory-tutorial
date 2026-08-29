@@ -18,9 +18,16 @@ import type { EditorPracticeBlock, WorkbookBlock, WorkbookLesson } from "./contr
 import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTerminal, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookLesson, PublicWorkbookOrderedBlock, PublicWorkbookState } from "./public-contract.js";
 
 const REVIEW_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please try another attempt in a moment.";
+const TERMINAL_REVIEW_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please run the command again in a moment.";
 const TUTOR_UNAVAILABLE = "The tutor is temporarily unavailable. Please retry.";
 const TERMINAL_RETRY_BASE_MS = 250;
 const TERMINAL_RETRY_MAX_MS = 8_000;
+const TERMINAL_AUTOMATIC_RETRY_LIMIT = 0;
+const TERMINAL_ASSESSMENT_TIMEOUT_MS = 30_000;
+
+class TerminalAssessmentTimeoutError extends Error {
+  constructor() { super("Terminal assessment timed out."); }
+}
 
 /** Injectable so terminal lifecycle retries have deterministic fake-timer coverage. */
 export interface TerminalAssessmentScheduler {
@@ -740,6 +747,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
   };
   type TerminalRetry = { request: TerminalAssessmentRequest; retryCount: number; handle: unknown };
   const terminalRetries = new Map<string, TerminalRetry>();
+  const terminalAssessmentTimeouts = new Set<unknown>();
   const terminalAssessmentTasks = new Set<Promise<void>>();
 
   const trackTerminalAssessment = (task: Promise<void>): void => {
@@ -766,6 +774,28 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
   const cancelAllTerminalRetries = (): void => {
     for (const attemptId of [...terminalRetries.keys()]) cancelTerminalRetry(attemptId);
   };
+  const cancelAllTerminalAssessmentTimeouts = (): void => {
+    for (const handle of [...terminalAssessmentTimeouts]) {
+      assessmentScheduler.cancel(handle);
+      terminalAssessmentTimeouts.delete(handle);
+    }
+  };
+  const withTerminalAssessmentTimeout = async <T>(operation: Promise<T>): Promise<T> => {
+    let handle: unknown;
+    const timeout = new Promise<T>((_resolve, reject) => {
+      handle = assessmentScheduler.schedule(TERMINAL_ASSESSMENT_TIMEOUT_MS, () => {
+        terminalAssessmentTimeouts.delete(handle);
+        reject(new TerminalAssessmentTimeoutError());
+      });
+      terminalAssessmentTimeouts.add(handle);
+    });
+    try {
+      return await Promise.race([operation, timeout]);
+    } finally {
+      assessmentScheduler.cancel(handle);
+      terminalAssessmentTimeouts.delete(handle);
+    }
+  };
   const terminalRequestIsCurrent = (request: TerminalAssessmentRequest): DeclaredWorkbookBlock | undefined => {
     if (!generationIsCurrent(request.generation)) return undefined;
     const active = activeDeclaredBlock();
@@ -776,6 +806,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
       record.type === "terminal-command-submitted" && record.blockId === request.blockId);
     if (!submission || latestSubmission?.attemptId !== request.attemptId || submission.lessonId !== request.lessonId || submission.blockId !== request.blockId || submission.command !== request.command) return undefined;
     if (records.some((record) => record.type === "attempt_accepted" && record.attemptId === request.attemptId) || records.some((record) => record.type === "work_accepted" && record.blockId === request.blockId)) return undefined;
+    if (records.some((record) => record.type === "terminal-feedback-recorded" && record.attemptId === request.attemptId)) return undefined;
     const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> =>
       record.type === "terminal-command-finished" && record.attemptId === request.attemptId);
     return finished?.evidenceRef === request.evidenceRef ? active : undefined;
@@ -807,10 +838,14 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     terminalRetries.set(request.attemptId, { request, retryCount, handle });
   };
   const retryTerminalAssessment = async (request: TerminalAssessmentRequest, retryCount: number): Promise<void> => {
-    const current = await transact(async () => Boolean(terminalRequestIsCurrent(request)));
-    // Retry state is deliberately not a terminal event or browser phase. The existing Checking
-    // projection remains visible until a final message or Main Tutor acceptance is recorded.
-    if (current) scheduleTerminalRetry(request, retryCount + 1);
+    const outcome = await transact(async (): Promise<"stale" | "retry" | "failed"> => {
+      if (!terminalRequestIsCurrent(request)) return "stale";
+      if (retryCount < TERMINAL_AUTOMATIC_RETRY_LIMIT) return "retry";
+      await append({ type: "terminal-feedback-recorded", attemptId: request.attemptId, text: TERMINAL_REVIEW_FAILURE_FEEDBACK });
+      notifyStateChanged({ lessonId: request.lessonId, blockId: request.blockId, status: "feedback", terminalPhase: "feedback" });
+      return "failed";
+    });
+    if (outcome === "retry") scheduleTerminalRetry(request, retryCount + 1);
   };
   const launchTerminalMainReview = (request: TerminalAssessmentRequest, handoff: PracticeCoachHandoff, attempt: Attempt, retryCount: number): void => {
     const task = (async () => {
@@ -825,7 +860,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
 
       let decision: TutorDecision;
       try {
-        decision = await mainTutor.review({ ...review.context, attempt, privateGuidance: request.rubric, practiceCoachHandoff: handoff });
+        decision = await withTerminalAssessmentTimeout(mainTutor.review({ ...review.context, attempt, privateGuidance: request.rubric, practiceCoachHandoff: handoff }));
       } catch (error) {
         log.info(`Workbook tutor terminal review failed for ${request.lessonId}/${request.blockId}: ${error instanceof Error ? error.message : String(error)}`);
         await retryTerminalAssessment(request, retryCount);
@@ -869,7 +904,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
 
       let advice: Awaited<ReturnType<PracticeCoach["assess"]>>;
       try {
-        advice = await practiceCoach.assess({ attempt, rubric: request.rubric });
+        advice = await withTerminalAssessmentTimeout(practiceCoach.assess({ attempt, rubric: request.rubric }));
       } catch (error) {
         log.info(`Practice Coach unavailable for ${request.lessonId}/${request.blockId}: ${error instanceof Error ? error.message : String(error)}`);
         await retryTerminalAssessment(request, retryCount);
@@ -1210,6 +1245,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
       // appending into a closed workflow.
       closed = true;
       cancelAllTerminalRetries();
+      cancelAllTerminalAssessmentTimeouts();
       // In-flight model requests are not cancellable through the current provider APIs. Their
       // guarded callbacks observe `closed`; do not let a stalled provider prevent terminal close.
       await Promise.allSettled([...ordinaryCommands, ...reviewFinalizers]);

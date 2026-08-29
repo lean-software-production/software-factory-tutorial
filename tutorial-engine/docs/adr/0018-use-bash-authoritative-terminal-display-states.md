@@ -4,7 +4,7 @@ Date: 2026-08-28
 
 ## Status
 
-accepted
+superseded by [20. Bound terminal assessment retries with recoverable feedback](0020-bound-terminal-assessment-retries-with-recoverable-feedback.md)
 
 Supersedes [17. Simplify terminal learner feedback](0017-simplify-terminal-learner-feedback.md).
 
