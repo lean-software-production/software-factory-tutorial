@@ -19,6 +19,8 @@
     "start": "node dist/workbook/cli.js",
     "test": "vitest run --root .",
     "test:video-analyser": "tsx test/workbook-factory/synthetic-contract.mts",
+    "factory:workbook:record": "tsx test/workbook-factory/record.mts --record-only",
+    "factory:workbook:deterministic": "tsx test/workbook-factory/record.mts --analyze",
     "browser:install": "playwright install chromium",
     "browser:install:ci": "playwright install --with-deps chromium",
     "browser:smoke": "tsx test/browser-smoke.mts",
