@@ -514,11 +514,16 @@ async function finalizeVideo(page: Page | undefined, context: BrowserContext | u
   return target;
 }
 
+export function formatWorkbookUxPreparationMessage(headless: boolean | undefined): string {
+  if (headless === false) return "Preparing fixture, local server, and headed browser...";
+  return "Preparing fixture, local server, and headless browser...";
+}
+
 export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOptions = {}): Promise<WorkbookUxTestRecorderResult> {
   assertRealJourneyMotionThresholdCalibration();
   const progress = options.progress;
   const runRoot = options.runRoot ? resolve(options.runRoot) : RUN_ROOT;
-  progress?.({ type: "stage", phase: "prepare", message: "Preparing fixture, local server, and headless browser..." });
+  progress?.({ type: "stage", phase: "prepare", message: formatWorkbookUxPreparationMessage(options.headless) });
   await rm(runRoot, { recursive: true, force: true });
   await mkdir(resolve(runRoot, "analysis"), { recursive: true });
   await mkdir(resolve(runRoot, "video-raw"), { recursive: true });

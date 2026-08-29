@@ -2,7 +2,7 @@
 import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, resolve } from 'node:path';
-import { recordWorkbookUxTest, type WorkbookUxTestRecorderOptions, type WorkbookUxTestRecorderResult } from './record.mjs';
+import { formatWorkbookUxPreparationMessage, recordWorkbookUxTest, type WorkbookUxTestRecorderOptions, type WorkbookUxTestRecorderResult } from './record.mjs';
 import { deterministicContractFailures, writeUxTestReport, type UxTestStationResult, type SerializedError } from './report.js';
 import { formatWorkbookUxStage, type WorkbookUxProgressEvent, type WorkbookUxProgressSink } from './progress.js';
 import { runAiReview, type AiReviewResult } from './review-ai.js';
@@ -46,7 +46,7 @@ export async function runWorkbookUxTest(options: WorkbookUxTestRunOptions = {}, 
   let deterministicError: SerializedError | undefined;
 
   try {
-    progress?.({ type: 'stage', phase: 'prepare', stage: 1, totalStages: 5, message: formatWorkbookUxStage(1, 5, 'Preparing fixture, local server, and headless browser...') });
+    progress?.({ type: 'stage', phase: 'prepare', stage: 1, totalStages: 5, message: formatWorkbookUxStage(1, 5, formatWorkbookUxPreparationMessage(options.headless)) });
     await record({ runRoot, analyze: true, headless: options.headless, progress: createRunRecordProgress(progress) });
     const contractFailures = await deterministicContractFailures(runRoot);
     if (contractFailures.length > 0) {
@@ -228,7 +228,6 @@ if (basename(process.argv[1] ?? '') === 'run.mts') {
     console.log(`Exit verdict: ${result.exitCode === 0 ? 'PASS' : 'FAIL'} (exit code ${result.exitCode})`);
     console.log(`Report: ${result.reportPath}`);
     console.log(`Result JSON: ${result.resultPath}`);
-    if (result.ai?.status === 'unavailable') console.log(`AI review unavailable: ${result.ai.reason}`);
     process.exitCode = result.exitCode;
   }).catch((error) => {
     console.error('Workbook UX test failed before report writing.');

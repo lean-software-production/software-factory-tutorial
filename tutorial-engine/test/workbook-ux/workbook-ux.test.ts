@@ -6,7 +6,7 @@ import type { AnalyzerReport } from './analyzer.js';
 import { writeUxTestReport, type UxTestStationResult } from './report.js';
 import { runWorkbookUxTest } from './run.mjs';
 import { buildPiArgs, runAiReview, type AiReviewResult, type ExecFileRunner } from './review-ai.js';
-import type { WorkbookUxTestRecorderOptions, WorkbookUxTestRecorderResult, WorkbookUxTestWalkthrough } from './record.mjs';
+import { formatWorkbookUxPreparationMessage, type WorkbookUxTestRecorderOptions, type WorkbookUxTestRecorderResult, type WorkbookUxTestWalkthrough } from './record.mjs';
 
 const now = '2026-01-02T03:04:05.000Z';
 
@@ -204,6 +204,26 @@ describe('workbook UX test orchestration', () => {
     ]);
   });
 
+  it('reports headed browser preparation when headed without launching a browser', async () => {
+    const runRoot = await fixtureRunRoot({ motionOk: true });
+    const messages: string[] = [];
+    let recorderHeadless: boolean | undefined;
+
+    const result = await runWorkbookUxTest({ runRoot, ai: false, headless: false, progress: (event) => messages.push(event.message) }, {
+      record: async (options) => {
+        recorderHeadless = options.headless;
+        return recorderResult(runRoot);
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(recorderHeadless).toBe(false);
+    expect(messages).toContain('[1/5] Preparing fixture, local server, and headed browser...');
+    expect(messages).not.toContain('[1/5] Preparing fixture, local server, and headless browser...');
+    expect(formatWorkbookUxPreparationMessage(false)).toBe('Preparing fixture, local server, and headed browser...');
+    expect(formatWorkbookUxPreparationMessage(undefined)).toBe('Preparing fixture, local server, and headless browser...');
+  });
+
   it('emits an explicit AI skipped stage for no-AI runs', async () => {
     const runRoot = await fixtureRunRoot({ motionOk: true });
     const messages: string[] = [];
@@ -235,6 +255,7 @@ describe('workbook UX test orchestration', () => {
 
     expect(result.exitCode).toBe(0);
     expect(messages).toContain('Advisory AI review unavailable: provider unavailable');
+    expect(messages.filter((message) => message === 'Advisory AI review unavailable: provider unavailable')).toHaveLength(1);
     expectInOrder(messages, [
       '[4/5] Running advisory AI review (timeout: 180s)...',
       'Advisory AI review unavailable: provider unavailable',
