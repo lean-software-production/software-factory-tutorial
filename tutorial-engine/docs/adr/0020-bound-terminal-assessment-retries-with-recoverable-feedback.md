@@ -4,7 +4,7 @@ Date: 2026-08-29
 
 ## Status
 
-accepted
+superseded by [22. Use one-shot terminal workflow assessment](0022-use-one-shot-terminal-workflow-assessment.md)
 
 Supersedes [18. Use Bash-authoritative terminal display states](0018-use-bash-authoritative-terminal-display-states.md).
 

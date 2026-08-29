@@ -41,5 +41,6 @@ Update the index below whenever you create a record or change its status.
 | [0017](0017-simplify-terminal-learner-feedback.md) | superseded | Simplify terminal learner feedback |
 | [0018](0018-use-bash-authoritative-terminal-display-states.md) | superseded | Use Bash-authoritative terminal display states |
 | [0019](0019-keep-live-terminal-context-private.md) | accepted | Keep Live Terminal Context Private |
-| [0020](0020-bound-terminal-assessment-retries-with-recoverable-feedback.md) | accepted | Bound terminal assessment retries with recoverable feedback |
+| [0020](0020-bound-terminal-assessment-retries-with-recoverable-feedback.md) | superseded | Bound terminal assessment retries with recoverable feedback |
 | [0021](0021-preflight-model-backed-roles-before-workbook-startup.md) | accepted | Preflight model-backed roles before workbook startup |
+| [0022](0022-use-one-shot-terminal-workflow-assessment.md) | accepted | Use one-shot terminal workflow assessment |

@@ -122,7 +122,7 @@ class ServerFakePty implements TerminalPty {
   onExit(callback: (event: { exitCode: number }) => void): void { this.exit = callback; }
 }
 
-/** Deterministic retry seam: models are fakes and tests advance retries explicitly. */
+/** Deterministic timeout seam: models are fakes and tests trigger assessment timeouts explicitly. */
 class FakeTerminalAssessmentScheduler {
   #next = 0;
   #pending = new Map<number, () => void>();
@@ -134,7 +134,7 @@ class FakeTerminalAssessmentScheduler {
   cancel(handle: unknown): void { this.#pending.delete(handle as number); }
   runNext(): void {
     const next = this.#pending.entries().next().value as [number, () => void] | undefined;
-    if (!next) throw new Error("No terminal retry is scheduled.");
+    if (!next) throw new Error("No terminal assessment timeout is scheduled.");
     this.#pending.delete(next[0]);
     next[1]();
   }
@@ -1209,7 +1209,7 @@ describe("workbook browser API", () => {
     } finally { await reloaded.close(); }
   });
 
-  it("bounds Practice Coach provider failure as durable terminal feedback without rereviewing on reads or restart", async () => {
+  it("records Practice Coach provider failure as durable terminal feedback without reassessing on reads or restart", async () => {
     const dir = await fixture();
     const firstPty = new ServerFakePty(false);
     const scheduler = new FakeTerminalAssessmentScheduler();
@@ -1242,7 +1242,7 @@ describe("workbook browser API", () => {
     const secondPty = new ServerFakePty(false);
     const secondTutor = new FakeMainTutor();
     const secondCoach = new FakePracticeCoach();
-    secondCoach.queue.push({ outcome: "feedback", text: "Explicit retry feedback." });
+    secondCoach.queue.push({ outcome: "feedback", text: "Explicit rerun feedback." });
     const second = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => secondPty, terminalAssessmentScheduler: scheduler, mainTutor: secondTutor, practiceCoach: secondCoach });
     try {
       expect(block(await state(second.url), "run-supplied-command")?.terminal?.message).toMatch(/Review is temporarily unavailable/i);
@@ -1250,8 +1250,8 @@ describe("workbook browser API", () => {
 
       secondPty.data?.(bashCommandMarker("run again"));
       secondPty.data?.(`done\r\n${bashFinishedMarker()}`);
-      const retried = await waitForWorkbookState(second.url, (next) => block(next, "run-supplied-command")?.terminal?.message === "Explicit retry feedback.", "explicit rerun feedback");
-      expect(block(retried, "run-supplied-command")?.terminal).toEqual({ phase: "feedback", message: "Explicit retry feedback." });
+      const rerun = await waitForWorkbookState(second.url, (next) => block(next, "run-supplied-command")?.terminal?.message === "Explicit rerun feedback.", "explicit rerun feedback");
+      expect(block(rerun, "run-supplied-command")?.terminal).toEqual({ phase: "feedback", message: "Explicit rerun feedback." });
       expect(secondCoach.assessments).toHaveLength(1);
       expect(scheduler.pending).toBe(0);
     } finally { await second.close(); }
@@ -1274,6 +1274,27 @@ describe("workbook browser API", () => {
       expect(block(failed, "run-supplied-command")?.terminal?.message).toMatch(/Review is temporarily unavailable.*run the command again/i);
       expect(coach.assessments).toHaveLength(1);
       expect(tutor.reviews).toHaveLength(1); // only the editor; non-final Coach output never calls Main Tutor
+      expect(scheduler.pending).toBe(0);
+    } finally { await server.close(); }
+  });
+
+  it("records empty Practice Coach terminal text as durable recoverable feedback", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty(false);
+    const scheduler = new FakeTerminalAssessmentScheduler();
+    const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const coach = new FakePracticeCoach();
+    coach.queue.push({ outcome: "feedback", text: "" });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalAssessmentScheduler: scheduler, mainTutor: tutor, practiceCoach: coach });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      pty.data?.(bashCommandMarker("run"));
+      pty.data?.(`done\r\n${bashFinishedMarker()}`);
+      const failed = await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.terminal?.phase === "feedback", "empty Coach text feedback");
+      expect(block(failed, "run-supplied-command")?.terminal?.message).toMatch(/Review is temporarily unavailable.*run the command again/i);
+      expect(coach.assessments).toHaveLength(1);
+      expect(tutor.reviews).toHaveLength(1); // only the editor; empty Coach output never calls Main Tutor
       expect(scheduler.pending).toBe(0);
     } finally { await server.close(); }
   });
@@ -1359,6 +1380,54 @@ describe("workbook browser API", () => {
         expect.objectContaining({ type: "terminal-coach-handoff-recorded" }),
         expect.objectContaining({ type: "terminal-feedback-recorded", text: expect.stringMatching(/Review is temporarily unavailable.*run the command again/i) }),
       ]));
+    } finally { await server.close(); }
+  });
+
+  it("records non-final Main Tutor terminal review as durable terminal feedback", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty(false);
+    const scheduler = new FakeTerminalAssessmentScheduler();
+    const tutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      { outcome: "working" },
+    );
+    const coach = new FakePracticeCoach();
+    coach.queue.push({ outcome: "ready", text: "private handoff" });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalAssessmentScheduler: scheduler, mainTutor: tutor, practiceCoach: coach });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      pty.data?.(bashCommandMarker("run"));
+      pty.data?.(`done\r\n${bashFinishedMarker()}`);
+      const failed = await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.terminal?.phase === "feedback", "non-final Main Tutor terminal feedback");
+      expect(block(failed, "run-supplied-command")?.terminal?.message).toMatch(/Review is temporarily unavailable.*run the command again/i);
+      expect(coach.assessments).toHaveLength(1);
+      expect(tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(1);
+      expect(scheduler.pending).toBe(0);
+    } finally { await server.close(); }
+  });
+
+  it("records empty Main Tutor terminal review text as durable terminal feedback", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty(false);
+    const scheduler = new FakeTerminalAssessmentScheduler();
+    const tutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      { outcome: "accepted", message: "" },
+    );
+    const coach = new FakePracticeCoach();
+    coach.queue.push({ outcome: "ready", text: "private handoff" });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalAssessmentScheduler: scheduler, mainTutor: tutor, practiceCoach: coach });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      pty.data?.(bashCommandMarker("run"));
+      pty.data?.(`done\r\n${bashFinishedMarker()}`);
+      const failed = await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.terminal?.phase === "feedback", "empty Main Tutor terminal feedback");
+      expect(block(failed, "run-supplied-command")?.terminal?.message).toMatch(/Review is temporarily unavailable.*run the command again/i);
+      expect(coach.assessments).toHaveLength(1);
+      expect(tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(1);
+      expect(scheduler.pending).toBe(0);
     } finally { await server.close(); }
   });
 

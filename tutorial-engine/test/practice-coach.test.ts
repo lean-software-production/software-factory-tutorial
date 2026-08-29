@@ -50,6 +50,31 @@ describe("Practice Coach learner-facing instructions", () => {
     expect(messages).toEqual(["disposed"]);
   });
 
+  it("dispatches one provider prompt when a runtime Practice Coach call fails", async () => {
+    let prompts = 0;
+    const coach = new FastPracticeCoach({
+      workspace: "/tmp/workbook",
+      log: { info() {}, error() {} },
+      sessionFactory: async () => ({
+        async prompt() {
+          prompts += 1;
+          throw new Error("provider unavailable");
+        },
+        dispose() {}
+      })
+    });
+
+    await expect(coach.assess({
+      attempt: {
+        id: "attempt", lessonId: "001", blockId: "block", version: 1, status: "reviewing",
+        evidence: { kind: "terminal", transcript: "private terminal transcript", terminalHtml: "<pre>private command</pre>" }
+      },
+      rubric: "private rubric"
+    })).rejects.toThrow("provider unavailable");
+
+    expect(prompts).toBe(1);
+  });
+
   it("logs the exact secret-bearing Practice Coach prompt before dispatch when explicitly enabled", async () => {
     process.env.PRACTICE_COACH_LOG_PROMPT = "1";
     const secretBearingSentinel = "Authorization: Bearer test-only-coach-token";

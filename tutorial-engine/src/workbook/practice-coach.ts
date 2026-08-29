@@ -72,7 +72,7 @@ async function createSession(workspace: string, request: PracticeCoachSessionFac
     sessionManager: SessionManager.inMemory(workspace),
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } })
   });
-  return createResilientTutorSession(session, log, "Practice Coach");
+  return createResilientTutorSession(session, log, "Practice Coach", { attempts: 1 });
 }
 
 export interface FastPracticeCoachOptions { workspace: string; log?: TutorialLogger; sessionFactory?: PracticeCoachSessionFactory; }
