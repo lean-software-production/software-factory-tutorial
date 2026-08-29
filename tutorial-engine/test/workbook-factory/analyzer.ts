@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
@@ -10,6 +11,7 @@ import {
   MARKER_PADDING,
   MARKER_PROTOCOL_VERSION,
   MARKER_SAMPLE_INSET,
+  MARKER_TOTAL_CELLS,
   MARKER_WIDTH,
   markerGeometry,
   type MarkerPhase,
@@ -26,7 +28,8 @@ export type FindingCode =
   | 'missing-required-step'
   | 'no-transition-frames'
   | 'segment-too-short'
-  | 'insufficient-texture';
+  | 'insufficient-texture'
+  | 'insufficient-motion-confidence';
 
 export interface MotionRoi {
   x: number;
@@ -41,9 +44,12 @@ export interface AnalyzerThresholds {
   stillnessMeanDifference: number;
   minRequiredMotionPx: number;
   jumpPx: number;
+  jumpViewportRatio: number;
+  jumpIsolationRatio: number;
   oscillationMinShiftPx: number;
   oscillationMinTotalPx: number;
   minTextureScore: number;
+  minMotionConfidence: number;
   maxShiftPx: number;
 }
 
@@ -108,6 +114,7 @@ export interface MotionSegment {
   maxAdjacentShiftPx: number;
   signReversals: number;
   confidence: number;
+  lowConfidenceMotionCount: number;
   texture: number;
 }
 
@@ -146,6 +153,14 @@ export interface AnalyzerReport {
       minDistanceMargin: number;
     };
   };
+  markerSamples: {
+    valid: number;
+    invalid: number;
+    ignoredLeadingInvalid: number;
+    ignoredTrailingInvalid: number;
+    firstValidIndex?: number;
+    lastValidIndex?: number;
+  };
   segments: MotionSegment[];
   findings: Finding[];
   evidence: {
@@ -167,22 +182,35 @@ interface BrowserFrameSample {
 
 type RgbTuple = [number, number, number];
 
+export const MIN_SAMPLE_HZ = 1;
+export const MAX_SAMPLE_HZ = 60;
+
+export function validateSampleHz(sampleHz: number): number {
+  if (!Number.isFinite(sampleHz) || sampleHz < MIN_SAMPLE_HZ || sampleHz > MAX_SAMPLE_HZ) {
+    throw new Error(`sampleHz must be a finite number from ${MIN_SAMPLE_HZ} to ${MAX_SAMPLE_HZ}; got ${sampleHz}`);
+  }
+  return sampleHz;
+}
+
 const DEFAULT_THRESHOLDS: AnalyzerThresholds = {
   markerMaxColourDistance: 115,
   markerMinDistanceMargin: 30,
   stillnessMeanDifference: 3.5,
   minRequiredMotionPx: 28,
-  jumpPx: 80,
+  jumpPx: 260,
+  jumpViewportRatio: 0.55,
+  jumpIsolationRatio: 2.2,
   oscillationMinShiftPx: 10,
   oscillationMinTotalPx: 120,
   minTextureScore: 4,
-  maxShiftPx: 190,
+  minMotionConfidence: 0.25,
+  maxShiftPx: 900,
 };
 
 export async function analyzeWorkbookVideo(options: AnalyzerOptions): Promise<AnalyzerReport> {
   const thresholds = { ...DEFAULT_THRESHOLDS, ...options.thresholds };
-  const sampleHz = options.sampleHz ?? 11;
-  const maxMotionWidth = options.maxMotionWidth ?? 480;
+  const sampleHz = validateSampleHz(options.sampleHz ?? 11);
+  const maxMotionWidth = options.maxMotionWidth ?? 360;
   await mkdir(options.outputDir, { recursive: true });
 
   const server = await startVideoServer(options.videoPath);
@@ -193,7 +221,7 @@ export async function analyzeWorkbookVideo(options: AnalyzerOptions): Promise<An
     await page.goto(server.playerUrl, { waitUntil: 'domcontentloaded' });
     await installDecoderScript(page);
     const metadata = await getVideoMetadata(page);
-    if (metadata.duration <= 0 || metadata.width <= 0 || metadata.height <= 0) {
+    if (!Number.isFinite(metadata.duration) || metadata.duration <= 0 || metadata.width <= 0 || metadata.height <= 0) {
       const report = emptyReport(options, thresholds, sampleHz, metadata, defaultRoi(metadata.width, metadata.height, options.roi), [
         {
           code: 'empty-video',
@@ -218,47 +246,52 @@ export async function analyzeWorkbookVideo(options: AnalyzerOptions): Promise<An
     }));
 
     const findings: Finding[] = [];
-    const markerFailures = samples.filter((sample) => !sample.marker.ok);
-    const absentCount = markerFailures.filter((sample) => !sample.marker.ok && sample.marker.reason === 'absent').length;
-    const ambiguousCount = markerFailures.length - absentCount;
-    if (absentCount > 0) {
+    const markerEnvelope = markerEnvelopeFor(samples);
+    const markerStats = markerEnvelope.stats;
+    const analysisSamples = markerEnvelope.envelopeSamples;
+    if (markerStats.valid === 0) {
       findings.push({
         code: 'marker-absent',
         severity: 'error',
-        message: `${absentCount} sampled frame(s) did not contain the workbook factory marker guard swatch.`,
-        frameIndexes: markerFailures.filter((sample) => !sample.marker.ok && sample.marker.reason === 'absent').map((sample) => sample.index),
+        message: 'No valid workbook factory marker was decoded from any sampled video frame.',
+        frameIndexes: samples.map((sample) => sample.index),
       });
-    }
-    if (ambiguousCount > 0) {
-      findings.push({
-        code: 'marker-ambiguous',
-        severity: 'error',
-        message: `${ambiguousCount} sampled frame(s) had an ambiguous workbook factory marker.`,
-        frameIndexes: markerFailures.filter((sample) => !sample.marker.ok && sample.marker.reason === 'ambiguous').map((sample) => sample.index),
-      });
+    } else {
+      const internalFailures = analysisSamples.filter((sample) => !sample.marker.ok);
+      const internalAbsent = internalFailures.filter((sample) => !sample.marker.ok && sample.marker.reason === 'absent');
+      const internalAmbiguous = internalFailures.filter((sample) => !sample.marker.ok && sample.marker.reason === 'ambiguous');
+      if (internalAbsent.length > 0) {
+        findings.push({
+          code: 'marker-absent',
+          severity: 'error',
+          message: `${internalAbsent.length} sampled frame(s) inside the valid marker envelope did not contain the workbook factory marker guard swatch.`,
+          frameIndexes: internalAbsent.map((sample) => sample.index),
+          details: { envelope: { firstValidIndex: markerStats.firstValidIndex, lastValidIndex: markerStats.lastValidIndex } },
+        });
+      }
+      if (internalAmbiguous.length > 0) {
+        findings.push({
+          code: 'marker-ambiguous',
+          severity: 'error',
+          message: `${internalAmbiguous.length} sampled frame(s) inside the valid marker envelope had an ambiguous workbook factory marker.`,
+          frameIndexes: internalAmbiguous.map((sample) => sample.index),
+          details: { envelope: { firstValidIndex: markerStats.firstValidIndex, lastValidIndex: markerStats.lastValidIndex } },
+        });
+      }
     }
 
-    const segments = buildSegments(samples, thresholds);
+    const segments = buildSegments(analysisSamples, thresholds);
     if (segments.length === 0) {
       findings.push({
         code: 'no-transition-frames',
         severity: 'error',
         message: 'No marker-labelled transition frames were decoded.',
+        frameIndexes: analysisSamples.filter((sample) => sample.marker.ok).map((sample) => sample.index),
       });
     }
 
     const requiredStepIds = new Set(options.requiredMotionStepIds);
-    const seenTransitionSteps = new Set(segments.map((segment) => segment.stepId));
-    for (const stepId of options.requiredMotionStepIds) {
-      if (!seenTransitionSteps.has(stepId)) {
-        findings.push({
-          code: 'missing-required-step',
-          stepId,
-          severity: 'error',
-          message: `Required motion step ${stepId} did not appear as a marker-labelled transition segment.`,
-        });
-      }
-    }
+    findings.push(...missingRequiredMotionStepFindings(options.requiredMotionStepIds, segments));
 
     for (const segment of segments) {
       if (segment.frameIndexes.length < 2) {
@@ -285,7 +318,21 @@ export async function analyzeWorkbookVideo(options: AnalyzerOptions): Promise<An
           details: { texture: segment.texture, threshold: thresholds.minTextureScore },
         });
       }
-      if (requiredStepIds.has(segment.stepId) && segment.totalAbsShiftPx < thresholds.minRequiredMotionPx) {
+      const appearsStatic = segment.totalAbsShiftPx < thresholds.minRequiredMotionPx;
+      const lowConfidence = segment.lowConfidenceMotionCount > 0 && !appearsStatic;
+      if (lowConfidence) {
+        findings.push({
+          code: 'insufficient-motion-confidence',
+          stepId: segment.stepId,
+          severity: 'error',
+          message: `Step ${segment.stepId} has ${segment.lowConfidenceMotionCount} moving sample pair(s) below deterministic motion-confidence threshold.`,
+          frameIndexes: segment.frameIndexes,
+          startTime: segment.startTime,
+          endTime: segment.endTime,
+          details: { confidence: segment.confidence, threshold: thresholds.minMotionConfidence },
+        });
+      }
+      if (requiredStepIds.has(segment.stepId) && appearsStatic) {
         findings.push({
           code: 'no-motion',
           stepId: segment.stepId,
@@ -297,19 +344,20 @@ export async function analyzeWorkbookVideo(options: AnalyzerOptions): Promise<An
           details: { totalAbsShiftPx: segment.totalAbsShiftPx, threshold: thresholds.minRequiredMotionPx },
         });
       }
-      if (segment.maxAdjacentShiftPx >= thresholds.jumpPx) {
+      const jump = lowConfidence ? undefined : jumpEvidence(segment, roi, thresholds);
+      if (jump) {
         findings.push({
           code: 'jump',
           stepId: segment.stepId,
           severity: 'error',
-          message: `Step ${segment.stepId} contains a ${segment.maxAdjacentShiftPx.toFixed(1)} px adjacent-frame vertical jump.`,
-          frameIndexes: segment.frameIndexes,
-          startTime: segment.startTime,
-          endTime: segment.endTime,
-          details: { maxAdjacentShiftPx: segment.maxAdjacentShiftPx, threshold: thresholds.jumpPx },
+          message: `Step ${segment.stepId} contains an isolated ${jump.shiftPx.toFixed(1)} px adjacent-frame teleport.`,
+          frameIndexes: [jump.fromIndex, jump.toIndex],
+          startTime: jump.fromTime,
+          endTime: jump.toTime,
+          details: { shiftPx: jump.shiftPx, effectiveThresholdPx: jump.thresholdPx, neighbourMaxPx: jump.neighbourMaxPx },
         });
       }
-      if (segment.signReversals >= 2 && segment.totalAbsShiftPx >= thresholds.oscillationMinTotalPx) {
+      if (!lowConfidence && segment.signReversals >= 2 && segment.totalAbsShiftPx >= thresholds.oscillationMinTotalPx) {
         findings.push({
           code: 'oscillation',
           stepId: segment.stepId,
@@ -353,12 +401,15 @@ export async function analyzeWorkbookVideo(options: AnalyzerOptions): Promise<An
           oscillationMinTotalPx: thresholds.oscillationMinTotalPx,
           stillnessMeanDifference: thresholds.stillnessMeanDifference,
           minTextureScore: thresholds.minTextureScore,
+          minMotionConfidence: thresholds.minMotionConfidence,
+          effectiveJumpPx: effectiveJumpThreshold(roi, thresholds),
         },
         marker: {
           maxColourDistance: thresholds.markerMaxColourDistance,
           minDistanceMargin: thresholds.markerMinDistanceMargin,
         },
       },
+      markerSamples: markerStats,
       segments,
       findings,
       evidence,
@@ -412,11 +463,19 @@ function emptyReport(
         oscillationMinTotalPx: thresholds.oscillationMinTotalPx,
         stillnessMeanDifference: thresholds.stillnessMeanDifference,
         minTextureScore: thresholds.minTextureScore,
+        minMotionConfidence: thresholds.minMotionConfidence,
+        effectiveJumpPx: effectiveJumpThreshold(roi, thresholds),
       },
       marker: {
         maxColourDistance: thresholds.markerMaxColourDistance,
         minDistanceMargin: thresholds.markerMinDistanceMargin,
       },
+    },
+    markerSamples: {
+      valid: 0,
+      invalid: 0,
+      ignoredLeadingInvalid: 0,
+      ignoredTrailingInvalid: 0,
     },
     segments: [],
     findings,
@@ -499,6 +558,51 @@ function colourDistance(a: RgbTuple, b: readonly [number, number, number]): numb
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
+function markerEnvelopeFor(samples: FrameSample[]): {
+  envelopeSamples: FrameSample[];
+  stats: AnalyzerReport['markerSamples'];
+} {
+  const validIndexes = samples.filter((sample) => sample.marker.ok).map((sample) => sample.index);
+  const firstValidIndex = validIndexes[0];
+  const lastValidIndex = validIndexes.at(-1);
+  const invalid = samples.length - validIndexes.length;
+  if (firstValidIndex === undefined || lastValidIndex === undefined) {
+    return {
+      envelopeSamples: samples,
+      stats: {
+        valid: 0,
+        invalid,
+        ignoredLeadingInvalid: 0,
+        ignoredTrailingInvalid: 0,
+      },
+    };
+  }
+
+  return {
+    envelopeSamples: samples.filter((sample) => sample.index >= firstValidIndex && sample.index <= lastValidIndex),
+    stats: {
+      valid: validIndexes.length,
+      invalid,
+      ignoredLeadingInvalid: samples.filter((sample) => sample.index < firstValidIndex && !sample.marker.ok).length,
+      ignoredTrailingInvalid: samples.filter((sample) => sample.index > lastValidIndex && !sample.marker.ok).length,
+      firstValidIndex,
+      lastValidIndex,
+    },
+  };
+}
+
+export function missingRequiredMotionStepFindings(requiredMotionStepIds: number[], segments: readonly Pick<MotionSegment, 'stepId'>[]): Finding[] {
+  const seenTransitionSteps = new Set(segments.map((segment) => segment.stepId));
+  return requiredMotionStepIds
+    .filter((stepId) => !seenTransitionSteps.has(stepId))
+    .map((stepId) => ({
+      code: 'missing-required-step' as const,
+      stepId,
+      severity: 'error' as const,
+      message: `Required motion step ${stepId} did not appear as a marker-labelled transition segment.`,
+    }));
+}
+
 function buildSegments(samples: FrameSample[], thresholds: AnalyzerThresholds): MotionSegment[] {
   const segments: MotionSegment[] = [];
   let current: FrameSample[] = [];
@@ -540,7 +644,8 @@ function measureSegment(frames: FrameSample[], thresholds: AnalyzerThresholds): 
     }
     motions.push(estimateVerticalShift(previous, next, thresholds));
   }
-  const shifts = motions.map((motion) => motion.shiftPx);
+  const reliableMotions = motions.filter((motion) => motion.confidence >= thresholds.minMotionConfidence || Math.abs(motion.shiftPx) < thresholds.oscillationMinShiftPx);
+  const shifts = reliableMotions.map((motion) => motion.shiftPx);
   const totalAbsShiftPx = shifts.reduce((sum, shift) => sum + Math.abs(shift), 0);
   const netShiftPx = shifts.reduce((sum, shift) => sum + shift, 0);
   const maxAdjacentShiftPx = shifts.reduce((max, shift) => Math.max(max, Math.abs(shift)), 0);
@@ -565,8 +670,62 @@ function measureSegment(frames: FrameSample[], thresholds: AnalyzerThresholds): 
     maxAdjacentShiftPx,
     signReversals,
     confidence: average(motions.map((motion) => motion.confidence)),
+    lowConfidenceMotionCount: motions.filter(
+      (motion) => motion.unshiftedDifference > thresholds.stillnessMeanDifference && motion.confidence < thresholds.minMotionConfidence,
+    ).length,
     texture: average(motions.map((motion) => motion.texture)),
   };
+}
+
+function effectiveJumpThreshold(roi: MotionRoi, thresholds: AnalyzerThresholds): number {
+  return Math.max(thresholds.jumpPx, roi.height * thresholds.jumpViewportRatio);
+}
+
+function jumpEvidence(segment: MotionSegment, roi: MotionRoi, thresholds: AnalyzerThresholds): {
+  fromIndex: number;
+  toIndex: number;
+  fromTime: number;
+  toTime: number;
+  shiftPx: number;
+  thresholdPx: number;
+  neighbourMaxPx: number;
+} | undefined {
+  const thresholdPx = effectiveJumpThreshold(roi, thresholds);
+  for (let index = 0; index < segment.motions.length; index += 1) {
+    for (const span of [1, 2]) {
+      const window = segment.motions.slice(index, index + span);
+      if (window.length !== span || window.some((motion) => motion.confidence < thresholds.minMotionConfidence)) {
+        continue;
+      }
+      const signs = window.map((motion) => Math.sign(motion.shiftPx));
+      if (signs.some((sign) => sign === 0) || new Set(signs).size !== 1) {
+        continue;
+      }
+      const shiftPx = window.reduce((sum, motion) => sum + motion.shiftPx, 0);
+      if (Math.abs(shiftPx) < thresholdPx) {
+        continue;
+      }
+      const previous = segment.motions[index - 1];
+      const next = segment.motions[index + span];
+      const neighbourMaxPx = Math.max(Math.abs(previous?.shiftPx ?? 0), Math.abs(next?.shiftPx ?? 0), thresholds.minRequiredMotionPx);
+      if (Math.abs(shiftPx) >= neighbourMaxPx * thresholds.jumpIsolationRatio) {
+        const first = window[0];
+        const last = window.at(-1);
+        if (first && last) {
+          return {
+            fromIndex: first.fromIndex,
+            toIndex: last.toIndex,
+            fromTime: first.fromTime,
+            toTime: last.toTime,
+            shiftPx,
+            thresholdPx,
+            neighbourMaxPx,
+          };
+        }
+      }
+    }
+  }
+  return undefined;
 }
 
 function estimateVerticalShift(previous: FrameSample, next: FrameSample, thresholds: AnalyzerThresholds): AdjacentMotion {
@@ -593,7 +752,7 @@ function estimateVerticalShift(previous: FrameSample, next: FrameSample, thresho
     };
   }
 
-  const maxShiftGray = Math.max(1, Math.min(Math.round(thresholds.maxShiftPx / pxPerGrayPx), Math.floor(height * 0.38)));
+  const maxShiftGray = Math.max(1, Math.min(Math.round(thresholds.maxShiftPx / pxPerGrayPx), Math.floor(height * 0.8)));
   let bestShift = 0;
   let bestScore = Number.POSITIVE_INFINITY;
   let secondBestScore = Number.POSITIVE_INFINITY;
@@ -621,7 +780,9 @@ function estimateVerticalShift(previous: FrameSample, next: FrameSample, thresho
     }
   }
 
-  const confidence = Math.max(0, (secondBestScore - bestScore) / Math.max(1, bestScore));
+  const improvementConfidence = Math.max(0, Math.min(1, (unshiftedDifference - bestScore) / Math.max(1, unshiftedDifference)));
+  const neighbourConfidence = Math.max(0, Math.min(1, (secondBestScore - bestScore) / Math.max(1, bestScore)));
+  const confidence = Math.max(improvementConfidence, neighbourConfidence * 0.5);
   return {
     fromIndex: previous.index,
     toIndex: next.index,
@@ -780,7 +941,7 @@ async function installDecoderScript(page: Page): Promise<void> {
         const markerY = args.constants.markerPadding;
         const cellSize = args.constants.markerHeight;
         const markerCells = [];
-        for (let index = 0; index < 10; index += 1) {
+        for (let index = 0; index < args.constants.markerTotalCells; index += 1) {
           const x = markerX + index * (cellSize + args.constants.markerGap) + args.constants.markerInset;
           const y = markerY + args.constants.markerInset;
           const sampleWidth = cellSize - args.constants.markerInset * 2;
@@ -871,6 +1032,9 @@ async function getVideoMetadata(page: Page): Promise<{ width: number; height: nu
 }
 
 async function decodeSamples(page: Page, duration: number, sampleHz: number, roi: MotionRoi, maxMotionWidth: number): Promise<BrowserFrameSample[]> {
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return Promise.resolve([]);
+  }
   const interval = 1 / sampleHz;
   const times: number[] = [];
   for (let time = 0; time < duration; time += interval) {
@@ -895,6 +1059,7 @@ async function captureSample(page: Page, time: number, roi: MotionRoi, maxMotion
     markerPadding: MARKER_PADDING,
     markerGap: MARKER_GAP,
     markerInset: MARKER_SAMPLE_INSET,
+    markerTotalCells: MARKER_TOTAL_CELLS,
   };
   const args = JSON.stringify({ time, roi, maxMotionWidth, constants });
   return page.evaluate(`window.__wfCaptureSample(${args})`) as Promise<BrowserFrameSample>;
@@ -912,16 +1077,31 @@ async function writeEvidence(
     frameTimes.set(sanitiseEvidenceName(name), time);
   };
 
-  for (const finding of findings.filter((item) => ['oscillation', 'jump', 'no-motion'].includes(item.code))) {
+  for (const finding of findings) {
     const stepSuffix = finding.stepId === undefined ? 'unknown' : String(finding.stepId);
+    const evidencePrefix = `${finding.code}-step-${stepSuffix}`;
     if (finding.startTime !== undefined) {
-      pushFrame(`${finding.code}-step-${stepSuffix}-start`, finding.startTime);
+      pushFrame(`${evidencePrefix}-start`, finding.startTime);
     }
     if (finding.startTime !== undefined && finding.endTime !== undefined) {
-      pushFrame(`${finding.code}-step-${stepSuffix}-mid`, (finding.startTime + finding.endTime) / 2);
+      pushFrame(`${evidencePrefix}-mid`, (finding.startTime + finding.endTime) / 2);
     }
     if (finding.endTime !== undefined) {
-      pushFrame(`${finding.code}-step-${stepSuffix}-end`, finding.endTime);
+      pushFrame(`${evidencePrefix}-end`, finding.endTime);
+    }
+    if (finding.startTime === undefined && finding.endTime === undefined && finding.frameIndexes && finding.frameIndexes.length > 0) {
+      const firstFrame = samples.find((sample) => sample.index === finding.frameIndexes?.[0]);
+      const middleFrame = samples.find((sample) => sample.index === finding.frameIndexes?.[Math.floor((finding.frameIndexes?.length ?? 1) / 2)]);
+      const lastFrame = samples.find((sample) => sample.index === finding.frameIndexes?.at(-1));
+      if (firstFrame) {
+        pushFrame(`${evidencePrefix}-first`, firstFrame.time);
+      }
+      if (middleFrame && middleFrame.index !== firstFrame?.index) {
+        pushFrame(`${evidencePrefix}-mid`, middleFrame.time);
+      }
+      if (lastFrame && lastFrame.index !== firstFrame?.index && lastFrame.index !== middleFrame?.index) {
+        pushFrame(`${evidencePrefix}-last`, lastFrame.time);
+      }
     }
   }
 
@@ -990,14 +1170,20 @@ function sanitiseEvidenceName(name: string): string {
 async function startVideoServer(videoPath: string): Promise<{ playerUrl: string; close: () => Promise<void> }> {
   const videoStat = await stat(videoPath);
   const videoName = basename(videoPath);
+  const token = randomBytes(16).toString('hex');
   const server = createServer(async (request, response) => {
     try {
-      if (request.url === '/' || request.url === '/player') {
-        servePlayer(response, videoName);
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      if ((url.pathname === '/' || url.pathname === '/player') && url.searchParams.get('token') === token) {
+        servePlayer(response, videoName, token);
         return;
       }
-      if (request.url !== `/video/${encodeURIComponent(videoName)}` && request.url !== `/video/${videoName}`) {
+      if (url.pathname !== `/video/${encodeURIComponent(videoName)}` && url.pathname !== `/video/${videoName}`) {
         response.writeHead(404).end('not found');
+        return;
+      }
+      if (url.searchParams.get('token') !== token) {
+        response.writeHead(403).end('forbidden');
         return;
       }
       await serveVideo(request, response, videoPath, videoStat.size);
@@ -1017,17 +1203,17 @@ async function startVideoServer(videoPath: string): Promise<{ playerUrl: string;
     throw new Error('could not bind video server');
   }
   return {
-    playerUrl: `http://127.0.0.1:${address.port}/player`,
+    playerUrl: `http://127.0.0.1:${address.port}/player?token=${token}`,
     close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
   };
 }
 
-function servePlayer(response: ServerResponse, videoName: string): void {
+function servePlayer(response: ServerResponse, videoName: string, token: string): void {
   response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
   response.end(`<!doctype html>
 <html><head><meta charset="utf-8"><title>workbook video analyser</title></head>
 <body style="margin:0;background:#111">
-<video src="/video/${encodeURIComponent(videoName)}" preload="auto" muted playsinline style="width:1px;height:1px;opacity:0"></video>
+<video src="/video/${encodeURIComponent(videoName)}?token=${token}" preload="auto" muted playsinline style="width:1px;height:1px;opacity:0"></video>
 </body></html>`);
 }
 
@@ -1039,7 +1225,7 @@ async function serveVideo(request: IncomingMessage, response: ServerResponse, vi
   };
   if (!range) {
     response.writeHead(200, { ...commonHeaders, 'content-length': size });
-    createReadStream(videoPath).pipe(response);
+    pipeVideo(videoPath, response);
     return;
   }
   const match = /^bytes=(\d*)-(\d*)$/.exec(range);
@@ -1053,10 +1239,14 @@ async function serveVideo(request: IncomingMessage, response: ServerResponse, vi
   let end = endText === '' ? size - 1 : Number(endText);
   if (startText === '' && endText !== '') {
     const suffixLength = Number(endText);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
+      response.writeHead(416, { 'content-range': `bytes */${size}` }).end();
+      return;
+    }
     start = Math.max(0, size - suffixLength);
     end = size - 1;
   }
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= size) {
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= size) {
     response.writeHead(416, { 'content-range': `bytes */${size}` }).end();
     return;
   }
@@ -1066,7 +1256,18 @@ async function serveVideo(request: IncomingMessage, response: ServerResponse, vi
     'content-length': end - start + 1,
     'content-range': `bytes ${start}-${end}/${size}`,
   });
-  createReadStream(videoPath, { start, end }).pipe(response);
+  pipeVideo(videoPath, response, { start, end });
+}
+
+function pipeVideo(videoPath: string, response: ServerResponse, range?: { start: number; end: number }): void {
+  const stream = createReadStream(videoPath, range);
+  stream.on('error', (error) => {
+    if (!response.headersSent) {
+      response.writeHead(500);
+    }
+    response.end(error.message);
+  });
+  stream.pipe(response);
 }
 
 export function markerDebugGeometry(videoWidth: number): ReturnType<typeof markerGeometry> {

@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-import { analyzeWorkbookVideo } from './analyzer.js';
+import { analyzeWorkbookVideo, validateSampleHz } from './analyzer.js';
 
 interface CliArgs {
   video?: string;
@@ -23,7 +23,7 @@ function parseArgs(argv: string[]): CliArgs {
       args.requiredMotionStepIds.push(...next.split(',').filter(Boolean).map((value) => Number(value)));
       index += 1;
     } else if (arg === '--sample-hz' && next) {
-      args.sampleHz = Number(next);
+      args.sampleHz = validateSampleHz(Number(next));
       index += 1;
     } else if (arg === '--help' || arg === '-h') {
       printHelp();

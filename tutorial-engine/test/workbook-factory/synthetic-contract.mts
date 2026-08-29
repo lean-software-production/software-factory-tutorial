@@ -3,23 +3,25 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
-import { analyzeWorkbookVideo, type AnalyzerReport, type FindingCode } from './analyzer.js';
+import { analyzeWorkbookVideo, missingRequiredMotionStepFindings, type AnalyzerReport, type FindingCode } from './analyzer.js';
 import { MARKER_COLOURS, markerCss, markerHtml, markerCellColours, rgbCss, type MarkerPhase } from './marker-protocol.js';
 
 const ROOT = join(process.cwd(), 'test/.tmp/workbook-factory/analyser-contract');
 const VIDEO_DIR = join(ROOT, 'video');
 const ANALYSIS_DIR = join(ROOT, 'analysis');
-const ABSENT_REQUIRED_DIR = join(ROOT, 'absent-required-analysis');
-const VIEWPORT = { width: 800, height: 600 };
+const VIEWPORT = { width: 1280, height: 900 };
 
 interface SyntheticPhase {
   phase: MarkerPhase;
   stepId: number;
   durationMs: number;
+  markerVisible?: boolean;
   offsetAt(progress: number): number;
 }
 
 const phases: SyntheticPhase[] = [
+  // Exercises marker-envelope semantics: leading unpainted/unmarked frames are tolerated and recorded.
+  { phase: 'settled', stepId: 0, durationMs: 320, markerVisible: false, offsetAt: () => 0 },
   { phase: 'settled', stepId: 0, durationMs: 250, offsetAt: () => 0 },
   { phase: 'transition', stepId: 1, durationMs: 1200, offsetAt: (progress) => -185 * easeInOut(progress) },
   { phase: 'settled', stepId: 1, durationMs: 250, offsetAt: () => -185 },
@@ -44,21 +46,23 @@ const phases: SyntheticPhase[] = [
       if (progress < 0.42) {
         return -245;
       }
-      if (progress < 0.5) {
-        return -385;
+      if (progress < 0.45) {
+        return -820;
       }
-      return -385 - (progress - 0.5) * 30;
+      return -820 - (progress - 0.45) * 60;
     },
   },
-  { phase: 'settled', stepId: 3, durationMs: 250, offsetAt: () => -400 },
-  { phase: 'transition', stepId: 4, durationMs: 900, offsetAt: () => -400 },
-  { phase: 'settled', stepId: 4, durationMs: 300, offsetAt: () => -400 },
+  { phase: 'settled', stepId: 3, durationMs: 250, offsetAt: () => -855 },
+  { phase: 'transition', stepId: 4, durationMs: 900, offsetAt: () => -855 },
+  { phase: 'settled', stepId: 4, durationMs: 250, offsetAt: () => -855 },
+  // A realistic fast but smooth, approximately viewport-sized monotonic scroll. It must not be called a jump.
+  { phase: 'transition', stepId: 5, durationMs: 1000, offsetAt: (progress) => -855 - 850 * easeInOut(progress) },
+  { phase: 'settled', stepId: 5, durationMs: 300, offsetAt: () => -1705 },
 ];
 
 await rm(ROOT, { recursive: true, force: true });
 await mkdir(VIDEO_DIR, { recursive: true });
 await mkdir(ANALYSIS_DIR, { recursive: true });
-await mkdir(ABSENT_REQUIRED_DIR, { recursive: true });
 
 const startedAt = performance.now();
 const videoPath = await recordSyntheticVideo();
@@ -66,19 +70,14 @@ const recordedAt = performance.now();
 const report = await analyzeWorkbookVideo({
   videoPath,
   outputDir: ANALYSIS_DIR,
-  requiredMotionStepIds: [1, 2, 3, 4],
+  requiredMotionStepIds: [1, 2, 3, 4, 5],
   sampleHz: 10,
 });
 const analysedAt = performance.now();
 assertContractFindings(report);
-
-const absentRequired = await analyzeWorkbookVideo({
-  videoPath,
-  outputDir: ABSENT_REQUIRED_DIR,
-  requiredMotionStepIds: [99],
-  sampleHz: 1,
-});
-assertHasFinding(absentRequired, 'missing-required-step', 99);
+assert.deepEqual(missingRequiredMotionStepFindings([99], report.segments).map((finding) => ({ code: finding.code, stepId: finding.stepId })), [
+  { code: 'missing-required-step', stepId: 99 },
+]);
 const completedAt = performance.now();
 
 const evidence = await readdir(ANALYSIS_DIR);
@@ -86,9 +85,10 @@ console.log(JSON.stringify({
   ok: true,
   videoPath,
   motionJson: join(ANALYSIS_DIR, 'motion.json'),
-  evidenceSample: evidence.filter((name) => name.endsWith('.png')).slice(0, 6),
+  evidenceSample: evidence.filter((name) => name.endsWith('.png')).slice(0, 8),
+  markerSamples: report.markerSamples,
   findings: report.findings.map((finding) => ({ code: finding.code, stepId: finding.stepId })),
-  absentRequiredFinding: absentRequired.findings.map((finding) => ({ code: finding.code, stepId: finding.stepId })),
+  focusedRequiredAbsentProof: missingRequiredMotionStepFindings([99], report.segments).map((finding) => ({ code: finding.code, stepId: finding.stepId })),
   performanceMs: {
     record: Math.round(recordedAt - startedAt),
     analyse: Math.round(analysedAt - recordedAt),
@@ -121,7 +121,12 @@ async function recordSyntheticVideo(): Promise<string> {
 }
 
 function syntheticHtml(): string {
-  const phaseData = JSON.stringify(phases.map((phase) => ({ phase: phase.phase, stepId: phase.stepId, durationMs: phase.durationMs })));
+  const phaseData = JSON.stringify(phases.map((phase) => ({
+    phase: phase.phase,
+    stepId: phase.stepId,
+    durationMs: phase.durationMs,
+    markerVisible: phase.markerVisible !== false,
+  })));
   const offsets = JSON.stringify(sampleOffsetsForBrowser());
   const markerColours = JSON.stringify({
     settled: rgbCss(MARKER_COLOURS.phase.settled),
@@ -147,11 +152,8 @@ function syntheticHtml(): string {
     .chrome strong { letter-spacing: 0.08em; text-transform: uppercase; font-size: 13px; color: #a9d8ff; }
     .viewport { position: absolute; inset: 58px 0 0 0; overflow: hidden; background: #e9edf3; }
     .content { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
-    .row { height: 54px; display: grid; grid-template-columns: 70px 1fr 150px; gap: 16px; align-items: center; padding: 0 36px; border-bottom: 1px solid rgba(20,30,50,0.18); color: #162033; }
-    .row:nth-child(4n) { background: linear-gradient(90deg, rgba(255,255,255,0.72), rgba(196,220,255,0.4)); }
-    .row:nth-child(4n+1) { background: linear-gradient(90deg, rgba(236,255,233,0.72), rgba(255,255,255,0.45)); }
-    .row:nth-child(4n+2) { background: linear-gradient(90deg, rgba(255,244,214,0.72), rgba(255,255,255,0.45)); }
-    .row:nth-child(4n+3) { background: linear-gradient(90deg, rgba(246,228,255,0.72), rgba(255,255,255,0.45)); }
+    .row { height: 54px; display: grid; grid-template-columns: 70px 1fr 220px; gap: 16px; align-items: center; padding: 0 36px; border-bottom: 1px solid rgba(20,30,50,0.18); color: #162033; }
+    .row { background-blend-mode: multiply; }
     .num { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 22px; color: #294c77; }
     .copy { font-size: 17px; font-weight: 650; }
     .micro { height: 18px; background-image: repeating-linear-gradient(90deg, #203858 0 5px, #f8fbff 5px 9px, #83a6ce 9px 13px); border-radius: 99px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.16); }
@@ -185,6 +187,8 @@ function syntheticHtml(): string {
       return stops[stops.length - 1][1];
     }
     function setMarker(phase) {
+      marker.style.display = phase.markerVisible ? 'grid' : 'none';
+      if (!phase.markerVisible) return;
       marker.dataset.markerStep = String(phase.stepId);
       marker.dataset.markerPhase = phase.phase;
       const colours = markerColours.cells[phase.phase + ':' + phase.stepId];
@@ -221,9 +225,13 @@ function syntheticHtml(): string {
 }
 
 function syntheticRows(): string {
-  return Array.from({ length: 58 }, (_, index) => {
+  return Array.from({ length: 84 }, (_, index) => {
     const words = ['validation loop', 'red green refactor', 'approval gate', 'workbook station', 'deterministic pixels', 'scroll invariant'];
-    return `<div class="row"><div class="num">${String(index + 1).padStart(2, '0')}</div><div class="copy">${words[index % words.length]} — textured row ${index * 37 % 101}</div><div class="micro"></div></div>`;
+    const hue = (index * 47) % 360;
+    const stripe = (index * 13) % 41;
+    const style = `background: linear-gradient(90deg, hsla(${hue}, 70%, 88%, 0.86), hsla(${(hue + 83) % 360}, 82%, 94%, 0.74)), repeating-linear-gradient(${(index * 17) % 180}deg, rgba(30,45,70,0.10) 0 3px, transparent 3px ${9 + (index % 7)}px);`;
+    const microStyle = `background-position:${stripe}px 0; filter:hue-rotate(${hue}deg);`;
+    return `<div class="row" style="${style}"><div class="num">${String(index + 1).padStart(2, '0')}</div><div class="copy">${words[index % words.length]} — textured row ${index * 37 % 101} / ${index * 19 % 137}</div><div class="micro" style="${microStyle}"></div></div>`;
   }).join('');
 }
 
@@ -232,7 +240,7 @@ function sampleOffsetsForBrowser(): Record<string, Array<[number, number]>> {
     if (phase.stepId === 2 && phase.phase === 'transition') {
       acc[String(index)] = [[0, -185], [0.22, -40], [0.48, -265], [0.72, -70], [1, -245]];
     } else if (phase.stepId === 3 && phase.phase === 'transition') {
-      acc[String(index)] = [[0, -245], [0.41, -245], [0.43, -385], [1, -400]];
+      acc[String(index)] = [[0, -245], [0.41, -245], [0.44, -820], [1, -855]];
     } else {
       acc[String(index)] = [[0, phase.offsetAt(0)], [1, phase.offsetAt(1)]];
     }
@@ -243,13 +251,17 @@ function sampleOffsetsForBrowser(): Record<string, Array<[number, number]>> {
 function assertContractFindings(report: AnalyzerReport): void {
   assert.equal(report.video.width, VIEWPORT.width);
   assert.equal(report.video.height, VIEWPORT.height);
-  assert.ok(report.video.frameCount >= 50, `expected enough decoded samples, got ${report.video.frameCount}`);
+  assert.ok(report.video.frameCount >= 75, `expected enough decoded samples, got ${report.video.frameCount}`);
+  assert.ok(report.markerSamples.ignoredLeadingInvalid > 0, `expected ignored leading invalid marker samples; got ${JSON.stringify(report.markerSamples)}`);
   assertHasFinding(report, 'oscillation', 2);
   assertHasFinding(report, 'jump', 3);
   assertHasFinding(report, 'no-motion', 4);
-  assertNoFinding(report, 'oscillation', 1);
-  assertNoFinding(report, 'jump', 1);
-  assertNoFinding(report, 'no-motion', 1);
+  for (const cleanStep of [1, 5]) {
+    assertNoFinding(report, 'oscillation', cleanStep);
+    assertNoFinding(report, 'jump', cleanStep);
+    assertNoFinding(report, 'no-motion', cleanStep);
+    assertNoFinding(report, 'insufficient-motion-confidence', cleanStep);
+  }
   assertNoFinding(report, 'marker-absent');
   assertNoFinding(report, 'marker-ambiguous');
   assertNoFinding(report, 'missing-required-step');
@@ -268,7 +280,7 @@ function assertHasFinding(report: AnalyzerReport, code: FindingCode, stepId?: nu
 function assertNoFinding(report: AnalyzerReport, code: FindingCode, stepId?: number): void {
   assert.ok(
     !report.findings.some((finding) => finding.code === code && (stepId === undefined || finding.stepId === stepId)),
-    `did not expect finding ${code}${stepId === undefined ? '' : ` for step ${stepId}`}`,
+    `did not expect finding ${code}${stepId === undefined ? '' : ` for step ${stepId}`}; got ${JSON.stringify(report.findings.map((finding) => ({ code: finding.code, stepId: finding.stepId })))}`,
   );
 }
 
