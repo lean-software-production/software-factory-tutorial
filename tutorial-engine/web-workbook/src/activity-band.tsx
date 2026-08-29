@@ -47,8 +47,8 @@ function documentTopFromLayout(element: HTMLElement) {
 }
 
 /**
- * The only live practice surface. Editor practice stays sticky while its conversation scrolls;
- * terminal practice remains in the document flow.
+ * The only live practice surface. Its sticky wrapper lets the learner refer to the
+ * activity while the durable conversation scrolls below it.
  */
 export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTerminalInsertionChange }: {
   lessonId: string;
@@ -66,7 +66,6 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
     focusedForBlock.current = undefined;
   }, [activeBlock.id]);
   useEffect(() => {
-    if (activeBlock.type === "terminal-practice") return;
     const element = bandRef.current;
     if (!element || typeof window === "undefined") return;
     const previousSibling = element.previousElementSibling;
@@ -117,7 +116,7 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
       window.removeEventListener("scroll", requestGeometry);
       window.removeEventListener("resize", requestGeometry);
     };
-  }, [activeBlock.id, activeBlock.type]);
+  }, [activeBlock.id]);
   useEffect(() => {
     if (activeBlock.type === "terminal-practice" || !activeProgress?.active || activeProgress.checkpoint?.status === "accepted" || typeof IntersectionObserver === "undefined") return;
     const element = bandRef.current;
@@ -143,7 +142,7 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
   if (!activePractical && !readyTerminalPreload || activeProgress?.checkpoint?.status === "accepted" && activeBlock.type !== "terminal-practice") return null;
 
   return <>
-    <section ref={bandRef} className="current-activity-band" data-activity-type={activeBlock.type} data-activity-layout={activeBlock.type === "terminal-practice" ? "inline" : "scroll-linked"} data-activity-preloaded={readyTerminalPreload ? "true" : undefined} aria-label="Activity">
+    <section ref={bandRef} className="current-activity-band" data-activity-type={activeBlock.type} data-activity-layout="scroll-linked" data-activity-preloaded={readyTerminalPreload ? "true" : undefined} aria-label="Activity">
       <BlockView lessonId={lessonId} block={activeBlock} progress={progress} refresh={refresh} onTerminalInsertionChange={forwardTerminalInsertion} />
     </section>
   </>;
