@@ -22,6 +22,11 @@ const WALKTHROUGH_PATH = "walkthrough.json";
 const INPUT_METADATA_PATH = "input-metadata.json";
 export const REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX = 20;
 export const REAL_JOURNEY_MIN_REQUIRED_MOTION_PX = 12;
+export const REAL_JOURNEY_OBSERVED_SPARSE_EDITOR_TEXTURE_FLOOR = 3.862;
+// The real provider-free journey deliberately samples a mostly white CodeMirror editor ROI.
+// Clean runs have measured that sparse editor at and above 3.862, so 3 keeps a healthy
+// scenario-specific margin without weakening the generic analyzer's texture default.
+export const REAL_JOURNEY_MIN_TEXTURE_SCORE = 3;
 const GEOMETRY_TARGETS: Record<WorkbookFactoryGeometryState, { naturalTop: number; minExpand: number; maxExpand: number }> = {
   small: { naturalTop: 285, minExpand: 0, maxExpand: 0.08 },
   mid: { naturalTop: 130, minExpand: 0.25, maxExpand: 0.75 },
@@ -663,7 +668,10 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
       sampleHz: 11,
       roi: { x: 360, y: 90, width: 720, height: 700 },
       maxMotionWidth: 240,
-      thresholds: { minRequiredMotionPx: REAL_JOURNEY_MIN_REQUIRED_MOTION_PX },
+      thresholds: {
+        minRequiredMotionPx: REAL_JOURNEY_MIN_REQUIRED_MOTION_PX,
+        minTextureScore: REAL_JOURNEY_MIN_TEXTURE_SCORE,
+      },
     });
     const segmentStepIds = analysis.segments.map((segment) => segment.stepId);
     const missingSegmentIds = REQUIRED_STATE_CHECKPOINT_STEP_IDS.filter((stepId) => !segmentStepIds.includes(stepId));

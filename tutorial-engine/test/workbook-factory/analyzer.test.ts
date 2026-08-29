@@ -10,12 +10,21 @@ import {
   type FrameSample,
   type MotionSegment,
 } from './analyzer.js';
+import {
+  REAL_JOURNEY_MIN_TEXTURE_SCORE,
+  REAL_JOURNEY_OBSERVED_SPARSE_EDITOR_TEXTURE_FLOOR,
+} from './record.mjs';
 
 describe('workbook video analyser contracts', () => {
   it('rejects non-finite and out-of-range sample rates before video decoding', () => {
     for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 61, 10_000]) {
       expect(() => validateSampleHz(value)).toThrow(/sampleHz/);
     }
+  });
+
+  it('calibrates the real journey texture floor below observed sparse editor texture', () => {
+    expect(REAL_JOURNEY_MIN_TEXTURE_SCORE).toBeGreaterThan(0);
+    expect(REAL_JOURNEY_MIN_TEXTURE_SCORE).toBeLessThan(REAL_JOURNEY_OBSERVED_SPARSE_EDITOR_TEXTURE_FLOOR);
   });
 
   it('accepts finite sample rates in the supported range', () => {
