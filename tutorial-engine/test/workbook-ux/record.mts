@@ -11,6 +11,7 @@ import { QueuedMainTutor, RecordingPracticeCoach } from "../support/fake-tutors.
 import { analyzeWorkbookVideo, type AnalyzerReport } from "./analyzer.js";
 import { createProtocolAwareFakePty } from "./fake-pty.js";
 import { MARKER_BITS, MARKER_COLOURS, MARKER_CELL_SIZE, MARKER_GAP, MARKER_TOTAL_CELLS, markerCss, rgbCss } from "./marker-protocol.js";
+import { checkpointProgressEvent, createWorkbookUxProgressLogger, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, type WorkbookUxProgressSink } from "./progress.js";
 import { REQUIRED_MOTION_STEP_IDS, REQUIRED_STATE_CHECKPOINT_STEP_IDS, SCROLL_CHECKPOINT_STEP_IDS, WORKBOOK_UX_TEST_STEPS, type WorkbookUxTestGeometryState, type WorkbookUxTestStepDeclaration } from "./steps.js";
 
 const RUN_ROOT = resolve(ENGINE_ROOT, "test/.tmp/workbook-ux/latest");
@@ -98,6 +99,7 @@ export interface WorkbookUxTestRecorderOptions {
   readonly runRoot?: string;
   readonly analyze?: boolean;
   readonly headless?: boolean;
+  readonly progress?: WorkbookUxProgressSink;
 }
 export interface WorkbookUxTestRecorderResult {
   readonly runRoot: string;
@@ -400,6 +402,7 @@ async function runScrollCheckpoint(args: {
   coach: RecordingPracticeCoach;
   fakePty: ReturnType<typeof createProtocolAwareFakePty>;
   position: () => Promise<GeometryTelemetry>;
+  progress?: WorkbookUxProgressSink;
 }): Promise<void> {
   const before = await measureGeometry(args.page);
   const startedAt = isoNow();
@@ -422,6 +425,7 @@ async function runScrollCheckpoint(args: {
     after,
     fakeCallCounts: fakeCounts(args.mainTutor, args.coach, args.fakePty),
   });
+  args.progress?.(checkpointProgressEvent(args.walkthrough.checkpoints.length, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, args.step));
 }
 
 async function runPreparedCheckpoint(args: {
@@ -433,6 +437,7 @@ async function runPreparedCheckpoint(args: {
   fakePty: ReturnType<typeof createProtocolAwareFakePty>;
   prepare: () => Promise<{ typedText?: string; command?: string }>;
   trigger: () => Promise<FeedbackTelemetry>;
+  progress?: WorkbookUxProgressSink;
 }): Promise<void> {
   const startedAt = isoNow();
   const prepared = await args.prepare();
@@ -460,6 +465,7 @@ async function runPreparedCheckpoint(args: {
     command: prepared.command,
     fakeCallCounts: fakeCounts(args.mainTutor, args.coach, args.fakePty),
   });
+  args.progress?.(checkpointProgressEvent(args.walkthrough.checkpoints.length, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, args.step));
 }
 
 function assertCheckpointGeometry(checkpoint: SemanticCheckpoint, failures: string[]): void {
@@ -510,7 +516,9 @@ async function finalizeVideo(page: Page | undefined, context: BrowserContext | u
 
 export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOptions = {}): Promise<WorkbookUxTestRecorderResult> {
   assertRealJourneyMotionThresholdCalibration();
+  const progress = options.progress;
   const runRoot = options.runRoot ? resolve(options.runRoot) : RUN_ROOT;
+  progress?.({ type: "stage", phase: "prepare", message: "Preparing fixture, local server, and headless browser..." });
   await rm(runRoot, { recursive: true, force: true });
   await mkdir(resolve(runRoot, "analysis"), { recursive: true });
   await mkdir(resolve(runRoot, "video-raw"), { recursive: true });
@@ -559,6 +567,7 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
       mainTutor,
       practiceCoach: coach,
       terminalPtyFactory: fakePty.create,
+      logger: createWorkbookUxProgressLogger(progress),
     });
     browser = await chromium.launch({ headless: options.headless ?? true });
     await collectInputMetadata(runRoot, bundleStatus, browser.version());
@@ -570,29 +579,30 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
     });
     page = await context.newPage();
     await installVideoMarker(page);
+    progress?.({ type: "stage", phase: "record", message: `Recording browser journey (${WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL} checkpoints)...` });
     await page.goto(server.url, { waitUntil: "domcontentloaded" });
     await setMarker(page, "settled", WORKBOOK_UX_TEST_STEPS.initial);
     await page.waitForTimeout(600);
 
     await setMarker(page, "settled", WORKBOOK_UX_TEST_STEPS.revealEditor);
     await revealEditor(page);
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.editorScrollToSmall, position: async () => positionBand(page!, "small") });
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorScrollToSmall, position: async () => positionBand(page!, "small") });
 
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.editorSmallFeedback, prepare: async () => {
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorSmallFeedback, prepare: async () => {
       const typedText = "Small-state draft: the learner notices compact feedback in the editor.\nThe typed line stays short enough to look like a first revision.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
     }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.small) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.editorScrollToMid, position: async () => positionBand(page!, "mid") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.editorMidFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorScrollToMid, position: async () => positionBand(page!, "mid") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorMidFeedback, prepare: async () => {
       const typedText = "Mid-scroll draft: the learner revises while the activity band is partially expanded.\nThey add a second visible line before pausing for feedback.\nThe surface should keep its feedback welded during the scroll-linked resize.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
     }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.mid) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.editorScrollToFull, position: async () => positionBand(page!, "full") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.editorFullFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorScrollToFull, position: async () => positionBand(page!, "full") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorFullFeedback, prepare: async () => {
       const typedText = "Full-width draft: the learner checks that feedback remains welded to the editor surface.\nThis longer note creates real text texture across the editor viewport.\nThe final visible line names the full-width state before feedback arrives.\nA fourth line keeps the cursor moving like an actual revision.\nA fifth line makes the full-width editor less empty in the recording.\nA sixth line gives the deterministic analyzer text edges to track.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
@@ -605,24 +615,24 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
 
     await clickContinue(page);
     await page.locator('.current-activity-band[data-activity-type="terminal-practice"]').waitFor({ state: "attached", timeout: 15_000 });
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToSmall, position: async () => positionBand(page!, "small") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.terminalSmallFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToSmall, position: async () => positionBand(page!, "small") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalSmallFeedback, prepare: async () => {
       const command = "printf small-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 1");
       return { command };
     }, trigger: async () => feedbackTelemetry(page!, "terminal", COACH_FEEDBACK.small) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToMid, position: async () => positionBand(page!, "mid") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.terminalMidFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToMid, position: async () => positionBand(page!, "mid") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalMidFeedback, prepare: async () => {
       const command = "printf mid-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 2");
       return { command };
     }, trigger: async () => feedbackTelemetry(page!, "terminal", COACH_FEEDBACK.mid) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToFull, position: async () => positionBand(page!, "full") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.terminalFullFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToFull, position: async () => positionBand(page!, "full") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalFullFeedback, prepare: async () => {
       const command = "printf full-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 3");
@@ -650,6 +660,7 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
     if (page) await page.screenshot({ path: resolve(runRoot, "recording-error.png"), fullPage: true }).catch(() => undefined);
     throw error;
   } finally {
+    if (page || context) progress?.({ type: "stage", phase: "finalize-video", message: "Finalizing recorded video..." });
     videoPath = await finalizeVideo(page, context, runRoot);
     context = undefined;
     if (browser) await browser.close().catch(() => undefined);
@@ -658,9 +669,11 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
 
   if (!videoPath) throw new Error("Playwright did not produce a workbook UX test video.");
   walkthrough.videoPath = videoPath;
+  progress?.({ type: "detail", source: "recorder", message: `  video finalized: ${videoPath}` });
 
   let analysis: AnalyzerReport | undefined;
   if (options.analyze ?? true) {
+    progress?.({ type: "stage", phase: "decode", message: "Decoding and analysing recorded video (this can take several minutes)..." });
     analysis = await analyzeWorkbookVideo({
       videoPath,
       outputDir: resolve(runRoot, "analysis"),
@@ -673,6 +686,7 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
         minTextureScore: REAL_JOURNEY_MIN_TEXTURE_SCORE,
       },
     });
+    progress?.({ type: "detail", source: "analyzer", message: `  decoded video duration: ${analysis.video.duration.toFixed(2)}s` });
     const segmentStepIds = analysis.segments.map((segment) => segment.stepId);
     const missingSegmentIds = REQUIRED_STATE_CHECKPOINT_STEP_IDS.filter((stepId) => !segmentStepIds.includes(stepId));
     for (const stepId of missingSegmentIds) walkthrough.semanticFailures.push(`Analyzer did not decode a marker transition segment for state checkpoint ${stepId}.`);
@@ -704,6 +718,9 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
     throw new Error(`Workbook UX deterministic run failed:\n${failures.map((failure) => ` - ${failure}`).join("\n")}`);
   }
 
+  progress?.((options.analyze ?? true)
+    ? { type: "status", phase: "deterministic", status: "passed", message: "Deterministic recording and analysis passed." }
+    : { type: "status", phase: "record", status: "complete", message: "Recording complete." });
   return { runRoot, videoPath, walkthroughPath: resolve(runRoot, WALKTHROUGH_PATH), analysis, walkthrough };
 }
 
@@ -714,12 +731,16 @@ function parseCliOptions(argv: readonly string[]): WorkbookUxTestRecorderOptions
   return { analyze, headless, runRoot: runRootArg ? resolve(runRootArg.slice("--run-root=".length)) : undefined };
 }
 
+const consoleProgress: WorkbookUxProgressSink = (event) => console.log(event.message);
+
 if (basename(process.argv[1] ?? "") === "record.mts") {
-  recordWorkbookUxTest(parseCliOptions(process.argv.slice(2))).then((result) => {
-    console.log(`Workbook UX test recording complete: ${result.videoPath}`);
+  recordWorkbookUxTest({ ...parseCliOptions(process.argv.slice(2)), progress: consoleProgress }).then((result) => {
+    console.log("Recording verdict: PASS");
+    console.log(`Video: ${result.videoPath}`);
     console.log(`Walkthrough: ${result.walkthroughPath}`);
     if (result.analysis) console.log(`Analysis: ${resolve(result.runRoot, "analysis/motion.json")}`);
   }).catch((error) => {
+    console.error("Recording verdict: FAIL");
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
   });

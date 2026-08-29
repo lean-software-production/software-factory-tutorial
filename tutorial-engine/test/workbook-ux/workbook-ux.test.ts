@@ -6,7 +6,7 @@ import type { AnalyzerReport } from './analyzer.js';
 import { writeUxTestReport, type UxTestStationResult } from './report.js';
 import { runWorkbookUxTest } from './run.mjs';
 import { buildPiArgs, runAiReview, type AiReviewResult, type ExecFileRunner } from './review-ai.js';
-import type { WorkbookUxTestRecorderResult, WorkbookUxTestWalkthrough } from './record.mjs';
+import type { WorkbookUxTestRecorderOptions, WorkbookUxTestRecorderResult, WorkbookUxTestWalkthrough } from './record.mjs';
 
 const now = '2026-01-02T03:04:05.000Z';
 
@@ -174,6 +174,96 @@ describe('workbook UX test AI review', () => {
 });
 
 describe('workbook UX test orchestration', () => {
+  it('emits ordered progress for a full deterministic plus AI run', async () => {
+    const runRoot = await fixtureRunRoot({ motionOk: true });
+    const messages: string[] = [];
+
+    const result = await runWorkbookUxTest({ runRoot, ai: true, progress: (event) => messages.push(event.message) }, {
+      record: async (options) => progressRecorder(options, runRoot),
+      ai: async () => aiAvailable(runRoot),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(messages).toEqual(expect.arrayContaining([
+      '[1/5] Preparing fixture, local server, and headless browser...',
+      '[2/5] Recording browser journey (12 checkpoints)...',
+      'Checkpoint 1/12: editor reveal scroll to small activity band',
+      '[3/5] Decoding and analysing recorded video (this can take several minutes)...',
+      'Deterministic recording and analysis passed.',
+      '[4/5] Running advisory AI review (timeout: 180s)...',
+      'Advisory AI review complete.',
+      '[5/5] Writing report...',
+    ]));
+    expectInOrder(messages, [
+      '[1/5] Preparing fixture, local server, and headless browser...',
+      '[2/5] Recording browser journey (12 checkpoints)...',
+      'Checkpoint 1/12: editor reveal scroll to small activity band',
+      '[3/5] Decoding and analysing recorded video (this can take several minutes)...',
+      '[4/5] Running advisory AI review (timeout: 180s)...',
+      '[5/5] Writing report...',
+    ]);
+  });
+
+  it('emits an explicit AI skipped stage for no-AI runs', async () => {
+    const runRoot = await fixtureRunRoot({ motionOk: true });
+    const messages: string[] = [];
+    let aiCalls = 0;
+
+    const result = await runWorkbookUxTest({ runRoot, ai: false, progress: (event) => messages.push(event.message) }, {
+      record: async (options) => progressRecorder(options, runRoot),
+      ai: async () => { aiCalls += 1; return aiAvailable(runRoot); },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(aiCalls).toBe(0);
+    expect(messages).toContain('[4/5] Advisory AI review skipped (--no-ai).');
+    expectInOrder(messages, [
+      '[3/5] Decoding and analysing recorded video (this can take several minutes)...',
+      '[4/5] Advisory AI review skipped (--no-ai).',
+      '[5/5] Writing report...',
+    ]);
+  });
+
+  it('emits unavailable AI as advisory progress without failing exit', async () => {
+    const runRoot = await fixtureRunRoot({ motionOk: true });
+    const messages: string[] = [];
+
+    const result = await runWorkbookUxTest({ runRoot, ai: true, progress: (event) => messages.push(event.message) }, {
+      record: async (options) => progressRecorder(options, runRoot),
+      ai: async () => aiUnavailable(runRoot, 'provider unavailable'),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(messages).toContain('Advisory AI review unavailable: provider unavailable');
+    expectInOrder(messages, [
+      '[4/5] Running advisory AI review (timeout: 180s)...',
+      'Advisory AI review unavailable: provider unavailable',
+      '[5/5] Writing report...',
+    ]);
+  });
+
+  it('emits deterministic failure, AI skip, and report stages in order', async () => {
+    const runRoot = await fixtureRunRoot({ motionOk: false, semanticFailures: ['bad geometry'] });
+    const messages: string[] = [];
+
+    const result = await runWorkbookUxTest({ runRoot, ai: true, progress: (event) => messages.push(event.message) }, {
+      record: async (options) => {
+        options.progress?.({ type: 'stage', phase: 'record', message: 'Recording browser journey (12 checkpoints)...' });
+        throw new Error('deterministic station failed');
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(messages.some((message) => message.startsWith('Deterministic recording/analysis failed: deterministic station failed'))).toBe(true);
+    expect(messages).toContain('[4/5] Advisory AI review skipped because deterministic station failed.');
+    expectInOrder(messages, [
+      '[1/5] Preparing fixture, local server, and headless browser...',
+      '[2/5] Recording browser journey (12 checkpoints)...',
+      '[4/5] Advisory AI review skipped because deterministic station failed.',
+      '[5/5] Writing report...',
+    ]);
+  });
+
   it('does not call AI when deterministic recording/analyzer fails', async () => {
     const runRoot = await fixtureRunRoot({ motionOk: false, semanticFailures: ['bad geometry'] });
     let aiCalls = 0;
@@ -335,6 +425,22 @@ function recorderResult(runRoot: string): WorkbookUxTestRecorderResult {
   return { runRoot, videoPath: resolve(runRoot, 'walkthrough.webm'), walkthroughPath: resolve(runRoot, 'walkthrough.json'), analysis: motionFixture(runRoot, true), walkthrough };
 }
 
+async function progressRecorder(options: WorkbookUxTestRecorderOptions, runRoot: string): Promise<WorkbookUxTestRecorderResult> {
+  options.progress?.({ type: 'stage', phase: 'record', message: 'Recording browser journey (12 checkpoints)...' });
+  options.progress?.({ type: 'checkpoint', completed: 1, total: 12, stepId: 31, stepName: 'editor reveal scroll to small activity band', message: 'Checkpoint 1/12: editor reveal scroll to small activity band' });
+  options.progress?.({ type: 'stage', phase: 'decode', message: 'Decoding and analysing recorded video (this can take several minutes)...' });
+  return recorderResult(runRoot);
+}
+
+function expectInOrder(haystack: readonly string[], needles: readonly string[]): void {
+  let previousIndex = -1;
+  for (const needle of needles) {
+    const index = haystack.findIndex((message, candidateIndex) => candidateIndex > previousIndex && message === needle);
+    expect(index, `missing progress message after index ${previousIndex}: ${needle}`).toBeGreaterThan(previousIndex);
+    previousIndex = index;
+  }
+}
+
 function geometry(scrollY: number, expand: number) {
   const rect = { x: 0, y: 0, width: 100, height: 100, top: 0, right: 100, bottom: 100, left: 0 };
   return { expand, scrollY, bandDocumentTop: 300, bandRect: rect, workRect: rect, mainRect: rect };
@@ -342,6 +448,24 @@ function geometry(scrollY: number, expand: number) {
 
 function station(name: string, status: UxTestStationResult['status']): UxTestStationResult {
   return { name, status, startedAt: now, finishedAt: now, durationMs: 0 };
+}
+
+function aiAvailable(runRoot: string): AiReviewResult {
+  return {
+    requested: true,
+    status: 'available',
+    command: 'fake-pi',
+    args: [],
+    startedAt: now,
+    finishedAt: now,
+    durationMs: 0,
+    stdoutPath: resolve(runRoot, 'ai-review.md'),
+    stderrPath: resolve(runRoot, 'ai-review.stderr.txt'),
+    jsonPath: resolve(runRoot, 'ai-review.json'),
+    reviewPath: resolve(runRoot, 'ai-review.md'),
+    attachmentPaths: [],
+    outputBytes: 10,
+  };
 }
 
 function aiUnavailable(runRoot: string, reason: string): AiReviewResult {

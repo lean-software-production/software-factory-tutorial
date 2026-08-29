@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { basename, dirname, resolve } from 'node:path';
 import { recordWorkbookUxTest, type WorkbookUxTestRecorderOptions, type WorkbookUxTestRecorderResult } from './record.mjs';
 import { deterministicContractFailures, writeUxTestReport, type UxTestStationResult, type SerializedError } from './report.js';
+import { formatWorkbookUxStage, type WorkbookUxProgressEvent, type WorkbookUxProgressSink } from './progress.js';
 import { runAiReview, type AiReviewResult } from './review-ai.js';
 
 export interface WorkbookUxTestRunOptions extends WorkbookUxTestRecorderOptions {
@@ -36,6 +37,7 @@ export async function runWorkbookUxTest(options: WorkbookUxTestRunOptions = {}, 
   const runStartedAtMs = Date.now();
   const runStartedAt = new Date(runStartedAtMs).toISOString();
   const runRoot = resolve(options.runRoot ?? DEFAULT_RUN_ROOT);
+  const progress = options.progress;
   const stations: UxTestStationResult[] = [];
   const recordStationStartMs = Date.now();
   const recordStationStartedAt = new Date(recordStationStartMs).toISOString();
@@ -44,28 +46,34 @@ export async function runWorkbookUxTest(options: WorkbookUxTestRunOptions = {}, 
   let deterministicError: SerializedError | undefined;
 
   try {
-    await record({ runRoot, analyze: true, headless: options.headless });
+    progress?.({ type: 'stage', phase: 'prepare', stage: 1, totalStages: 5, message: formatWorkbookUxStage(1, 5, 'Preparing fixture, local server, and headless browser...') });
+    await record({ runRoot, analyze: true, headless: options.headless, progress: createRunRecordProgress(progress) });
     const contractFailures = await deterministicContractFailures(runRoot);
     if (contractFailures.length > 0) {
       throw new Error(`Workbook UX deterministic artifact contract failed:\n${contractFailures.map((failure) => ` - ${failure}`).join('\n')}`);
     }
     deterministicPassed = true;
     stations.push(station('record-and-deterministic-analysis', 'passed', recordStationStartedAt, recordStationStartMs));
+    progress?.({ type: 'status', phase: 'deterministic', status: 'passed', message: 'Deterministic recording and analysis passed.' });
   } catch (error) {
     deterministicError = serializeError(error);
     stations.push(station('record-and-deterministic-analysis', 'failed', recordStationStartedAt, recordStationStartMs, deterministicError));
+    progress?.({ type: 'status', phase: 'deterministic', status: 'failed', message: `Deterministic recording/analysis failed: ${deterministicError.message}` });
   }
 
   let ai: WorkbookUxTestRunResult['ai'];
   if (!options.ai) {
     ai = { requested: false, status: 'skipped', reason: 'AI review disabled by CLI.' };
+    progress?.({ type: 'stage', phase: 'ai', stage: 4, totalStages: 5, message: formatWorkbookUxStage(4, 5, 'Advisory AI review skipped (--no-ai).') });
     stations.push(skippedStation('advisory-ai-review', 'AI review disabled by CLI.'));
   } else if (!deterministicPassed) {
     ai = { requested: false, status: 'skipped', reason: 'AI review skipped because deterministic station failed.' };
+    progress?.({ type: 'stage', phase: 'ai', stage: 4, totalStages: 5, message: formatWorkbookUxStage(4, 5, 'Advisory AI review skipped because deterministic station failed.') });
     stations.push(skippedStation('advisory-ai-review', 'Deterministic station failed.'));
   } else {
     const aiStationStartMs = Date.now();
     const aiStationStartedAt = new Date(aiStationStartMs).toISOString();
+    progress?.({ type: 'stage', phase: 'ai', stage: 4, totalStages: 5, message: formatWorkbookUxStage(4, 5, `Running advisory AI review (timeout: ${formatSeconds(options.aiTimeoutMs ?? 180_000)})...`) });
     try {
       ai = await (deps.ai ?? ((aiOptions) => runAiReview(aiOptions)))({
         runRoot,
@@ -76,10 +84,13 @@ export async function runWorkbookUxTest(options: WorkbookUxTestRunOptions = {}, 
     } catch (error) {
       ai = await aiUnavailableFromThrownError(runRoot, options.aiCommand ?? 'pi', error, aiStationStartedAt, aiStationStartMs);
     }
+    if (ai.status === 'available') progress?.({ type: 'status', phase: 'ai', status: 'passed', message: 'Advisory AI review complete.' });
+    else progress?.({ type: 'status', phase: 'ai', status: 'unavailable', message: `Advisory AI review unavailable: ${ai.reason ?? 'no reason supplied.'}` });
     stations.push(station('advisory-ai-review', ai.status === 'available' ? 'passed' : 'unavailable', aiStationStartedAt, aiStationStartMs, ai.reason ? { message: ai.reason } : undefined));
   }
 
   const runFinishedAt = new Date().toISOString();
+  progress?.({ type: 'stage', phase: 'report', stage: 5, totalStages: 5, message: formatWorkbookUxStage(5, 5, 'Writing report...') });
   const reportResult = await (deps.report ?? writeUxTestReport)({
     runRoot,
     startedAt: runStartedAt,
@@ -133,6 +144,34 @@ function parseCliOptions(argv: readonly string[]): WorkbookUxTestRunOptions {
   return { ai, headless, runRoot, aiCommand, aiModel, aiTimeoutMs, analyze: true };
 }
 
+function createRunRecordProgress(progress: WorkbookUxProgressSink | undefined): WorkbookUxProgressSink | undefined {
+  if (!progress) return undefined;
+  let recordingStagePrinted = false;
+  let decodeStagePrinted = false;
+  return (event: WorkbookUxProgressEvent) => {
+    if (event.type === 'stage' && event.phase === 'prepare') return;
+    if (event.type === 'stage' && event.phase === 'record') {
+      if (recordingStagePrinted) return;
+      recordingStagePrinted = true;
+      progress({ ...event, stage: 2, totalStages: 5, message: formatWorkbookUxStage(2, 5, event.message) });
+      return;
+    }
+    if (event.type === 'stage' && event.phase === 'decode') {
+      if (decodeStagePrinted) return;
+      decodeStagePrinted = true;
+      progress({ ...event, stage: 3, totalStages: 5, message: formatWorkbookUxStage(3, 5, event.message) });
+      return;
+    }
+    if (event.type === 'status' && event.phase === 'deterministic') return;
+    progress(event);
+  };
+}
+
+function formatSeconds(milliseconds: number): string {
+  const seconds = milliseconds / 1_000;
+  return Number.isInteger(seconds) ? `${seconds}s` : `${seconds.toFixed(1)}s`;
+}
+
 function station(name: string, status: UxTestStationResult['status'], startedAt: string, startedAtMs: number, error?: SerializedError): UxTestStationResult {
   const finishedAtMs = Date.now();
   return { name, status, startedAt, finishedAt: new Date(finishedAtMs).toISOString(), durationMs: finishedAtMs - startedAtMs, error };
@@ -181,13 +220,18 @@ function printHelp(): void {
   console.log(`Usage: tsx test/workbook-ux/run.mts [--ai|--no-ai] [--headed] [--run-root=PATH] [--ai-command=pi] [--ai-model=MODEL] [--ai-timeout-ms=MS]\n\nRuns the workbook UX test: checked-out engine input -> provider-free fixture walkthrough/WebM -> deterministic decoded-WebM analysis -> optional advisory pi review -> durable report.\n\nExit is nonzero only when the recording/deterministic station fails. AI unavailability or findings never gate exit.`);
 }
 
+const consoleProgress: WorkbookUxProgressSink = (event) => console.log(event.message);
+
 if (basename(process.argv[1] ?? '') === 'run.mts') {
-  runWorkbookUxTest(parseCliOptions(process.argv.slice(2))).then((result) => {
-    console.log(`Workbook UX test report: ${result.reportPath}`);
-    console.log(`Workbook UX test result: ${result.resultPath}`);
+  runWorkbookUxTest({ ...parseCliOptions(process.argv.slice(2)), progress: consoleProgress }).then((result) => {
+    console.log(`Deterministic verdict: ${result.deterministicPassed ? 'PASSED' : 'FAILED'}`);
+    console.log(`Exit verdict: ${result.exitCode === 0 ? 'PASS' : 'FAIL'} (exit code ${result.exitCode})`);
+    console.log(`Report: ${result.reportPath}`);
+    console.log(`Result JSON: ${result.resultPath}`);
     if (result.ai?.status === 'unavailable') console.log(`AI review unavailable: ${result.ai.reason}`);
     process.exitCode = result.exitCode;
   }).catch((error) => {
+    console.error('Workbook UX test failed before report writing.');
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
   });

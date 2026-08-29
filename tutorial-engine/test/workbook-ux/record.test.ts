@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { TerminalShellProtocol } from "../../src/workbook/terminal-shell-protocol.js";
 import { ProtocolAwareFakePty } from "./fake-pty.js";
-import { REQUIRED_MOTION_STEP_IDS, REQUIRED_STATE_CHECKPOINT_STEP_IDS, SCROLL_CHECKPOINT_STEP_IDS, WORKBOOK_UX_TEST_STEP_LIST } from "./steps.js";
+import { REQUIRED_MOTION_STEP_IDS, REQUIRED_STATE_CHECKPOINT_STEP_IDS, SCROLL_CHECKPOINT_STEP_IDS, WORKBOOK_UX_TEST_STEP_LIST, WORKBOOK_UX_TEST_STEPS } from "./steps.js";
 import { encodeStepBits } from "./marker-protocol.js";
 import { assertRealJourneyMotionThresholdCalibration, REAL_JOURNEY_MIN_REQUIRED_MOTION_PX, REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX } from "./record.mjs";
+import { checkpointProgressEvent, createWorkbookUxProgressLogger, formatWorkbookUxCheckpointProgress, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, type WorkbookUxProgressEvent } from "./progress.js";
 
 describe("protocol-aware fake PTY", () => {
   it("frames typed characters as authoritative workbook command and finished markers", () => {
@@ -22,6 +23,36 @@ describe("protocol-aware fake PTY", () => {
     expect(events).toContainEqual({ type: "command-submitted", command: "npm test" });
     expect(events).toContainEqual({ type: "command-finished", exitStatus: 0 });
     expect(events.filter((event) => event.type === "output").map((event) => event.data).join("")).toContain("observed:npm test");
+  });
+});
+
+describe("workbook UX test progress", () => {
+  it("formats semantic checkpoint progress with count and step name", () => {
+    expect(WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL).toBe(12);
+    expect(formatWorkbookUxCheckpointProgress(3, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, "editor scroll from small to mid activity band"))
+      .toBe("Checkpoint 3/12: editor scroll from small to mid activity band");
+    expect(checkpointProgressEvent(1, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, WORKBOOK_UX_TEST_STEPS.editorScrollToSmall)).toMatchObject({
+      type: "checkpoint",
+      completed: 1,
+      total: 12,
+      stepId: WORKBOOK_UX_TEST_STEPS.editorScrollToSmall.id,
+      message: "Checkpoint 1/12: editor reveal scroll to small activity band",
+    });
+  });
+
+  it("routes server diagnostics through the supplied progress sink", () => {
+    const events: WorkbookUxProgressEvent[] = [];
+    const logger = createWorkbookUxProgressLogger((event) => events.push(event));
+
+    logger.info("Workbook tutor listening on http://127.0.0.1:1234.");
+    logger.error("Embedded terminal startup failed", new Error("boom"));
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ type: "detail", source: "server", severity: "info" });
+    expect(events[0]?.message).toContain("  server: Workbook tutor listening");
+    expect(events[1]).toMatchObject({ type: "detail", source: "server", severity: "error" });
+    expect(events[1]?.message).toContain("server error: Embedded terminal startup failed");
+    expect(events[1]?.message).toContain("boom");
   });
 });
 

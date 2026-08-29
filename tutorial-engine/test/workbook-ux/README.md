@@ -30,6 +30,21 @@ npm run --workspace=tutorial-engine test:workbook-ux
 - `test:workbook-ux:deterministic` runs the linear UX test without AI and exits nonzero only if recording semantics or deterministic analyzer findings fail.
 - `test:workbook-ux` runs the full UX test with `--ai`. AI findings or AI unavailability never gate exit.
 
+The default commands are headless. A full deterministic run may take several minutes while Chromium records the journey and the analyzer decodes the WebM. Progress is intentionally coarse: stage lines plus one line per semantic checkpoint, for example:
+
+```text
+[1/5] Preparing fixture, local server, and headless browser...
+  server: Workbook tutor listening on http://127.0.0.1:54231. State: ...
+[2/5] Recording browser journey (12 checkpoints)...
+Checkpoint 1/12: editor reveal scroll to small activity band
+...
+[3/5] Decoding and analysing recorded video (this can take several minutes)...
+[4/5] Advisory AI review skipped (--no-ai).
+[5/5] Writing report...
+Deterministic verdict: PASSED
+Report: tutorial-engine/test/.tmp/workbook-ux/latest/report.md
+```
+
 Useful direct CLI options:
 
 ```bash
