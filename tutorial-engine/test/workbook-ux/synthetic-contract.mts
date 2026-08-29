@@ -6,7 +6,7 @@ import { chromium } from 'playwright';
 import { analyzeWorkbookVideo, missingRequiredMotionStepFindings, type AnalyzerReport, type FindingCode } from './analyzer.js';
 import { MARKER_COLOURS, markerCss, markerHtml, markerCellColours, rgbCss, type MarkerPhase } from './marker-protocol.js';
 
-const ROOT = join(process.cwd(), 'test/.tmp/workbook-factory/analyser-contract');
+const ROOT = join(process.cwd(), 'test/.tmp/workbook-ux/analyser-contract');
 const VIDEO_DIR = join(ROOT, 'video');
 const ANALYSIS_DIR = join(ROOT, 'analysis');
 const VIEWPORT = { width: 1280, height: 900 };
@@ -105,14 +105,14 @@ async function recordSyntheticVideo(): Promise<string> {
   try {
     const page = await context.newPage();
     await page.setContent(syntheticHtml(), { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => (window as Window & { __workbookFactoryDone?: boolean }).__workbookFactoryDone === true, undefined, {
+    await page.waitForFunction(() => (window as Window & { __workbookUxTestDone?: boolean }).__workbookUxTestDone === true, undefined, {
       timeout: totalDurationMs() + 10000,
     });
     const video = page.video();
     assert(video, 'Playwright did not create a video handle');
     await context.close();
     const rawPath = await video.path();
-    const finalPath = join(ROOT, 'synthetic-workbook-factory.webm');
+    const finalPath = join(ROOT, 'synthetic-workbook-ux.webm');
     await rename(rawPath, finalPath);
     return finalPath;
   } finally {
@@ -169,8 +169,8 @@ function syntheticHtml(): string {
     const markerColours = ${markerColours};
     const totalDuration = ${totalDurationMs()};
     const content = document.getElementById('content');
-    const marker = document.querySelector('.wf-marker');
-    const cells = Array.from(document.querySelectorAll('.wf-marker-cell'));
+    const marker = document.querySelector('.wux-marker');
+    const cells = Array.from(document.querySelectorAll('.wux-marker-cell'));
     let start = undefined;
     function offsetFor(phaseIndex, progress) {
       const stops = offsets[String(phaseIndex)];
@@ -213,7 +213,7 @@ function syntheticHtml(): string {
       content.style.transform = 'translate3d(0, ' + offsetFor(phaseIndex, progress) + 'px, 0)';
       setMarker(phase);
       if (elapsed >= totalDuration) {
-        window.__workbookFactoryDone = true;
+        window.__workbookUxTestDone = true;
         return;
       }
       requestAnimationFrame(tick);

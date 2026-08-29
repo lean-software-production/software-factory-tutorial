@@ -3,18 +3,18 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AnalyzerReport } from './analyzer.js';
-import { writeFactoryReport, type FactoryStationResult } from './report.js';
-import { runWorkbookFactory } from './run.mjs';
+import { writeUxTestReport, type UxTestStationResult } from './report.js';
+import { runWorkbookUxTest } from './run.mjs';
 import { buildPiArgs, runAiReview, type AiReviewResult, type ExecFileRunner } from './review-ai.js';
-import type { WorkbookFactoryRecorderResult, WorkbookFactoryWalkthrough } from './record.mjs';
+import type { WorkbookUxTestRecorderResult, WorkbookUxTestWalkthrough } from './record.mjs';
 
 const now = '2026-01-02T03:04:05.000Z';
 
-describe('workbook factory report', () => {
+describe('workbook UX test report', () => {
   it('writes pass reports with authoritative deterministic verdict', async () => {
     const runRoot = await fixtureRunRoot({ motionOk: true });
     const stationResults = [station('record-and-deterministic-analysis', 'passed')];
-    const { result, reportPath, resultPath } = await writeFactoryReport({
+    const { result, reportPath, resultPath } = await writeUxTestReport({
       runRoot,
       startedAt: now,
       finishedAt: now,
@@ -25,14 +25,14 @@ describe('workbook factory report', () => {
     });
 
     expect(reportPath).toBe(resolve(runRoot, 'report.md'));
-    expect(resultPath).toBe(resolve(runRoot, 'factory-result.json'));
+    expect(resultPath).toBe(resolve(runRoot, 'ux-test-result.json'));
     expect(result.exitCode).toBe(0);
     expect(result.deterministicVerdict).toBe('passed');
   });
 
   it('writes failure reports from partial artifacts without crashing', async () => {
     const runRoot = await fixtureRunRoot({ motionOk: false, semanticFailures: ['feedback is occluded'] });
-    const { result } = await writeFactoryReport({
+    const { result } = await writeUxTestReport({
       runRoot,
       startedAt: now,
       finishedAt: now,
@@ -51,7 +51,7 @@ describe('workbook factory report', () => {
   it('records unavailable AI as advisory without failing deterministic pass', async () => {
     const runRoot = await fixtureRunRoot({ motionOk: true });
     const ai: AiReviewResult = aiUnavailable(runRoot, 'quota limited');
-    const { result } = await writeFactoryReport({
+    const { result } = await writeUxTestReport({
       runRoot,
       startedAt: now,
       finishedAt: now,
@@ -74,7 +74,7 @@ describe('workbook factory report', () => {
     const runRoot = await fixtureRunRoot({ motionOk: true });
     await rm(resolve(runRoot, artifact), { force: true });
 
-    const { result } = await writeFactoryReport({
+    const { result } = await writeUxTestReport({
       runRoot,
       startedAt: now,
       finishedAt: now,
@@ -94,7 +94,7 @@ describe('workbook factory report', () => {
     const runRoot = await fixtureRunRoot({ motionOk: true });
     await rm(resolve(runRoot, 'analysis/motion.json'), { force: true });
 
-    const { result } = await writeFactoryReport({
+    const { result } = await writeUxTestReport({
       runRoot,
       startedAt: now,
       finishedAt: now,
@@ -113,7 +113,7 @@ describe('workbook factory report', () => {
     const runRoot = await fixtureRunRoot({ motionOk: true });
     await writeFile(resolve(runRoot, 'analysis/motion.json'), '{not json');
 
-    const { result } = await writeFactoryReport({
+    const { result } = await writeUxTestReport({
       runRoot,
       startedAt: now,
       finishedAt: now,
@@ -129,7 +129,7 @@ describe('workbook factory report', () => {
   });
 });
 
-describe('workbook factory AI review', () => {
+describe('workbook UX test AI review', () => {
   it('builds pi args with no tools/session, low thinking, and evidence attachments', () => {
     const args = buildPiArgs({ attachments: ['analysis/contact-sheet.png', 'ai-walkthrough-summary.json', 'analysis/motion.json', 'analysis/frame.png'], prompt: 'review' });
 
@@ -173,12 +173,12 @@ describe('workbook factory AI review', () => {
   });
 });
 
-describe('workbook factory orchestration', () => {
+describe('workbook UX test orchestration', () => {
   it('does not call AI when deterministic recording/analyzer fails', async () => {
     const runRoot = await fixtureRunRoot({ motionOk: false, semanticFailures: ['bad geometry'] });
     let aiCalls = 0;
 
-    const result = await runWorkbookFactory({ runRoot, ai: true }, {
+    const result = await runWorkbookUxTest({ runRoot, ai: true }, {
       record: async () => { throw new Error('deterministic station failed'); },
       ai: async () => { aiCalls += 1; return aiUnavailable(runRoot, 'should not call'); },
     });
@@ -193,7 +193,7 @@ describe('workbook factory orchestration', () => {
     await rm(resolve(runRoot, 'analysis/motion.json'), { force: true });
     let aiCalls = 0;
 
-    const result = await runWorkbookFactory({ runRoot, ai: true }, {
+    const result = await runWorkbookUxTest({ runRoot, ai: true }, {
       record: async () => recorderResult(runRoot),
       ai: async () => { aiCalls += 1; return aiUnavailable(runRoot, 'should not call'); },
     });
@@ -207,7 +207,7 @@ describe('workbook factory orchestration', () => {
     const runRoot = await fixtureRunRoot({ motionOk: true });
     let aiCalls = 0;
 
-    const result = await runWorkbookFactory({ runRoot, ai: true }, {
+    const result = await runWorkbookUxTest({ runRoot, ai: true }, {
       record: async () => recorderResult(runRoot),
       ai: async () => { aiCalls += 1; return aiUnavailable(runRoot, 'provider unavailable'); },
     });
@@ -221,7 +221,7 @@ describe('workbook factory orchestration', () => {
   it('converts thrown AI bugs into unavailable AI and still writes a passing deterministic report', async () => {
     const runRoot = await fixtureRunRoot({ motionOk: true });
 
-    const result = await runWorkbookFactory({ runRoot, ai: true }, {
+    const result = await runWorkbookUxTest({ runRoot, ai: true }, {
       record: async () => recorderResult(runRoot),
       ai: async () => { throw new Error('prompt template read exploded'); },
     });
@@ -231,12 +231,12 @@ describe('workbook factory orchestration', () => {
     expect(result.ai?.status).toBe('unavailable');
     expect(result.ai && 'reason' in result.ai ? result.ai.reason : '').toContain('prompt template read exploded');
     await expect(readFile(resolve(runRoot, 'report.md'), 'utf8')).resolves.toContain('AI review (advisory)');
-    await expect(readFile(resolve(runRoot, 'factory-result.json'), 'utf8')).resolves.toContain('prompt template read exploded');
+    await expect(readFile(resolve(runRoot, 'ux-test-result.json'), 'utf8')).resolves.toContain('prompt template read exploded');
   });
 });
 
 async function fixtureRunRoot(options: { motionOk: boolean; semanticFailures?: string[] }): Promise<string> {
-  const runRoot = await mkdtemp(resolve(tmpdir(), 'wf-factory-test-'));
+  const runRoot = await mkdtemp(resolve(tmpdir(), 'workbook-ux-test-'));
   await mkdir(resolve(runRoot, 'analysis'), { recursive: true });
   await writeFile(resolve(runRoot, 'input-metadata.json'), JSON.stringify({
     git: { sha: 'aa06ec1', dirty: false, status: [] },
@@ -252,12 +252,12 @@ async function fixtureRunRoot(options: { motionOk: boolean; semanticFailures?: s
   await writeFile(resolve(runRoot, 'analysis/contact-sheet.png'), 'fake png');
   await writeFile(resolve(runRoot, 'analysis/step-3-mid.png'), 'fake png');
   if (!options.motionOk || options.semanticFailures?.length) {
-    await writeFile(resolve(runRoot, 'recording-error.json'), JSON.stringify({ message: 'Workbook factory deterministic run failed.', failures: options.semanticFailures ?? [], walkthrough }));
+    await writeFile(resolve(runRoot, 'recording-error.json'), JSON.stringify({ message: 'Workbook UX test deterministic run failed.', failures: options.semanticFailures ?? [], walkthrough }));
   }
   return runRoot;
 }
 
-function walkthroughFixture(runRoot: string, semanticFailures: string[]): WorkbookFactoryWalkthrough {
+function walkthroughFixture(runRoot: string, semanticFailures: string[]): WorkbookUxTestWalkthrough {
   return {
     generatedAt: now,
     runRoot,
@@ -330,7 +330,7 @@ function motionFixture(runRoot: string, ok: boolean): AnalyzerReport {
   };
 }
 
-function recorderResult(runRoot: string): WorkbookFactoryRecorderResult {
+function recorderResult(runRoot: string): WorkbookUxTestRecorderResult {
   const walkthrough = walkthroughFixture(runRoot, []);
   return { runRoot, videoPath: resolve(runRoot, 'walkthrough.webm'), walkthroughPath: resolve(runRoot, 'walkthrough.json'), analysis: motionFixture(runRoot, true), walkthrough };
 }
@@ -340,7 +340,7 @@ function geometry(scrollY: number, expand: number) {
   return { expand, scrollY, bandDocumentTop: 300, bandRect: rect, workRect: rect, mainRect: rect };
 }
 
-function station(name: string, status: FactoryStationResult['status']): FactoryStationResult {
+function station(name: string, status: UxTestStationResult['status']): UxTestStationResult {
   return { name, status, startedAt: now, finishedAt: now, durationMs: 0 };
 }
 

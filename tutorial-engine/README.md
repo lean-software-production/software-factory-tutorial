@@ -97,7 +97,7 @@ npm run test:workbook-ux               # same workbook UX test plus advisory pi 
 npm run check       # TypeScript, eval type-check, unit tests, browser build, and browser smoke
 ```
 
-The workbook UX test family lives in [`test/workbook-factory/`](test/workbook-factory/). It writes a durable `report.md` and `factory-result.json`; deterministic findings gate exit, while the optional AI review is advisory and marked `@needs-human`.
+The workbook UX test family lives in [`test/workbook-ux/`](test/workbook-ux/). It writes a durable `report.md` and `ux-test-result.json`; deterministic findings gate exit, while the optional AI review is advisory and marked `@needs-human`.
 
 `npm run browser:smoke` is safe to run on its own. It serves the built bundle in
 `dist/web-workbook/`, so before it starts Chromium it compares that bundle against everything vite

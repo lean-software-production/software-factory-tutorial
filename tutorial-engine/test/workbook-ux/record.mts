@@ -11,9 +11,9 @@ import { QueuedMainTutor, RecordingPracticeCoach } from "../support/fake-tutors.
 import { analyzeWorkbookVideo, type AnalyzerReport } from "./analyzer.js";
 import { createProtocolAwareFakePty } from "./fake-pty.js";
 import { MARKER_BITS, MARKER_COLOURS, MARKER_CELL_SIZE, MARKER_GAP, MARKER_TOTAL_CELLS, markerCss, rgbCss } from "./marker-protocol.js";
-import { REQUIRED_MOTION_STEP_IDS, REQUIRED_STATE_CHECKPOINT_STEP_IDS, SCROLL_CHECKPOINT_STEP_IDS, WORKBOOK_FACTORY_STEPS, type WorkbookFactoryGeometryState, type WorkbookFactoryStepDeclaration } from "./steps.js";
+import { REQUIRED_MOTION_STEP_IDS, REQUIRED_STATE_CHECKPOINT_STEP_IDS, SCROLL_CHECKPOINT_STEP_IDS, WORKBOOK_UX_TEST_STEPS, type WorkbookUxTestGeometryState, type WorkbookUxTestStepDeclaration } from "./steps.js";
 
-const RUN_ROOT = resolve(ENGINE_ROOT, "test/.tmp/workbook-factory/latest");
+const RUN_ROOT = resolve(ENGINE_ROOT, "test/.tmp/workbook-ux/latest");
 const FIXTURE_ROOT = resolve(ENGINE_ROOT, "test/fixtures/journey-workbook");
 const WEB_ROOT = resolve(ENGINE_ROOT, WEB_BUNDLE_DIRECTORY);
 const VIEWPORT = { width: 1280, height: 900 } as const;
@@ -27,7 +27,7 @@ export const REAL_JOURNEY_OBSERVED_SPARSE_EDITOR_TEXTURE_FLOOR = 3.862;
 // Clean runs have measured that sparse editor at and above 3.862, so 3 keeps a healthy
 // scenario-specific margin without weakening the generic analyzer's texture default.
 export const REAL_JOURNEY_MIN_TEXTURE_SCORE = 3;
-const GEOMETRY_TARGETS: Record<WorkbookFactoryGeometryState, { naturalTop: number; minExpand: number; maxExpand: number }> = {
+const GEOMETRY_TARGETS: Record<WorkbookUxTestGeometryState, { naturalTop: number; minExpand: number; maxExpand: number }> = {
   small: { naturalTop: 285, minExpand: 0, maxExpand: 0.08 },
   mid: { naturalTop: 130, minExpand: 0.25, maxExpand: 0.75 },
   full: { naturalTop: 0, minExpand: 0.92, maxExpand: 1 },
@@ -68,8 +68,8 @@ export interface SemanticCheckpoint {
   readonly stepId: number;
   readonly name: string;
   readonly surface: string;
-  readonly requestedState?: WorkbookFactoryGeometryState;
-  readonly kind: WorkbookFactoryStepDeclaration["kind"];
+  readonly requestedState?: WorkbookUxTestGeometryState;
+  readonly kind: WorkbookUxTestStepDeclaration["kind"];
   readonly requiredMotion: boolean;
   readonly startedAt: string;
   readonly settledAt: string;
@@ -81,7 +81,7 @@ export interface SemanticCheckpoint {
   readonly command?: string;
   readonly fakeCallCounts: FakeCallCounts;
 }
-export interface WorkbookFactoryWalkthrough {
+export interface WorkbookUxTestWalkthrough {
   readonly generatedAt: string;
   readonly runRoot: string;
   readonly fixtureRoot: string;
@@ -94,28 +94,28 @@ export interface WorkbookFactoryWalkthrough {
   readonly analyzer?: Pick<AnalyzerReport, "ok" | "requiredMotionStepIds" | "markerSamples" | "findings"> & { readonly segmentStepIds: number[]; readonly evidenceFiles: readonly string[]; readonly contactSheet?: string };
   readonly semanticFailures: string[];
 }
-export interface WorkbookFactoryRecorderOptions {
+export interface WorkbookUxTestRecorderOptions {
   readonly runRoot?: string;
   readonly analyze?: boolean;
   readonly headless?: boolean;
 }
-export interface WorkbookFactoryRecorderResult {
+export interface WorkbookUxTestRecorderResult {
   readonly runRoot: string;
   readonly videoPath: string;
   readonly walkthroughPath: string;
   readonly analysis?: AnalyzerReport;
-  readonly walkthrough: WorkbookFactoryWalkthrough;
+  readonly walkthrough: WorkbookUxTestWalkthrough;
 }
 
 type MarkerPhase = "settled" | "transition";
 
 type Mutable<T> = { -readonly [Property in keyof T]: T[Property] };
-type MutableWalkthrough = Mutable<Omit<WorkbookFactoryWalkthrough, "checkpoints" | "semanticFailures" | "fake" | "videoPath">> & {
+type MutableWalkthrough = Mutable<Omit<WorkbookUxTestWalkthrough, "checkpoints" | "semanticFailures" | "fake" | "videoPath">> & {
   checkpoints: SemanticCheckpoint[];
   semanticFailures: string[];
-  fake: Mutable<WorkbookFactoryWalkthrough["fake"]>;
+  fake: Mutable<WorkbookUxTestWalkthrough["fake"]>;
   videoPath: string;
-  analyzer?: WorkbookFactoryWalkthrough["analyzer"];
+  analyzer?: WorkbookUxTestWalkthrough["analyzer"];
 };
 
 function isoNow(): string { return new Date().toISOString(); }
@@ -164,20 +164,20 @@ async function installVideoMarker(page: Page): Promise<void> {
     const ensure = () => {
       const root = document.documentElement;
       if (!root) return;
-      if (!document.getElementById("workbook-factory-marker-style")) {
+      if (!document.getElementById("workbook-ux-marker-style")) {
         const style = document.createElement("style");
-        style.id = "workbook-factory-marker-style";
+        style.id = "workbook-ux-marker-style";
         style.textContent = css;
         (document.head || root).appendChild(style);
       }
-      let marker = document.querySelector<HTMLElement>(".wf-marker");
+      let marker = document.querySelector<HTMLElement>(".wux-marker");
       if (!marker) {
         marker = document.createElement("div");
-        marker.className = "wf-marker";
+        marker.className = "wux-marker";
         marker.setAttribute("aria-hidden", "true");
         for (let index = 0; index < totalCells; index += 1) {
           const cell = document.createElement("div");
-          cell.className = "wf-marker-cell";
+          cell.className = "wux-marker-cell";
           cell.dataset.markerCell = String(index);
           cell.style.width = `${cellSize}px`;
           cell.style.height = `${cellSize}px`;
@@ -187,7 +187,7 @@ async function installVideoMarker(page: Page): Promise<void> {
       }
       marker.dataset.markerStep = String(state.stepId);
       marker.dataset.markerPhase = state.phase;
-      const cells = Array.from(marker.querySelectorAll<HTMLElement>(".wf-marker-cell"));
+      const cells = Array.from(marker.querySelectorAll<HTMLElement>(".wux-marker-cell"));
       const colourFor = (index: number): string => {
         if (index === 0) return colours.guard;
         if (index === 1) return state.phase === "settled" ? colours.settled : colours.transition;
@@ -195,7 +195,7 @@ async function installVideoMarker(page: Page): Promise<void> {
       };
       cells.forEach((cell, index) => { cell.style.background = colourFor(index); });
     };
-    Object.defineProperty(window, "__workbookFactoryMarker", {
+    Object.defineProperty(window, "__workbookUxTestMarker", {
       value: (next: { phase: Phase; stepId: number }) => {
         state.phase = next.phase;
         state.stepId = next.stepId;
@@ -221,10 +221,10 @@ async function installVideoMarker(page: Page): Promise<void> {
   });
 }
 
-async function setMarker(page: Page, phase: MarkerPhase, step: WorkbookFactoryStepDeclaration): Promise<string> {
+async function setMarker(page: Page, phase: MarkerPhase, step: WorkbookUxTestStepDeclaration): Promise<string> {
   await page.evaluate(({ phase: nextPhase, stepId }) => {
-    const setter = (window as unknown as { __workbookFactoryMarker?: (state: { phase: MarkerPhase; stepId: number }) => void }).__workbookFactoryMarker;
-    if (!setter) throw new Error("Workbook factory marker has not been installed.");
+    const setter = (window as unknown as { __workbookUxTestMarker?: (state: { phase: MarkerPhase; stepId: number }) => void }).__workbookUxTestMarker;
+    if (!setter) throw new Error("Workbook UX test marker has not been installed.");
     setter({ phase: nextPhase, stepId });
   }, { phase, stepId: step.id });
   return isoNow();
@@ -269,7 +269,7 @@ async function measureGeometry(page: Page): Promise<GeometryTelemetry> {
   });
 }
 
-async function positionBand(page: Page, state: WorkbookFactoryGeometryState): Promise<GeometryTelemetry> {
+async function positionBand(page: Page, state: WorkbookUxTestGeometryState): Promise<GeometryTelemetry> {
   const target = GEOMETRY_TARGETS[state];
   const before = await measureGeometry(page);
   await page.evaluate(async ({ bandDocumentTop, naturalTop }) => {
@@ -395,7 +395,7 @@ function fakeCounts(mainTutor: QueuedMainTutor, coach: RecordingPracticeCoach, f
 async function runScrollCheckpoint(args: {
   page: Page;
   walkthrough: MutableWalkthrough;
-  step: WorkbookFactoryStepDeclaration;
+  step: WorkbookUxTestStepDeclaration;
   mainTutor: QueuedMainTutor;
   coach: RecordingPracticeCoach;
   fakePty: ReturnType<typeof createProtocolAwareFakePty>;
@@ -427,7 +427,7 @@ async function runScrollCheckpoint(args: {
 async function runPreparedCheckpoint(args: {
   page: Page;
   walkthrough: MutableWalkthrough;
-  step: WorkbookFactoryStepDeclaration;
+  step: WorkbookUxTestStepDeclaration;
   mainTutor: QueuedMainTutor;
   coach: RecordingPracticeCoach;
   fakePty: ReturnType<typeof createProtocolAwareFakePty>;
@@ -508,7 +508,7 @@ async function finalizeVideo(page: Page | undefined, context: BrowserContext | u
   return target;
 }
 
-export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOptions = {}): Promise<WorkbookFactoryRecorderResult> {
+export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOptions = {}): Promise<WorkbookUxTestRecorderResult> {
   assertRealJourneyMotionThresholdCalibration();
   const runRoot = options.runRoot ? resolve(options.runRoot) : RUN_ROOT;
   await rm(runRoot, { recursive: true, force: true });
@@ -518,7 +518,7 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
   const inputRoot = await copyFixture(runRoot);
   await collectInputMetadata(runRoot, bundleStatus);
 
-  process.env.OPENCODE_API_KEY ??= "workbook-factory-no-model-key";
+  process.env.OPENCODE_API_KEY ??= "workbook-ux-no-model-key";
   const mainTutor = new QueuedMainTutor(
     { outcome: "feedback", message: EDITOR_FEEDBACK.small } satisfies TutorDecision,
     { outcome: "feedback", message: EDITOR_FEEDBACK.mid } satisfies TutorDecision,
@@ -558,7 +558,7 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
       port: 0,
       mainTutor,
       practiceCoach: coach,
-      terminalPtyFactory: fakePty.factory,
+      terminalPtyFactory: fakePty.create,
     });
     browser = await chromium.launch({ headless: options.headless ?? true });
     await collectInputMetadata(runRoot, bundleStatus, browser.version());
@@ -571,58 +571,58 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
     page = await context.newPage();
     await installVideoMarker(page);
     await page.goto(server.url, { waitUntil: "domcontentloaded" });
-    await setMarker(page, "settled", WORKBOOK_FACTORY_STEPS.initial);
+    await setMarker(page, "settled", WORKBOOK_UX_TEST_STEPS.initial);
     await page.waitForTimeout(600);
 
-    await setMarker(page, "settled", WORKBOOK_FACTORY_STEPS.revealEditor);
+    await setMarker(page, "settled", WORKBOOK_UX_TEST_STEPS.revealEditor);
     await revealEditor(page);
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorScrollToSmall, position: async () => positionBand(page!, "small") });
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.editorScrollToSmall, position: async () => positionBand(page!, "small") });
 
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorSmallFeedback, prepare: async () => {
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.editorSmallFeedback, prepare: async () => {
       const typedText = "Small-state draft: the learner notices compact feedback in the editor.\nThe typed line stays short enough to look like a first revision.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
     }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.small) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorScrollToMid, position: async () => positionBand(page!, "mid") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorMidFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.editorScrollToMid, position: async () => positionBand(page!, "mid") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.editorMidFeedback, prepare: async () => {
       const typedText = "Mid-scroll draft: the learner revises while the activity band is partially expanded.\nThey add a second visible line before pausing for feedback.\nThe surface should keep its feedback welded during the scroll-linked resize.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
     }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.mid) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorScrollToFull, position: async () => positionBand(page!, "full") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorFullFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.editorScrollToFull, position: async () => positionBand(page!, "full") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.editorFullFeedback, prepare: async () => {
       const typedText = "Full-width draft: the learner checks that feedback remains welded to the editor surface.\nThis longer note creates real text texture across the editor viewport.\nThe final visible line names the full-width state before feedback arrives.\nA fourth line keeps the cursor moving like an actual revision.\nA fifth line makes the full-width editor less empty in the recording.\nA sixth line gives the deterministic analyzer text edges to track.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
     }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.full) });
 
-    await setMarker(page, "settled", WORKBOOK_FACTORY_STEPS.editorAccepted);
+    await setMarker(page, "settled", WORKBOOK_UX_TEST_STEPS.editorAccepted);
     await typeEditorRevision(page, "Accepted final draft: small, mid-scroll, and full-width feedback all stayed stable.");
     await waitForEditorAccepted(page);
     await page.waitForTimeout(450);
 
     await clickContinue(page);
     await page.locator('.current-activity-band[data-activity-type="terminal-practice"]').waitFor({ state: "attached", timeout: 15_000 });
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalScrollToSmall, position: async () => positionBand(page!, "small") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalSmallFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToSmall, position: async () => positionBand(page!, "small") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.terminalSmallFeedback, prepare: async () => {
       const command = "printf small-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 1");
       return { command };
     }, trigger: async () => feedbackTelemetry(page!, "terminal", COACH_FEEDBACK.small) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalScrollToMid, position: async () => positionBand(page!, "mid") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalMidFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToMid, position: async () => positionBand(page!, "mid") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.terminalMidFeedback, prepare: async () => {
       const command = "printf mid-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 2");
       return { command };
     }, trigger: async () => feedbackTelemetry(page!, "terminal", COACH_FEEDBACK.mid) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalScrollToFull, position: async () => positionBand(page!, "full") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalFullFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToFull, position: async () => positionBand(page!, "full") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_UX_TEST_STEPS.terminalFullFeedback, prepare: async () => {
       const command = "printf full-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 3");
@@ -707,7 +707,7 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
   return { runRoot, videoPath, walkthroughPath: resolve(runRoot, WALKTHROUGH_PATH), analysis, walkthrough };
 }
 
-function parseCliOptions(argv: readonly string[]): WorkbookFactoryRecorderOptions {
+function parseCliOptions(argv: readonly string[]): WorkbookUxTestRecorderOptions {
   const analyze = argv.includes("--record-only") ? false : argv.includes("--analyze") ? true : true;
   const headless = argv.includes("--headed") ? false : true;
   const runRootArg = argv.find((arg) => arg.startsWith("--run-root="));
@@ -715,7 +715,7 @@ function parseCliOptions(argv: readonly string[]): WorkbookFactoryRecorderOption
 }
 
 if (basename(process.argv[1] ?? "") === "record.mts") {
-  recordWorkbookFactory(parseCliOptions(process.argv.slice(2))).then((result) => {
+  recordWorkbookUxTest(parseCliOptions(process.argv.slice(2))).then((result) => {
     console.log(`Workbook UX test recording complete: ${result.videoPath}`);
     console.log(`Walkthrough: ${result.walkthroughPath}`);
     if (result.analysis) console.log(`Analysis: ${resolve(result.runRoot, "analysis/motion.json")}`);

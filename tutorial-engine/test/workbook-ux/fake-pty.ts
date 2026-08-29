@@ -113,7 +113,7 @@ export function createProtocolAwareFakePty(fakeOptions: ProtocolAwareFakePtyOpti
   const instances: ProtocolAwareFakePty[] = [];
   return {
     instances,
-    factory: (options: TerminalPtyOptions): TerminalPty => {
+    create: (options: TerminalPtyOptions): TerminalPty => {
       const instance = new ProtocolAwareFakePty(options, fakeOptions);
       instances.push(instance);
       return instance;

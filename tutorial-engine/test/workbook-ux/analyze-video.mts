@@ -49,7 +49,7 @@ function parseArgs(argv: string[]): CliArgs {
 
 function printHelp(): void {
   console.log(`Usage:
-  tsx test/workbook-factory/analyze-video.mts --video recording.webm --out .tmp/analyser --required-motion-step 1,2,3
+  tsx test/workbook-ux/analyze-video.mts --video recording.webm --out .tmp/analyser --required-motion-step 1,2,3
 
 Decodes a finalized Playwright WebM in pinned Chromium, samples real pixels, segments marker-labelled transitions, and writes motion.json plus PNG evidence.`);
 }

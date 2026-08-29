@@ -7,13 +7,13 @@ This directory contains the linear workbook UX test family. It never calls produ
 Input checked-out tutorial-engine version → copied fixture workbook → provider-free Playwright walkthrough → finalized WebM → deterministic decoded-WebM analyzer → optional `pi -p` advisory review → durable report.
 
 1. **Input identity** — `input-metadata.json` records the exact Git SHA, dirty state, package pins, Playwright Chromium version, viewport, and web bundle freshness.
-2. **Recording** — `recordWorkbookFactory()` copies `test/fixtures/journey-workbook/` into the ignored run workspace and starts the real workbook server with deterministic fakes:
+2. **Recording** — `recordWorkbookUxTest()` copies `test/fixtures/journey-workbook/` into the ignored run workspace and starts the real workbook server with deterministic fakes:
    - `QueuedMainTutor` for editor feedback and acceptance;
    - `RecordingPracticeCoach` for terminal feedback;
    - a protocol-aware fake PTY that accepts xterm keystrokes, emits visible output and OSC-633 workbook markers, and never runs shell commands.
 3. **Deterministic analysis** — the analyzer decodes the recorded WebM in Chromium, reads only the test marker embedded in the video, checks required scroll motion, and writes `analysis/motion.json`, selected evidence frames, and `analysis/contact-sheet.png`.
 4. **Optional advisory AI** — `review-ai.ts` invokes `pi` with `execFile`, `-p -nt --no-session --thinking low`, and `@...` attachments for the contact sheet, decoded frames, provider-safe `ai-walkthrough-summary.json`, and `analysis/motion.json`. It asks only for UX/scroll glitch observations and requires `@needs-human` evidence citations. Missing/quota-limited/nonzero/timeout/empty/thrown AI output is reported as unavailable and never changes the exit code.
-5. **Report** — `report.ts` always writes `report.md` and `factory-result.json`, even when recording or deterministic analysis throws. The report renders whatever metadata, screenshot, video, walkthrough, analyzer, and AI artifacts exist.
+5. **Report** — `report.ts` always writes `report.md` and `ux-test-result.json`, even when recording or deterministic analysis throws. The report renders whatever metadata, screenshot, video, walkthrough, analyzer, and AI artifacts exist.
 
 ## Commands
 
@@ -33,14 +33,14 @@ npm run --workspace=tutorial-engine test:workbook-ux
 Useful direct CLI options:
 
 ```bash
-tsx test/workbook-factory/run.mts --no-ai --run-root=test/.tmp/workbook-factory/manual
-tsx test/workbook-factory/run.mts --ai --headed
-tsx test/workbook-factory/run.mts --ai --ai-command=/path/to/pi --ai-model='provider/model' --ai-timeout-ms=180000
+tsx test/workbook-ux/run.mts --no-ai --run-root=test/.tmp/workbook-ux/manual
+tsx test/workbook-ux/run.mts --ai --headed
+tsx test/workbook-ux/run.mts --ai --ai-command=/path/to/pi --ai-model='provider/model' --ai-timeout-ms=180000
 ```
 
 ## Artifact contract
 
-Default run root: `tutorial-engine/test/.tmp/workbook-factory/latest/`.
+Default run root: `tutorial-engine/test/.tmp/workbook-ux/latest/`.
 
 Expected durable artifacts:
 
@@ -52,7 +52,7 @@ Expected durable artifacts:
 - `ai-walkthrough-summary.json`, `ai-review.md`, `ai-review.stderr.txt`, `ai-review.json` when AI was requested or attempted;
 - `recording-error.json` and `recording-error.png` when recording or deterministic validation fails;
 - `report.md` — human report with relative artifact links;
-- `factory-result.json` — machine-readable station status, deterministic verdict, artifacts, and AI status.
+- `ux-test-result.json` — machine-readable station status, deterministic verdict, artifacts, and AI status.
 
 ## Authoritative vs advisory
 

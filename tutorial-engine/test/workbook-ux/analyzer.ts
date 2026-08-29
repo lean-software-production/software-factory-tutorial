@@ -494,7 +494,7 @@ export function markerEnvelopeFindings(
       {
         code: 'marker-absent',
         severity: 'error',
-        message: 'No valid workbook factory marker was decoded from any sampled video frame.',
+        message: 'No valid workbook UX test marker was decoded from any sampled video frame.',
         frameIndexes: allSamples.map((sample) => sample.index),
       },
     ];
@@ -508,7 +508,7 @@ export function markerEnvelopeFindings(
     findings.push({
       code: 'marker-absent',
       severity: 'error',
-      message: `${internalAbsent.length} sampled frame(s) inside the valid marker envelope did not contain the workbook factory marker guard swatch.`,
+      message: `${internalAbsent.length} sampled frame(s) inside the valid marker envelope did not contain the workbook UX test marker guard swatch.`,
       frameIndexes: internalAbsent.map((sample) => sample.index),
       details: { envelope: { firstValidIndex: markerStats.firstValidIndex, lastValidIndex: markerStats.lastValidIndex } },
     });
@@ -517,7 +517,7 @@ export function markerEnvelopeFindings(
     findings.push({
       code: 'marker-ambiguous',
       severity: 'error',
-      message: `${internalAmbiguous.length} sampled frame(s) inside the valid marker envelope had an ambiguous workbook factory marker.`,
+      message: `${internalAmbiguous.length} sampled frame(s) inside the valid marker envelope had an ambiguous workbook UX test marker.`,
       frameIndexes: internalAmbiguous.map((sample) => sample.index),
       details: { envelope: { firstValidIndex: markerStats.firstValidIndex, lastValidIndex: markerStats.lastValidIndex } },
     });

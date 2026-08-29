@@ -2,44 +2,44 @@
 import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, resolve } from 'node:path';
-import { recordWorkbookFactory, type WorkbookFactoryRecorderOptions, type WorkbookFactoryRecorderResult } from './record.mjs';
-import { deterministicContractFailures, writeFactoryReport, type FactoryStationResult, type SerializedError } from './report.js';
+import { recordWorkbookUxTest, type WorkbookUxTestRecorderOptions, type WorkbookUxTestRecorderResult } from './record.mjs';
+import { deterministicContractFailures, writeUxTestReport, type UxTestStationResult, type SerializedError } from './report.js';
 import { runAiReview, type AiReviewResult } from './review-ai.js';
 
-export interface WorkbookFactoryRunOptions extends WorkbookFactoryRecorderOptions {
+export interface WorkbookUxTestRunOptions extends WorkbookUxTestRecorderOptions {
   ai?: boolean;
   aiCommand?: string;
   aiModel?: string;
   aiTimeoutMs?: number;
 }
 
-export interface WorkbookFactoryRunDeps {
-  record?: (options: WorkbookFactoryRecorderOptions) => Promise<WorkbookFactoryRecorderResult>;
+export interface WorkbookUxTestRunDeps {
+  record?: (options: WorkbookUxTestRecorderOptions) => Promise<WorkbookUxTestRecorderResult>;
   ai?: (options: { runRoot: string; command?: string; model?: string; timeoutMs?: number }) => Promise<AiReviewResult>;
-  report?: typeof writeFactoryReport;
+  report?: typeof writeUxTestReport;
 }
 
-export interface WorkbookFactoryRunResult {
+export interface WorkbookUxTestRunResult {
   runRoot: string;
   exitCode: number;
   deterministicPassed: boolean;
-  stations: FactoryStationResult[];
+  stations: UxTestStationResult[];
   reportPath: string;
   resultPath: string;
   ai?: AiReviewResult | { requested: false; status: 'skipped'; reason: string };
 }
 
 const ENGINE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const DEFAULT_RUN_ROOT = resolve(ENGINE_ROOT, 'test/.tmp/workbook-factory/latest');
+const DEFAULT_RUN_ROOT = resolve(ENGINE_ROOT, 'test/.tmp/workbook-ux/latest');
 
-export async function runWorkbookFactory(options: WorkbookFactoryRunOptions = {}, deps: WorkbookFactoryRunDeps = {}): Promise<WorkbookFactoryRunResult> {
+export async function runWorkbookUxTest(options: WorkbookUxTestRunOptions = {}, deps: WorkbookUxTestRunDeps = {}): Promise<WorkbookUxTestRunResult> {
   const runStartedAtMs = Date.now();
   const runStartedAt = new Date(runStartedAtMs).toISOString();
   const runRoot = resolve(options.runRoot ?? DEFAULT_RUN_ROOT);
-  const stations: FactoryStationResult[] = [];
+  const stations: UxTestStationResult[] = [];
   const recordStationStartMs = Date.now();
   const recordStationStartedAt = new Date(recordStationStartMs).toISOString();
-  const record = deps.record ?? recordWorkbookFactory;
+  const record = deps.record ?? recordWorkbookUxTest;
   let deterministicPassed = false;
   let deterministicError: SerializedError | undefined;
 
@@ -56,7 +56,7 @@ export async function runWorkbookFactory(options: WorkbookFactoryRunOptions = {}
     stations.push(station('record-and-deterministic-analysis', 'failed', recordStationStartedAt, recordStationStartMs, deterministicError));
   }
 
-  let ai: WorkbookFactoryRunResult['ai'];
+  let ai: WorkbookUxTestRunResult['ai'];
   if (!options.ai) {
     ai = { requested: false, status: 'skipped', reason: 'AI review disabled by CLI.' };
     stations.push(skippedStation('advisory-ai-review', 'AI review disabled by CLI.'));
@@ -80,7 +80,7 @@ export async function runWorkbookFactory(options: WorkbookFactoryRunOptions = {}
   }
 
   const runFinishedAt = new Date().toISOString();
-  const reportResult = await (deps.report ?? writeFactoryReport)({
+  const reportResult = await (deps.report ?? writeUxTestReport)({
     runRoot,
     startedAt: runStartedAt,
     finishedAt: runFinishedAt,
@@ -102,7 +102,7 @@ export async function runWorkbookFactory(options: WorkbookFactoryRunOptions = {}
   };
 }
 
-function parseCliOptions(argv: readonly string[]): WorkbookFactoryRunOptions {
+function parseCliOptions(argv: readonly string[]): WorkbookUxTestRunOptions {
   let ai = false;
   let headless = true;
   let runRoot: string | undefined;
@@ -133,12 +133,12 @@ function parseCliOptions(argv: readonly string[]): WorkbookFactoryRunOptions {
   return { ai, headless, runRoot, aiCommand, aiModel, aiTimeoutMs, analyze: true };
 }
 
-function station(name: string, status: FactoryStationResult['status'], startedAt: string, startedAtMs: number, error?: SerializedError): FactoryStationResult {
+function station(name: string, status: UxTestStationResult['status'], startedAt: string, startedAtMs: number, error?: SerializedError): UxTestStationResult {
   const finishedAtMs = Date.now();
   return { name, status, startedAt, finishedAt: new Date(finishedAtMs).toISOString(), durationMs: finishedAtMs - startedAtMs, error };
 }
 
-function skippedStation(name: string, reason: string): FactoryStationResult {
+function skippedStation(name: string, reason: string): UxTestStationResult {
   const now = new Date().toISOString();
   return { name, status: 'skipped', startedAt: now, finishedAt: now, durationMs: 0, error: { message: reason } };
 }
@@ -178,11 +178,11 @@ function serializeError(error: unknown): SerializedError {
 }
 
 function printHelp(): void {
-  console.log(`Usage: tsx test/workbook-factory/run.mts [--ai|--no-ai] [--headed] [--run-root=PATH] [--ai-command=pi] [--ai-model=MODEL] [--ai-timeout-ms=MS]\n\nRuns the workbook UX test: checked-out engine input -> provider-free fixture walkthrough/WebM -> deterministic decoded-WebM analysis -> optional advisory pi review -> durable report.\n\nExit is nonzero only when the recording/deterministic station fails. AI unavailability or findings never gate exit.`);
+  console.log(`Usage: tsx test/workbook-ux/run.mts [--ai|--no-ai] [--headed] [--run-root=PATH] [--ai-command=pi] [--ai-model=MODEL] [--ai-timeout-ms=MS]\n\nRuns the workbook UX test: checked-out engine input -> provider-free fixture walkthrough/WebM -> deterministic decoded-WebM analysis -> optional advisory pi review -> durable report.\n\nExit is nonzero only when the recording/deterministic station fails. AI unavailability or findings never gate exit.`);
 }
 
 if (basename(process.argv[1] ?? '') === 'run.mts') {
-  runWorkbookFactory(parseCliOptions(process.argv.slice(2))).then((result) => {
+  runWorkbookUxTest(parseCliOptions(process.argv.slice(2))).then((result) => {
     console.log(`Workbook UX test report: ${result.reportPath}`);
     console.log(`Workbook UX test result: ${result.resultPath}`);
     if (result.ai?.status === 'unavailable') console.log(`AI review unavailable: ${result.ai.reason}`);

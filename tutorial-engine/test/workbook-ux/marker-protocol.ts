@@ -91,14 +91,14 @@ export function markerCellColours(state: MarkerState): readonly Rgb[] {
 
 export function markerHtml(state: MarkerState): string {
   const cells = markerCellColours(state)
-    .map((colour, index) => `<div class="wf-marker-cell" data-marker-cell="${index}" style="background:${rgbCss(colour)}"></div>`)
+    .map((colour, index) => `<div class="wux-marker-cell" data-marker-cell="${index}" style="background:${rgbCss(colour)}"></div>`)
     .join('');
-  return `<div class="wf-marker" data-marker-step="${state.stepId}" data-marker-phase="${state.phase}">${cells}</div>`;
+  return `<div class="wux-marker" data-marker-step="${state.stepId}" data-marker-phase="${state.phase}">${cells}</div>`;
 }
 
 export function markerCss(): string {
   return `
-    .wf-marker {
+    .wux-marker {
       position: fixed;
       top: ${MARKER_PADDING}px;
       right: ${MARKER_PADDING}px;
@@ -111,7 +111,7 @@ export function markerCss(): string {
       pointer-events: none;
       background: transparent;
     }
-    .wf-marker-cell {
+    .wux-marker-cell {
       box-sizing: border-box;
       width: ${MARKER_CELL_SIZE}px;
       height: ${MARKER_CELL_SIZE}px;

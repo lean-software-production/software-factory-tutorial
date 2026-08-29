@@ -1,12 +1,12 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { relative, resolve, sep } from 'node:path';
 import type { AnalyzerReport, Finding } from './analyzer.js';
-import type { WorkbookFactoryWalkthrough, SemanticCheckpoint } from './record.mjs';
+import type { WorkbookUxTestWalkthrough, SemanticCheckpoint } from './record.mjs';
 import type { AiReviewResult } from './review-ai.js';
 
 export type StationStatus = 'passed' | 'failed' | 'skipped' | 'unavailable';
 
-export interface FactoryStationResult {
+export interface UxTestStationResult {
   name: string;
   status: StationStatus;
   startedAt: string;
@@ -20,18 +20,18 @@ export interface SerializedError {
   stack?: string;
 }
 
-export interface FactoryReportOptions {
+export interface UxTestReportOptions {
   runRoot: string;
   startedAt: string;
   finishedAt: string;
-  stations: FactoryStationResult[];
+  stations: UxTestStationResult[];
   deterministicPassed: boolean;
   deterministicError?: SerializedError;
   aiRequested: boolean;
   ai?: AiReviewResult | { requested: false; status: 'skipped'; reason: string };
 }
 
-export interface FactoryResultJson {
+export interface UxTestResultJson {
   schemaVersion: 1;
   generatedAt: string;
   runRoot: string;
@@ -41,20 +41,20 @@ export interface FactoryResultJson {
   aiStatus: string;
   inputIdentity?: unknown;
   artifacts: Record<string, string | undefined>;
-  stations: FactoryStationResult[];
+  stations: UxTestStationResult[];
   deterministic: {
     ok: boolean;
     error?: SerializedError;
     semanticFailures: string[];
     findings: Finding[];
   };
-  ai?: FactoryReportOptions['ai'];
+  ai?: UxTestReportOptions['ai'];
 }
 
 export async function deterministicContractFailures(runRootInput: string): Promise<string[]> {
   const runRoot = resolve(runRootInput);
   const inputMetadataJson = await readJsonDetailed<unknown>(resolve(runRoot, 'input-metadata.json'));
-  const walkthroughJson = await readJsonDetailed<WorkbookFactoryWalkthrough>(resolve(runRoot, 'walkthrough.json'));
+  const walkthroughJson = await readJsonDetailed<WorkbookUxTestWalkthrough>(resolve(runRoot, 'walkthrough.json'));
   const motionJson = await readJsonDetailed<AnalyzerReport>(resolve(runRoot, 'analysis/motion.json'));
   const walkthrough = walkthroughJson.value;
   const motion = motionJson.value;
@@ -68,13 +68,13 @@ export async function deterministicContractFailures(runRootInput: string): Promi
   ];
 }
 
-export async function writeFactoryReport(options: FactoryReportOptions): Promise<{ reportPath: string; resultPath: string; result: FactoryResultJson }> {
+export async function writeUxTestReport(options: UxTestReportOptions): Promise<{ reportPath: string; resultPath: string; result: UxTestResultJson }> {
   const runRoot = resolve(options.runRoot);
   const inputMetadataJson = await readJsonDetailed<unknown>(resolve(runRoot, 'input-metadata.json'));
-  const walkthroughJson = await readJsonDetailed<WorkbookFactoryWalkthrough>(resolve(runRoot, 'walkthrough.json'));
+  const walkthroughJson = await readJsonDetailed<WorkbookUxTestWalkthrough>(resolve(runRoot, 'walkthrough.json'));
   const motionJson = await readJsonDetailed<AnalyzerReport>(resolve(runRoot, 'analysis/motion.json'));
   const recordingErrorPath = resolve(runRoot, 'recording-error.json');
-  const recordingError = await readJson<{ message?: string; stack?: string; failures?: string[]; walkthrough?: WorkbookFactoryWalkthrough }>(recordingErrorPath);
+  const recordingError = await readJson<{ message?: string; stack?: string; failures?: string[]; walkthrough?: WorkbookUxTestWalkthrough }>(recordingErrorPath);
   const recordingErrorStats = await stat(recordingErrorPath).catch(() => undefined);
   const inputMetadata = inputMetadataJson.value;
   const walkthrough = walkthroughJson.value ?? recordingError?.walkthrough;
@@ -97,7 +97,7 @@ export async function writeFactoryReport(options: FactoryReportOptions): Promise
     && semanticFailures.length === 0
     && motion?.ok === true
     && findings.length === 0;
-  const result: FactoryResultJson = {
+  const result: UxTestResultJson = {
     schemaVersion: 1,
     generatedAt: options.finishedAt,
     runRoot,
@@ -140,7 +140,7 @@ export async function writeFactoryReport(options: FactoryReportOptions): Promise
     aiReviewText,
   });
   const reportPath = resolve(runRoot, 'report.md');
-  const resultPath = resolve(runRoot, 'factory-result.json');
+  const resultPath = resolve(runRoot, 'ux-test-result.json');
   await writeFile(reportPath, report);
   await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`);
   return { reportPath, resultPath, result };
@@ -151,12 +151,12 @@ function renderMarkdownReport(args: {
   startedAt: string;
   finishedAt: string;
   inputMetadata?: unknown;
-  walkthrough?: WorkbookFactoryWalkthrough;
+  walkthrough?: WorkbookUxTestWalkthrough;
   motion?: AnalyzerReport;
   videoPath: string;
   videoStats?: { size: number };
   recordingError?: { message?: string; stack?: string; failures?: string[] };
-  result: FactoryResultJson;
+  result: UxTestResultJson;
   aiReviewText: string;
 }): string {
   const lines: string[] = [];
@@ -350,7 +350,7 @@ interface ParsedJson<T> {
 
 function deterministicArtifactFailures(args: {
   inputMetadataJson: ParsedJson<unknown>;
-  walkthroughJson: ParsedJson<WorkbookFactoryWalkthrough>;
+  walkthroughJson: ParsedJson<WorkbookUxTestWalkthrough>;
   videoStats?: { size: number };
   motionJson: ParsedJson<AnalyzerReport>;
   contactSheetStats?: { size: number };

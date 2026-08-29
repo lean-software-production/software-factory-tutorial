@@ -3,7 +3,7 @@ import { constants as fsConstants } from 'node:fs';
 import { access, readdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import type { AnalyzerReport } from './analyzer.js';
-import type { WorkbookFactoryWalkthrough } from './record.mjs';
+import type { WorkbookUxTestWalkthrough } from './record.mjs';
 
 export type AiReviewStatus = 'available' | 'unavailable';
 
@@ -183,7 +183,7 @@ async function collectAiAttachments(runRoot: string, maxFrames: number): Promise
 }
 
 async function writeProviderSafeWalkthroughSummary(runRoot: string): Promise<void> {
-  const walkthrough = await readJson<WorkbookFactoryWalkthrough>(resolve(runRoot, 'walkthrough.json'));
+  const walkthrough = await readJson<WorkbookUxTestWalkthrough>(resolve(runRoot, 'walkthrough.json'));
   const summary = {
     generatedAt: walkthrough?.generatedAt,
     viewport: walkthrough?.viewport,
@@ -220,7 +220,7 @@ async function buildAiPrompt(runRoot: string, attachments: string[]): Promise<st
 
 async function deterministicContext(runRoot: string): Promise<string> {
   const lines: string[] = [];
-  const walkthrough = await readJson<WorkbookFactoryWalkthrough>(resolve(runRoot, 'walkthrough.json'));
+  const walkthrough = await readJson<WorkbookUxTestWalkthrough>(resolve(runRoot, 'walkthrough.json'));
   const motion = await readJson<AnalyzerReport>(resolve(runRoot, 'analysis/motion.json'));
   if (walkthrough) {
     lines.push(`- Semantic failures: ${walkthrough.semanticFailures.length === 0 ? 'none' : walkthrough.semanticFailures.join('; ')}`);
