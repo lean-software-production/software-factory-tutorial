@@ -154,20 +154,37 @@ function deferred<T>() {
   return { promise, resolve: resolvePromise, reject: rejectPromise };
 }
 
+interface TerminalFrameWaiter { predicate(message: any): boolean; resolve(message: any): void; }
+interface TerminalFrameBuffer { frames: any[]; waiters: TerminalFrameWaiter[]; }
+const terminalFramesBySocket = new WeakMap<WebSocket, TerminalFrameBuffer>();
+
 function connect(url: string, origin?: string): Promise<WebSocket> {
   return new Promise((resolvePromise, reject) => {
     const ws = new WebSocket(url.replace(/^http/, "ws") + "/api/workbook/terminal", origin ? { headers: { Origin: origin } } : undefined);
+    const buffer: TerminalFrameBuffer = { frames: [], waiters: [] };
+    terminalFramesBySocket.set(ws, buffer);
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      const matchingWaiters = buffer.waiters.filter((waiter) => waiter.predicate(message));
+      if (matchingWaiters.length > 0) {
+        buffer.waiters = buffer.waiters.filter((waiter) => !matchingWaiters.includes(waiter));
+        for (const waiter of matchingWaiters) waiter.resolve(message);
+      } else {
+        buffer.frames.push(message);
+      }
+    });
     ws.once("open", () => resolvePromise(ws));
     ws.once("error", reject);
   });
 }
 
 function waitFor(ws: WebSocket, predicate: (message: any) => boolean): Promise<any> {
+  const buffer = terminalFramesBySocket.get(ws);
+  const bufferedIndex = buffer?.frames.findIndex(predicate) ?? -1;
+  if (buffer && bufferedIndex >= 0) return Promise.resolve(buffer.frames.splice(bufferedIndex, 1)[0]);
   return new Promise((resolvePromise) => {
-    ws.on("message", (data) => {
-      const message = JSON.parse(data.toString());
-      if (predicate(message)) resolvePromise(message);
-    });
+    if (buffer) buffer.waiters.push({ predicate, resolve: resolvePromise });
+    else ws.on("message", (data) => { const message = JSON.parse(data.toString()); if (predicate(message)) resolvePromise(message); });
   });
 }
 
