@@ -268,7 +268,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         const body = await readJson(request); const text = typeof body.text === "string" ? body.text : undefined;
         if (text === undefined) return sendJson(response, 400, { error: "Editor text must be a string." });
         if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) return sendJson(response, 400, { error: "Editor text is too large." });
-        return sendJson(response, 202, await workflow.submitEditor(typeof body.blockId === "string" ? body.blockId : "", text));
+        const revision = typeof body.revision === "number" ? body.revision : undefined;
+        return sendJson(response, 202, await workflow.submitEditor(typeof body.blockId === "string" ? body.blockId : "", text, revision));
       } catch (error) { return sendJson(response, errorStatus(error, /accepted work|not active/i.test(errorMessage(error)) ? 409 : 400), { error: errorMessage(error) }); }
     }
     if (request.method === "POST" && isRoute(url.pathname, "events")) {

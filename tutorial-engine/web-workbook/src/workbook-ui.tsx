@@ -354,19 +354,34 @@ function editorStatusText(state: BlockProgress | undefined, completed: boolean):
   return "Editing — changes are reviewed automatically after you pause.";
 }
 
+function editorProgressIn(next: State, blockId: string): BlockProgress | undefined { return next.progress.blocks.find((block) => block.id === blockId); }
+
 function EditorPracticeBlockView({ block, state, refresh }: { block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void }) {
   const editorElement = useRef<HTMLDivElement | null>(null);
   const editor = useRef<EditorView | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const activeRef = useRef(false);
   const baseRevision = useRef(state?.revision ?? 0);
+  const latestSubmittedRevision = useRef(state?.revision ?? 0);
   const [localError, setLocalError] = useState<string>();
+  const [retainedFeedback, setRetainedFeedback] = useState<string | undefined>(state?.checkpoint?.feedback);
   const accepted = state?.checkpoint?.status === "accepted";
   const completed = Boolean(state?.completed || state?.editorStatus === "unlocked");
   const canEdit = Boolean(state?.active && !completed && !accepted);
   const initialText = state?.draftText ?? "";
 
-  useEffect(() => { baseRevision.current = state?.revision ?? baseRevision.current; }, [block.id, state?.revision]);
+  useEffect(() => {
+    const revision = state?.revision;
+    if (revision !== undefined) {
+      baseRevision.current = Math.max(baseRevision.current, revision);
+      latestSubmittedRevision.current = Math.max(latestSubmittedRevision.current, revision);
+    }
+  }, [block.id, state?.revision]);
+  useEffect(() => {
+    const feedback = state?.checkpoint?.feedback?.trim();
+    if (feedback) setRetainedFeedback(feedback);
+    if (state?.checkpoint?.status === "accepted" || completed) setRetainedFeedback(undefined);
+  }, [block.id, completed, state?.checkpoint?.feedback, state?.checkpoint?.status]);
   useEffect(() => { activeRef.current = canEdit; }, [canEdit]);
   // The editor is seeded once, when it opens. draftText changes on every server review, so making
   // the creation effect below depend on it would destroy and rebuild the view mid-typing and take
@@ -387,10 +402,18 @@ function EditorPracticeBlockView({ block, state, refresh }: { block: EditorPract
         if (!activeRef.current) return;
         const revision = baseRevision.current + 1;
         baseRevision.current = revision;
+        latestSubmittedRevision.current = revision;
         setLocalError(undefined);
-        postEditorDraft(block.id, revision, text).then(refresh).catch((error) => {
+        postEditorDraft(block.id, revision, text).then((next) => {
+          if (latestSubmittedRevision.current !== revision) return;
+          const returnedRevision = editorProgressIn(next, block.id)?.revision;
+          if (returnedRevision !== undefined && returnedRevision < revision) return;
+          refresh(next);
+        }).catch((error) => {
+          if (latestSubmittedRevision.current !== revision) return;
           console.error(error);
-          setLocalError(error instanceof Error ? error.message : "Editor review failed. Keep editing and try again.");
+          const message = error instanceof Error ? error.message : "Editor review failed.";
+          setLocalError(`${message} Please retry after your connection recovers.`);
         });
       }, 750);
     };
@@ -415,13 +438,21 @@ function EditorPracticeBlockView({ block, state, refresh }: { block: EditorPract
   }, [block.id, canEdit, refresh]);
 
   // One channel, as the terminal has: whatever the learner most needs to read sits welded to the
-  // bottom of the work surface. Feedback outranks the running status, which outranks nothing.
-  const liveFeedback = localError ?? state?.checkpoint?.feedback ?? editorStatusText(state, completed);
+  // bottom of the work surface. Prior actionable feedback stays in place during replacement review;
+  // update and retry states are secondary status, not destructive feedback.
+  const checkpointFeedback = state?.checkpoint?.feedback;
+  const showingRetainedFeedback = Boolean(checkpointFeedback || retainedFeedback && (state?.checkpoint?.status === "reviewing" || localError));
+  const liveFeedback = showingRetainedFeedback ? checkpointFeedback ?? retainedFeedback : undefined;
+  const reviewNotice = localError ?? state?.checkpoint?.reviewNotice ?? (liveFeedback && state?.checkpoint?.status === "reviewing" ? "Updating feedback…" : undefined);
+  const liveStatus = liveFeedback ? reviewNotice : editorStatusText(state, completed);
   return <div className={`work-block editor-practice ${state?.active ? "is-active" : ""}`}>
     <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
-    {canEdit && <div className={`editor-live-surface${liveFeedback ? " has-feedback" : ""}`}>
+    {canEdit && <div className={`editor-live-surface${liveFeedback || liveStatus ? " has-feedback" : ""}`}>
       <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />
-      {liveFeedback && <aside className="live-block-feedback editor-feedback-overlay" aria-live="polite"><Markdown source="generated">{liveFeedback}</Markdown></aside>}
+      {(liveFeedback || liveStatus) && <aside className={`live-block-feedback editor-feedback-overlay${state?.checkpoint?.status === "reviewing" && liveFeedback ? " updating" : ""}`} aria-live="polite">
+        {liveFeedback && <Markdown source="generated">{liveFeedback}</Markdown>}
+        {liveStatus && <p className="editor-review-status">{state?.checkpoint?.status === "reviewing" && liveFeedback && <span className="editor-updating-spinner" aria-hidden="true" />}{liveStatus}</p>}
+      </aside>}
     </div>}
     {completed ? <aside className="success-checkpoint editor-unlocked" aria-live="polite">
       <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Unlocked</p><h3>Accepted revision unlocked the next step.</h3><p>{state?.checkpoint?.successMessage || "The latest accepted editor draft was written to the target file."}</p></div>
@@ -433,7 +464,7 @@ export function BlockView({ lessonId, block, progress, refresh, onTerminalInsert
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
   if (block.type === "terminal-practice") return <TerminalBlock block={block} state={state} onTerminalInsertionChange={onTerminalInsertionChange} />;
-  if (block.type === "editor-practice") return <EditorPracticeBlockView block={block} state={state} refresh={refresh} />;
+  if (block.type === "editor-practice") return <EditorPracticeBlockView key={block.id} block={block} state={state} refresh={refresh} />;
   return null;
 }
 

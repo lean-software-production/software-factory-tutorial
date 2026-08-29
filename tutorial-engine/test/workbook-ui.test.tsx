@@ -848,6 +848,57 @@ describe("workbook lesson UI", () => {
     expect(markup).not.toContain("conversation-entry");
   });
 
+  it("keeps previous editor feedback visible with a subtle update status while a new review is pending", async () => {
+    const feedback = "Name the acceptance marker and explain why it belongs there.";
+    const container = await mount(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "feedback", checkpoint: { status: "feedback", feedback, evidence: { kind: "editor", text: "first draft" } } } as any),
+      refresh: vi.fn()
+    }));
+
+    await act(async () => {
+      mountedRoot!.render(createElement(BlockView, {
+        block: editorBlock,
+        progress: activeEditorProgress({ revision: 2, draftText: "second draft", editorStatus: "reviewing", checkpoint: { status: "reviewing", evidence: { kind: "editor", text: "second draft" } } } as any),
+        refresh: vi.fn()
+      }));
+    });
+
+    expect(container.textContent).toContain(feedback);
+    expect(container.textContent).toContain("Updating feedback…");
+    expect(container.querySelector(".editor-updating-spinner")).not.toBeNull();
+    expect(container.textContent).not.toContain("Reviewing your latest revision…");
+  });
+
+  it("replaces old editor feedback atomically only when latest feedback arrives", async () => {
+    const container = await mount(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "feedback", checkpoint: { status: "feedback", feedback: "Old actionable feedback.", evidence: { kind: "editor", text: "first draft" } } } as any),
+      refresh: vi.fn()
+    }));
+
+    await act(async () => {
+      mountedRoot!.render(createElement(BlockView, {
+        block: editorBlock,
+        progress: activeEditorProgress({ revision: 2, draftText: "second draft", editorStatus: "reviewing", checkpoint: { status: "reviewing", evidence: { kind: "editor", text: "second draft" } } } as any),
+        refresh: vi.fn()
+      }));
+    });
+    expect(container.textContent).toContain("Old actionable feedback.");
+
+    await act(async () => {
+      mountedRoot!.render(createElement(BlockView, {
+        block: editorBlock,
+        progress: activeEditorProgress({ revision: 2, draftText: "second draft", editorStatus: "feedback", checkpoint: { status: "feedback", feedback: "New actionable feedback.", evidence: { kind: "editor", text: "second draft" } } } as any),
+        refresh: vi.fn()
+      }));
+    });
+
+    expect(container.textContent).toContain("New actionable feedback.");
+    expect(container.textContent).not.toContain("Old actionable feedback.");
+    expect(container.textContent).not.toContain("Updating feedback…");
+  });
+
   it("does not render live editor-practice surface or status for inactive and completed blocks", () => {
     const inactiveMarkup = html(createElement(BlockView, {
       block: editorBlock,
@@ -1024,21 +1075,86 @@ describe("workbook lesson UI", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ blockId: "edit-answer", revision: 1, text: "second draft" });
   });
 
-  it("preserves editor focus while refreshed state arrives", async () => {
+  it("ignores stale editor POST responses when an older request resolves after a newer one", async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn();
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    const fetchMock = vi.fn((_input?: RequestInfo | URL, _init?: RequestInit) => fetchMock.mock.calls.length === 1 ? first.promise : second.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: "" } as any), refresh }));
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+
+    editor.textContent = "first draft";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); vi.advanceTimersByTime(750); await Promise.resolve(); });
+    editor.textContent = "second draft";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); vi.advanceTimersByTime(750); await Promise.resolve(); });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toMatchObject({ revision: 1, text: "first draft" });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]![1]!.body))).toMatchObject({ revision: 2, text: "second draft" });
+
+    await act(async () => {
+      second.resolve({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 2, editorStatus: "feedback", checkpoint: { status: "feedback", feedback: "New feedback.", evidence: { kind: "editor", text: "second draft" } } } as any)) } as Response);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      first.resolve({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, editorStatus: "feedback", checkpoint: { status: "feedback", feedback: "Old feedback.", evidence: { kind: "editor", text: "first draft" } } } as any)) } as Response);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    const refreshedEditorBlock = (refresh.mock.calls[0]![0] as State).progress.blocks.find((candidate) => candidate.id === "edit-answer");
+    expect(refreshedEditorBlock?.checkpoint?.feedback).toBe("New feedback.");
+  });
+
+  it("retains previous editor feedback with a retry status when a resubmission transport fails", async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn();
+    const fetchMock = vi.fn(async () => { throw new Error("Network unavailable."); });
+    vi.stubGlobal("fetch", fetchMock);
+    const container = await mount(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "feedback", checkpoint: { status: "feedback", feedback: "Old actionable feedback.", evidence: { kind: "editor", text: "first draft" } } } as any),
+      refresh
+    }));
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+
+    editor.textContent = "second draft";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); vi.advanceTimersByTime(750); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(container.textContent).toContain("Old actionable feedback.");
+    expect(container.textContent).toContain("Network unavailable.");
+    expect(container.textContent).toContain("retry");
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("preserves editor focus, cursor, and local draft while refreshed state arrives", async () => {
     const refresh = vi.fn();
     const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: "" } as any), refresh }));
-    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']");
-    editor!.focus();
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+    editor.textContent = "local unsent draft";
+    editor.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.setStart(editor.firstChild ?? editor, "local ".length);
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
     expect(document.activeElement).toBe(editor);
 
     await act(async () => {
-      mountedRoot!.render(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "waiting" } as any), refresh }));
+      mountedRoot!.render(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 1, draftText: "server draft", editorStatus: "waiting" } as any), refresh }));
     });
 
-    expect(document.activeElement).toBe(container.querySelector("[role='textbox'][contenteditable='true']"));
+    const refreshedEditor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+    expect(refreshedEditor).toBe(editor);
+    expect(document.activeElement).toBe(refreshedEditor);
+    expect(refreshedEditor.textContent).toBe("local unsent draft");
+    expect(window.getSelection()?.anchorOffset).toBe("local ".length);
   });
 
-  it("continues submitting after a refreshed draft recreates the editor", async () => {
+  it("continues submitting after a refreshed draft without recreating the editor", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "waiting" } as any)) }));
     vi.stubGlobal("fetch", fetchMock);

@@ -80,6 +80,8 @@ function publicCheckpoint(attempt: Attempt | undefined, projected: AcceptedCheck
   if (attempt && attempt.status !== "superseded") {
     const evidence = publicAttemptEvidence(attempt);
     if (attempt.status === "accepted") return projected ? { status: "accepted", successMessage: attempt.successMessage ?? projected.summary, evidence } : { status: "reviewing", evidence };
+    if (attempt.evidence.kind === "editor" && attempt.status === "reviewing" && attempt.retainedFeedback) return { status: "reviewing", feedback: attempt.retainedFeedback, reviewNotice: "Updating feedback…", evidence };
+    if (attempt.evidence.kind === "editor" && attempt.status === "feedback" && attempt.retainedFeedback && attempt.feedback === REVIEW_FAILURE_FEEDBACK) return { status: "feedback", feedback: attempt.retainedFeedback, reviewNotice: REVIEW_FAILURE_FEEDBACK, evidence };
     return { status: attempt.status, feedback: attempt.status === "feedback" ? attempt.feedback : undefined, evidence };
   }
   return projected ? { status: "accepted", successMessage: projected.summary, evidence: { kind: projected.kind } } : undefined;
@@ -413,7 +415,7 @@ export interface WorkbookWorkflow {
   completeBlock(blockId: string): Promise<CompleteBlockResult>;
   reloadContent(): Promise<{ outcome: "reloaded"; generation: number } | { outcome: "error"; message: string } | { outcome: "closed" }>;
   sendMessage(input: { blockId: string; text: string; blockInView?: string }): Promise<Awaited<ReturnType<typeof publicState>>>;
-  submitEditor(blockId: string, text: string): Promise<Awaited<ReturnType<typeof publicState>>>;
+  submitEditor(blockId: string, text: string, revision?: number): Promise<Awaited<ReturnType<typeof publicState>>>;
   submitEvent(input: { blockId: string; action: string; response?: string }): Promise<Awaited<ReturnType<typeof publicState>>>;
   retry(failureId: string): Promise<Awaited<ReturnType<typeof publicState>>>;
 }
@@ -685,7 +687,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       const failure = transact(async () => {
         if (!generationIsCurrent(generation)) return;
         log.info(`Workbook tutor review failed for ${attempt.lessonId}/${attempt.blockId}: ${error instanceof Error ? error.message : String(error)}`);
-        const feedback = await attempts.markFeedback(attempt.id, REVIEW_FAILURE_FEEDBACK);
+        const feedback = await attempts.markReviewUnavailable(attempt.id, REVIEW_FAILURE_FEEDBACK);
         if (feedback) {
           try { await appendFailure({ lessonId: feedback.lessonId, blockId: feedback.blockId, requestId: feedback.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK }); }
           finally { notifyStateChanged(attemptStateEvent(feedback)); }
@@ -710,7 +712,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       try { message = requireTutorText(decision.message, "review"); }
       catch {
         log.info(`Workbook tutor review returned empty text for ${attempt.lessonId}/${attempt.blockId}.`);
-        const updated = await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
+        const updated = await attempts.markReviewUnavailable(current.id, REVIEW_FAILURE_FEEDBACK);
         try { await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK }); }
         finally { if (updated) notifyStateChanged(attemptStateEvent(updated)); }
         return;
@@ -722,14 +724,14 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
             const workspaceRoot = workspaceRootForLesson(active.chapter.lesson);
             if (!workspaceRoot) throw new Error(`Lesson '${active.lessonId}' has no live workspace.`);
             if (!await promoteCurrentEditorAttempt({ workspace: workspaceRoot, attempts, lessonId: active.lessonId, block: { ...active.block, id: active.id }, attemptId: current.id })) {
-              const updated = await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
+              const updated = await attempts.markReviewUnavailable(current.id, REVIEW_FAILURE_FEEDBACK);
               try { await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK }); }
               finally { if (updated) notifyStateChanged(attemptStateEvent(updated)); }
               return;
             }
           } catch (error) {
             log.info(`Accepted editor attempt could not be promoted: ${error instanceof Error ? error.message : String(error)}`);
-            const updated = await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
+            const updated = await attempts.markReviewUnavailable(current.id, REVIEW_FAILURE_FEEDBACK);
             try { await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK }); }
             finally { if (updated) notifyStateChanged(attemptStateEvent(updated)); }
             return;
@@ -754,14 +756,14 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     trackFinalizer(finalizer);
   };
 
-  const createAttempt = async (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }): Promise<Attempt> => {
+  const createAttempt = async (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string; version?: number }): Promise<Attempt> => {
     if (closed) throw new Error("Workbook server is closed.");
     // This runs inside timeline.run(). Never trust guidance captured by a terminal/browser caller:
     // a reload can change the declared block while that caller is queued. The active declaration is
     // the only authority for the review prompt.
     const active = activeDeclaredBlock();
     if (!active || active.lessonId !== input.lessonId || active.id !== input.blockId || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(input.evidence, active.block)) throw new Error("This block is not active yet.");
-    const attempt = await attempts.create({ lessonId: input.lessonId, blockId: input.blockId, evidence: input.evidence });
+    const attempt = await attempts.create({ lessonId: input.lessonId, blockId: input.blockId, evidence: input.evidence, version: input.version });
     const reviewing = await attempts.markReviewing(attempt.id) ?? attempt;
     void finishReview(reviewing, active.block.tutor);
     return reviewing;
@@ -1186,14 +1188,20 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   });
 
 
-  const submitEditor = async (blockId: string, text: string) => {
+  const submitEditor = async (blockId: string, text: string, revision?: number) => {
     const active = activeDeclaredBlock();
     if (!active || active.block.type !== "editor-practice" || (active.id !== blockId && active.declaredId !== blockId)) throw new WorkbookWorkflowCommandError(409, "This editor block is not active yet.");
     const workspaceRoot = workspaceRootForLesson(active.chapter.lesson);
     if (!workspaceRoot) throw new WorkbookWorkflowCommandError(400, `Lesson '${active.lessonId}' has no live workspace.`);
     try { await resolveEditorTarget(workspaceRoot, active.block.path); }
     catch (error) { throw new WorkbookWorkflowCommandError(400, error instanceof Error ? error.message : "Unsafe editor target path."); }
-    await submitAttempt({ lessonId: active.lessonId, blockId: active.id, evidence: { kind: "editor", text }, privateGuidance: active.block.tutor });
+    const editorGuidance = active.block.tutor;
+    await transact(async () => {
+      const current = await attempts.current(active.lessonId, active.id).catch(() => undefined);
+      if (revision !== undefined && (!Number.isSafeInteger(revision) || revision <= 0)) throw new WorkbookWorkflowCommandError(400, "Editor revision must be a positive integer.");
+      if (revision !== undefined && current && revision <= current.version) return;
+      await createAttempt({ lessonId: active.lessonId, blockId: active.id, evidence: { kind: "editor", text }, privateGuidance: editorGuidance, version: revision });
+    });
     return await currentPublicState();
   };
 

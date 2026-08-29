@@ -676,6 +676,54 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("ignores a stale editor revision submitted after a newer one so only the latest can unlock", async () => {
+    const { dir, session } = await sessionFixture();
+    const latestDecision = deferred<TutorDecision>();
+    const tutor = new FakeMainTutor(latestDecision.promise, { outcome: "accepted", message: "Old stale review accepted." });
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: tutor, practiceCoach: new FakePracticeCoach() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", revision: 2, text: "newest draft" })).status).toBe(202);
+      await waitForWorkbookState(server.url, () => tutor.reviews.length === 1, "latest editor review to start");
+
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", revision: 1, text: "stale old draft" })).status).toBe(202);
+      await waitMs(20);
+      expect(tutor.reviews).toHaveLength(1);
+      expect(tutor.reviews[0]!.attempt.version).toBe(2);
+      expect(tutor.reviews[0]!.attempt.evidence).toMatchObject({ kind: "editor", text: "newest draft" });
+
+      latestDecision.resolve({ outcome: "accepted", message: "Latest review accepted." });
+      const accepted = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "accepted", "latest editor acceptance");
+      expect(block(accepted, "edit-answer")?.revision).toBe(2);
+      expect(block(accepted, "edit-answer")?.checkpoint?.successMessage).toBe("Latest review accepted.");
+      await expect(readFile(resolve(session.workspaceRoots["refactor-line"]!, "factory/answer.md"), "utf8")).resolves.toBe("newest draft");
+    } finally { await server.close(); }
+  });
+
+  it("retains prior editor feedback while a newer review is pending and when that provider fails", async () => {
+    const { dir, session } = await sessionFixture();
+    const providerFailure = deferred<TutorDecision>();
+    const tutor = new FakeMainTutor({ outcome: "feedback", message: "Mention the factory acceptance marker." }, providerFailure.promise);
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: tutor, practiceCoach: new FakePracticeCoach() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", revision: 1, text: "first draft" })).status).toBe(202);
+      const firstFeedback = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "feedback", "first editor feedback");
+      expect(block(firstFeedback, "edit-answer")?.checkpoint?.feedback).toBe("Mention the factory acceptance marker.");
+
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", revision: 2, text: "second draft" })).status).toBe(202);
+      const reviewing = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "reviewing", "second editor reviewing");
+      expect(block(reviewing, "edit-answer")?.checkpoint?.feedback).toBe("Mention the factory acceptance marker.");
+      expect(block(reviewing, "edit-answer")?.checkpoint?.reviewNotice).toMatch(/updating feedback/i);
+
+      providerFailure.reject(new Error("provider down"));
+      const failed = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.reviewNotice?.match(/temporarily unavailable/i), "failed editor review retaining feedback");
+      expect(block(failed, "edit-answer")?.checkpoint?.feedback).toBe("Mention the factory acceptance marker.");
+      expect(block(failed, "edit-answer")?.checkpoint?.status).toBe("feedback");
+      expect(block(failed, "edit-answer")?.checkpoint?.reviewNotice).toMatch(/try another attempt/i);
+    } finally { await server.close(); }
+  });
+
   it("keeps scoped lesson workspace private while editor attempts resolve beneath it", async () => {
     const dir = await fixture({ editorPath: "answer.md", firstLessonWorkspace: "scoped-lesson" });
     const session = await (await SessionWorkspaceManager.create(dir)).createSession({ id: "scoped-runtime" });

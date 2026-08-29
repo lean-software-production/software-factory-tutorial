@@ -20,6 +20,8 @@ export interface Attempt {
   evidence: AttemptEvidence;
   status: AttemptStatus;
   feedback?: string;
+  /** Last actionable feedback kept visible while a replacement review is pending or retryable. */
+  retainedFeedback?: string;
   /** Terminal-only coaching state; excluded from Main Tutor context and timeline. */
   privateQuickFeedback?: boolean;
   successMessage?: string;
@@ -27,7 +29,7 @@ export interface Attempt {
 
 export type SubmitAttempt = (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }) => Promise<void>;
 
-type AttemptInput = Omit<Attempt, "id" | "version" | "status">;
+type AttemptInput = Omit<Attempt, "id" | "version" | "status"> & { version?: number };
 type AttemptPointer = { id: string; lessonId: string; blockId: string; version: number };
 
 const MAX_TEXT_BYTES = 64_000;
@@ -96,8 +98,12 @@ export class AttemptStore {
     assertEvidence(input.evidence);
     const previous = await this.current(input.lessonId, input.blockId);
     if (previous?.status === "accepted") throw new Error("Accepted work cannot be replaced before continuation.");
-    if (previous && previous.status !== "superseded") await this.#write({ ...previous, status: "superseded", feedback: undefined, successMessage: undefined });
-    const attempt: Attempt = { id: randomUUID(), lessonId: input.lessonId, blockId: input.blockId, version: (previous?.version ?? 0) + 1, evidence: input.evidence, status: "working" };
+    const previousVersion = previous?.version ?? 0;
+    const requestedVersion = input.version;
+    if (requestedVersion !== undefined && (!Number.isSafeInteger(requestedVersion) || requestedVersion <= previousVersion)) throw new Error("Attempt revision is stale.");
+    const retainedFeedback = previous?.evidence.kind === "editor" && input.evidence.kind === "editor" ? previous.status === "feedback" ? previous.feedback : previous.retainedFeedback : undefined;
+    if (previous && previous.status !== "superseded") await this.#write({ ...previous, status: "superseded", feedback: undefined, retainedFeedback: undefined, successMessage: undefined });
+    const attempt: Attempt = { id: randomUUID(), lessonId: input.lessonId, blockId: input.blockId, version: requestedVersion ?? previousVersion + 1, evidence: input.evidence, status: "working", ...(retainedFeedback ? { retainedFeedback } : {}) };
     await this.#write(attempt);
     await writeJson(this.#currentPath(attempt.lessonId, attempt.blockId), this.#pointer(attempt));
     await writeJson(this.#idPath(attempt.id), this.#pointer(attempt));
@@ -155,17 +161,22 @@ export class AttemptStore {
 
   async markFeedback(id: string, message: string): Promise<Attempt | undefined> {
     const feedback = message.trim().slice(0, 1_000) || "The tutor is ready to check your next attempt.";
+    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback, retainedFeedback: undefined, privateQuickFeedback: undefined }));
+  }
+
+  async markReviewUnavailable(id: string, message: string): Promise<Attempt | undefined> {
+    const feedback = message.trim().slice(0, 1_000) || "Review is temporarily unavailable. Please try another attempt in a moment.";
     return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback, privateQuickFeedback: undefined }));
   }
 
   async markQuickFeedback(id: string, message: string): Promise<Attempt | undefined> {
     const feedback = message.trim().slice(0, 1_000) || "Check the terminal output and try again.";
-    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback, privateQuickFeedback: true }));
+    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback, retainedFeedback: undefined, privateQuickFeedback: true }));
   }
 
   async acceptCurrent(id: string, successMessage: string): Promise<Attempt | undefined> {
     const message = successMessage.trim().slice(0, 1_000) || "Nice work — this attempt is accepted.";
-    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "accepted", feedback: undefined, privateQuickFeedback: undefined, successMessage: message }));
+    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "accepted", feedback: undefined, retainedFeedback: undefined, privateQuickFeedback: undefined, successMessage: message }));
   }
 
   async resetPresentationState(): Promise<void> {
