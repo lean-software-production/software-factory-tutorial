@@ -19,7 +19,7 @@ done
 temporary_directory="$(mktemp -d)"
 container=""
 cleanup() {
-  if [[ -n "$container" ]]; then docker rm "$container" >/dev/null; fi
+  if [[ -n "$container" ]]; then docker rm "$container" >/dev/null 2>&1 || true; fi
   rm -rf "$temporary_directory"
 }
 trap cleanup EXIT
