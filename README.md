@@ -26,6 +26,7 @@ npm run tutorial:workbook -- --session <id>
 npm run --workspace=tutorial-engine check:workbook
 npm run check
 npm run eval:engine -- --help       # live synthetic engine eval CLI, forwarded to tutorial-engine
+npm run eval:release                # bounded six-scenario engine eval release profile
 npm run eval -- --help              # temporary compatibility alias for eval:engine
 ```
 

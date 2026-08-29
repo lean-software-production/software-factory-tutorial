@@ -22,6 +22,7 @@ describe("evaluator package scripts", () => {
     expect(packageJson.scripts["check:eval"]).toBeUndefined();
     expect(packageJson.scripts["test:eval"]).toBeUndefined();
     expect(packageJson.scripts["eval:engine"]).toBe("npm run --workspace=tutorial-engine eval --");
+    expect(packageJson.scripts["eval:release"]).toBe("npm run --workspace=tutorial-engine eval:release --");
     expect(packageJson.scripts.eval).toBe("npm run eval:engine --");
 
     expect(enginePackageJson.scripts["check:eval"]).toBe("tsc -p evals/tsconfig.json");
@@ -33,6 +34,7 @@ describe("evaluator package scripts", () => {
     expect(testEval).toContain("evals/test/*.test.ts");
     expect(testEval).not.toContain("evals/run.ts");
     expect(enginePackageJson.scripts.eval).toBe("npm run build && tsx evals/run.ts");
+    expect(enginePackageJson.scripts["eval:release"]).toBe("npm run eval -- --release");
 
     expect(tsconfig.include).toEqual(["run.ts", "v2/**/*.ts", "test/**/*.test.ts"]);
     expect(tsconfig.exclude).toEqual(expect.arrayContaining(["harness", "scenarios", "reports"]));

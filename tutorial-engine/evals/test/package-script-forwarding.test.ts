@@ -28,7 +28,7 @@ async function runNpm(args: string[], cwd: string, env: NodeJS.ProcessEnv = {}):
   await execFileAsync("npm", args, { cwd, env: { ...process.env, ...env } });
 }
 
-async function npmForwardedArgs(scriptName: "eval:engine" | "eval", args: string[]): Promise<string[]> {
+async function npmForwardedArgs(scriptName: "eval:engine" | "eval" | "eval:release", args: string[]): Promise<string[]> {
   const rootPackage = await readJson<PackageJson>(resolve(repoRoot, "package.json"));
   const enginePackage = await readJson<PackageJson>(resolve(engineRoot, "package.json"));
   const sandbox = await mkdtemp(resolve(tmpdir(), "eval-forwarding-"));
@@ -42,6 +42,7 @@ async function npmForwardedArgs(scriptName: "eval:engine" | "eval", args: string
       workspaces: ["tutorial-engine"],
       scripts: {
         "eval:engine": rootPackage.scripts["eval:engine"],
+        "eval:release": rootPackage.scripts["eval:release"],
         eval: rootPackage.scripts.eval
       }
     }, null, 2));
@@ -51,7 +52,8 @@ async function npmForwardedArgs(scriptName: "eval:engine" | "eval", args: string
       type: "module",
       scripts: {
         build: "node -e \"process.exit(0)\"",
-        eval: enginePackage.scripts.eval
+        eval: enginePackage.scripts.eval,
+        "eval:release": enginePackage.scripts["eval:release"]
       }
     }, null, 2));
     await writeFile(resolve(sandbox, "node_modules/.bin/tsx"), [
@@ -88,5 +90,10 @@ describe("evaluator package ownership", () => {
 
     await expect(npmForwardedArgs("eval:engine", args)).resolves.toEqual(["evals/run.ts", ...args]);
     await expect(npmForwardedArgs("eval", args)).resolves.toEqual(["evals/run.ts", ...args]);
-  });
+  }, 15_000);
+
+  it("forwards the root release shortcut into the bounded workspace release scope", async () => {
+    await expect(npmForwardedArgs("eval:release", [])).resolves.toEqual(["evals/run.ts", "--release"]);
+    await expect(npmForwardedArgs("eval:release", ["--repeat", "2"])).resolves.toEqual(["evals/run.ts", "--release", "--repeat", "2"]);
+  }, 15_000);
 });

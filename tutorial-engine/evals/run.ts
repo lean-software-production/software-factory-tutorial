@@ -89,31 +89,106 @@ export interface V2EvalRunOptions {
   dependencies?: V2EvalRunnerDependencies;
 }
 
-function usage(): void {
-  console.log(`Live synthetic tutorial-engine mechanics evals (real tutor and judge model calls; not part of npm test)
+export function v2EvalUsageText(): string {
+  return `Live synthetic tutorial-engine mechanics evals (real tutor and judge model calls; not part of npm test)
 
 Usage from tutorial-engine/:
   npm run eval -- --scenario v2-exact-command-success
   npm run eval -- --all --yes
   npm run eval -- --scenario v2-exact-command-success --repeat 3
+  npm run eval -- --release
+  npm run eval:release
 
 Usage from the repository root:
   npm run eval:engine -- --scenario v2-exact-command-success
+  npm run eval:release
   npm run eval -- --scenario v2-exact-command-success  # temporary compatibility alias
 
-A scope is required. EVAL_JUDGE_MODEL selects the judge model. TUTOR_MODEL optionally selects the tutor model used by the workbook tutor. Reports are written under tutorial-engine/evals/reports/.`);
+A scope is required. --release runs the bounded six-scenario release profile once per scenario. EVAL_JUDGE_MODEL selects the judge model. TUTOR_MODEL optionally selects the tutor model used by the workbook tutor. Reports are written under tutorial-engine/evals/reports/.`;
+}
+
+function usage(): void {
+  console.log(v2EvalUsageText());
+}
+
+export type V2EvalScope = "scenario" | "all" | "release";
+
+export interface V2EvalCliPlan {
+  scope: V2EvalScope;
+  scenarios: V2Scenario[];
+  repeat: number;
+  requiresAllConfirmation: boolean;
+}
+
+export const v2ReleaseScenarioIds = [
+  "v2-exact-command-success",
+  "v2-editor-feedback-locked",
+  "v2-editor-unlocked",
+  "v2-clue-only-task",
+  "v2-reflection-follow-up",
+  "v2-transition-completion"
+] as const;
+
+function v2ScenarioById(id: string): V2Scenario {
+  const scenario = v2Scenarios.find((item) => item.id === id);
+  if (!scenario) throw new Error(`Unknown v2 scenario '${id}'.`);
+  return scenario;
+}
+
+function optionPositions(args: string[], option: string): number[] {
+  return args.flatMap((arg, index) => arg === option ? [index] : []);
+}
+
+function requiredOptionValues(args: string[], positions: number[], missingMessage: string): string[] {
+  return positions.map((position) => {
+    const value = args[position + 1];
+    if (value === undefined || value.startsWith("--")) throw new Error(missingMessage);
+    return value;
+  });
+}
+
+export function parseV2EvalArgs(args: string[]): V2EvalCliPlan | undefined {
+  const scenarioPositions = optionPositions(args, "--scenario");
+  const repeatPositions = optionPositions(args, "--repeat");
+  const hasAll = args.includes("--all");
+  const hasRelease = args.includes("--release");
+
+  const selectedScenarioIds = requiredOptionValues(args, scenarioPositions, "--scenario requires a scenario id.");
+  const repeatValues = requiredOptionValues(args, repeatPositions, "--repeat requires a value.");
+
+  const scopeCount = (hasAll ? 1 : 0) + (hasRelease ? 1 : 0) + (scenarioPositions.length > 0 ? 1 : 0);
+  if (scopeCount > 1) throw new Error("Choose exactly one eval scope: --release, --all, or --scenario <id>.");
+  if (scopeCount === 0) return undefined;
+
+  if (hasRelease && repeatPositions.length > 0) throw new Error("--release always runs each scenario once; do not combine it with --repeat.");
+  if (scenarioPositions.length > 1) throw new Error("Specify --scenario at most once.");
+  if (repeatPositions.length > 1) throw new Error("Specify --repeat at most once.");
+
+  let repeat = 1;
+  if (repeatPositions.length === 1) {
+    repeat = Number(repeatValues[0]);
+    if (!Number.isInteger(repeat) || repeat < 1 || repeat > 3) throw new Error("--repeat must be 1, 2, or 3.");
+  }
+
+  if (hasRelease) {
+    return { scope: "release", scenarios: v2ReleaseScenarioIds.map(v2ScenarioById), repeat: 1, requiresAllConfirmation: false };
+  }
+  if (hasAll) {
+    return { scope: "all", scenarios: v2Scenarios, repeat, requiresAllConfirmation: !args.includes("--yes") };
+  }
+  return { scope: "scenario", scenarios: [v2ScenarioById(selectedScenarioIds[0]!)], repeat, requiresAllConfirmation: false };
 }
 
 export function selectV2Scenarios(args: string[]): V2Scenario[] {
-  const scenarioIndex = args.indexOf("--scenario");
-  if (args.includes("--all")) return v2Scenarios;
-  if (scenarioIndex >= 0 && args[scenarioIndex + 1]) {
-    const id = args[scenarioIndex + 1]!;
-    const scenario = v2Scenarios.find((item) => item.id === id);
-    if (!scenario) throw new Error(`Unknown v2 scenario '${id}'.`);
-    return [scenario];
-  }
-  return [];
+  return parseV2EvalArgs(args)?.scenarios ?? [];
+}
+
+export function prepareV2EvalCliRun(args: string[], env: NodeJS.ProcessEnv = process.env): V2EvalCliPlan | undefined {
+  const plan = parseV2EvalArgs(args);
+  if (!plan) return undefined;
+  if (plan.requiresAllConfirmation) throw new Error(`--all can spend model tokens across ${v2Scenarios.length} live scenarios. Re-run with --yes to confirm.`);
+  if (!env.EVAL_JUDGE_MODEL) throw new Error("Set EVAL_JUDGE_MODEL before running paid live evals.");
+  return plan;
 }
 
 function modelIdentities(): { tutor: string; judge: string } {
@@ -457,16 +532,13 @@ export async function runV2EvalOnce(scenario: V2Scenario, repetition: number, op
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.includes("--help")) { usage(); return; }
-  const chosen = selectV2Scenarios(args);
-  if (!chosen.length) { usage(); process.exitCode = 1; return; }
-  const repeatIndex = args.indexOf("--repeat");
-  const repeat = repeatIndex >= 0 ? Number(args[repeatIndex + 1]) : 1;
-  if (!Number.isInteger(repeat) || repeat < 1 || repeat > 3) throw new Error("--repeat must be 1, 2, or 3.");
-  if (!process.env.EVAL_JUDGE_MODEL) throw new Error("Set EVAL_JUDGE_MODEL before running paid live evals.");
-  if (args.includes("--all") && !args.includes("--yes")) throw new Error(`--all can spend model tokens across ${v2Scenarios.length} live scenarios. Re-run with --yes to confirm.`);
+  const plan = prepareV2EvalCliRun(args);
+  if (!plan) { usage(); process.exitCode = 1; return; }
+  const chosen = plan.scenarios;
+  const repeat = plan.repeat;
 
   await mkdir(reports, { recursive: true });
-  console.log(`Selected: ${chosen.map((item) => item.id).join(", ")}\nTutor: ${process.env.TUTOR_MODEL ?? "tutorial default"}\nJudge: ${process.env.EVAL_JUDGE_MODEL}`);
+  console.log(`Selected: ${chosen.map((item) => item.id).join(", ")}\nScope: ${plan.scope}\nRuns per scenario: ${repeat}\nTutor: ${process.env.TUTOR_MODEL ?? "tutorial default"}\nJudge: ${process.env.EVAL_JUDGE_MODEL}`);
   const results: Array<{ scenario: string; runs: V2EvalRunResult[] }> = [];
   for (const scenario of chosen) {
     const runs = [];

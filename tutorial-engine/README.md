@@ -132,7 +132,8 @@ cannot omit the browser smoke. CI provisions Chromium with its Linux dependencie
 intentionally separate from this mandatory gate.
 
 The synthetic tutorial-engine mechanics eval lives in [`evals/`](evals/). Its live command is
-`npm run eval -- --scenario <v2-id>` from this workspace. From the repository root,
-`npm run eval:engine -- --scenario <v2-id>` forwards here, and root `npm run eval -- ...` remains only
-as a temporary compatibility alias. These evals are distinct from any future authored-workbook eval
-suite for the learner curriculum.
+`npm run eval -- --scenario <v2-id>` from this workspace; `npm run eval:release` runs the bounded
+six-scenario release profile once per scenario. From the repository root,
+`npm run eval:engine -- --scenario <v2-id>` forwards here, `npm run eval:release` delegates through
+`--workspace=tutorial-engine`, and root `npm run eval -- ...` remains only as a temporary compatibility
+alias. These evals are distinct from any future authored-workbook eval suite for the learner curriculum.

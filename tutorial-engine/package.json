@@ -22,6 +22,7 @@
     "check:eval": "tsc -p evals/tsconfig.json",
     "test:eval": "vitest run --root . evals/test/*.test.ts",
     "eval": "npm run build && tsx evals/run.ts",
+    "eval:release": "npm run eval -- --release",
     "factory:workbook": "tsx test/workbook-factory/run.mts --ai",
     "factory:workbook:record": "tsx test/workbook-factory/record.mts --record-only",
     "factory:workbook:deterministic": "tsx test/workbook-factory/run.mts --no-ai",

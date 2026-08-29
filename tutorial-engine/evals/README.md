@@ -17,7 +17,7 @@ Before running a live eval:
 
 ## Cost warning
 
-`npm run --workspace=tutorial-engine eval` is the live workspace command. It spends tutor-model and judge-model tokens. A single selected scenario starts a fresh workbook server, drives one learner session, runs deterministic gates, and then calls the judge once if the gates pass. `--repeat 3` can make three tutor sessions and three judge calls. `--all --yes` runs every v2 scenario and can spend several times more.
+`npm run --workspace=tutorial-engine eval` is the live workspace command. It spends tutor-model and judge-model tokens. A single selected scenario starts a fresh workbook server, drives one learner session, runs deterministic gates, and then calls the judge once if the gates pass. `--repeat 3` can make three tutor sessions and three judge calls. `--all --yes` runs every v2 scenario and can spend several times more. `--release` is the bounded release profile: it runs the six current engine scenarios exactly once each and rejects `--all`, `--scenario`, and `--repeat` combinations.
 
 Do not put `npm run --workspace=tutorial-engine eval` in deterministic checks. Root `npm run check` remains model-free: it typechecks and unit-tests the evaluator through the tutorial-engine workspace but does not call the tutor or judge.
 
@@ -34,9 +34,11 @@ export EVAL_JUDGE_MODEL='provider/model-name'
 npm run --workspace=tutorial-engine eval -- --scenario v2-exact-command-success
 npm run --workspace=tutorial-engine eval -- --scenario v2-exact-command-success --repeat 3
 npm run --workspace=tutorial-engine eval -- --all --yes
+npm run --workspace=tutorial-engine eval -- --release
+npm run --workspace=tutorial-engine eval:release
 ```
 
-From the repository root, `npm run eval:engine -- ...` forwards to the same workspace command. `npm run eval -- ...` is a temporary compatibility alias for that forwarding command.
+From the repository root, `npm run eval:engine -- ...` forwards to the same workspace command. `npm run eval:release` delegates to the tutorial-engine release profile with `--workspace=tutorial-engine`. `npm run eval -- ...` is a temporary compatibility alias for that forwarding command.
 
 The v2 live evaluator does not support the legacy `--lesson` or `--calibrate` scopes.
 
@@ -51,7 +53,7 @@ Use `--scenario <id>` to run exactly one scenario. Current scenario IDs are:
 - `v2-reflection-follow-up`: submits a reflection answer and a follow-up answer.
 - `v2-transition-completion`: completes terminal practice, reflection, and the lesson transition.
 
-Use `--all --yes` only when you intend to run every scenario. Use `--repeat 2` or `--repeat 3` to re-run the selected scope in fresh workspaces; repeat must be between 1 and 3.
+Use `--all --yes` only when you intend to run every scenario. Use `--repeat 2` or `--repeat 3` to re-run exploratory `--scenario` or `--all` scopes in fresh workspaces; repeat must be between 1 and 3. Use `--release` for the bounded release gate; it selects the six listed scenarios once each, never repeats them, and cannot be combined with `--all`, `--scenario`, or `--repeat`.
 
 ## What it exercises
 
