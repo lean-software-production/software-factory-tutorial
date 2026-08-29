@@ -8,23 +8,51 @@
  */
 import { readdir, rename } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import { devcontainerState } from "../tutorial-engine/scripts/test-visual.mjs";
 
-const visualRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../tutorial-engine/test/visual");
+export const APPROVAL_ENVIRONMENT_MESSAGE =
+  "Refusing to approve visual screenshots outside the repository devcontainer. Open a devcontainer terminal, then run `npm run approve:visual`.";
 
-let entries;
-try { entries = await readdir(visualRoot); }
-catch { console.log("Nothing to approve: no test/visual directory yet."); process.exit(0); }
-
-const received = entries.filter((entry) => entry.endsWith(".received.png"));
-if (received.length === 0) {
-  console.log("Nothing to approve: no received screenshots are waiting.");
-  process.exit(0);
+export function visualApprovalRoot(scriptDirectory = dirname(fileURLToPath(import.meta.url))) {
+  return resolve(scriptDirectory, "../tutorial-engine/test/visual");
 }
 
-for (const file of received) {
-  const approved = file.replace(/\.received\.png$/, ".approved.png");
-  await rename(resolve(visualRoot, file), resolve(visualRoot, approved));
-  console.log(`Approved ${approved}`);
+export function assertCanonicalApprovalEnvironment(state = devcontainerState()) {
+  if (!state.canonical) throw new Error(APPROVAL_ENVIRONMENT_MESSAGE);
 }
-console.log(`\n${received.length} screenshot(s) approved. Commit them with the change that caused them.`);
+
+export async function approveVisual({ visualRoot = visualApprovalRoot(), state = devcontainerState(), log = console.log } = {}) {
+  assertCanonicalApprovalEnvironment(state);
+
+  let entries;
+  try {
+    entries = await readdir(visualRoot);
+  } catch {
+    log("Nothing to approve: no test/visual directory yet.");
+    return 0;
+  }
+
+  const received = entries.filter((entry) => entry.endsWith(".received.png"));
+  if (received.length === 0) {
+    log("Nothing to approve: no received screenshots are waiting.");
+    return 0;
+  }
+
+  for (const file of received) {
+    const approved = file.replace(/\.received\.png$/, ".approved.png");
+    await rename(resolve(visualRoot, file), resolve(visualRoot, approved));
+    log(`Approved ${approved}`);
+  }
+  log(`\n${received.length} screenshot(s) approved. Commit them with the change that caused them.`);
+  return received.length;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    await approveVisual();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
