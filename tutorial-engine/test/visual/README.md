@@ -1,10 +1,11 @@
 # Approved screenshots
 
 These are approval tests. `npm run check:visual` now always delegates to the engine-owned canonical
-validation command, `npm run --workspace=tutorial-engine test:visual`, which enters and validates in
-the approved devcontainer path. Each `.approved.png` is the blessed rendering; a failing run leaves
+validation command, `npm run --workspace=tutorial-engine test:visual`, which auto-enters and validates
+in the approved devcontainer path. Each `.approved.png` is the blessed rendering; a failing run leaves
 a `.received.png` beside it. Review that image first, then run `npm run approve:visual` as a separate
-explicit action if the change is deliberate.
+explicit action if the change is deliberate. Approval deliberately refuses outside the repository
+devcontainer; invoke it from a devcontainer terminal rather than from the host.
 
 ## Approve from the devcontainer, not your host
 
