@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import { parsePublicTerminalMessage, type PublicTerminalFrame } from "../../tutorial-engine/src/workbook/public-terminal-contract.js";
+import { parsePublicTerminalMessage, type PublicTerminalFrame } from "../../src/workbook/public-terminal-contract.js";
 import { assertNoPrivateTutorState, recordEditorStatus, recordPublicState, recordReflectionTurn, recordTerminalTranscript } from "./session.js";
 import type { PublicWorkbookState, V2SessionTrace, V2TerminalTranscriptEntry } from "./types.js";
 

@@ -22,6 +22,7 @@ tutorial-engine/test/.tmp/
 .pi/settings.json
 .local/
 evals/reports/
+tutorial-engine/evals/reports/
 .yaks
 
 # Agent worktrees. Throwaway checkouts; ignoring only these keeps a shared

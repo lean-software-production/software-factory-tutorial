@@ -1,8 +1,8 @@
 import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { SessionWorkspaceManager, type TutorialSessionPaths } from "../../tutorial-engine/src/session-workspace.js";
-import { startWorkbookServer, type StartedWorkbookServer, type WorkbookServerOptions } from "../../tutorial-engine/src/workbook/server.js";
+import { SessionWorkspaceManager, type TutorialSessionPaths } from "../../src/session-workspace.js";
+import { startWorkbookServer, type StartedWorkbookServer, type WorkbookServerOptions } from "../../src/workbook/server.js";
 import type { EvaluationWorkspace } from "./types.js";
 
 export interface CreateEvaluationWorkspaceOptions {

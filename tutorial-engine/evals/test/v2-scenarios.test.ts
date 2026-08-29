@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { WorkbookTimelineRecord } from "../../tutorial-engine/src/workbook/timeline.js";
+import type { WorkbookTimelineRecord } from "../../src/workbook/timeline.js";
 import { selectV2Scenarios } from "../run.js";
 import { buildV2JudgePrompt, createV2Report, verifyV2JudgeResult } from "../v2/judge.js";
 import { clueCommand, deterministicV2Gate, exactCommand, findV2Scenario, satisfactoryEditorDraft, v2Scenarios } from "../v2/scenarios.js";
@@ -176,7 +176,7 @@ describe("v2 live evaluator scenarios", () => {
     const leaky = editorFeedbackTrace();
     (leaky.publicStates[1]!.state as any).progress.blocks[0].feedback = "Private editor criterion: mention promotion.";
     const leakyFailed = deterministicV2Gate(findV2Scenario(leaky.scenarioId), leaky);
-    expect(leakyFailed.assertions.find((assertion) => assertion.name === "public trace has no hidden tutor instructions")?.passed).toBe(false);
+    expect(leakyFailed.assertions.find((assertion) => assertion.name === "checked trace has no hidden tutor instructions")?.passed).toBe(false);
   });
 
   it("gates satisfactory editor drafts on unlock and promoted artifact", () => {
@@ -270,6 +270,9 @@ describe("v2 live evaluator scenarios", () => {
 
     expect(prompt).toContain(scenario.criteria[0]!);
     expect(prompt).toContain("terminalTranscript");
+    expect(prompt).toContain("durable workbook timeline records from workbook/events.jsonl");
+    expect(prompt).toContain("not all learner-visible");
+    expect(prompt).not.toContain("Recorded public trace");
     expect(prompt).not.toContain("Active specification");
     expect(prompt).not.toContain("private tutor guidance");
 

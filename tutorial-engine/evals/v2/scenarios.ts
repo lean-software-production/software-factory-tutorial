@@ -291,7 +291,7 @@ function editorUnlocked(trace: V2SessionTrace): V2GateAssertion {
 function publicStateClean(trace: V2SessionTrace): V2GateAssertion {
   const serialized = JSON.stringify(trace);
   const leaked = /"tutor"\s*:|This is private tutor guidance|Do not reveal an exact command|Follow up until the learner|Private editor criterion/i.test(serialized);
-  return { name: "public trace has no hidden tutor instructions", passed: !leaked, detail: leaked ? "Hidden tutor instructions appeared in the trace." : "Trace contains only public state and recorded learner-visible exchanges." };
+  return { name: "checked trace has no hidden tutor instructions", passed: !leaked, detail: leaked ? "Hidden tutor instructions appeared in the trace." : "Trace passed structural tutor-field and known sentinel checks across public state, learner-visible exchanges, durable timeline records, and artifacts." };
 }
 
 function exactCommandInput(trace: V2SessionTrace): V2GateAssertion {

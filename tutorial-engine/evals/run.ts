@@ -12,14 +12,18 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const reports = join(root, "evals/reports");
 
 function usage(): void {
-  console.log(`Live v2 workbook evals (real tutor and judge model calls; not part of npm test)
+  console.log(`Live synthetic tutorial-engine mechanics evals (real tutor and judge model calls; not part of npm test)
 
-Usage:
+Usage from tutorial-engine/:
   npm run eval -- --scenario v2-exact-command-success
   npm run eval -- --all --yes
   npm run eval -- --scenario v2-exact-command-success --repeat 3
 
-A scope is required. EVAL_JUDGE_MODEL selects the judge model. TUTOR_MODEL optionally selects the tutor model used by the workbook tutor. Reports are written under evals/reports/.`);
+Usage from the repository root:
+  npm run eval:engine -- --scenario v2-exact-command-success
+  npm run eval -- --scenario v2-exact-command-success  # temporary compatibility alias
+
+A scope is required. EVAL_JUDGE_MODEL selects the judge model. TUTOR_MODEL optionally selects the tutor model used by the workbook tutor. Reports are written under tutorial-engine/evals/reports/.`);
 }
 
 export function selectV2Scenarios(args: string[]): V2Scenario[] {

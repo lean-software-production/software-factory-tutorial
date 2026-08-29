@@ -104,7 +104,7 @@ describe("the visual check's trigger", () => {
     "tutorial/lessons/001-run-an-agent-headlessly/lesson.md",
     "tutorial/docs/specs/002-build-a-doer.md",
     "AGENTS.md",
-    "evals/run.ts",
+    "tutorial-engine/evals/run.ts",
     "tutorial-engine/src/workbook/cli-arguments.ts",
     // Deliberately absent from the surface: it moves on every dependency change, and almost none of
     // them touch rendering. The rendering-critical versions are pinned in tutorial-engine/package.json

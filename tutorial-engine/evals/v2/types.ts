@@ -1,6 +1,6 @@
-import type { StartedWorkbookServer, WorkbookServerOptions } from "../../tutorial-engine/src/workbook/server.js";
-import type { WorkbookTimelineRecord } from "../../tutorial-engine/src/workbook/timeline.js";
-import type { TutorialSessionPaths } from "../../tutorial-engine/src/session-workspace.js";
+import type { StartedWorkbookServer, WorkbookServerOptions } from "../../src/workbook/server.js";
+import type { WorkbookTimelineRecord } from "../../src/workbook/timeline.js";
+import type { TutorialSessionPaths } from "../../src/session-workspace.js";
 
 export type PublicWorkbookState = Record<string, unknown>;
 

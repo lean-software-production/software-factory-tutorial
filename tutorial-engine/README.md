@@ -87,9 +87,12 @@ and transitions.
 ## Commands
 
 ```sh
-npm run build  # compile server and browser client
-npm test       # unit tests
-npm run check  # TypeScript, unit tests, browser build, and browser smoke
+npm run build       # compile server and browser client
+npm test            # unit tests, including deterministic eval tests
+npm run check:eval  # type-check the synthetic engine eval runner and deterministic tests
+npm run test:eval   # focused deterministic eval tests
+npm run eval -- --help
+npm run check       # TypeScript, eval type-check, unit tests, browser build, and browser smoke
 ```
 
 `npm run browser:smoke` is safe to run on its own. It serves the built bundle in
@@ -117,8 +120,15 @@ If Chromium is present but fails to start with a missing shared library such as 
 system dependencies are absent rather than the browser; `npm run browser:install:ci` installs both
 and needs root.
 
-`npm run check` is the deterministic package gate: it type-checks the engine and workbook UI, runs
-engine tests, builds the workbook browser bundle, and runs the Chromium smoke test. `prepublishOnly`
-runs `build` then this check, so publishing cannot omit the browser smoke. CI provisions Chromium with
-its Linux dependencies through `npm run browser:install:ci`. Docker terminal-image builds and
-provider-backed evaluations are intentionally separate from this mandatory gate.
+`npm run check` is the deterministic package gate: it type-checks the engine, workbook UI, and
+synthetic engine eval code, runs engine and deterministic eval tests once, builds the workbook browser
+bundle, and runs the Chromium smoke test. `prepublishOnly` runs `build` then this check, so publishing
+cannot omit the browser smoke. CI provisions Chromium with its Linux dependencies through
+`npm run browser:install:ci`. Docker terminal-image builds and live provider-backed evaluations are
+intentionally separate from this mandatory gate.
+
+The synthetic tutorial-engine mechanics eval lives in [`evals/`](evals/). Its live command is
+`npm run eval -- --scenario <v2-id>` from this workspace. From the repository root,
+`npm run eval:engine -- --scenario <v2-id>` forwards here, and root `npm run eval -- ...` remains only
+as a temporary compatibility alias. These evals are distinct from any future authored-workbook eval
+suite for the learner curriculum.

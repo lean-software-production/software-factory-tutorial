@@ -11,7 +11,7 @@ workspaces under `tutorial/.tutorial/<session-id>/workspaces/<workspace-id>/`.
 | [`tutorial/`](tutorial/) | Learner-facing workbook, lessons, specs, seed files, and authored starter trees. |
 | [`tutorial-engine/`](tutorial-engine/) | The browser-led workbook engine and its tests. |
 | [`scripts/`](scripts/) | Root launchers and setup helpers. |
-| [`evals/`](evals/) | Live and deterministic workbook evaluation harnesses. |
+| [`tutorial-engine/evals/`](tutorial-engine/evals/) | Synthetic tutorial-engine mechanics evals and deterministic evaluator tests. |
 
 ## Root commands
 
@@ -25,6 +25,8 @@ npm start                         # alias for tutorial:workbook
 npm run tutorial:workbook -- --session <id>
 npm run --workspace=tutorial-engine check:workbook
 npm run check
+npm run eval:engine -- --help       # live synthetic engine eval CLI, forwarded to tutorial-engine
+npm run eval -- --help              # temporary compatibility alias for eval:engine
 ```
 
 `npm run tutorial:workbook` supplies the embedded terminal with one read-only runtime mount: root
@@ -37,6 +39,7 @@ ignored state is neither resumed nor migrated.
 
 - Learners: start with [`tutorial/README.md`](tutorial/README.md), then run `npm run tutorial:workbook`.
 - Engine developers: start with [`tutorial-engine/README.md`](tutorial-engine/README.md) and its ADRs.
+  Synthetic engine-mechanics evals live under [`tutorial-engine/evals/`](tutorial-engine/evals/).
 - Curriculum maintainers: edit authored lesson prose under [`tutorial/lessons/`](tutorial/lessons/) and
   canonical lesson specs under [`tutorial/docs/specs/`](tutorial/docs/specs/).
 - Coding agents: read [`AGENTS.md`](AGENTS.md).

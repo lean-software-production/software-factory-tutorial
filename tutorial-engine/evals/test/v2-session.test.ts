@@ -1,10 +1,10 @@
 import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadWorkbook } from "../../tutorial-engine/src/workbook/load.js";
-import type { WorkbookServerOptions } from "../../tutorial-engine/src/workbook/server.js";
-import type { TutorDecision } from "../../tutorial-engine/src/workbook/tutor.js";
-import { RecordingMainTutor } from "../../tutorial-engine/test/support/fake-tutors.js";
+import { loadWorkbook } from "../../src/workbook/load.js";
+import type { WorkbookServerOptions } from "../../src/workbook/server.js";
+import type { TutorDecision } from "../../src/workbook/tutor.js";
+import { RecordingMainTutor } from "../../test/support/fake-tutors.js";
 import { createEmptyV2SessionTrace, readWorkbookTimeline, recordPublicState, snapshotArtifacts } from "../v2/session.js";
 import { createEvaluationWorkspace } from "../v2/workspace.js";
 
