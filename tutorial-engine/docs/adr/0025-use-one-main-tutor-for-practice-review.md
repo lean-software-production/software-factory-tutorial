@@ -89,8 +89,9 @@ or acceptance authority by themselves.
 
 Privacy boundaries from ADRs 0018 through 0020 are retained and tightened. Public state, SSE timeline
 records, browser-safe serializations, diagnostics, and log projections must not expose private
-transcript, command text, immutable evidence, file content, tool results, failure detail, retry budget
-state, or legacy handoff content. Learner-visible failure copy remains generic. Private review context
+transcript, command text, immutable evidence, file content, private rubrics, paths, tool results,
+failure detail, retry budget state, or legacy handoff content. Learner-visible failure copy remains
+generic. Private review context
 may be used only inside the Main Tutor review request and the minimum private state needed to reject
 stale results and permit review-only retry.
 
