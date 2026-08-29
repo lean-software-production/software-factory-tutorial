@@ -9,7 +9,9 @@
   `calculator/` move together. Treat this content as immutable during learner runs.
 - Each learner session has a private workspace at `tutorial/.tutorial/<session-id>/workspace/`.
   Learner shell commands, edits, and commits happen there, not in the authored template and not in
-  the repository root.
+  the repository root. A lesson may optionally declare `workspace: workspaces/<slug>`; that scopes
+  editor paths and terminal starting directories beneath the shared session workspace, but it does
+  not isolate the filesystem or create a separate Git repository.
 - The root `npm run tutorial:workbook` command launches the workbook. By default it creates a fresh
   session and prints the session ID and workspace path. `npm run tutorial:workbook -- --session <id>`
   is the only way to reopen that ID; browser-tutor state is not resumed.
@@ -79,7 +81,9 @@ ledger would hand everyone who clones the tutorial a copy that claims to be part
 ledger's rows carry a specification link and a goal, and no status.
 
 Inside a session workspace, `factory/` sorts into three kinds, and the split is what `.gitignore`
-encodes:
+encodes. Lessons that declare `workspace: workspaces/<slug>` use the same rules inside that scoped
+folder: files the learner writes are session-local work, and regenerated evidence belongs under a
+nearby `.tmp/` rather than in the authored tutorial.
 
 - **The learner's line** — every `.sh` and `.md` they write — is tracked by the session-local Git
   repository, so their own work survives a mistake inside that session and can be committed there.

@@ -228,7 +228,7 @@ export async function loadWorkbookLesson(lessonDir: string, id: string): Promise
 
   const blocks = await Promise.all(front.blocks.map((blockId) => loadWorkbookBlock(lessonDir, blockId, lessonPath)));
   const outcomes = blocks.filter(isInteractiveBlock).map((block) => block.outcome);
-  return validateWorkbookLesson({ id, title, dek, introduction, durationMinutes: front.durationMinutes, outcomes, blocks }, lessonPath);
+  return validateWorkbookLesson({ id, title, dek, introduction, durationMinutes: front.durationMinutes, workspace: front.workspace, outcomes, blocks }, lessonPath);
 }
 
 interface ChapterDraft extends Omit<WorkbookChapter, "lessonNumber"> {

@@ -2,6 +2,7 @@ import { lstat, mkdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { AttemptStore } from "./attempts.js";
 import type { EditorPracticeBlock } from "./contract.js";
+import { resolveLessonWorkspaceRoot } from "./lesson-workspace.js";
 
 const DENIED_TARGET_SEGMENTS = new Set([".git", ".tutorial", ".tmp"]);
 
@@ -32,14 +33,14 @@ async function nearestExisting(candidate: string): Promise<string> {
   }
 }
 
-export async function resolveEditorTarget(workspace: string, path: string): Promise<string> {
+export async function resolveEditorTarget(workspace: string, path: string, lessonWorkspace?: string): Promise<string> {
   assertSafeEditorTargetPath(path);
-  const root = await realpath(resolve(workspace));
+  const root = await resolveLessonWorkspaceRoot(workspace, lessonWorkspace);
   const target = resolve(root, path);
-  if (!isInside(root, target)) throw new Error("Editor target path is outside the workspace.");
+  if (!isInside(root, target)) throw new Error("Editor target path is outside the lesson workspace.");
   const existing = await nearestExisting(target);
   const realExisting = await realpath(existing);
-  if (!isInside(root, realExisting)) throw new Error("Editor target path is outside the workspace.");
+  if (!isInside(root, realExisting)) throw new Error("Editor target path is outside the lesson workspace.");
   return target;
 }
 
@@ -49,6 +50,7 @@ export interface PromoteAcceptedEditorAttemptOptions {
   lessonId: string;
   block: EditorPracticeBlock;
   attemptId: string;
+  lessonWorkspace?: string;
 }
 
 export async function promoteCurrentEditorAttempt(options: PromoteAcceptedEditorAttemptOptions): Promise<{ path: string } | undefined> {
@@ -56,7 +58,7 @@ export async function promoteCurrentEditorAttempt(options: PromoteAcceptedEditor
   if (!attempt || attempt.lessonId !== options.lessonId || attempt.blockId !== options.block.id || attempt.evidence.kind !== "editor") return undefined;
   const current = await options.attempts.current(options.lessonId, options.block.id);
   if (!current || current.id !== attempt.id || (current.status !== "reviewing" && current.status !== "accepted") || current.evidence.kind !== "editor") return undefined;
-  const target = await resolveEditorTarget(options.workspace, options.block.path);
+  const target = await resolveEditorTarget(options.workspace, options.block.path, options.lessonWorkspace);
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, current.evidence.text, "utf8");
   return { path: target };

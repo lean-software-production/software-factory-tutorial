@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createSessionId,
+  LESSON_WORKSPACES_DIRECTORY,
   MATERIALIZED_WORKSPACE_DIRECTORIES,
   SessionWorkspaceManager,
   validateSessionId,
@@ -89,7 +90,7 @@ describe("SessionWorkspaceManager", () => {
 
     const session = await manager.createSession({ id: "minimal" });
 
-    expect((await readdir(session.workspaceRoot)).sort()).toEqual([".git", ".gitignore", ...MATERIALIZED_WORKSPACE_DIRECTORIES].sort());
+    expect((await readdir(session.workspaceRoot)).sort()).toEqual([".git", ".gitignore", LESSON_WORKSPACES_DIRECTORY, ...MATERIALIZED_WORKSPACE_DIRECTORIES].sort());
     await expect(readdir(join(session.workspaceRoot, "calculator"))).resolves.not.toContain("node_modules");
     await expect(readFile(join(session.workspaceRoot, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
     await expect(readFile(join(session.workspaceRoot, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
@@ -122,6 +123,133 @@ describe("SessionWorkspaceManager", () => {
 
     await expect(readFile(join(second.workspaceRoot, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
     await expect(readFile(join(second.workspaceRoot, "factory/new-station.sh"), "utf8")).rejects.toThrow();
+  });
+
+  it("materializes declared lesson workspaces, copying an optional authored template", async () => {
+    const contentRoot = await contentFixture();
+    await write(join(contentRoot, "lessons/scoped-lesson/lesson.md"), [
+      "---",
+      "durationMinutes: 5",
+      "workspace: workspaces/scoped-lesson",
+      "blocks:",
+      "  - only",
+      "---",
+      "# Scoped lesson",
+      "",
+      "Scoped dek.",
+    ].join("\n"));
+    await write(join(contentRoot, "workspaces/scoped-lesson/spec.md"), "template spec\n");
+    await write(join(contentRoot, "workspaces/scoped-lesson/.gitkeep"), "\n");
+    await write(join(contentRoot, "workspaces/unreferenced/file.txt"), "not copied\n");
+
+    const { workspaceRoot } = await (await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "scoped" });
+
+    await expect(readFile(join(workspaceRoot, "workspaces/scoped-lesson/spec.md"), "utf8")).resolves.toBe("template spec\n");
+    await expect(readFile(join(workspaceRoot, "workspaces/scoped-lesson/.gitkeep"), "utf8")).resolves.toBe("\n");
+    await expect(lstat(join(workspaceRoot, "workspaces/unreferenced"))).rejects.toThrow();
+    expect(await git(workspaceRoot, "ls-files", "workspaces/scoped-lesson/spec.md")).toBe("workspaces/scoped-lesson/spec.md");
+    expect(await git(workspaceRoot, "ls-files", "workspaces/scoped-lesson/.gitkeep")).toBe("workspaces/scoped-lesson/.gitkeep");
+    expect(await git(workspaceRoot, "status", "--porcelain")).toBe("");
+  });
+
+  it("tracks .gitkeep for otherwise empty authored lesson workspace templates", async () => {
+    const contentRoot = await contentFixture();
+    await write(join(contentRoot, "lessons/empty-template/lesson.md"), [
+      "---",
+      "durationMinutes: 5",
+      "workspace: workspaces/empty-template",
+      "blocks:",
+      "  - only",
+      "---",
+      "# Empty template",
+      "",
+      "Empty template dek.",
+    ].join("\n"));
+    await mkdir(join(contentRoot, "workspaces/empty-template"), { recursive: true });
+
+    const { workspaceRoot } = await (await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "empty-template" });
+
+    await expect(readFile(join(workspaceRoot, "workspaces/empty-template/.gitkeep"), "utf8")).resolves.toBe("");
+    expect(await git(workspaceRoot, "ls-files", "workspaces/empty-template/.gitkeep")).toBe("workspaces/empty-template/.gitkeep");
+    expect(await git(workspaceRoot, "status", "--porcelain")).toBe("");
+  });
+
+  it("tracks .gitkeep for declared lesson workspaces with no authored template", async () => {
+    const contentRoot = await contentFixture();
+    await write(join(contentRoot, "lessons/empty-scoped/lesson.md"), [
+      "---",
+      "durationMinutes: 5",
+      "workspace: workspaces/empty-scoped",
+      "blocks:",
+      "  - only",
+      "---",
+      "# Empty scoped lesson",
+      "",
+      "Empty scoped dek.",
+    ].join("\n"));
+
+    const { workspaceRoot } = await (await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "empty-scoped" });
+
+    await expect(stat(join(workspaceRoot, "workspaces/empty-scoped"))).resolves.toMatchObject({});
+    await expect(readFile(join(workspaceRoot, "workspaces/empty-scoped/.gitkeep"), "utf8")).resolves.toBe("");
+    expect(await git(workspaceRoot, "ls-files", "workspaces/empty-scoped/.gitkeep")).toBe("workspaces/empty-scoped/.gitkeep");
+    expect(await git(workspaceRoot, "status", "--porcelain")).toBe("");
+  });
+
+  it("rejects malformed declared lesson workspace paths during materialization", async () => {
+    const contentRoot = await contentFixture();
+    await write(join(contentRoot, "lessons/bad-scoped/lesson.md"), [
+      "---",
+      "durationMinutes: 5",
+      "workspace: ../escape",
+      "blocks:",
+      "  - only",
+      "---",
+      "# Bad scoped lesson",
+      "",
+      "Bad scoped dek.",
+    ].join("\n"));
+
+    await expect((await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "bad-scoped" })).rejects.toThrow(/workspace/);
+  });
+
+  it("rejects symlinked lesson workspace templates even when they point inside the content root", async () => {
+    const contentRoot = await contentFixture();
+    await write(join(contentRoot, "lessons/symlinked-template/lesson.md"), [
+      "---",
+      "durationMinutes: 5",
+      "workspace: workspaces/symlinked-template",
+      "blocks:",
+      "  - only",
+      "---",
+      "# Symlinked template",
+      "",
+      "Symlinked template dek.",
+    ].join("\n"));
+    await write(join(contentRoot, "workspaces/real-template/spec.md"), "real template\n");
+    await symlink(join(contentRoot, "workspaces/real-template"), join(contentRoot, "workspaces/symlinked-template"));
+
+    await expect((await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "symlinked-template" })).rejects.toThrow(/symlinked content/i);
+  });
+
+  it("rejects nested symlinks inside authored lesson workspace templates", async () => {
+    const contentRoot = await contentFixture();
+    await write(join(contentRoot, "lessons/nested-symlink/lesson.md"), [
+      "---",
+      "durationMinutes: 5",
+      "workspace: workspaces/nested-symlink",
+      "blocks:",
+      "  - only",
+      "---",
+      "# Nested symlink",
+      "",
+      "Nested symlink dek.",
+    ].join("\n"));
+    await write(join(contentRoot, "workspaces/shared/spec.md"), "shared spec\n");
+    await mkdir(join(contentRoot, "workspaces/nested-symlink"), { recursive: true });
+    await symlink(join(contentRoot, "workspaces/shared/spec.md"), join(contentRoot, "workspaces/nested-symlink/spec.md"));
+
+    await expect((await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "nested-symlink" })).rejects.toThrow(/symlinked content/i);
   });
 
   it("initializes an isolated Git repository with a clean committed baseline", async () => {

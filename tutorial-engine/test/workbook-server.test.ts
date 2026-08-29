@@ -20,7 +20,7 @@ import { QueuedMainTutor as FakeMainTutor, RecordingPracticeCoach as FakePractic
 
 let dirs: string[] = [];
 
-async function fixture(options: { editorPath?: string } = {}) {
+async function fixture(options: { editorPath?: string; firstLessonWorkspace?: string } = {}) {
   const dir = await mkdtemp(resolve(tmpdir(), "workbook-server-")); dirs.push(dir);
   const first = resolve(dir, "lessons/001-first");
   const second = resolve(dir, "lessons/002-second");
@@ -40,7 +40,7 @@ async function fixture(options: { editorPath?: string } = {}) {
   ].join("\n"));
   await mkdir(resolve(dir, "parts"), { recursive: true });
   await writeFile(resolve(dir, "parts/loop.md"), ["---", "---", "# Part 1 — Loop", "", "Part copy."].join("\n"));
-  await writeLesson(first, "First lesson", ["orientation", "edit-answer", "run-supplied-command", "change-job", "reflection", "transition"]);
+  await writeLesson(first, "First lesson", ["orientation", "edit-answer", "run-supplied-command", "change-job", "reflection", "transition"], "Fixture lesson introduction.", options.firstLessonWorkspace);
   await writeBlock(first, "orientation", "narrative", "Orientation", "Start with the concept.");
   await writeBlock(first, "edit-answer", "editor-practice", "Edit", "Write the answer in the editor.", "Private editor rubric: mention the factory acceptance marker.", options.editorPath ?? "factory/answer.md");
   await writeBlock(first, "run-supplied-command", "terminal-practice", "Run", "Run the supplied command.", "Observe run result.");
@@ -64,10 +64,11 @@ async function sessionFixture() {
   return { dir, session };
 }
 
-async function writeLesson(lessonDir: string, title: string, blocks: string[], introduction = "Fixture lesson introduction.") {
+async function writeLesson(lessonDir: string, title: string, blocks: string[], introduction = "Fixture lesson introduction.", workspace?: string) {
   await writeFile(resolve(lessonDir, "lesson.md"), [
     "---",
     "durationMinutes: 10",
+    ...(workspace ? [`workspace: ${workspace}`] : []),
     "blocks:",
     ...blocks.map((id) => `  - ${id}`),
     "---",
@@ -508,6 +509,62 @@ describe("workbook browser API", () => {
       expect(next.progress.activeBlockId).toBe("lesson--001-first--edit-answer");
       const privateRecords = (await readFile(tutorialSessionStatePath(session.sessionRoot, "workbook/events.jsonl"), "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
       expect(privateRecords.some((record: any) => record.type === "attempt_accepted")).toBe(false);
+    } finally { await server.close(); }
+  });
+
+  it("keeps scoped lesson workspace private while editor attempts resolve beneath it", async () => {
+    const dir = await fixture({ editorPath: "answer.md", firstLessonWorkspace: "workspaces/scoped-lesson" });
+    await mkdir(resolve(dir, "calculator/src"), { recursive: true });
+    await writeFile(resolve(dir, "calculator/package.json"), "{\"type\":\"module\"}\n", "utf8");
+    await mkdir(resolve(dir, "factory"), { recursive: true });
+    await writeFile(resolve(dir, "factory/answer.md"), "authored answer\n", "utf8");
+    const session = await (await SessionWorkspaceManager.create(dir)).createSession({ id: "scoped-runtime" });
+    const tutor = new FakeMainTutor();
+    tutor.queue.push({ outcome: "accepted", message: "Editor accepted." });
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: tutor, practiceCoach: new FakePracticeCoach() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      const opened = await state(server.url);
+      expect(JSON.stringify(opened)).not.toContain("workspaces/scoped-lesson");
+      expect(block(opened, "edit-answer")?.draftText).toBe("");
+
+      await postEditor(server.url, { blockId: "edit-answer", text: "scoped learner answer" });
+      const accepted = await waitForWorkbookState(server.url, (value) => block(value, "edit-answer")?.checkpoint?.status === "accepted", "accepted scoped editor attempt");
+
+      expect(JSON.stringify(accepted)).not.toContain("workspaces/scoped-lesson");
+      expect(block(accepted, "edit-answer")?.checkpoint.evidence.text).toBe("scoped learner answer");
+      await expect(readFile(resolve(session.workspaceRoot, "workspaces/scoped-lesson/answer.md"), "utf8")).resolves.toBe("scoped learner answer");
+      await expect(access(resolve(session.workspaceRoot, "answer.md"))).rejects.toThrow();
+      await expect(readFile(resolve(dir, "factory/answer.md"), "utf8")).resolves.toBe("authored answer\n");
+    } finally { await server.close(); }
+  });
+
+  it("starts a scoped terminal block in its lesson workspace", async () => {
+    const dir = await fixture({ firstLessonWorkspace: "workspaces/scoped-lesson" });
+    await mkdir(resolve(dir, "workspaces/scoped-lesson"), { recursive: true });
+    const ptys: ServerFakePty[] = [];
+    const optionsSeen: terminalModule.TerminalPtyOptions[] = [];
+    const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const server = await startWorkbookServer({
+      target: dir,
+      webRoot: resolve(dir, "web"),
+      port: 0,
+      terminalPtyFactory: (options) => { optionsSeen.push(options); const pty = new ServerFakePty(false); ptys.push(pty); return pty; },
+      mainTutor: tutor,
+      practiceCoach: new FakePracticeCoach()
+    });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      const active = await state(server.url);
+      expect(block(active, "run-supplied-command")?.active).toBe(true);
+      const ws = await connect(server.url, server.url);
+      ws.send(JSON.stringify({ type: "input", data: "pwd\r" }));
+      await waitMs(20);
+      ws.close();
+
+      expect(optionsSeen.map((options) => options.containerWorkdir)).toContain("/workspace/workspaces/scoped-lesson");
+      expect(ptys.at(-1)?.writes).toEqual(["pwd\r"]);
     } finally { await server.close(); }
   });
 

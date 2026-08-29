@@ -1,5 +1,6 @@
 ---
 durationMinutes: 10
+workspace: workspaces/your-first-factory
 blocks:
   - write-a-seed
   - write-worker-prompt

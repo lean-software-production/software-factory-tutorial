@@ -169,6 +169,38 @@ describe("workbook lesson contract", () => {
     expect((lesson.blocks[4] as any).tutor).toBeUndefined();
   });
 
+  it("loads an optional lesson workspace without changing browser-visible editor paths", async () => {
+    const dir = await flatFixture();
+    await writeFile(resolve(dir, "lessons/001-first-lesson/lesson.md"), [
+      "---",
+      "durationMinutes: 5",
+      "workspace: workspaces/first-lesson",
+      "blocks:",
+      "  - only",
+      "---",
+      "# First Flat Lesson",
+      "",
+      "First flat dek.",
+    ].join("\n"));
+    await writeFile(resolve(dir, "lessons/001-first-lesson/blocks/only.md"), [
+      "---",
+      "type: editor-practice",
+      "path: spec.md",
+      "outcome: Write a scoped file.",
+      "tutor: Check the scoped editor file.",
+      "---",
+      "## Only Block",
+      "",
+      "Edit the scoped file.",
+    ].join("\n"));
+
+    const loaded = await loadWorkbook(dir);
+
+    expect(loaded.chapters[0]?.lesson.workspace).toBe("workspaces/first-lesson");
+    const block = loaded.chapters[0]?.lesson.blocks[0];
+    expect(block).toMatchObject({ type: "editor-practice", path: "spec.md" });
+  });
+
   it("does not fall back to legacy nested part directories when no flat lessons exist", async () => {
     const dir = await fixture();
     const loaded = await loadWorkbook(dir);
@@ -434,8 +466,12 @@ describe("workbook lesson contract", () => {
     expect(message).toMatch(/lessons\/x\/lesson\.md: blocks must be a non-empty ordered list/);
   });
 
-  it("rejects malformed block ids", () => {
+  it("rejects malformed block ids and lesson workspaces", () => {
     expect(() => validateLessonFrontMatter({ durationMinutes: 5, blocks: ["Bad Id!"] }, "lesson.md")).toThrow(/blocks/);
+    expect(validateLessonFrontMatter({ durationMinutes: 5, workspace: "workspaces/scoped-lesson", blocks: ["ok"] }, "lesson.md")).toEqual({ durationMinutes: 5, workspace: "workspaces/scoped-lesson", blocks: ["ok"] });
+    for (const workspace of ["scoped-lesson", "workspaces/Bad", "workspaces/with_underscore", "workspaces/", "workspaces/a/b", "../workspaces/x"]) {
+      expect(() => validateLessonFrontMatter({ durationMinutes: 5, workspace, blocks: ["ok"] }, "lesson.md"), workspace).toThrow(/workspace/);
+    }
   });
 
   it("requires a non-empty tutor and outcome field for terminal-practice, reflection, and editor-practice blocks", () => {

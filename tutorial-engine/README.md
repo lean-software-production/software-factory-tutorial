@@ -21,7 +21,9 @@ npm run dev:workbook -- ../tutorial
 From the repository root, `npm run tutorial:workbook` is the named launcher for the workbook;
 `npm start` is its alias. It uses the root trusted Node runtime profile for the embedded terminal:
 it mounts only the repository-root `node_modules/` directory read-only at workspace
-`node_modules/`, and it never mounts `package.json` or lockfiles. A plain launch creates a fresh
+`node_modules/`, and it never mounts `package.json` or lockfiles. The terminal container mounts the
+session workspace root read-only, then overlays learner-writeable roots such as `factory/`,
+`calculator/`, `workspaces/`, scratch directories, and `.git/`. A plain launch creates a fresh
 session and prints its ID and workspace path. Reopen a specific session with
 `npm run tutorial:workbook -- --session <id>`; browser-tutor `.tutorial/.tmp` state is not resumed.
 
@@ -46,7 +48,8 @@ Markdown under the target directory:
 
 - `workbook.md` has YAML front matter, exactly one H1 title, and workbook introduction Markdown;
 - optional `parts/<part-id>.md` files have empty front matter, one H1 title, and part preamble Markdown;
-- each `lessons/<lesson-id>/lesson.md` has duration and ordered block ids in front matter;
+- each `lessons/<lesson-id>/lesson.md` has duration, optional `workspace`, and ordered block ids in
+  front matter;
 - a lesson H1 supplies the title; the first paragraph after it is the compact dek used in summaries and history; any remaining Markdown is the full lesson introduction;
 - each `lessons/<lesson-id>/blocks/<block-id>.md` has one H2 title, block-type front matter, and learner-facing Markdown.
 
@@ -57,9 +60,25 @@ Supported authored block types are:
 - `editor-practice`: embedded editor work. It requires private `tutor`, workspace-relative `path` front matter, and a learner-facing `outcome`.
 - `reflection`: tutor-mediated reflection. It requires private `tutor` front matter and a learner-facing `outcome`.
 
-A lesson's `outcomes` are not authored in its front matter. They are derived, in block order, from the
-`outcome` field on every interactive block (`terminal-practice`, `editor-practice`, and `reflection`), so
-each learning outcome is delivered at the block where it is actually earned.
+A lesson's `workspace` may be absent. When present it must be
+`workspaces/<lowercase-hyphenated-slug>`. It is not filesystem isolation: all lessons still share
+the same session workspace and the same session-local Git repository, and sibling navigation
+remains possible. The field only changes the default working folder for that lesson.
+Editor-practice paths remain learner-visible as authored, such as `spec.md`, but reads and
+accepted promotions resolve them under the lesson folder. Terminal-practice shells start in
+`/workspace/workspaces/<slug>`.
+
+If `tutorial/workspaces/<slug>/` exists, the launcher copies it into each new session and
+includes its copied files in the baseline commit. Authored `.gitkeep` files are copied unchanged.
+If the copied template contains no files, the launcher writes an empty `.gitkeep` marker in the
+session destination so Git can baseline the declared workspace. If there is no template, the
+`workspace` declaration creates the session folder with the same empty `.gitkeep` marker. The hidden
+marker is acceptable in the learner workspace because ordinary `ls` omits it. Symlinked lesson
+workspace templates and nested symlinks are rejected during materialization.
+
+A lesson's `outcomes` are not authored in its front matter. They are derived, in block order,
+from the `outcome` field on every interactive block (`terminal-practice`, `editor-practice`, and
+`reflection`), so each learning outcome is delivered at the block where it is actually earned.
 
 The workbook synthesizes the workbook introduction, each part preamble, and each lesson preamble
 as structural blocks. A lesson-preamble block contains its title, dek, outcomes, and full

@@ -27,6 +27,7 @@ export interface WorkbookLesson {
   dek: string;
   introduction: string;
   durationMinutes: number;
+  workspace?: string;
   outcomes: string[];
   blocks: WorkbookBlock[];
 }
@@ -39,11 +40,12 @@ export interface WorkbookManifest { parts?: WorkbookPartManifest[]; }
 /** No part-level structured field is defined yet, so front matter must be an empty map. */
 export interface PartManifest {}
 
-export interface LessonFrontMatter { durationMinutes: number; blocks: string[]; }
+export interface LessonFrontMatter { durationMinutes: number; blocks: string[]; workspace?: string; }
 export interface BlockFrontMatter { type: WorkbookBlockType; path?: string; tutor?: string; outcome?: string; }
 
 const BLOCK_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 export const WORKBOOK_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const LESSON_WORKSPACE_PATTERN = /^workspaces\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function isNonEmptyString(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -121,7 +123,7 @@ export function validateLessonFrontMatter(data: unknown, location: string): Less
   const errors: string[] = [];
   if (!isPlainObject(data)) fail(location, [`${location}: front matter must be a YAML mapping.`]);
   const record = data as Record<string, unknown>;
-  rejectUnknownFields(record, ["durationMinutes", "blocks"], location, errors);
+  rejectUnknownFields(record, ["durationMinutes", "blocks", "workspace"], location, errors);
 
   const duration = record.durationMinutes;
   if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) errors.push(`${location}: durationMinutes must be a positive number`);
@@ -137,8 +139,13 @@ export function validateLessonFrontMatter(data: unknown, location: string): Less
     }
   }
 
+  const workspace = record.workspace;
+  if (workspace !== undefined && (!isNonEmptyString(workspace) || !LESSON_WORKSPACE_PATTERN.test(workspace))) {
+    errors.push(`${location}: workspace must be workspaces/<lowercase-hyphenated-slug>`);
+  }
+
   if (errors.length) fail(location, errors);
-  return { durationMinutes: duration as number, blocks: blocks as string[] };
+  return { durationMinutes: duration as number, blocks: blocks as string[], workspace: workspace as string | undefined };
 }
 
 /** Validate one block's raw front matter: its type, and a private tutor field required only for interactive types. */
@@ -195,6 +202,7 @@ export function validateWorkbookLesson(value: unknown, location = "lesson"): Wor
   if (!isNonEmptyString(lesson.dek)) errors.push(`${location}.dek is required`);
   if (typeof lesson.introduction !== "string") errors.push(`${location}.introduction is required and must be a string`);
   if (typeof lesson.durationMinutes !== "number" || !Number.isFinite(lesson.durationMinutes) || lesson.durationMinutes <= 0) errors.push(`${location}.durationMinutes must be a positive number`);
+  if (lesson.workspace !== undefined && (!isNonEmptyString(lesson.workspace) || !LESSON_WORKSPACE_PATTERN.test(lesson.workspace))) errors.push(`${location}.workspace must be workspaces/<lowercase-hyphenated-slug>`);
   const hasInteractiveBlock = Array.isArray(lesson.blocks) && lesson.blocks.some((block) => block && block.type !== "narrative");
   if (!isStringArray(lesson.outcomes)) errors.push(`${location}.outcomes must be a list of strings`);
   else if (hasInteractiveBlock && (lesson.outcomes.length === 0 || lesson.outcomes.some((item) => !isNonEmptyString(item)))) errors.push(`${location}.outcomes must be a non-empty list of non-empty strings derived from its interactive blocks`);

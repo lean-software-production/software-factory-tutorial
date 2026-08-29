@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { WorkbookTerminalManager, dockerContainerUser, dockerExecArguments, publicTerminalTranscript, type ActiveObservedTerminalBlock, type TerminalClient, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { WorkbookTerminalManager, dockerContainerUser, dockerExecArguments, dockerRunArguments, publicTerminalTranscript, type ActiveObservedTerminalBlock, type TerminalClient, type TerminalPty, type TerminalPtyFactory, type TerminalPtyOptions } from "../src/workbook/terminal.js";
 import type { TerminalObservationFact } from "../src/workbook/terminal-observation.js";
 
 class FakePty implements TerminalPty {
@@ -21,6 +24,7 @@ class FakePty implements TerminalPty {
   onData(callback: (data: string) => void): void { this.#data.push(callback); }
   onExit(callback: (event: { exitCode: number }) => void): void { this.#exit.push(callback); }
   emit(data: string): void { this.#data.forEach((callback) => callback(data)); }
+  emitExit(event: { exitCode: number }): void { this.#exit.forEach((callback) => callback(event)); }
 }
 
 class FakeClient implements TerminalClient {
@@ -34,6 +38,11 @@ function marker(command: string): string { return `\x1b]633;workbook-command;${B
 function finished(exitStatus = 0): string { return `\x1b]633;workbook-finished;${exitStatus}\x07`; }
 
 const activePractice: ActiveObservedTerminalBlock = { lessonId: "lesson", blockId: "practice" };
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 function setup(options: { initialActiveBlock?: ActiveObservedTerminalBlock } = {}) {
   const initialActiveBlock = "initialActiveBlock" in options ? options.initialActiveBlock : activePractice;
@@ -63,6 +72,20 @@ describe("WorkbookTerminalManager", () => {
     expect(dockerContainerUser()).toBe(`${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`);
     expect(dockerExecArguments("terminal").join(" ")).toContain("workbook-command");
     expect(dockerExecArguments("terminal").join(" ")).toContain("workbook-finished");
+    expect(dockerExecArguments("terminal", "/workspace/workspaces/scoped-lesson")).toContain("/workspace/workspaces/scoped-lesson");
+    expect(() => dockerExecArguments("terminal", "/workspace/../escape")).toThrow(/workdir/);
+  });
+
+  it("mounts the shared workspaces directory as a writable overlay when it exists", async () => {
+    const workspace = await mkdtemp(resolve(tmpdir(), "workbook-terminal-workspaces-"));
+    tempDirs.push(workspace);
+    await mkdir(resolve(workspace, "workspaces/scoped-lesson"), { recursive: true });
+
+    const args = dockerRunArguments({ workspace, name: "terminal", apiKey: "test-key" });
+
+    expect(args.join("\n")).toContain(`dst=/workspace,readonly`);
+    expect(args.join("\n")).toContain(`dst=/workspace/workspaces`);
+    expect(args.join("\n")).not.toContain(`dst=/workspace/workspaces,readonly`);
   });
 
   it("opens one transport shell before attach, then forwards input and bounds resize", () => {
@@ -79,6 +102,76 @@ describe("WorkbookTerminalManager", () => {
     manager.receive({ type: "resize", cols: 999, rows: 999 });
     expect(ptys[0]?.writes).toEqual(["echo hi\r"]);
     expect(ptys[0]?.resizes).toEqual([[500, 200]]);
+  });
+
+  it("replaces a preloaded root PTY before learner input reaches a scoped lesson workspace", async () => {
+    const facts: TerminalObservationFact[] = [];
+    const ptys: FakePty[] = [];
+    const optionsSeen: TerminalPtyOptions[] = [];
+    const active: { block?: ActiveObservedTerminalBlock } = { block: undefined };
+    const manager = new WorkbookTerminalManager({
+      workspace: "/tmp/workspace",
+      getActiveBlock: () => active.block,
+      observationSink: async (fact) => { facts.push(fact); },
+      ptyFactory: (options) => {
+        optionsSeen.push(options);
+        const pty = new FakePty();
+        ptys.push(pty);
+        return pty;
+      },
+    });
+
+    manager.start();
+    expect(optionsSeen[0]?.containerWorkdir).toBe("/workspace");
+    active.block = { lessonId: "lesson", blockId: "practice", lessonWorkspace: "workspaces/scoped-lesson" };
+    ptys[0]!.emit(marker("stale root command"));
+    manager.receive({ type: "input", data: "pwd\r" });
+    ptys[1]!.emit(marker("pwd"));
+    await Promise.resolve();
+
+    expect(ptys).toHaveLength(2);
+    expect(ptys[0]!.killed).toBe(true);
+    expect(ptys[0]!.writes).toEqual([]);
+    expect(ptys[1]!.writes).toEqual(["pwd\r"]);
+    expect(optionsSeen[1]?.containerWorkdir).toBe("/workspace/workspaces/scoped-lesson");
+    expect(facts).toEqual([expect.objectContaining({ type: "terminal-command-submitted", command: "pwd" })]);
+  });
+
+  it("ignores a stale preloaded PTY exit after replacing it for a scoped lesson workspace", async () => {
+    const facts: TerminalObservationFact[] = [];
+    const ptys: FakePty[] = [];
+    const active: { block?: ActiveObservedTerminalBlock } = { block: undefined };
+    const manager = new WorkbookTerminalManager({
+      workspace: "/tmp/workspace",
+      getActiveBlock: () => active.block,
+      observationSink: async (fact) => { facts.push(fact); },
+      ptyFactory: () => {
+        const pty = new FakePty();
+        ptys.push(pty);
+        return pty;
+      },
+    });
+    const client = new FakeClient();
+
+    manager.start();
+    manager.attach(client);
+    active.block = { lessonId: "lesson", blockId: "practice", lessonWorkspace: "workspaces/scoped-lesson" };
+    manager.receive({ type: "input", data: "pwd\r" });
+    ptys[1]!.emit(marker("pwd"));
+    ptys[1]!.emit("replacement output\r\n");
+    ptys[0]!.emitExit({ exitCode: 130 });
+    manager.receive({ type: "input", data: "echo still usable\r" });
+    ptys[1]!.emit(finished(0));
+    await Promise.resolve();
+
+    expect(ptys).toHaveLength(2);
+    expect(ptys[0]!.killed).toBe(true);
+    expect(ptys[1]!.writes).toEqual(["pwd\r", "echo still usable\r"]);
+    expect(client.messages.some((message) => message.type === "exit")).toBe(false);
+    expect(manager.activePublicSnapshot()).toEqual({ lessonId: "lesson", blockId: "practice", transcript: "replacement output\n" });
+    expect(manager.activeTranscriptContext()?.transcript).toContain("replacement output");
+    expect(facts.map((fact) => fact.type)).toEqual(["terminal-command-submitted", "terminal-command-finished"]);
+    expect(facts[1]).toMatchObject({ type: "terminal-command-finished", evidence: { command: "pwd", exitStatus: 0 } });
   });
 
   it("rejects preactive input and does not observe markers before a terminal block is active", async () => {

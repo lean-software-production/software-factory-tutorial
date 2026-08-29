@@ -63,8 +63,14 @@ function evidenceMatchesBlock(evidence: AttemptEvidence, block: WorkbookBlock): 
 function acceptsWorkImmediately(block: OrderedWorkbookBlock): boolean { return block.origin === "structural" || block.kind === "narrative"; }
 
 function publicBlock(block: WorkbookBlock): PublicWorkbookBlock { const { tutor: _privateTutor, ...visible } = block as WorkbookBlock & { tutor?: string }; return visible; }
-function publicLesson(lesson: WorkbookLesson, blocks: WorkbookBlock[]): PublicWorkbookLesson { return { ...lesson, blocks: blocks.map(publicBlock) }; }
-async function readTargetDraftText(workspace: string, block: EditorPracticeBlock): Promise<string> { try { return await readFile(await resolveEditorTarget(workspace, block.path), "utf8"); } catch (error: any) { if (error?.code === "ENOENT") return ""; throw error; } }
+function publicLesson(lesson: WorkbookLesson, blocks: WorkbookBlock[]): PublicWorkbookLesson {
+  const { workspace: _privateWorkspace, ...visible } = lesson;
+  return { ...visible, blocks: blocks.map(publicBlock) };
+}
+async function readTargetDraftText(workspace: string, block: EditorPracticeBlock, lessonWorkspace?: string): Promise<string> {
+  try { return await readFile(await resolveEditorTarget(workspace, block.path, lessonWorkspace), "utf8"); }
+  catch (error: any) { if (error?.code === "ENOENT") return ""; throw error; }
+}
 function publicAttemptEvidence(attempt: Attempt): PublicCheckpoint["evidence"] {
   if (attempt.evidence.kind === "editor") return { kind: "editor", text: attempt.evidence.text };
   if (attempt.evidence.kind === "terminal") return { kind: "terminal" };
@@ -337,7 +343,7 @@ async function publicState(loaded: LoadedWorkbook, learnerWorkspace: string, rec
     }
     if (authored.type === "editor-practice" && active && !completed) {
       if (currentAttempt?.evidence.kind === "editor") return { ...withCheckpoint, revision: currentAttempt.version, draftText: currentAttempt.evidence.text, editorStatus: checkpoint?.status === "reviewing" ? "reviewing" : checkpoint?.status === "feedback" ? "feedback" : checkpoint?.status === "accepted" ? "unlocked" : "editing" };
-      return { ...withCheckpoint, revision: 0, draftText: await readTargetDraftText(learnerWorkspace, authored).catch(() => ""), editorStatus: "editing" };
+      return { ...withCheckpoint, revision: 0, draftText: await readTargetDraftText(learnerWorkspace, authored, ordered.chapter.lesson.workspace).catch(() => ""), editorStatus: "editing" };
     }
     if (authored.type === "editor-practice" && currentAttempt?.status === "accepted") return { ...withCheckpoint, revision: currentAttempt.version, editorStatus: "unlocked" };
     return withCheckpoint;
@@ -693,7 +699,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
       if (decision.outcome === "accepted") {
         if (current.evidence.kind === "editor" && active.block.type === "editor-practice") {
           try {
-            if (!await promoteCurrentEditorAttempt({ workspace: learnerWorkspace, attempts, lessonId: active.lessonId, block: { ...active.block, id: active.id }, attemptId: current.id })) {
+            if (!await promoteCurrentEditorAttempt({ workspace: learnerWorkspace, attempts, lessonId: active.lessonId, block: { ...active.block, id: active.id }, attemptId: current.id, lessonWorkspace: active.chapter.lesson.workspace })) {
               const updated = await attempts.markFeedback(current.id, REVIEW_FAILURE_FEEDBACK);
               try { await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK }); }
               finally { if (updated) notifyStateChanged(attemptStateEvent(updated)); }
@@ -750,7 +756,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
 
   const activeObservedBlock = (): ActiveObservedTerminalBlock | undefined => {
     const active = activeDeclaredBlock();
-    return active?.block.type === "terminal-practice" ? { lessonId: active.lessonId, blockId: active.id } : undefined;
+    return active?.block.type === "terminal-practice" ? { lessonId: active.lessonId, blockId: active.id, lessonWorkspace: active.chapter.lesson.workspace } : undefined;
   };
 
   // One workflow owns one embedded terminal session. Bash submission starts an attempt; only its
@@ -1152,7 +1158,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
   const submitEditor = async (blockId: string, text: string) => {
     const active = activeDeclaredBlock();
     if (!active || active.block.type !== "editor-practice" || (active.id !== blockId && active.declaredId !== blockId)) throw new WorkbookWorkflowCommandError(409, "This editor block is not active yet.");
-    try { await resolveEditorTarget(learnerWorkspace, active.block.path); }
+    try { await resolveEditorTarget(learnerWorkspace, active.block.path, active.chapter.lesson.workspace); }
     catch (error) { throw new WorkbookWorkflowCommandError(400, error instanceof Error ? error.message : "Unsafe editor target path."); }
     await submitAttempt({ lessonId: active.lessonId, blockId: active.id, evidence: { kind: "editor", text }, privateGuidance: active.block.tutor });
     return await currentPublicState();

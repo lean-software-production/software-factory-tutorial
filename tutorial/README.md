@@ -155,10 +155,12 @@ relative to it. If you put `pi` on your `PATH` with the `export` above rather th
 globally, repeat that export in this terminal after changing directory — from lesson 002 the
 scripts you write call `pi` themselves.
 
-The files you write by hand all live under `factory/` in that session workspace, which is where
-the tutor looks for your work. Edit them with your usual editor as the tutor instructs, then go
-back to the tutor for the next step or for feedback. Once you have created
-`factory/refactor-do.sh` in lesson 002, run it directly:
+Most files you write by hand live under `factory/` in that session workspace, which is where the
+tutor looks for your work. A lesson may also put you in a smaller lesson folder under
+`workspaces/`; when that happens, the workbook's embedded editor and terminal start there, while
+the surrounding session workspace and Git repository remain shared. Edit files with your usual
+editor as the tutor instructs, then go back to the tutor for the next step or for feedback. Once
+you have created `factory/refactor-do.sh` in lesson 002, run it directly:
 
 ```sh
 chmod +x factory/refactor-do.sh

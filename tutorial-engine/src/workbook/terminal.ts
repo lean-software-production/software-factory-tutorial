@@ -6,6 +6,7 @@ import * as pty from "node-pty";
 import type { TutorialLogger } from "./runtime-log.js";
 import { createTutorialLogger } from "./runtime-log.js";
 import { NO_RUNTIME_PROVISION, type TrustedRuntimeProvision } from "./runtime-provision.js";
+import { lessonWorkspaceContainerPath } from "./lesson-workspace.js";
 import { publicTerminalFrame } from "./public-terminal-contract.js";
 import { TerminalObservation, type TerminalObservationFact } from "./terminal-observation.js";
 import { TerminalShellProtocol } from "./terminal-shell-protocol.js";
@@ -25,7 +26,7 @@ export interface TerminalPty {
   open?(): void;
 }
 
-export interface TerminalPtyOptions { cwd: string; cols: number; rows: number; runtimeProvision?: TrustedRuntimeProvision; }
+export interface TerminalPtyOptions { cwd: string; cols: number; rows: number; runtimeProvision?: TrustedRuntimeProvision; containerWorkdir?: string; }
 interface DockerPty extends TerminalPty { stopContainer?(): void; }
 const WORKBOOK_TERMINAL_IMAGE = "lean-software-production/workbook-terminal:latest";
 const OPENCODE_API_KEY_ENV = "OPENCODE_API_KEY";
@@ -36,14 +37,15 @@ const PI_PREFLIGHT = [
   "const { ModelRuntime } = await import(`${globalRoot}/@earendil-works/pi-coding-agent/dist/index.js`);",
   "if ((await ModelRuntime.create().then((runtime) => runtime.getAvailable())).length === 0) process.exit(1);"
 ].join(" ");
-const DEFAULT_WRITABLE_WORKSPACE_PATHS = ["factory", "calculator", ".tmp", ".tutorial/.tmp", ".git"] as const;
-const DEFAULT_WRITABLE_SCRATCH_DIRECTORIES = [".tmp", ".tutorial/.tmp"] as const;
+const DEFAULT_WRITABLE_WORKSPACE_PATHS = ["factory", "calculator", "workspaces", ".tmp", ".tutorial/.tmp", ".git"] as const;
+const DEFAULT_WRITABLE_SCRATCH_DIRECTORIES = ["workspaces", ".tmp", ".tutorial/.tmp"] as const;
 export type TerminalPtyFactory = (options: TerminalPtyOptions) => TerminalPty;
 export interface DockerRunArgumentsOptions { workspace: string; name: string; apiKey: string; writableWorkspacePaths?: readonly string[]; runtimeProvision?: TrustedRuntimeProvision; }
 
 export interface ActiveObservedTerminalBlock {
   lessonId: string;
   blockId: string;
+  lessonWorkspace?: string;
 }
 
 export interface ActiveTerminalTranscriptContext {
@@ -187,8 +189,13 @@ export function dockerRunArguments(options: DockerRunArgumentsOptions): string[]
 
 export const WORKBOOK_TERMINAL_PROMPT_COMMAND = "status=$?; printf '\\033]633;workbook-finished;%s\\007' \"$status\"; trap 'trap - DEBUG; __workbook_command_file=$(mktemp /tmp/workbook-command.XXXXXX 2>/dev/null || true); command=; if [ -n \"$__workbook_command_file\" ] && fc -ln -1 > \"$__workbook_command_file\" 2>/dev/null; then command=$(<\"$__workbook_command_file\"); fi; if [ -n \"$__workbook_command_file\" ]; then rm -f \"$__workbook_command_file\"; fi; command=${command#	}; command=${command# }; if [ -z \"$command\" ]; then command=$BASH_COMMAND; fi; printf \"\\033]633;workbook-command;\"; printf '%s' \"$command\" | base64 -w 0; printf \"\\007\"' DEBUG";
 
-export function dockerExecArguments(name: string): string[] {
-  return ["exec", "-it", "--env", "PS1=$ ", "--env", `PROMPT_COMMAND=${WORKBOOK_TERMINAL_PROMPT_COMMAND}`, "--workdir", "/workspace", name, "/bin/bash", "--noprofile", "--norc", "-i"];
+function assertContainerWorkdir(path: string): string {
+  if (path !== "/workspace" && !/^\/workspace\/workspaces\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(path)) throw new Error(`Unsafe terminal workdir: ${path}`);
+  return path;
+}
+
+export function dockerExecArguments(name: string, containerWorkdir = "/workspace"): string[] {
+  return ["exec", "-it", "--env", "PS1=$ ", "--env", `PROMPT_COMMAND=${WORKBOOK_TERMINAL_PROMPT_COMMAND}`, "--workdir", assertContainerWorkdir(containerWorkdir), name, "/bin/bash", "--noprofile", "--norc", "-i"];
 }
 
 /** Starts a hardened, per-practice container; browser bytes can only reach docker exec. */
@@ -199,6 +206,7 @@ export function createDockerPty(options: TerminalPtyOptions): TerminalPty {
 class PreparedDockerPty implements DockerPty {
   readonly #workspace: string;
   readonly #runtimeProvision: TrustedRuntimeProvision | undefined;
+  readonly #containerWorkdir: string;
   readonly #name = `workbook-terminal-${randomUUID()}`;
   #cols: number;
   #rows: number;
@@ -209,6 +217,7 @@ class PreparedDockerPty implements DockerPty {
   constructor(options: TerminalPtyOptions) {
     this.#workspace = resolve(options.cwd);
     this.#runtimeProvision = options.runtimeProvision;
+    this.#containerWorkdir = assertContainerWorkdir(options.containerWorkdir ?? "/workspace");
     this.#cols = options.cols;
     this.#rows = options.rows;
     const apiKey = requireOpenCodeApiKey();
@@ -224,7 +233,7 @@ class PreparedDockerPty implements DockerPty {
 
   open(): void {
     if (this.#shell) return;
-    const shell = pty.spawn("docker", dockerExecArguments(this.#name), {
+    const shell = pty.spawn("docker", dockerExecArguments(this.#name, this.#containerWorkdir), {
       name: "xterm-256color", cols: this.#cols, rows: this.#rows, cwd: this.#workspace, env: { ...process.env, TERM: "xterm-256color" }
     }) as TerminalPty;
     this.#shell = shell;
@@ -257,6 +266,7 @@ export class WorkbookTerminalManager {
   readonly workspace: string;
   readonly runtimeProvision: TrustedRuntimeProvision;
   #pty: TerminalPty | undefined;
+  #ptyContainerWorkdir: string | undefined;
   #client: TerminalClient | undefined;
   #replay = "";
   #terminalShellProtocol = new TerminalShellProtocol();
@@ -304,19 +314,24 @@ export class WorkbookTerminalManager {
   }
 
   receive(message: TerminalMessage): void {
-    const shell = this.#pty;
-    if (!shell) return;
     if (message.type === "input") {
       if (typeof message.data !== "string" || Buffer.byteLength(message.data, "utf8") > MAX_INPUT_BYTES) return;
       // A browser may attach while its next terminal block is visibly preloaded. Transport output
       // is harmless then, but input cannot reach the shell until the workflow makes a terminal
-      // block active; otherwise a preloaded canvas would bypass progression authority.
-      if (!this.#getActiveBlock()) return;
+      // block active; otherwise a preloaded canvas would bypass progression authority. When that
+      // active block has a lesson workspace, replace any preloaded root shell before writing.
+      const block = this.#getActiveBlock();
+      if (!block) return;
+      this.#ensurePtyForWorkdir(this.#containerWorkdirFor(block));
+      const shell = this.#pty;
+      if (!shell) return;
       this.#appendActiveTranscript("input", message.data);
       this.#terminalObservation?.observeInteractiveInput(message.data);
       shell.write(message.data);
       return;
     }
+    const shell = this.#pty;
+    if (!shell) return;
     if (message.type === "resize" && Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols > 0 && message.rows > 0) {
       shell.resize(Math.min(message.cols, MAX_COLS), Math.min(message.rows, MAX_ROWS));
     }
@@ -350,6 +365,7 @@ export class WorkbookTerminalManager {
     const shell = this.#pty as DockerPty | undefined;
     shell?.kill(); shell?.stopContainer?.();
     this.#pty = undefined;
+    this.#ptyContainerWorkdir = undefined;
     this.#client?.close(1012, "Terminal advanced to the next block.");
     this.#client = undefined;
   }
@@ -369,24 +385,47 @@ export class WorkbookTerminalManager {
     const shell = this.#pty as DockerPty | undefined;
     shell?.kill(); shell?.stopContainer?.();
     this.#pty = undefined;
+    this.#ptyContainerWorkdir = undefined;
   }
 
-  #ensurePty(): void {
-    if (this.#pty) return;
+  #ensurePty(): void { this.#ensurePtyForWorkdir(this.#containerWorkdirFor(this.#getActiveBlock())); }
+
+  #containerWorkdirFor(block: ActiveObservedTerminalBlock | undefined): string {
+    return lessonWorkspaceContainerPath(block?.lessonWorkspace);
+  }
+
+  #currentPtyMatchesActiveBlock(): boolean {
+    const active = this.#getActiveBlock();
+    return !!active && this.#ptyContainerWorkdir === this.#containerWorkdirFor(active);
+  }
+
+  #ensurePtyForWorkdir(containerWorkdir: string): void {
+    if (this.#pty && this.#ptyContainerWorkdir === containerWorkdir) return;
+    const previous = this.#pty as DockerPty | undefined;
+    previous?.kill(); previous?.stopContainer?.();
+    this.#pty = undefined;
+    this.#ptyContainerWorkdir = undefined;
+    this.#terminalObservation?.cancel();
+    this.#terminalObservation = undefined;
+    this.#terminalObservationBlockKey = undefined;
     this.#terminalShellProtocol = new TerminalShellProtocol();
-    const instance = this.#ptyFactory({ cwd: this.workspace, runtimeProvision: this.runtimeProvision, cols: 90, rows: 24 });
+    const instance = this.#ptyFactory({ cwd: this.workspace, runtimeProvision: this.runtimeProvision, cols: 90, rows: 24, containerWorkdir });
     this.#pty = instance;
+    this.#ptyContainerWorkdir = containerWorkdir;
     instance.onData((data) => {
+      if (this.#pty !== instance) return;
       for (const event of this.#terminalShellProtocol.consume(data)) {
         if (event.type === "output") this.#forwardTerminalOutput(event.data);
         else if (event.type === "command-submitted") this.#observeCommandSubmitted(event.command);
-        else this.#terminalObservation?.observeCommandFinished({ exitStatus: event.exitStatus });
+        else if (this.#currentPtyMatchesActiveBlock()) this.#terminalObservation?.observeCommandFinished({ exitStatus: event.exitStatus });
       }
     });
     instance.onExit(({ exitCode, signal }) => {
-      this.#client?.send(publicTerminalFrame({ type: "exit", exitCode, signal }));
       (instance as DockerPty).stopContainer?.();
-      if (this.#pty === instance) this.#pty = undefined;
+      if (this.#pty !== instance) return;
+      this.#client?.send(publicTerminalFrame({ type: "exit", exitCode, signal }));
+      this.#pty = undefined;
+      this.#ptyContainerWorkdir = undefined;
       this.#terminalObservation?.close();
       this.#terminalObservation = undefined;
       this.#terminalObservationBlockKey = undefined;
@@ -399,16 +438,18 @@ export class WorkbookTerminalManager {
 
   #forwardTerminalOutput(data: string): void {
     this.#replay = boundedAppend(this.#replay, data, MAX_REPLAY_BYTES);
-    this.#appendActiveTranscript("output", data);
-    this.#appendActivePublicOutput(data);
+    if (this.#currentPtyMatchesActiveBlock()) {
+      this.#appendActiveTranscript("output", data);
+      this.#appendActivePublicOutput(data);
+      this.#terminalObservation?.observeTerminalOutput(data);
+    }
     this.#client?.send(publicTerminalFrame({ type: "output", data }));
-    this.#terminalObservation?.observeTerminalOutput(data);
   }
 
   #appendActiveTranscript(kind: "input" | "output", data: string): void {
     if (!data) return;
     const block = this.#getActiveBlock();
-    if (!block) return;
+    if (!block || !this.#currentPtyMatchesActiveBlock()) return;
     const key = terminalKey(block);
     if (this.#activeTranscriptBlockKey !== key) {
       this.#activeTranscriptBlockKey = key;
@@ -419,7 +460,7 @@ export class WorkbookTerminalManager {
 
   #appendActivePublicOutput(data: string): void {
     const block = this.#getActiveBlock();
-    if (!block) return;
+    if (!block || !this.#currentPtyMatchesActiveBlock()) return;
     const key = terminalKey(block);
     if (this.#activePublicTranscriptBlockKey !== key) {
       this.#activePublicTranscriptBlockKey = key;
@@ -430,7 +471,7 @@ export class WorkbookTerminalManager {
 
   #observeCommandSubmitted(command: string): void {
     const block = this.#getActiveBlock();
-    if (!block) return;
+    if (!block || !this.#currentPtyMatchesActiveBlock()) return;
     const key = terminalKey(block);
     let observation = this.#terminalObservation;
     if (this.#terminalObservationBlockKey !== key || !observation) {
