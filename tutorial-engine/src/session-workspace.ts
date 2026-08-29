@@ -17,7 +17,7 @@ export const SAFE_SESSION_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 export const LESSON_WORKSPACE_GITIGNORE_LINES = ["factory/**/.tmp/"] as const;
 
 const SESSION_ID_MAX_LENGTH = 64;
-const SKIPPED_AUTHORED_DIRECTORIES = new Set(["node_modules", ".tmp"]);
+const SKIPPED_AUTHORED_ENTRIES = new Set(["node_modules", ".tmp", ".tutorial", ".git", ".DS_Store"]);
 const WORKER_REPOSITORY_GIT_CONFIG = [
   ["user.name", "Tutorial Factory Worker"],
   ["user.email", "factory-worker@example.invalid"],
@@ -126,9 +126,9 @@ async function copyAuthoredDirectory(source: string, destination: string, conten
   const realSource = await realpath(source);
   if (!inside(contentRoot, realSource)) throw new SessionWorkspaceError(`Refusing to materialize a path outside the content root: ${source}`);
   await mkdir(destination, { recursive: true });
+  await chmod(destination, sourceInfo.mode);
   for (const entry of await readdir(source, { withFileTypes: true })) {
-    if (entry.name === ".git") throw new SessionWorkspaceError(`Authored workspace templates must not contain .git: ${resolve(source, entry.name)}`);
-    if (entry.isDirectory() && SKIPPED_AUTHORED_DIRECTORIES.has(entry.name)) continue;
+    if (SKIPPED_AUTHORED_ENTRIES.has(entry.name)) continue;
     const from = resolve(source, entry.name);
     const to = resolve(destination, entry.name);
     if (entry.isSymbolicLink()) throw new SessionWorkspaceError(`Refusing to materialize symlinked content: ${from}`);
@@ -137,8 +137,12 @@ async function copyAuthoredDirectory(source: string, destination: string, conten
       continue;
     }
     if (entry.isFile()) {
+      const sourceFileInfo = await stat(from);
+      if (sourceFileInfo.nlink !== 1) throw new SessionWorkspaceError(`Refusing to materialize hardlinked content: ${from}`);
       await copyFile(from, to);
-      await chmod(to, (await stat(from)).mode);
+      await chmod(to, sourceFileInfo.mode);
+      const destinationInfo = await stat(to);
+      if (!destinationInfo.isFile() || destinationInfo.nlink !== 1) throw new SessionWorkspaceError(`Materialized workspace file must be a fresh ordinary file: ${to}`);
       continue;
     }
     throw new SessionWorkspaceError(`Refusing to materialize unsupported file type: ${from}`);
@@ -166,7 +170,6 @@ async function validateAuthoredWorkspaceTemplate(contentRoot: string, workspaceI
   if (!info.isDirectory()) throw new SessionWorkspaceError(`Authored workspace template must be a directory: ${source}`);
   const realSource = await realpath(source);
   if (!inside(realContentRoot, realSource)) throw new SessionWorkspaceError(`Authored workspace template must stay inside the content root: ${source}`);
-  if (await pathExists(resolve(source, ".git"))) throw new SessionWorkspaceError(`Authored workspace templates must not contain .git: ${source}`);
   return source;
 }
 

@@ -46,6 +46,10 @@ async function contentFixture(): Promise<string> {
   await write(join(root, "workspaces/refactor-line/calculator/package.json"), "{\"type\":\"module\"}\n");
   await write(join(root, "workspaces/refactor-line/calculator/src/index.ts"), "export const value = 1;\n");
   await write(join(root, "workspaces/refactor-line/calculator/node_modules/cache.txt"), "must not copy\n");
+  await write(join(root, "workspaces/refactor-line/calculator/.tmp/cache.txt"), "must not copy\n");
+  await write(join(root, "workspaces/refactor-line/calculator/.tutorial/state.json"), "must not copy\n");
+  await write(join(root, "workspaces/refactor-line/calculator/.git/config"), "must not copy\n");
+  await write(join(root, "workspaces/refactor-line/calculator/.DS_Store"), "must not copy\n");
   await write(join(root, "workspaces/refactor-line/factory/refactor.md"), "factory seed\n");
   return root;
 }
@@ -113,7 +117,7 @@ describe("SessionWorkspaceManager", () => {
     await expect(manager.reopenSession("lesson-007")).resolves.toEqual(created);
   });
 
-  it("materializes every declared workspace and never copies node_modules or authored workbook content", async () => {
+  it("materializes every declared workspace and skips generated/session/dependency/VCS state without copying authored workbook content", async () => {
     const contentRoot = await contentFixture();
     await declareWorkspaceLesson(contentRoot, "002", "your-first-factory");
     await write(join(contentRoot, "workspaces/your-first-factory/spec.md"), "starter spec\n");
@@ -125,7 +129,7 @@ describe("SessionWorkspaceManager", () => {
     expect((await readdir(session.sessionRoot)).sort()).toEqual([SESSION_WORKSPACES_DIRECTORY].sort());
     expect(Object.keys(session.workspaceRoots).sort()).toEqual(["refactor-line", "your-first-factory"]);
     const refactor = workspaceRootFor(session, "refactor-line");
-    await expect(readdir(join(refactor, "calculator"))).resolves.not.toContain("node_modules");
+    await expect(readdir(join(refactor, "calculator"))).resolves.not.toEqual(expect.arrayContaining(["node_modules", ".tmp", ".tutorial", ".git", ".DS_Store"]));
     await expect(readFile(join(refactor, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
     await expect(readFile(join(refactor, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
     await expect(readFile(join(workspaceRootFor(session, "your-first-factory"), "spec.md"), "utf8")).resolves.toBe("starter spec\n");
@@ -135,14 +139,17 @@ describe("SessionWorkspaceManager", () => {
     }
   });
 
-  it("preserves executable modes in copied workspace templates", async () => {
+  it("preserves directory and executable modes in copied workspace templates", async () => {
     const contentRoot = await contentFixture();
     await write(join(contentRoot, "workspaces/refactor-line/factory/run.sh"), "#!/usr/bin/env bash\n");
+    await mkdir(join(contentRoot, "workspaces/refactor-line/factory/empty-mode-dir"));
     await chmod(join(contentRoot, "workspaces/refactor-line/factory/run.sh"), 0o755);
+    await chmod(join(contentRoot, "workspaces/refactor-line/factory/empty-mode-dir"), 0o750);
 
     const session = await (await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "modes" });
 
     expect((await stat(join(refactorRoot(session), "factory/run.sh"))).mode & 0o111).not.toBe(0);
+    expect((await stat(join(refactorRoot(session), "factory/empty-mode-dir"))).mode.toString(8).slice(-4)).toBe("0750");
   });
 
   it("keeps authored content immutable when a live workspace changes", async () => {
@@ -311,11 +318,14 @@ describe("SessionWorkspaceManager", () => {
     await expect((await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "bad-scoped" })).rejects.toThrow(/workspace/);
   });
 
-  it("rejects authored workspace .git directories and symlinked templates", async () => {
+  it("skips authored workspace .git directories and rejects symlinked templates", async () => {
     const contentRoot = await contentFixture();
     await declareWorkspaceLesson(contentRoot, "git-template", "git-template");
-    await mkdir(join(contentRoot, "workspaces/git-template/.git"), { recursive: true });
-    await expect((await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "git-template" })).rejects.toThrow(/\.git/);
+    await write(join(contentRoot, "workspaces/git-template/.git/config"), "generated git metadata\n");
+    await write(join(contentRoot, "workspaces/git-template/spec.md"), "real template\n");
+    const session = await (await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "git-template" });
+    await expect(readFile(join(workspaceRootFor(session, "git-template"), "spec.md"), "utf8")).resolves.toBe("real template\n");
+    await expect(readFile(join(workspaceRootFor(session, "git-template"), ".git/config"), "utf8")).resolves.not.toContain("generated git metadata");
 
     const symlinked = await contentFixture();
     await declareWorkspaceLesson(symlinked, "symlinked-template", "symlinked-template");
