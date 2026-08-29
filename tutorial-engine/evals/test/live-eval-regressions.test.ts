@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import type { WorkbookTimelineRecord } from "../../tutorial-engine/src/workbook/timeline.js";
+import type { WorkbookTimelineRecord } from "../../src/workbook/timeline.js";
 import { buildV2JudgePrompt, createV2Report, verifyV2JudgeResult } from "../v2/judge.js";
 import { deterministicV2Gate, findV2Scenario, satisfactoryEditorDraft, v2Scenarios } from "../v2/scenarios.js";
 import { createEmptyV2SessionTrace } from "../v2/session.js";
@@ -78,8 +78,12 @@ describe("live v2 evaluator regressions", () => {
   it("documents exact live command usage, prerequisites, scenario selection, cost, and report files", async () => {
     const readme = await readFile("evals/README.md", "utf8");
 
-    expect(readme).toContain("npm run eval -- --scenario v2-exact-command-success");
-    expect(readme).toContain("npm run eval -- --all --yes");
+    expect(readme).toContain("# Synthetic tutorial-engine mechanics evals");
+    expect(readme).toContain("not the future authored-workbook eval suite");
+    expect(readme).toContain("npm run --workspace=tutorial-engine eval -- --scenario v2-exact-command-success");
+    expect(readme).toContain("npm run --workspace=tutorial-engine eval -- --all --yes");
+    expect(readme).toContain("npm run eval:engine -- ...");
+    expect(readme).toContain("temporary compatibility alias");
     expect(readme).toContain("EVAL_JUDGE_MODEL");
     expect(readme).toContain("TUTOR_MODEL");
     expect(readme).toContain("OPENCODE_API_KEY");
@@ -88,10 +92,14 @@ describe("live v2 evaluator regressions", () => {
     expect(readme).toContain("evals/reports/<run-id>/trace.json");
     expect(readme).toContain("evals/reports/<run-id>/judge-input.txt");
     expect(readme).toContain("evals/reports/latest.json");
+    expect(readme).toContain("durable workbook timeline records from `workbook/events.jsonl`");
+    expect(readme).toContain("may include internal terminal lifecycle records");
+    expect(readme).toContain("checked trace citations");
+    expect(readme).not.toContain("public workbook events");
     for (const scenario of v2Scenarios) expect(readme).toContain(scenario.id);
   });
 
-  it("keeps the judge input auditable and limited to the recorded public learner session", () => {
+  it("keeps the judge input auditable about the checked trace boundary", () => {
     const trace = auditableTrace();
     const scenario = findV2Scenario(trace.scenarioId);
     const gate = passingGate(trace);
@@ -102,6 +110,10 @@ describe("live v2 evaluator regressions", () => {
     expect(judgeInput).toContain("command block complete");
     expect(judgeInput).toContain("The public workbook state showed the command block.");
     expect(judgeInput).toContain("factory/.tmp/evaluator-command.txt");
+    expect(judgeInput).toContain("Recorded checked trace");
+    expect(judgeInput).toContain("durable workbook timeline records from workbook/events.jsonl");
+    expect(judgeInput).toContain("not all learner-visible");
+    expect(judgeInput).not.toContain("Recorded public trace");
     expect(judgeInput).not.toContain('"tutor":');
     expect(judgeInput).not.toContain("This is private tutor guidance");
     expect(judgeInput).not.toContain("Do not reveal an exact command");
@@ -112,7 +124,7 @@ describe("live v2 evaluator regressions", () => {
         tutorQuality: { score: 2, citations: [1], rationale: "The terminal transcript was recorded." },
         criteriaFit: { score: 2, citations: [4], rationale: "The artifact snapshot was recorded." }
       },
-      summary: "The judge received the recorded public learner session."
+      summary: "The judge received the checked learner trace."
     }, trace);
     const report = createV2Report({ scenario, trace, gate, judge, judgeInput, tutorModel: "tutor-model", judgeModel: "judge-model" });
 

@@ -66,7 +66,7 @@ export function buildV2JudgePrompt(scenario: V2Scenario, trace: V2SessionTrace, 
 Scenario:
 ${JSON.stringify({ id: scenario.id, title: scenario.title, description: scenario.description, criteria: scenario.criteria }, null, 2)}
 
-Recorded public trace. Citation IDs are the id fields in this array. The trace contains only public workbook state, learner-visible terminal transcript, public reflection turns, workbook events, and artifact snapshots:
+Recorded checked trace. Citation IDs are the id fields in this array. This list contains public workbook state (including public editor projections), learner-visible terminal transcript, public reflection turns, durable workbook timeline records from workbook/events.jsonl, and allowlisted artifact snapshots. Timeline records may include internal terminal lifecycle records and are not all learner-visible. The trace has passed the existing structural private tutor-field and known private tutor-guidance sentinel checks:
 ${JSON.stringify(citations, null, 2)}
 
 Deterministic protocol gate:

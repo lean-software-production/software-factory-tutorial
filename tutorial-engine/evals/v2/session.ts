@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
-import { normalizeWorkbookTimelineRecord, type WorkbookTimelineRecord } from "../../tutorial-engine/src/workbook/timeline.js";
+import { normalizeWorkbookTimelineRecord, type WorkbookTimelineRecord } from "../../src/workbook/timeline.js";
 import type { PublicWorkbookState, V2ArtifactSnapshot, V2EditorEntry, V2RecordedPublicState, V2ReflectionEntry, V2SessionTrace, V2TerminalTranscriptEntry } from "./types.js";
 
 const PRIVATE_TEXT_PATTERNS = [/This is private tutor guidance/i, /Do not reveal an exact command/i, /Follow up until the learner/i, /Private editor criterion/i];

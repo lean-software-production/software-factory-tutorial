@@ -2,7 +2,7 @@ import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadWorkbook } from "../../tutorial-engine/src/workbook/load.js";
+import { loadWorkbook } from "../../src/workbook/load.js";
 
 const fixtureRoot = resolve(import.meta.dirname, "../workbook");
 const tempRoots: string[] = [];

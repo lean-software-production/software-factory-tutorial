@@ -1,14 +1,14 @@
 import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { publicTerminalFrame, type PublicTerminalFrame } from "../../tutorial-engine/src/workbook/public-terminal-contract.js";
-import type { TerminalPty } from "../../tutorial-engine/src/workbook/terminal.js";
-import type { TutorDecision } from "../../tutorial-engine/src/workbook/tutor.js";
+import { publicTerminalFrame, type PublicTerminalFrame } from "../../src/workbook/public-terminal-contract.js";
+import type { TerminalPty } from "../../src/workbook/terminal.js";
+import type { TutorDecision } from "../../src/workbook/tutor.js";
 import { createV2WorkbookDriver, V2WorkbookDriver } from "../v2/driver.js";
 import { clueCommand, exactCommand, satisfactoryEditorDraft } from "../v2/scenarios.js";
 import { createEmptyV2SessionTrace, readWorkbookTimeline } from "../v2/session.js";
 import { createEvaluationWorkspace, type CreateEvaluationWorkspaceOptions } from "../v2/workspace.js";
-import { RecordingPracticeCoach, RecordingMainTutor, type ReviewInput } from "../../tutorial-engine/test/support/fake-tutors.js";
+import { RecordingPracticeCoach, RecordingMainTutor, type ReviewInput } from "../../test/support/fake-tutors.js";
 
 class DriverFakeMainTutor extends RecordingMainTutor {
   protected override defaultReply = "Tutor reply that asks one public follow-up.";
