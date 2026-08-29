@@ -22,6 +22,8 @@
     "check:eval": "tsc -p evals/tsconfig.json",
     "test:eval": "vitest run --root . evals/test/*.test.ts",
     "eval": "npm run build && tsx evals/run.ts",
+    "factory:workbook:record": "tsx test/workbook-factory/record.mts --record-only",
+    "factory:workbook:deterministic": "tsx test/workbook-factory/record.mts --analyze",
     "browser:install": "playwright install chromium",
     "browser:install:ci": "playwright install --with-deps chromium",
     "browser:smoke": "tsx test/browser-smoke.mts",
