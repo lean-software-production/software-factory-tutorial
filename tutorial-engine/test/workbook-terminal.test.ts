@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { WorkbookTerminalManager, dockerContainerUser, dockerExecArguments, type ActiveObservedTerminalBlock, type TerminalClient, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
+import { WorkbookTerminalManager, dockerContainerUser, dockerExecArguments, publicTerminalTranscript, type ActiveObservedTerminalBlock, type TerminalClient, type TerminalPty, type TerminalPtyFactory } from "../src/workbook/terminal.js";
 import type { TerminalObservationFact } from "../src/workbook/terminal-observation.js";
 
 class FakePty implements TerminalPty {
   writes: string[] = [];
   resizes: Array<[number, number]> = [];
   opened = 0;
+  killed = false;
   #data: Array<(data: string) => void> = [];
   #exit: Array<(event: { exitCode: number }) => void> = [];
   constructor(private readonly synchronousOutput?: (data: string) => string | undefined) {}
@@ -15,7 +16,7 @@ class FakePty implements TerminalPty {
     if (output) this.emit(output);
   }
   resize(cols: number, rows: number): void { this.resizes.push([cols, rows]); }
-  kill(): void {}
+  kill(): void { this.killed = true; }
   open(): void { if (!this.opened) this.opened += 1; }
   onData(callback: (data: string) => void): void { this.#data.push(callback); }
   onExit(callback: (event: { exitCode: number }) => void): void { this.#exit.push(callback); }
@@ -24,8 +25,9 @@ class FakePty implements TerminalPty {
 
 class FakeClient implements TerminalClient {
   messages: any[] = [];
+  closed: Array<[number | undefined, string | undefined]> = [];
   send(message: string): void { this.messages.push(JSON.parse(message)); }
-  close(): void {}
+  close(code?: number, reason?: string): void { this.closed.push([code, reason]); }
 }
 
 function marker(command: string): string { return `\x1b]633;workbook-command;${Buffer.from(command).toString("base64")}\x07`; }
@@ -53,6 +55,10 @@ function setup(options: { initialActiveBlock?: ActiveObservedTerminalBlock } = {
 }
 
 describe("WorkbookTerminalManager", () => {
+  it("sanitizes control sequences and common secrets before durable terminal output", () => {
+    expect(publicTerminalTranscript("\u001b[31mvisible\u001b[0m\r\nAPI_KEY=top-secret\nBearer abc.def")).toBe("visible\nAPI_KEY= [redacted]\nBearer [redacted]");
+  });
+
   it("uses the host identity and installs Bash's private command markers", () => {
     expect(dockerContainerUser()).toBe(`${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`);
     expect(dockerExecArguments("terminal").join(" ")).toContain("workbook-command");
@@ -127,6 +133,26 @@ describe("WorkbookTerminalManager", () => {
 
     active.block = { lessonId: "lesson", blockId: "other" };
     expect(manager.activeTranscriptContext()).toBeUndefined();
+  });
+
+  it("resets a completed terminal transport before a distinct terminal block can attach", () => {
+    const { manager, ptys, active } = setup();
+    const firstClient = new FakeClient();
+    manager.attach(firstClient);
+    ptys[0]!.emit("\u001b[31mterminal A output\u001b[0m\r\n");
+
+    expect(manager.activePublicSnapshot()).toEqual({ lessonId: "lesson", blockId: "practice", transcript: "terminal A output\n" });
+    manager.resetAfterTerminalContinuation(activePractice);
+
+    expect(ptys[0]!.killed).toBe(true);
+    expect(firstClient.closed).toEqual([[1012, "Terminal advanced to the next block."]]);
+    active.block = { lessonId: "lesson", blockId: "other" };
+    const secondClient = new FakeClient();
+    expect(manager.attach(secondClient)).toBe(true);
+    expect(ptys).toHaveLength(2);
+    expect(secondClient.messages).toEqual([]);
+    ptys[1]!.emit("terminal B output\r\n");
+    expect(manager.activePublicSnapshot()).toEqual({ lessonId: "lesson", blockId: "other", transcript: "terminal B output\n" });
   });
 
   it("records accepted input before synchronous PTY output caused by that input", async () => {

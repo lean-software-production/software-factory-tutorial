@@ -53,6 +53,13 @@ export interface ActiveTerminalTranscriptContext {
   transcript: string;
 }
 
+/** The only terminal text persisted into the browser-safe event stream. */
+export interface ActiveTerminalPublicSnapshot {
+  lessonId: string;
+  blockId: string;
+  transcript: string;
+}
+
 export interface WorkbookTerminalManagerOptions {
   workspace: string;
   runtimeProvision?: TrustedRuntimeProvision;
@@ -65,6 +72,7 @@ export interface WorkbookTerminalManagerOptions {
 
 const MAX_REPLAY_BYTES = 64_000;
 const MAX_ACTIVE_TERMINAL_CONTEXT_BYTES = 64_000;
+const MAX_PUBLIC_TERMINAL_SNAPSHOT_BYTES = 16_000;
 const MAX_INPUT_BYTES = 16_384;
 const MAX_COLS = 500;
 const MAX_ROWS = 200;
@@ -74,6 +82,23 @@ function boundedAppend(previous: string, addition: string, limit: number): strin
   return next.length > limit ? next.slice(-limit) : next;
 }
 function terminalKey(block: ActiveObservedTerminalBlock): string { return `${block.lessonId}:${block.blockId}`; }
+
+/**
+ * Browser terminal frames can include escape sequences and control bytes. Historical output is
+ * rendered in a `<pre>`, not replayed into xterm, so retain only printable text and basic layout.
+ * Commands, protocol markers, evidence references, and private tutor context are never included.
+ */
+export function publicTerminalTranscript(output: string): string {
+  return output
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b[PX^_][\s\S]*?\x1b\\/g, "")
+    .replace(/\x1b./g, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[^\n\t\x20-\x7e]/g, "")
+    .replace(/\b((?:api[_-]?key|access[_-]?token|authorization|password|passwd|secret))\b\s*(?:=|:)\s*\S+/gi, "$1= [redacted]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [redacted]");
+}
 
 /** The tmpfs Pi state must be writable by the shell that runs inside the container. */
 export function dockerContainerUser(): string {
@@ -239,6 +264,8 @@ export class WorkbookTerminalManager {
   #terminalObservationBlockKey: string | undefined;
   #activeTranscript = "";
   #activeTranscriptBlockKey: string | undefined;
+  #activePublicTranscript = "";
+  #activePublicTranscriptBlockKey: string | undefined;
   readonly #getActiveBlock: () => ActiveObservedTerminalBlock | undefined;
   readonly #observationSink: (fact: TerminalObservationFact) => Promise<void> | void;
   readonly #ptyFactory: TerminalPtyFactory;
@@ -302,6 +329,31 @@ export class WorkbookTerminalManager {
     return { lessonId: block.lessonId, blockId: block.blockId, transcript: this.#activeTranscript };
   }
 
+  activePublicSnapshot(): ActiveTerminalPublicSnapshot | undefined {
+    const block = this.#getActiveBlock();
+    if (!block || this.#activePublicTranscriptBlockKey !== terminalKey(block)) return undefined;
+    return { lessonId: block.lessonId, blockId: block.blockId, transcript: this.#activePublicTranscript };
+  }
+
+  /** Discard one completed terminal's transport only after its continuation is durable. */
+  resetAfterTerminalContinuation(leaving: ActiveObservedTerminalBlock): void {
+    if (this.#terminalObservationBlockKey && this.#terminalObservationBlockKey !== terminalKey(leaving)) return;
+    this.#terminalObservation?.close();
+    this.#terminalObservation = undefined;
+    this.#terminalObservationBlockKey = undefined;
+    this.#activeTranscript = "";
+    this.#activeTranscriptBlockKey = undefined;
+    this.#activePublicTranscript = "";
+    this.#activePublicTranscriptBlockKey = undefined;
+    this.#replay = "";
+    this.#terminalShellProtocol = new TerminalShellProtocol();
+    const shell = this.#pty as DockerPty | undefined;
+    shell?.kill(); shell?.stopContainer?.();
+    this.#pty = undefined;
+    this.#client?.close(1012, "Terminal advanced to the next block.");
+    this.#client = undefined;
+  }
+
   dispose(): void { this.#stopTerminal(); }
 
   #stopTerminal(): void {
@@ -310,6 +362,8 @@ export class WorkbookTerminalManager {
     this.#terminalObservationBlockKey = undefined;
     this.#activeTranscript = "";
     this.#activeTranscriptBlockKey = undefined;
+    this.#activePublicTranscript = "";
+    this.#activePublicTranscriptBlockKey = undefined;
     this.#client?.close(1001, "Workbook terminal stopped.");
     this.#client = undefined;
     const shell = this.#pty as DockerPty | undefined;
@@ -338,12 +392,15 @@ export class WorkbookTerminalManager {
       this.#terminalObservationBlockKey = undefined;
       this.#activeTranscript = "";
       this.#activeTranscriptBlockKey = undefined;
+      this.#activePublicTranscript = "";
+      this.#activePublicTranscriptBlockKey = undefined;
     });
   }
 
   #forwardTerminalOutput(data: string): void {
     this.#replay = boundedAppend(this.#replay, data, MAX_REPLAY_BYTES);
     this.#appendActiveTranscript("output", data);
+    this.#appendActivePublicOutput(data);
     this.#client?.send(publicTerminalFrame({ type: "output", data }));
     this.#terminalObservation?.observeTerminalOutput(data);
   }
@@ -358,6 +415,17 @@ export class WorkbookTerminalManager {
       this.#activeTranscript = "";
     }
     this.#activeTranscript = boundedAppend(this.#activeTranscript, `[TERMINAL ${kind.toUpperCase()}]\n${data}`, MAX_ACTIVE_TERMINAL_CONTEXT_BYTES);
+  }
+
+  #appendActivePublicOutput(data: string): void {
+    const block = this.#getActiveBlock();
+    if (!block) return;
+    const key = terminalKey(block);
+    if (this.#activePublicTranscriptBlockKey !== key) {
+      this.#activePublicTranscriptBlockKey = key;
+      this.#activePublicTranscript = "";
+    }
+    this.#activePublicTranscript = boundedAppend(this.#activePublicTranscript, publicTerminalTranscript(data), MAX_PUBLIC_TERMINAL_SNAPSHOT_BYTES);
   }
 
   #observeCommandSubmitted(command: string): void {

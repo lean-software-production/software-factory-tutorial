@@ -78,7 +78,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
-import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, visibleTerminalText, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
+import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, TerminalHistory, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
 
 const progress: Progress = {
   activeLessonId: "part/lesson-one",
@@ -644,6 +644,36 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector(".timeline-message.tutor:not(.hint):not(.review)")?.textContent).toContain("Tutor reply.");
     expect(container.querySelector(".timeline-message.tutor.review")?.textContent).toContain("Tutor review.");
     expect(container.querySelector(".timeline-message.tutor.review")?.textContent).toContain("Tutor review.");
+  });
+
+  it("keeps terminal A's snapshot below A while terminal B owns the live surface without duplicate anchors", () => {
+    const firstId = "lesson--001-first--run";
+    const secondId = "lesson--001-first--change";
+    const records = [
+      { type: "message", id: "first", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "001-first", blockId: firstId, role: "assistant", source: "authored", presentation: "course", text: "## First terminal" },
+      { type: "message", id: "second", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "001-first", blockId: secondId, role: "assistant", source: "authored", presentation: "course", text: "## Second terminal" },
+    ] as const;
+    const firstTerminalState = { id: firstId, type: "terminal-practice", ready: false, active: false, completed: true, verified: true, emerged: true, terminal: { phase: "complete" as const, message: "Accepted." }, terminalSnapshot: { transcript: "terminal A only" } };
+    const markup = html(createElement(TimelineThread, {
+      activeLessonId: "001-first",
+      activeBlockId: secondId,
+      onSend: vi.fn(async () => undefined),
+      onRetry: vi.fn(async () => undefined),
+      records,
+      renderTerminalHistory: (record) => record.blockId === firstId
+        ? createElement(TerminalHistory, { state: firstTerminalState as any })
+        : null,
+      practiceSurfaceBlockId: secondId,
+      practiceSurface: createElement("div", { "data-live-terminal": secondId }, "live B")
+    }));
+
+    expect(markup.indexOf("First terminal")).toBeLessThan(markup.indexOf("terminal A only"));
+    expect(markup.indexOf("terminal A only")).toBeLessThan(markup.indexOf("Second terminal"));
+    expect(markup.indexOf("Second terminal")).toBeLessThan(markup.indexOf("live B"));
+    expect(markup.match(new RegExp(`id=\\"${firstId}\\"`, "g"))).toHaveLength(1);
+    expect(markup.match(new RegExp(`id=\\"${secondId}\\"`, "g"))).toHaveLength(1);
+    expect(markup.match(/terminal A only/g)).toHaveLength(1);
+    expect(markup).not.toContain("terminal B only");
   });
 
   it("renders Do it for me only for the active authored terminal record with an insertion callback", () => {
@@ -2080,21 +2110,17 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector(".timeline-do-it")).toBeNull();
   });
 
-  it("captures the final visible terminal rows and joins them to terminal success", () => {
-    const lines = ["$ npm test", "PASS  calculator", "", ""];
-    const snapshot = visibleTerminalText({
-      rows: 4,
-      buffer: { active: { viewportY: 6, length: 10, getLine: (row: number) => ({ translateToString: () => lines[row - 6] }) } }
-    } as any);
-    const markup = html(createElement(BlockView, {
-      block: lesson.blocks[1]!,
-      progress: activeBlockProgress(lesson.blocks[1]!, { terminal: { phase: "complete", message: "Accepted by the Main Tutor." } } as any),
-      refresh: vi.fn(),
+  it("renders the durable terminal transcript beside terminal success", () => {
+    const snapshot = "$ npm test\nPASS  calculator";
+    const markup = html(createElement(TerminalHistory, {
+      state: activeBlockProgress(lesson.blocks[1]!, {
+        terminal: { phase: "complete", message: "Accepted by the Main Tutor." },
+        terminalSnapshot: { transcript: snapshot }
+      } as any).blocks[0]
     }));
 
-    expect(snapshot).toBe("$ npm test\nPASS  calculator");
-    expect(markup).toContain('class="terminal-completion-surface"');
-    expect(markup).toContain('class="frozen-terminal-output">Terminal completed.</pre>');
+    expect(markup).toContain('class="terminal-history"');
+    expect(markup).toContain('class="frozen-terminal-output">$ npm test\nPASS  calculator</pre>');
     expect(markup).toContain("Accepted by the Main Tutor.");
     expect(markup).not.toContain("Terminal session frozen.");
   });
@@ -2123,14 +2149,11 @@ describe("workbook lesson UI", () => {
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
     expect(container.textContent).toContain("Keep the final feedback.");
 
-    const terminalPanel = container.querySelector(".embedded-terminal-panel")!;
-    vi.spyOn(terminalPanel, "getBoundingClientRect").mockReturnValue({ height: 240 } as DOMRect);
-
     await act(async () => { mountedRoot!.render(render({ phase: "complete", message: "Accepted by the Main Tutor." })); });
-    expect(container.querySelector(".frozen-terminal")?.getAttribute("style")).toContain("min-height: 240px");
-    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
-    expect(container.textContent).toContain("Accepted by the Main Tutor.");
-    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
+    expect(container.querySelector(".embedded-terminal-panel")).toBeNull();
+    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(0);
+    expect(container.textContent).not.toContain("Accepted by the Main Tutor.");
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(0);
   });
 
   it("keeps the server state on Enter and replaces it only with Bash-authoritative state", async () => {
@@ -2193,11 +2216,7 @@ describe("workbook lesson UI", () => {
     await act(async () => { await Promise.resolve(); });
 
     expect(container.textContent).toContain(acceptedText);
-    if (_kind === "terminal") {
-      expect(container.querySelector(".current-activity-band")).toBeTruthy();
-    } else {
-      expect(container.querySelector(".current-activity-band")).toBeNull();
-    }
+    expect(container.querySelector(".current-activity-band")).toBeNull();
     expect(container.textContent).not.toContain("Get a hint");
     const continueButtons = [...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue");
     expect(continueButtons).toHaveLength(1);

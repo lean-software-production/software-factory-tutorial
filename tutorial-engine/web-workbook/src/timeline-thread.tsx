@@ -27,7 +27,7 @@ function resizeComposerTextarea(textarea: HTMLTextAreaElement) {
   textarea.style.overflowY = textarea.scrollHeight > composerMaxHeightPx ? "auto" : "hidden";
 }
 
-export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, practiceSurface, practiceSurfaceBlockId, completionPanel, readyBlockIds = [], inputDisabled = false, activeReflectionReviewing = false }: {
+export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, renderTerminalHistory, practiceSurface, practiceSurfaceBlockId, completionPanel, readyBlockIds = [], inputDisabled = false, activeReflectionReviewing = false }: {
   records: readonly TimelineThreadRecord[];
   activeLessonId: string;
   activeBlockId: string;
@@ -35,6 +35,8 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   onRetry(failureId: string): Promise<void>;
   onDoItForMe?(): void;
   renderContinuation?(record: TimelineMessageRecord): React.ReactNode;
+  /** A durable, static terminal transcript directly below its own authored record. */
+  renderTerminalHistory?(record: TimelineMessageRecord): React.ReactNode;
   /** One live practice surface, anchored to its authored record whether ready or active. */
   practiceSurface?: React.ReactNode;
   practiceSurfaceBlockId?: string;
@@ -144,6 +146,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
         if (placesPracticeSurface) renderedPracticeSurface = true;
         nodes.push(<section key={record.id} id={record.blockId} className={`work-block active-block-region${active ? " is-active" : ""}`} tabIndex={-1} data-active-block={active ? "true" : undefined}>
           <article className={`timeline-authored-content${transitionClass}`}><Markdown source="authored" lessonFrame={isLessonFrameRecord(record)}>{record.text}</Markdown></article>
+          {renderTerminalHistory?.(record)}
           {placesPracticeSurface && practiceSurface}
           {canInsertCommand && <button className="button primary timeline-do-it" onClick={() => { onDoItForMe?.(); setCommandInserted(true); }}>{commandInserted ? "Inserted — press Enter" : "Do it for me"}</button>}
           {following.map(renderConversationRecord)}

@@ -1162,6 +1162,53 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("persists an accepted terminal's sanitized snapshot and rebuilds it after reload", async () => {
+    const dir = await fixture();
+    const ptys: ServerFakePty[] = [];
+    const tutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      { outcome: "accepted", message: "Terminal accepted." },
+    );
+    const server = await startWorkbookServer({
+      target: dir,
+      webRoot: resolve(dir, "web"),
+      port: 0,
+      terminalPtyFactory: () => {
+        const pty = new ServerFakePty();
+        ptys.push(pty);
+        return pty;
+      },
+      mainTutor: tutor,
+      practiceCoach: new FakePracticeCoach()
+    });
+    const blockId = "lesson--001-first--run-supplied-command";
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      await submitTerminalAttempt(server.url, blockId);
+      const accepted = await waitForWorkbookState(server.url, (next) =>
+        block(next, blockId)?.terminal?.phase === "complete"
+        && typeof block(next, blockId)?.terminalSnapshot?.transcript === "string", "durable terminal snapshot");
+
+      const snapshot = block(accepted, blockId).terminalSnapshot;
+      expect(snapshot.transcript).toContain(`ran:run ${blockId}`);
+      expect(snapshot.transcript).not.toMatch(/workbook-command|workbook-finished|attemptId|evidenceRef|Observe run result/);
+      expect((await timelineSnapshot(server.url)).some((record) => record.type === "terminal-transcript-snapshotted")).toBe(false);
+      const records = await privateTimeline(dir);
+      expect(records).toContainEqual(expect.objectContaining({ type: "terminal-transcript-snapshotted", lessonId: "001-first", blockId, transcript: snapshot.transcript }));
+
+      await completeBlock(server.url, blockId);
+      expect(ptys[0]!.killed).toBe(true);
+    } finally { await server.close(); }
+
+    const reloaded = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor(), practiceCoach: new FakePracticeCoach() });
+    try {
+      const restored = await state(reloaded.url);
+      expect(block(restored, blockId)?.terminal).toEqual({ phase: "complete", message: "Terminal accepted." });
+      expect(block(restored, blockId)?.terminalSnapshot).toEqual({ transcript: expect.stringContaining(`ran:run ${blockId}`) });
+    } finally { await reloaded.close(); }
+  });
+
   it("keeps finished Coach working and provider failures in Checking while retrying invisibly", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty(false);

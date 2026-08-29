@@ -93,7 +93,20 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const mainTutor = options.mainTutor ?? new DefaultMainWorkbookTutor({ workspace: runtime.contentRoot, log });
   const practiceCoach = options.practiceCoach ?? new FastPracticeCoach({ workspace: runtime.workspaceRoot, log });
   let terminal: WorkbookTerminalManager | undefined;
-  const workflow = await createWorkbookWorkflow({ contentRoot: runtime.contentRoot, learnerWorkspace: runtime.workspaceRoot, timeline, attempts, mainTutor, practiceCoach, terminalEvidence, terminalAssessmentScheduler: options.terminalAssessmentScheduler, activeTerminalContext: () => terminal?.activeTranscriptContext(), log });
+  const workflow = await createWorkbookWorkflow({
+    contentRoot: runtime.contentRoot,
+    learnerWorkspace: runtime.workspaceRoot,
+    timeline,
+    attempts,
+    mainTutor,
+    practiceCoach,
+    terminalEvidence,
+    terminalAssessmentScheduler: options.terminalAssessmentScheduler,
+    activeTerminalContext: () => terminal?.activeTranscriptContext(),
+    activeTerminalSnapshot: () => terminal?.activePublicSnapshot(),
+    onTerminalContinued: (block) => terminal?.resetAfterTerminalContinuation(block),
+    log
+  });
   await workflow.start();
 
   terminal = embeddedTerminalEnabled ? new WorkbookTerminalManager({

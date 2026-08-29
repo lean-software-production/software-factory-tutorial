@@ -9,6 +9,8 @@ export type PublicTerminal =
   | { phase: "checking" }
   | { phase: "feedback"; message: string }
   | { phase: "complete"; message: string };
+/** Sanitized, bounded output captured when a terminal attempt is accepted. */
+export type PublicTerminalSnapshot = { transcript: string };
 export type PublicWorkbookBlock =
   | { id: string; type: "narrative"; title: string; markdown: string }
   | { id: string; type: "terminal-practice"; title: string; markdown: string }
@@ -18,7 +20,7 @@ export interface PublicWorkbookLesson { id: string; title: string; dek: string; 
 export interface PublicWorkbookChapter { id: string; title: string; partId?: string; part?: string; partMarkdown?: string; partNumber?: number; lessonNumber: number; lesson?: PublicWorkbookLesson; }
 export type PublicReflectionTurn = { role: "learner" | "tutor"; text: string };
 export interface PublicCheckpoint { status: "working" | "reviewing" | "feedback" | "accepted"; feedback?: string; successMessage?: string; summary?: string; evidence?: { kind: PublicAttemptKind; text?: string; conversation?: PublicReflectionTurn[] }; }
-export interface PublicWorkbookBlockProgress { id: string; type?: PublicWorkbookBlockKind | string; anchorId?: string; origin?: string; kind?: PublicWorkbookBlockKind | string; title?: string; ready: boolean; active: boolean; completed: boolean; completedAt?: string; verified: boolean; emerged: boolean; workAccepted?: boolean; checkpoint?: PublicCheckpoint; /** Terminal practice never uses the legacy checkpoint fallback. */ terminal?: PublicTerminal; revision?: number; draftText?: string; editorStatus?: PublicEditorStatus; }
+export interface PublicWorkbookBlockProgress { id: string; type?: PublicWorkbookBlockKind | string; anchorId?: string; origin?: string; kind?: PublicWorkbookBlockKind | string; title?: string; ready: boolean; active: boolean; completed: boolean; completedAt?: string; verified: boolean; emerged: boolean; workAccepted?: boolean; checkpoint?: PublicCheckpoint; /** Terminal practice never uses the legacy checkpoint fallback. */ terminal?: PublicTerminal; /** Durable historical output for an accepted terminal practice. */ terminalSnapshot?: PublicTerminalSnapshot; revision?: number; draftText?: string; editorStatus?: PublicEditorStatus; }
 export interface PublicWorkbookProgress { activeLessonId: string; activeBlockId: string; activeAnchorId?: string; completedLessons: string[]; completedBlocks?: string[]; workAcceptedBlocks?: string[]; readyBlocks?: string[]; blocks: PublicWorkbookBlockProgress[]; reflections: Record<string, string>; reflectionConversations: Record<string, PublicReflectionTurn[]>; canComplete?: { blockId: string; eligible: boolean; reason?: string }; workbookComplete?: boolean; }
 export interface PublicWorkbookOrderedBlock { id: string; anchorId: string; origin: string; kind: PublicWorkbookBlockKind | string; title: string; lessonId: string; declaredId?: string; order?: number; }
 export type PublicTimelineMessage = { type: "message"; id: string; sequence: number; at: string; lessonId: string; blockId: string; role: "assistant" | "user"; source: "authored" | "learner" | "main_tutor"; presentation: "course" | "chat" | "review"; text: string; blockInView?: string; };
@@ -31,13 +33,14 @@ function strings(value: unknown): value is string[] { return Array.isArray(value
 function terminal(value: unknown): value is PublicTerminal {
   return record(value) && (value.phase === "running" || value.phase === "checking" || (value.phase === "feedback" || value.phase === "complete") && typeof value.message === "string");
 }
+function terminalSnapshot(value: unknown): value is PublicTerminalSnapshot { return record(value) && typeof value.transcript === "string"; }
 function lesson(value: unknown): value is PublicWorkbookLesson { return record(value) && typeof value.id === "string" && typeof value.title === "string" && typeof value.dek === "string" && typeof value.introduction === "string" && typeof value.durationMinutes === "number" && strings(value.outcomes) && Array.isArray(value.blocks); }
 /** Validates fields the browser reads before rendering, without duplicating authored-content validation. */
 export function isPublicWorkbookState(value: unknown): value is PublicWorkbookState {
   if (!record(value) || !record(value.workbook) || typeof value.workbook.title !== "string" || typeof value.introduction !== "string" || typeof value.introductionComplete !== "boolean" || !Array.isArray(value.chapters) || !Array.isArray(value.timeline) || !record(value.progress) || !record(value.adapter)) return false;
   if (!value.chapters.every((chapter) => record(chapter) && typeof chapter.id === "string" && typeof chapter.title === "string" && typeof chapter.lessonNumber === "number" && (chapter.lesson === undefined || lesson(chapter.lesson)))) return false;
   const progress = value.progress;
-  return typeof progress.activeLessonId === "string" && typeof progress.activeBlockId === "string" && strings(progress.completedLessons) && Array.isArray(progress.blocks) && progress.blocks.every((block) => record(block) && (block.terminal === undefined || terminal(block.terminal))) && record(progress.reflections) && record(progress.reflectionConversations);
+  return typeof progress.activeLessonId === "string" && typeof progress.activeBlockId === "string" && strings(progress.completedLessons) && Array.isArray(progress.blocks) && progress.blocks.every((block) => record(block) && (block.terminal === undefined || terminal(block.terminal)) && (block.terminalSnapshot === undefined || terminalSnapshot(block.terminalSnapshot))) && record(progress.reflections) && record(progress.reflectionConversations);
 }
 export function parsePublicWorkbookState(value: unknown): PublicWorkbookState { if (!isPublicWorkbookState(value)) throw new Error("Workbook server returned an invalid public state."); return value; }
 export function parsePublicCompleteBlockResult(value: unknown): PublicCompleteBlockResult {

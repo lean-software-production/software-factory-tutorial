@@ -62,6 +62,21 @@ describe("WorkbookTimeline", () => {
     expect(await timeline.read()).toEqual([record]);
   });
 
+  it("persists a browser-safe terminal snapshot separately from private command evidence", async () => {
+    const timeline = new WorkbookTimeline(await workspace());
+    const record = await timeline.append({
+      type: "terminal-transcript-snapshotted",
+      attemptId: "attempt-1",
+      lessonId: "lesson-1",
+      blockId: "lesson-1--terminal",
+      transcript: "sanitized learner-visible output\n",
+    });
+
+    expect(record).toMatchObject({ type: "terminal-transcript-snapshotted", lessonId: "lesson-1", blockId: "lesson-1--terminal", transcript: "sanitized learner-visible output\n" });
+    expect(JSON.stringify(record)).not.toMatch(/command|evidenceRef|rubric|handoff|secret/i);
+    expect(await timeline.read()).toEqual([record]);
+  });
+
   it("assigns deterministic IDs to pre-timeline workflow rows", async () => {
     const directory = await workspace();
     const timeline = new WorkbookTimeline(directory);

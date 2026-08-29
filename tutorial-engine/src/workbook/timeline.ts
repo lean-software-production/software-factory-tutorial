@@ -10,13 +10,14 @@ export type TimelineMetadata = { id: string; sequence: number; at: string };
 export type TerminalCoachHandoffOutcome = "ready" | "interesting";
 
 /**
- * The durable terminal lifecycle. Command text, evidence references, and the Coach handoff stay
- * in this private session log; the public projection exposes only a safe terminal phase and final
- * learner message.
+ * The durable terminal lifecycle. Commands, evidence references, and Coach handoffs stay private.
+ * A bounded, sanitized terminal transcript is the sole browser-safe terminal payload: it is written
+ * only when an attempt is accepted and is projected as historical output for that authored block.
  */
 export type TerminalLifecycleInput =
   | { type: "terminal-command-submitted"; attemptId: string; lessonId: string; blockId: string; command: string; terminalSessionId: string }
   | { type: "terminal-command-finished"; attemptId: string; exitStatus: number; evidenceRef: string }
+  | { type: "terminal-transcript-snapshotted"; attemptId: string; lessonId: string; blockId: string; transcript: string }
   | { type: "terminal-feedback-recorded"; attemptId: string; text: string }
   | { type: "terminal-coach-handoff-recorded"; attemptId: string; outcome: TerminalCoachHandoffOutcome; text: string };
 

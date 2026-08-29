@@ -129,24 +129,8 @@ function terminalSocketUrl(): string {
   return url.href;
 }
 
-/**
- * Capture only the rows the learner could see when the terminal stopped. xterm has already
- * interpreted control and colour sequences by this point, so the frozen `<pre>` is a faithful,
- * safe HTML representation rather than a replay of raw terminal bytes. Trailing empty rows are
- * layout, not transcript: retaining them is what used to leave a large dark gap before success.
- */
-export function visibleTerminalText(terminal: Terminal | null): string | undefined {
-  const buffer = terminal?.buffer?.active;
-  if (!buffer) return undefined;
-  const lines: string[] = [];
-  const lastRow = Math.min(buffer.length, buffer.viewportY + terminal.rows);
-  for (let row = buffer.viewportY; row < lastRow; row += 1) lines.push(buffer.getLine(row)?.translateToString(true) ?? "");
-  while (lines.at(-1) === "") lines.pop();
-  return lines.join("\n") || undefined;
-}
-
-function FrozenTerminal({ text, height }: { text?: string; height?: number }) {
-  return <div className="frozen-terminal" aria-label="Frozen terminal session" style={height ? { minHeight: height } : undefined}>
+export function FrozenTerminal({ text }: { text?: string }) {
+  return <div className="frozen-terminal" aria-label="Frozen terminal session">
     <pre className="frozen-terminal-output">{text ?? "Terminal completed."}</pre>
   </div>;
 }
@@ -163,22 +147,15 @@ function setTerminalInteractivity(terminal: Terminal | null, element: HTMLDivEle
   if (helperTextarea) helperTextarea.disabled = !interactive;
 }
 
-function EmbeddedTerminal({ command, active, frozen = false, onError, onTerminalInsertionChange }: { command?: string; active: boolean; frozen?: boolean; onError(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange }: { command?: string; active: boolean; onError(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const terminalPanel = useRef<HTMLDivElement | null>(null);
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
-  const frozenText = useRef<string | undefined>(undefined);
-  const frozenHeight = useRef<number | undefined>(undefined);
   const fit = useRef<FitAddon | null>(null);
   const socket = useRef<WebSocket | null>(null);
   const interactive = useRef(active);
   const [connected, setConnected] = useState(false);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
-
-  // `frozen` changes during the render that replaces xterm. Read its buffer and measured panel
-  // height before the effect below disposes it, then retain both through later state renders.
-  if (frozen && frozenText.current === undefined) frozenText.current = visibleTerminalText(terminal.current);
-  if (frozen && frozenHeight.current === undefined) frozenHeight.current = terminalPanel.current?.getBoundingClientRect().height;
 
   // This changes input authority in place. It deliberately does not participate in the setup
   // effect below, so promoting a ready terminal keeps its xterm instance and WebSocket alive.
@@ -188,7 +165,7 @@ function EmbeddedTerminal({ command, active, frozen = false, onError, onTerminal
   }, [active]);
 
   useEffect(() => {
-    if (frozen || !terminalElement.current) return;
+    if (!terminalElement.current) return;
     const nextTerminal = new Terminal({ cursorBlink: true, convertEol: true, disableStdin: !interactive.current, fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 16, theme: { background: "#101820" } });
     const nextFit = new FitAddon();
     nextTerminal.loadAddon(nextFit);
@@ -242,7 +219,7 @@ function EmbeddedTerminal({ command, active, frozen = false, onError, onTerminal
       socket.current = null;
       setConnected(false);
     };
-  }, [frozen, onError]);
+  }, [onError]);
 
   const insertCommand = useCallback(() => {
     if (!interactive.current || !command) return;
@@ -251,15 +228,14 @@ function EmbeddedTerminal({ command, active, frozen = false, onError, onTerminal
   }, [command]);
 
   useEffect(() => {
-    if (!active || frozen || !command || !connected || socket.current?.readyState !== WebSocket.OPEN) {
+    if (!active || !command || !connected || socket.current?.readyState !== WebSocket.OPEN) {
       onTerminalInsertionChange?.(undefined);
       return;
     }
     onTerminalInsertionChange?.(insertCommand);
     return () => onTerminalInsertionChange?.(undefined);
-  }, [active, command, connected, connectionEpoch, frozen, insertCommand, onTerminalInsertionChange]);
+  }, [active, command, connected, connectionEpoch, insertCommand, onTerminalInsertionChange]);
 
-  if (frozen) return <FrozenTerminal text={frozenText.current} height={frozenHeight.current} />;
   return <div ref={terminalPanel} className="embedded-terminal-panel">
     <span className={`terminal-connection-status${connected ? " connected" : ""}`} aria-label={connected ? "Terminal connected" : "Terminal disconnected"} />
     <div ref={terminalElement} className="embedded-terminal" aria-label="Embedded terminal" aria-disabled={active ? undefined : "true"} />
@@ -334,7 +310,15 @@ function initialTerminalDisplay(state: BlockProgress | undefined): TerminalCoach
   return reduceTerminalCoachingDisplay(createTerminalCoachingDisplayState(), { type: "server-state", terminal: state?.terminal });
 }
 
-function TerminalBlock({ lessonId, block, state, onTerminalInsertionChange }: { lessonId: string; block: Block; state: BlockProgress | undefined; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+export function TerminalHistory({ state }: { state: BlockProgress | undefined }) {
+  if (!state?.terminalSnapshot) return null;
+  return <div className="terminal-history" aria-label="Completed terminal output">
+    <FrozenTerminal text={state.terminalSnapshot.transcript} />
+    {state.terminal?.phase === "complete" && <aside className="terminal-history-complete"><Markdown source="generated">{state.terminal.message}</Markdown></aside>}
+  </div>;
+}
+
+function TerminalBlock({ block, state, onTerminalInsertionChange }: { block: Block; state: BlockProgress | undefined; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const command = shellCommandFrom(block.markdown);
   const [display, dispatch] = useReducer(reduceTerminalCoachingDisplay, state, initialTerminalDisplay);
   const [terminalError, setTerminalError] = useState<string>();
@@ -351,17 +335,14 @@ function TerminalBlock({ lessonId, block, state, onTerminalInsertionChange }: { 
   // Exactly one in-place learner-facing node represents status, feedback, completion, or a
   // transport error. It is never moved into the activity/timeline portal.
   const displayPanel = text ? <aside className={`live-block-feedback terminal-feedback-overlay${display.phase === "running" ? " running" : ""}`} aria-live="polite" role="status">{display.phase === "running" && <span className="terminal-running-spinner" aria-hidden="true" />}<Markdown source="generated">{text}</Markdown></aside> : null;
-  return <section id={blockElementId(lessonId, block.id)} className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
-    {complete ? <div className="terminal-completion-surface">
-      <EmbeddedTerminal command={command} active={Boolean(state?.active)} frozen onError={setTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} />
-      {displayPanel}
-    </div> : showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
+  return <div className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
+    {showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
       <EmbeddedTerminal command={command} active={Boolean(state?.active)} onError={setTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} />
       {displayPanel}
     </div>}
     {!showLiveTerminal && !complete && displayPanel}
     {preloading && <p className="terminal-coaching-activity subtle">Preparing terminal…</p>}
-  </section>;
+  </div>;
 }
 
 function editorStatusText(state: BlockProgress | undefined, completed: boolean): string {
@@ -373,7 +354,7 @@ function editorStatusText(state: BlockProgress | undefined, completed: boolean):
   return "Editing — changes are reviewed automatically after you pause.";
 }
 
-function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId: string; block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void }) {
+function EditorPracticeBlockView({ block, state, refresh }: { block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void }) {
   const editorElement = useRef<HTMLDivElement | null>(null);
   const editor = useRef<EditorView | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -436,7 +417,7 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
   // One channel, as the terminal has: whatever the learner most needs to read sits welded to the
   // bottom of the work surface. Feedback outranks the running status, which outranks nothing.
   const liveFeedback = localError ?? state?.checkpoint?.feedback ?? editorStatusText(state, completed);
-  return <section id={blockElementId(lessonId, block.id)} className={`work-block editor-practice ${state?.active ? "is-active" : ""}`}>
+  return <div className={`work-block editor-practice ${state?.active ? "is-active" : ""}`}>
     <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
     {canEdit && <div className={`editor-live-surface${liveFeedback ? " has-feedback" : ""}`}>
       <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />
@@ -445,14 +426,14 @@ function EditorPracticeBlockView({ lessonId, block, state, refresh }: { lessonId
     {completed ? <aside className="success-checkpoint editor-unlocked" aria-live="polite">
       <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Unlocked</p><h3>Accepted revision unlocked the next step.</h3><p>{state?.checkpoint?.successMessage || "The latest accepted editor draft was written to the target file."}</p></div>
     </aside> : !canEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
-  </section>;
+  </div>;
 }
 
 export function BlockView({ lessonId, block, progress, refresh, onTerminalInsertionChange }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
-  if (block.type === "terminal-practice") return <TerminalBlock lessonId={resolvedLessonId} block={block} state={state} onTerminalInsertionChange={onTerminalInsertionChange} />;
-  if (block.type === "editor-practice") return <EditorPracticeBlockView lessonId={resolvedLessonId} block={block} state={state} refresh={refresh} />;
+  if (block.type === "terminal-practice") return <TerminalBlock block={block} state={state} onTerminalInsertionChange={onTerminalInsertionChange} />;
+  if (block.type === "editor-practice") return <EditorPracticeBlockView block={block} state={state} refresh={refresh} />;
   return null;
 }
 
@@ -551,7 +532,10 @@ function renderedBlockSource(state: State, blockId: string): PracticeSurfaceSour
 function practiceSurfaceSource(state: State): PracticeSurfaceSource | undefined {
   const active = progressFor(state.progress, state.progress.activeBlockId);
   const activeSource = renderedBlockSource(state, state.progress.activeBlockId);
-  if (active?.active && !active.completed && activeSource && ["terminal-practice", "editor-practice"].includes(activeSource.block.type)) return activeSource;
+  if (active?.active && !active.completed && activeSource && ["terminal-practice", "editor-practice"].includes(activeSource.block.type) && !(activeSource.block.type === "terminal-practice" && active.terminal?.phase === "complete")) return activeSource;
+  // A terminal's accepted snapshot replaces its live xterm before the learner continues. Do not
+  // preload a distinct ready terminal from the old shell; continuation resets that transport.
+  if (activeSource?.block.type === "terminal-practice" && active?.terminal?.phase === "complete") return undefined;
 
   const readyId = readySuccessorId(state.progress);
   const ready = readyId ? progressFor(state.progress, readyId) : undefined;
@@ -769,7 +753,7 @@ export function App() {
     <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
-      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
+      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} renderTerminalHistory={(record) => <TerminalHistory state={state.progress.blocks.find((block) => block.id === record.blockId)} />} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand key={activitySource.block.id} lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
     </article></main>
   </div>;
 }
