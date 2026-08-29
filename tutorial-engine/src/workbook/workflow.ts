@@ -337,7 +337,7 @@ async function publicState(loaded: LoadedWorkbook, workspaceRootForLesson: (less
       return {
         ...base,
         verified: terminal?.phase === "complete",
-        ...(terminal ? { terminal } : {}),
+        ...(terminal ? { terminal, terminalRevision: terminalAttempt!.revision } : {}),
         ...(terminal?.phase === "complete" && terminalSnapshots.has(ordered.id) ? { terminalSnapshot: terminalSnapshots.get(ordered.id)! } : {})
       };
     }
