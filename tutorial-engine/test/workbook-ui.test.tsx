@@ -681,8 +681,9 @@ describe("workbook lesson UI", () => {
     expect(container.querySelectorAll(".timeline-lesson-transition")).toHaveLength(0);
   });
 
-  it("scrolls only when a persisted tutor response or tutor failure is appended", async () => {
+  it("ignores learner echoes and thinking statuses, and leaves already-visible appended responses stable", async () => {
     const scrollIntoView = vi.fn();
+    const scrollTo = vi.fn();
     const baseRecords = [
       { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "Course note" },
       { type: "message", id: "history", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "main_tutor", presentation: "chat", text: "Historic tutor reply" }
@@ -695,9 +696,13 @@ describe("workbook lesson UI", () => {
       activeReflectionReviewing,
       records
     });
-    const container = await mount(render(baseRecords), (win) => { win.HTMLElement.prototype.scrollIntoView = scrollIntoView; });
+    const container = await mount(render(baseRecords), (win) => {
+      win.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+      win.scrollTo = scrollTo as any;
+    });
 
     expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(scrollTo).not.toHaveBeenCalled();
 
     const withLearner = [
       ...baseRecords,
@@ -705,10 +710,12 @@ describe("workbook lesson UI", () => {
     ] as const;
     await act(async () => { mountedRoot!.render(render(withLearner)); });
     expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(scrollTo).not.toHaveBeenCalled();
 
     await act(async () => { mountedRoot!.render(render(withLearner, true)); });
     expect(container.querySelector('.timeline-message.tutor.thinking[role="status"][aria-label="Tutor is thinking"]')).toBeTruthy();
     expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(scrollTo).not.toHaveBeenCalled();
 
     const withReply = [
       ...withLearner,
@@ -716,10 +723,9 @@ describe("workbook lesson UI", () => {
     ] as const;
     await act(async () => { mountedRoot!.render(render(withReply)); });
 
-    expect(scrollIntoView).toHaveBeenCalledTimes(1);
-    const tutorBubble = [...container.querySelectorAll(".timeline-message.tutor")].at(-1);
-    expect(scrollIntoView.mock.instances[0]).toBe(tutorBubble);
-    expect(scrollIntoView.mock.calls[0]?.[0]).toEqual({ behavior: "auto", block: "end" });
+    expect([...container.querySelectorAll(".timeline-message.tutor")].at(-1)?.textContent).toContain("Tutor reply");
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(scrollTo).not.toHaveBeenCalled();
 
     const withFailure = [
       ...withReply,
@@ -727,15 +733,16 @@ describe("workbook lesson UI", () => {
     ] as const;
     await act(async () => { mountedRoot!.render(render(withFailure)); });
 
-    expect(scrollIntoView).toHaveBeenCalledTimes(2);
-    expect(scrollIntoView.mock.instances[1]).toBe(container.querySelector(".timeline-message.tutor.failure"));
-    expect(scrollIntoView.mock.calls[1]?.[0]).toEqual({ behavior: "auto", block: "end" });
+    expect(container.querySelector(".timeline-message.tutor.failure")?.textContent).toContain("Please retry.");
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(scrollTo).not.toHaveBeenCalled();
   });
 
-  it("shows one persisted learner bubble and waits to scroll until the persisted tutor reply arrives", async () => {
+  it("shows one persisted learner bubble and keeps an already-visible persisted tutor reply stable", async () => {
     let resolveSend!: () => void;
     const onSend = vi.fn(() => new Promise<void>((resolve) => { resolveSend = resolve; }));
     const scrollIntoView = vi.fn();
+    const scrollTo = vi.fn();
     const course = { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "Course note" } as const;
     const learner = { type: "message", id: "learner", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "user", source: "learner", presentation: "chat", text: "What should I try next?" } as const;
     const reply = { type: "message", id: "reply", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "main_tutor", presentation: "chat", text: "Try the next visible command." } as const;
@@ -746,7 +753,10 @@ describe("workbook lesson UI", () => {
       onRetry: vi.fn(async () => undefined),
       records
     });
-    const container = await mount(render([course]), (win) => { win.HTMLElement.prototype.scrollIntoView = scrollIntoView; });
+    const container = await mount(render([course]), (win) => {
+      win.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+      win.scrollTo = scrollTo as any;
+    });
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
 
     textarea.value = "What should I try next?";
@@ -759,6 +769,7 @@ describe("workbook lesson UI", () => {
     expect(textarea.disabled).toBe(true);
     expect(container.querySelectorAll(".timeline-message.learner")).toHaveLength(0);
     expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(scrollTo).not.toHaveBeenCalled();
 
     await act(async () => { mountedRoot!.render(render([course, learner])); });
 
@@ -766,14 +777,14 @@ describe("workbook lesson UI", () => {
     expect(learnerBubbles).toHaveLength(1);
     expect(learnerBubbles[0]?.textContent).toContain("What should I try next?");
     expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(scrollTo).not.toHaveBeenCalled();
 
     await act(async () => { mountedRoot!.render(render([course, learner, reply])); });
 
     expect(container.querySelectorAll(".timeline-message.learner")).toHaveLength(1);
-    expect(scrollIntoView).toHaveBeenCalledTimes(1);
-    const tutorBubble = container.querySelector(".timeline-message.tutor");
-    expect(scrollIntoView.mock.instances[0]).toBe(tutorBubble);
-    expect(scrollIntoView.mock.calls[0]?.[0]).toEqual({ behavior: "auto", block: "end" });
+    expect(container.querySelector(".timeline-message.tutor")?.textContent).toContain("Try the next visible command.");
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(scrollTo).not.toHaveBeenCalled();
 
     await act(async () => { resolveSend(); await Promise.resolve(); });
   });

@@ -1,11 +1,11 @@
 #!/usr/bin/env npx tsx
 /**
- * Diagnostic real-browser trace for tutor-chat submit scrolling.
+ * Real-browser contract for tutor-chat reply scrolling.
  *
- * This boots the real workbook UI/server against the visual fixture, sends one delayed fake-tutor
- * chat message, and prints the scroll/layout trace as JSON. It asserts the simplified chat scroll
- * contract: the persisted learner record appears once without scrolling, then the persisted tutor
- * reply receives exactly one deterministic auto/end scroll that leaves the reply above the fixed composer.
+ * This boots the real workbook UI/server against the visual fixture and checks observable scroll
+ * outcomes rather than incidental DOM API calls:
+ *   1. a reply that is already fully visible above the fixed composer leaves scrollY stable;
+ *   2. a reply inserted below/behind the fixed composer is revealed by the minimum needed movement.
  *
  *   npm run --workspace=tutorial-engine build:web:workbook
  *   cd tutorial-engine && npx tsx test/tutor-chat-scroll.mts
@@ -46,16 +46,16 @@ function deferred<T>() {
 }
 
 function longLearnerMessage(): string {
-  return Array.from({ length: 14 }, (_, index) =>
+  return Array.from({ length: 8 }, (_, index) =>
     `Diagnostic learner message paragraph ${index + 1}: `
-    + "This deliberately verbose sentence is repeated so the local echo becomes tall enough to affect the document scroll position and make scrollIntoView behavior measurable in Chromium."
+    + "This deliberately verbose sentence is repeated so the local echo becomes tall enough to make the reply insertion geometry measurable in Chromium."
   ).join("\n\n");
 }
 
-function longTutorReply(): string {
-  return Array.from({ length: 12 }, (_, index) =>
-    `Diagnostic tutor reply paragraph ${index + 1}: `
-    + "This fake response is intentionally long, but neutral; it exists only to make the final tutor card tall enough for scroll measurements."
+function obscuredTutorReply(): string {
+  return Array.from({ length: 6 }, (_, index) =>
+    `Diagnostic obscured tutor reply paragraph ${index + 1}: `
+    + "This fake response is intentionally tall enough to begin below the fixed composer, but short enough to fit within the safe reading region after one minimal scroll."
   ).join("\n\n");
 }
 
@@ -66,17 +66,14 @@ async function main(): Promise<void> {
   const moduleName = "playwright";
   let playwright: { chromium: { launch(options?: unknown): Promise<any> } };
   try { playwright = await import(moduleName) as typeof playwright; }
-  catch { throw new Error("Tutor-chat scroll diagnostic needs Playwright. Install it with `npm install --no-save -D playwright`, then `npx playwright install chromium`."); }
+  catch { throw new Error("Tutor-chat scroll contract needs Playwright. Install it with `npm install --no-save -D playwright`, then `npx playwright install chromium`."); }
 
   const workspace = await mkdtemp(resolve(tmpdir(), "tutor-chat-scroll-"));
   await cp(fixtureRoot, workspace, { recursive: true });
   await mkdir(resolve(workspace, "factory"), { recursive: true });
   await writeFile(resolve(workspace, "factory/answer.md"), "A draft for the visual fixture.\n");
 
-  const reply = deferred<string>();
   const mainTutor = new QueuedMainTutor();
-  mainTutor.replyQueue.push(reply.promise);
-
   const server = await startWorkbookServer({
     target: workspace,
     webRoot,
@@ -88,39 +85,14 @@ async function main(): Promise<void> {
   });
   const browser = await playwright.chromium.launch();
   const trace: any[] = [];
-  let scrollCallCursor = 0;
 
   try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, reducedMotion: "reduce" });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1, reducedMotion: "reduce" });
     await page.addInitScript(() => {
       (globalThis as unknown as { __name: unknown }).__name = (value: unknown) => value;
-      const calls: any[] = [];
-      (window as any).__scrollIntoViewCalls = calls;
-      const original = Element.prototype.scrollIntoView;
-      Element.prototype.scrollIntoView = function (this: Element, ...args: any[]) {
-        const rect = this.getBoundingClientRect();
-        const options = args.length === 0 ? undefined : args[0];
-        calls.push({
-          atMs: Math.round(performance.now()),
-          target: {
-            tagName: this.tagName,
-            id: this.id || undefined,
-            className: typeof (this as HTMLElement).className === "string" ? (this as HTMLElement).className : undefined,
-            text: (this.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 120),
-          },
-          options,
-          rectBefore: { top: Math.round(rect.top), bottom: Math.round(rect.bottom), height: Math.round(rect.height) },
-          scrollYBefore: Math.round(window.scrollY),
-          scrollHeightBefore: document.documentElement.scrollHeight,
-          viewportHeight: window.innerHeight,
-          hash: location.hash,
-        });
-        return original.apply(this, args as [arg?: boolean | ScrollIntoViewOptions]);
-      };
     });
 
-    const snapshot = async (label: string) => {
-      const sample = await page.evaluate(async ({ snapshotLabel, fromScrollCall }: { snapshotLabel: string; fromScrollCall: number }) => {
+    const snapshot = async (label: string) => page.evaluate(async (snapshotLabel: string) => {
       const rectOf = (element: Element | null) => {
         if (!element) return null;
         const rect = element.getBoundingClientRect();
@@ -141,6 +113,7 @@ async function main(): Promise<void> {
       const composer = document.querySelector(".timeline-composer-dock") as HTMLElement | null;
       const textarea = document.querySelector(".timeline-composer-textarea") as HTMLTextAreaElement | null;
       const activeBlock = document.querySelector('[data-active-block="true"]') as HTMLElement | null;
+      const replyScrollGap = Number.parseFloat(getComputedStyle(latest ?? document.documentElement).getPropertyValue("--timeline-reply-scroll-gap"));
       return {
         label: snapshotLabel,
         atMs: Math.round(performance.now()),
@@ -148,6 +121,7 @@ async function main(): Promise<void> {
         documentScrollHeight: document.documentElement.scrollHeight,
         viewportHeight: window.innerHeight,
         maxScrollY: Math.round(document.documentElement.scrollHeight - window.innerHeight),
+        replyScrollGapPx: Number.isFinite(replyScrollGap) ? replyScrollGap : 14,
         latestConversationItem: latest ? {
           tagName: latest.tagName,
           id: latest.id || undefined,
@@ -180,12 +154,41 @@ async function main(): Promise<void> {
           hash: location.hash,
           href: location.href,
         },
-        scrollIntoViewCallCount: ((window as any).__scrollIntoViewCalls ?? []).length,
-        scrollIntoViewCalls: ((window as any).__scrollIntoViewCalls ?? []).slice(fromScrollCall).map((call: any, index: number) => ({ index: fromScrollCall + index, ...call })),
       };
-      }, { snapshotLabel: label, fromScrollCall: scrollCallCursor });
-      scrollCallCursor = sample.scrollIntoViewCallCount;
-      return sample;
+    }, label);
+
+    const placeLatestLearnerBottomAt = async (viewportBottom: number) => page.evaluate((targetBottom: number) => {
+      const learners = [...document.querySelectorAll(".timeline-message.learner")];
+      const latestLearner = learners.at(-1) as HTMLElement | undefined;
+      if (!latestLearner) return { ok: false, reason: "missing latest learner" };
+      const before = latestLearner.getBoundingClientRect();
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      const target = Math.max(0, Math.min(max, window.scrollY + before.bottom - targetBottom));
+      window.scrollTo({ top: target, left: window.scrollX, behavior: "instant" });
+      const after = latestLearner.getBoundingClientRect();
+      return {
+        ok: true,
+        requestedBottom: targetBottom,
+        scrollY: Math.round(window.scrollY),
+        maxScrollY: Math.round(max),
+        learnerBottomBefore: Math.round(before.bottom),
+        learnerBottomAfter: Math.round(after.bottom),
+      };
+    }, viewportBottom);
+
+    const sendMessageAndWaitForLearner = async (text: string, expectedLearnerCount: number, expectedReplyRequestCount: number, snippet: string) => {
+      await page.locator(".timeline-composer-textarea").fill(text);
+      await page.waitForFunction(() => !((document.querySelector(".round-send") as HTMLButtonElement | null)?.disabled), undefined, { timeout: 5_000 });
+      await page.locator(".round-send").click();
+      await waitFor(() => mainTutor.replies.length === expectedReplyRequestCount, `api: fake main tutor did not receive learner message ${expectedReplyRequestCount}`);
+      const learnerRendered = await page.waitForFunction(({ count, textSnippet }: { count: number; textSnippet: string }) => {
+        const learners = [...document.querySelectorAll(".timeline-message.learner")];
+        return learners.length === count
+          && learners.at(-1)?.textContent?.includes(textSnippet)
+          && !document.querySelector(".timeline-message.tutor.thinking");
+      }, { count: expectedLearnerCount, textSnippet: snippet }, { timeout: 10_000 }).then(() => true).catch(() => false);
+      check(learnerRendered, `ui: persisted learner record ${expectedLearnerCount} did not render before tutor reply`);
+      await page.waitForTimeout(150);
     };
 
     await page.goto(server.url);
@@ -213,66 +216,75 @@ async function main(): Promise<void> {
     }, undefined, { timeout: 10_000 }).then(() => true).catch(() => false);
     check(composerReady, "setup: tutor composer was not editable");
 
-    const learnerMessage = longLearnerMessage();
-    const tutorReply = longTutorReply();
-    await page.locator(".timeline-composer-textarea").fill(learnerMessage);
-    await page.waitForFunction(() => !((document.querySelector(".round-send") as HTMLButtonElement | null)?.disabled), undefined, { timeout: 5_000 });
+    const visibleReply = deferred<string>();
+    mainTutor.replyQueue.push(visibleReply.promise);
+    const visibleLearnerMessage = "Diagnostic visible learner question: can you confirm this short setup?";
+    const visibleTutorReply = "Diagnostic visible tutor reply: yes, this card is already fully in the reading region.";
+    await sendMessageAndWaitForLearner(visibleLearnerMessage, 1, 1, "Diagnostic visible learner question");
+    const visibleSetup = await placeLatestLearnerBottomAt(430);
+    check(Boolean((visibleSetup as any).ok), `setup: could not position visible learner (${JSON.stringify(visibleSetup)})`);
+    await page.waitForTimeout(100);
+    const beforeVisibleReply = await snapshot("visible-before-reply");
+    trace.push({ ...beforeVisibleReply, positioning: visibleSetup });
 
-    const scrollSetup = await page.evaluate(() => {
-      const max = document.documentElement.scrollHeight - window.innerHeight;
-      const target = Math.max(0, Math.min(max - 140, Math.round(max * 0.45)));
-      window.scrollTo(0, target);
-      return { target: Math.round(target), maxScrollY: Math.round(max) };
-    });
-    await page.waitForTimeout(200);
-    check(scrollSetup.maxScrollY > 300, `setup: page was not meaningfully scrollable before submission (maxScrollY ${scrollSetup.maxScrollY})`);
-    check(scrollSetup.target < scrollSetup.maxScrollY - 80, `setup: deliberate pre-submit scroll target was too close to the bottom (${JSON.stringify(scrollSetup)})`);
-    trace.push({ ...(await snapshot("before-submission")), deliberatePreSubmitScroll: scrollSetup });
+    visibleReply.resolve(visibleTutorReply);
+    const visibleTutorRendered = await page.waitForFunction((snippet: string) => document.body.textContent?.includes(snippet), "Diagnostic visible tutor reply", { timeout: 10_000 }).then(() => true).catch(() => false);
+    check(visibleTutorRendered, "ui: visible tutor reply did not render");
+    await page.waitForTimeout(500);
+    const afterVisibleReply = await snapshot("visible-after-reply");
+    trace.push(afterVisibleReply);
 
-    await page.locator(".round-send").click();
-    await waitFor(() => mainTutor.replies.length === 1, "api: fake main tutor did not receive the learner message");
-    const persistedLearnerRendered = await page.waitForFunction((snippet: string) => {
-      const learners = [...document.querySelectorAll(".timeline-message.learner")];
-      return learners.length === 1
-        && learners[0]?.textContent?.includes(snippet)
-        && !document.querySelector(".timeline-message.tutor.thinking");
-    }, "Diagnostic learner message paragraph 1", { timeout: 10_000 }).then(() => true).catch(() => false);
-    check(persistedLearnerRendered, "ui: exactly one persisted learner record did not render before tutor reply");
-    await page.waitForTimeout(250);
-    const afterLearner = await snapshot("after-persisted-learner");
-    trace.push(afterLearner);
-    check(afterLearner.conversationCounts.learner === 1, `ui: expected one learner bubble after persisted learner, saw ${afterLearner.conversationCounts.learner}`);
-    check(afterLearner.conversationCounts.thinking === 0, "ui: main-chat thinking card rendered while tutor reply was pending");
-    check(afterLearner.scrollIntoViewCalls.length === 0, `scroll: persisted learner arrival should not scroll (${JSON.stringify(afterLearner.scrollIntoViewCalls)})`);
-
-    reply.resolve(tutorReply);
-    const tutorReplyRendered = await page.waitForFunction((snippet: string) => {
-      const text = document.body.textContent ?? "";
-      return text.includes(snippet) && !document.querySelector(".timeline-message.tutor.thinking");
-    }, "Diagnostic tutor reply paragraph 1", { timeout: 10_000 }).then(() => true).catch(() => false);
-    check(tutorReplyRendered, "ui: final tutor reply did not render");
-    await page.waitForTimeout(350);
-    const afterReply = await snapshot("after-tutor-reply");
-    trace.push(afterReply);
-
-    const replyScrolls = afterReply.scrollIntoViewCalls.filter((call: any) => call.target.className?.includes("timeline-message tutor") && call.target.text?.includes("Diagnostic tutor reply paragraph 1"));
-    check(afterReply.conversationCounts.learner === 1, `ui: expected one learner bubble after tutor reply, saw ${afterReply.conversationCounts.learner}`);
-    check(replyScrolls.length === 1, `scroll: expected exactly one tutor reply scroll, saw ${replyScrolls.length} (${JSON.stringify(afterReply.scrollIntoViewCalls)})`);
-    check(replyScrolls[0]?.options?.behavior === "auto" && replyScrolls[0]?.options?.block === "end", `scroll: tutor reply used unexpected scroll options ${JSON.stringify(replyScrolls[0]?.options)}`);
-    check(!afterReply.scrollIntoViewCalls.some((call: any) => call.options?.behavior === "smooth"), `scroll: tutor reply phase should not use smooth scrolling (${JSON.stringify(afterReply.scrollIntoViewCalls)})`);
-
-    const replyRect = afterReply.latestConversationItem?.rect;
-    const composerDockTop = afterReply.composer.dockRect?.top;
-    if (replyRect && composerDockTop !== undefined) {
-      const gapAboveComposer = composerDockTop - replyRect.bottom;
-      check(replyRect.top > 16, `scroll: tutor reply should not be pinned at the viewport top (${JSON.stringify({ replyRect, composerDockTop })})`);
-      check(replyRect.bottom <= composerDockTop + 2, `scroll: tutor reply bottom should be above the composer dock (${JSON.stringify({ replyRect, composerDockTop })})`);
-      check(gapAboveComposer <= 40, `scroll: tutor reply should end close to the composer dock (${JSON.stringify({ gapAboveComposer, replyRect, composerDockTop })})`);
+    const visibleScrollDelta = afterVisibleReply.scrollY - beforeVisibleReply.scrollY;
+    check(Math.abs(visibleScrollDelta) <= 1, `scroll: already-visible tutor reply changed scrollY by ${visibleScrollDelta}px (${JSON.stringify({ before: beforeVisibleReply.scrollY, after: afterVisibleReply.scrollY })})`);
+    const visibleReplyRect = afterVisibleReply.latestConversationItem?.rect;
+    const visibleComposerTop = afterVisibleReply.composer.dockRect?.top;
+    if (visibleReplyRect && visibleComposerTop !== undefined) {
+      const safeBottom = visibleComposerTop - afterVisibleReply.replyScrollGapPx;
+      check(visibleReplyRect.top >= 0 && visibleReplyRect.bottom <= safeBottom + 2, `scroll: visible tutor reply was not fully above the composer (${JSON.stringify({ visibleReplyRect, visibleComposerTop, safeBottom })})`);
     } else {
-      check(false, `scroll: missing tutor reply or composer geometry (${JSON.stringify(afterReply.latestConversationItem)}, ${JSON.stringify(afterReply.composer)})`);
+      check(false, `scroll: missing visible tutor reply or composer geometry (${JSON.stringify(afterVisibleReply.latestConversationItem)}, ${JSON.stringify(afterVisibleReply.composer)})`);
     }
 
-    check(mainTutor.replies[0]?.learnerMessage.text === learnerMessage.trim(), "api: fake main tutor received unexpected learner message text");
+    const hiddenReply = deferred<string>();
+    mainTutor.replyQueue.push(hiddenReply.promise);
+    const hiddenLearnerMessage = longLearnerMessage();
+    const hiddenTutorReply = obscuredTutorReply();
+    await sendMessageAndWaitForLearner(hiddenLearnerMessage, 2, 2, "Diagnostic learner message paragraph 1");
+    const composerTopBeforeHidden = (await snapshot("obscured-position-reference")).composer.dockRect?.top ?? 790;
+    const hiddenSetup = await placeLatestLearnerBottomAt(composerTopBeforeHidden - 24);
+    check(Boolean((hiddenSetup as any).ok), `setup: could not position obscured learner (${JSON.stringify(hiddenSetup)})`);
+    await page.waitForTimeout(100);
+    const beforeHiddenReply = await snapshot("obscured-before-reply");
+    trace.push({ ...beforeHiddenReply, positioning: hiddenSetup });
+
+    hiddenReply.resolve(hiddenTutorReply);
+    const hiddenTutorRendered = await page.waitForFunction((snippet: string) => document.body.textContent?.includes(snippet), "Diagnostic obscured tutor reply paragraph 1", { timeout: 10_000 }).then(() => true).catch(() => false);
+    check(hiddenTutorRendered, "ui: obscured tutor reply did not render");
+    await page.waitForTimeout(500);
+    const afterHiddenReply = await snapshot("obscured-after-reply");
+    trace.push(afterHiddenReply);
+
+    const hiddenScrollDelta = afterHiddenReply.scrollY - beforeHiddenReply.scrollY;
+    check(hiddenScrollDelta > 20, `scroll: obscured tutor reply should have moved down enough to reveal it, moved ${hiddenScrollDelta}px`);
+    const hiddenReplyRect = afterHiddenReply.latestConversationItem?.rect;
+    const hiddenComposerTop = afterHiddenReply.composer.dockRect?.top;
+    if (hiddenReplyRect && hiddenComposerTop !== undefined) {
+      const targetGap = afterHiddenReply.replyScrollGapPx;
+      const safeBottom = hiddenComposerTop - targetGap;
+      const finalGap = hiddenComposerTop - hiddenReplyRect.bottom;
+      const impliedInitialBottom = hiddenReplyRect.bottom + hiddenScrollDelta;
+      const minimalDelta = Math.max(0, Math.round(impliedInitialBottom - safeBottom));
+      check(hiddenReplyRect.top >= 0, `scroll: obscured tutor reply top should remain visible after minimal reveal (${JSON.stringify({ hiddenReplyRect, hiddenComposerTop })})`);
+      check(hiddenReplyRect.bottom <= safeBottom + 2, `scroll: obscured tutor reply bottom should be above the composer (${JSON.stringify({ hiddenReplyRect, hiddenComposerTop, safeBottom })})`);
+      check(Math.abs(finalGap - targetGap) <= 3, `scroll: obscured tutor reply should stop at the safe-region edge, not overscroll (${JSON.stringify({ finalGap, targetGap, hiddenReplyRect, hiddenComposerTop })})`);
+      check(Math.abs(hiddenScrollDelta - minimalDelta) <= 3, `scroll: obscured tutor reply movement was not minimal (${JSON.stringify({ hiddenScrollDelta, minimalDelta, impliedInitialBottom, safeBottom })})`);
+      check(afterHiddenReply.scrollY < afterHiddenReply.maxScrollY - 2, `scroll: obscured tutor reply check was clamped at page bottom (${JSON.stringify({ scrollY: afterHiddenReply.scrollY, maxScrollY: afterHiddenReply.maxScrollY })})`);
+    } else {
+      check(false, `scroll: missing obscured tutor reply or composer geometry (${JSON.stringify(afterHiddenReply.latestConversationItem)}, ${JSON.stringify(afterHiddenReply.composer)})`);
+    }
+
+    check(mainTutor.replies[0]?.learnerMessage.text === visibleLearnerMessage.trim(), "api: fake main tutor received unexpected first learner message text");
+    check(mainTutor.replies[1]?.learnerMessage.text === hiddenLearnerMessage.trim(), "api: fake main tutor received unexpected second learner message text");
   } finally {
     await browser.close();
     await server.close();
