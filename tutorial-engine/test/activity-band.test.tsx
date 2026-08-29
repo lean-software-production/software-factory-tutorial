@@ -79,6 +79,7 @@ describe("ActivityBand stability", () => {
     const mainSource = readFileSync(mainSourcePath, "utf8");
 
     expect(mainSource).toContain('import "./activity-band.css"');
+    expect(terminalStyles).not.toMatch(/\.current-activity-band\[data-activity-type="terminal-practice"\]\s*\{/);
     expect(terminalStyles).toMatch(/\.current-activity-band\[data-activity-type="terminal-practice"\]\s*>\s*\.work-block\s*\{[^}]*transition:\s*none;/);
     expect(workbookStyles).toMatch(/\.current-activity-band\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;/);
     expect(workbookStyles).toMatch(/\.current-activity-band\s*\{[^}]*top:\s*var\(--activity-top\);/);
@@ -127,6 +128,7 @@ describe("ActivityBand stability", () => {
     }
 
     const listenerTypes: string[] = [];
+    let viewportScrollY = 0;
     const container = await mount(createElement("main", null,
       createElement("div", { "data-inline-source": "" }),
       createElement(ActivityBand, {
@@ -138,6 +140,7 @@ describe("ActivityBand stability", () => {
     ), (window) => {
       Object.defineProperty(window, "ResizeObserver", { value: FakeResizeObserver, configurable: true });
       Object.defineProperty(window, "requestAnimationFrame", { value: (callback: FrameRequestCallback) => { callback(0); return 1; }, configurable: true });
+      Object.defineProperty(window, "scrollY", { get: () => viewportScrollY, configurable: true });
       const addEventListener = window.addEventListener.bind(window) as (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => void;
       window.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
         listenerTypes.push(type);
@@ -145,14 +148,15 @@ describe("ActivityBand stability", () => {
       }) as typeof window.addEventListener;
     });
 
-    const main = container.querySelector("main")!;
+    const main = container.querySelector<HTMLElement>("main")!;
     const inlineSource = container.querySelector("[data-inline-source]")!;
     const band = container.querySelector<HTMLElement>(".current-activity-band")!;
     const observer = FakeResizeObserver.instances[0]!;
-    let bandRect = rect(240, 720, 320);
+    Object.defineProperty(main, "offsetTop", { value: 80, configurable: true });
+    Object.defineProperty(band, "offsetTop", { value: 240, configurable: true });
+    Object.defineProperty(band, "offsetParent", { value: main, configurable: true });
     Object.defineProperty(main, "getBoundingClientRect", { value: () => rect(100, 1000), configurable: true });
     Object.defineProperty(inlineSource, "getBoundingClientRect", { value: () => rect(240, 720), configurable: true });
-    Object.defineProperty(band, "getBoundingClientRect", { value: () => bandRect, configurable: true });
 
     expect(FakeResizeObserver.instances).toHaveLength(1);
     expect(observer.observed).toContain(inlineSource);
@@ -165,7 +169,7 @@ describe("ActivityBand stability", () => {
     expect(band.style.getPropertyValue("--activity-expand")).toBe("0.000");
     expect(band.style.getPropertyValue("--activity-width")).toBe("720px");
 
-    bandRect = rect(124, 952, 0);
+    viewportScrollY = 320;
     await act(async () => { dom!.window.dispatchEvent(new dom!.window.Event("scroll")); });
     expect(band.style.getPropertyValue("--activity-expand")).toBe("1.000");
     expect(band.style.getPropertyValue("--activity-width")).toBe("952px");
