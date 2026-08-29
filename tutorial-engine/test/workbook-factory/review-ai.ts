@@ -162,6 +162,8 @@ async function collectAiAttachments(runRoot: string, maxFrames: number): Promise
     motion = undefined;
   }
 
+  await writeProviderSafeWalkthroughSummary(runRoot);
+
   const evidenceFrames = motion?.evidence.frames ?? [];
   const discoveredFrames = await readdir(resolve(runRoot, 'analysis')).catch(() => []);
   const pngFrames = unique([
@@ -173,11 +175,38 @@ async function collectAiAttachments(runRoot: string, maxFrames: number): Promise
     ok: true,
     attachments: [
       'analysis/contact-sheet.png',
-      'walkthrough.json',
+      'ai-walkthrough-summary.json',
       'analysis/motion.json',
       ...pngFrames.map((file) => `analysis/${file}`),
     ],
   };
+}
+
+async function writeProviderSafeWalkthroughSummary(runRoot: string): Promise<void> {
+  const walkthrough = await readJson<WorkbookFactoryWalkthrough>(resolve(runRoot, 'walkthrough.json'));
+  const summary = {
+    generatedAt: walkthrough?.generatedAt,
+    viewport: walkthrough?.viewport,
+    markerProtocol: walkthrough?.markerProtocol,
+    semanticFailures: walkthrough?.semanticFailures ?? [],
+    checkpoints: (walkthrough?.checkpoints ?? []).map((checkpoint) => ({
+      stepId: checkpoint.stepId,
+      name: checkpoint.name,
+      surface: checkpoint.surface,
+      requestedState: checkpoint.requestedState,
+      kind: checkpoint.kind,
+      requiredMotion: checkpoint.requiredMotion,
+      marker: checkpoint.marker,
+      before: checkpoint.before,
+      after: checkpoint.after,
+      typedText: checkpoint.typedText,
+      command: checkpoint.command,
+      feedback: checkpoint.feedback,
+      fakeCallCounts: checkpoint.fakeCallCounts,
+    })),
+    fake: walkthrough?.fake,
+  };
+  await writeFile(resolve(runRoot, 'ai-walkthrough-summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
 }
 
 async function buildAiPrompt(runRoot: string, attachments: string[]): Promise<string> {
@@ -194,7 +223,6 @@ async function deterministicContext(runRoot: string): Promise<string> {
   const walkthrough = await readJson<WorkbookFactoryWalkthrough>(resolve(runRoot, 'walkthrough.json'));
   const motion = await readJson<AnalyzerReport>(resolve(runRoot, 'analysis/motion.json'));
   if (walkthrough) {
-    lines.push(`- Run root: ${walkthrough.runRoot}`);
     lines.push(`- Semantic failures: ${walkthrough.semanticFailures.length === 0 ? 'none' : walkthrough.semanticFailures.join('; ')}`);
     lines.push('- Checkpoints:');
     for (const checkpoint of walkthrough.checkpoints) {

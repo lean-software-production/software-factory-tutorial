@@ -1,8 +1,9 @@
 #!/usr/bin/env npx tsx
+import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, resolve } from 'node:path';
 import { recordWorkbookFactory, type WorkbookFactoryRecorderOptions, type WorkbookFactoryRecorderResult } from './record.mjs';
-import { writeFactoryReport, type FactoryStationResult, type SerializedError } from './report.js';
+import { deterministicContractFailures, writeFactoryReport, type FactoryStationResult, type SerializedError } from './report.js';
 import { runAiReview, type AiReviewResult } from './review-ai.js';
 
 export interface WorkbookFactoryRunOptions extends WorkbookFactoryRecorderOptions {
@@ -44,6 +45,10 @@ export async function runWorkbookFactory(options: WorkbookFactoryRunOptions = {}
 
   try {
     await record({ runRoot, analyze: true, headless: options.headless });
+    const contractFailures = await deterministicContractFailures(runRoot);
+    if (contractFailures.length > 0) {
+      throw new Error(`Workbook factory deterministic artifact contract failed:\n${contractFailures.map((failure) => ` - ${failure}`).join('\n')}`);
+    }
     deterministicPassed = true;
     stations.push(station('record-and-deterministic-analysis', 'passed', recordStationStartedAt, recordStationStartMs));
   } catch (error) {
@@ -61,12 +66,16 @@ export async function runWorkbookFactory(options: WorkbookFactoryRunOptions = {}
   } else {
     const aiStationStartMs = Date.now();
     const aiStationStartedAt = new Date(aiStationStartMs).toISOString();
-    ai = await (deps.ai ?? ((aiOptions) => runAiReview(aiOptions)))({
-      runRoot,
-      command: options.aiCommand,
-      model: options.aiModel,
-      timeoutMs: options.aiTimeoutMs,
-    });
+    try {
+      ai = await (deps.ai ?? ((aiOptions) => runAiReview(aiOptions)))({
+        runRoot,
+        command: options.aiCommand,
+        model: options.aiModel,
+        timeoutMs: options.aiTimeoutMs,
+      });
+    } catch (error) {
+      ai = await aiUnavailableFromThrownError(runRoot, options.aiCommand ?? 'pi', error, aiStationStartedAt, aiStationStartMs);
+    }
     stations.push(station('advisory-ai-review', ai.status === 'available' ? 'passed' : 'unavailable', aiStationStartedAt, aiStationStartMs, ai.reason ? { message: ai.reason } : undefined));
   }
 
@@ -132,6 +141,36 @@ function station(name: string, status: FactoryStationResult['status'], startedAt
 function skippedStation(name: string, reason: string): FactoryStationResult {
   const now = new Date().toISOString();
   return { name, status: 'skipped', startedAt: now, finishedAt: now, durationMs: 0, error: { message: reason } };
+}
+
+async function aiUnavailableFromThrownError(runRoot: string, command: string, error: unknown, startedAt: string, startedAtMs: number): Promise<AiReviewResult> {
+  const serialized = serializeError(error);
+  const finishedAtMs = Date.now();
+  const reviewPath = resolve(runRoot, 'ai-review.md');
+  const stderrPath = resolve(runRoot, 'ai-review.stderr.txt');
+  const jsonPath = resolve(runRoot, 'ai-review.json');
+  const result: AiReviewResult = {
+    requested: true,
+    status: 'unavailable',
+    reason: `AI review threw: ${serialized.message}`,
+    command,
+    args: [],
+    startedAt,
+    finishedAt: new Date(finishedAtMs).toISOString(),
+    durationMs: finishedAtMs - startedAtMs,
+    stdoutPath: reviewPath,
+    stderrPath,
+    jsonPath,
+    reviewPath,
+    attachmentPaths: [],
+    outputBytes: 0,
+  };
+  await Promise.allSettled([
+    writeFile(reviewPath, ''),
+    writeFile(stderrPath, `${serialized.message}\n${serialized.stack ?? ''}`),
+    writeFile(jsonPath, `${JSON.stringify(result, null, 2)}\n`),
+  ]);
+  return result;
 }
 
 function serializeError(error: unknown): SerializedError {

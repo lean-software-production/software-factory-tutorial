@@ -51,19 +51,52 @@ export interface FactoryResultJson {
   ai?: FactoryReportOptions['ai'];
 }
 
-export async function writeFactoryReport(options: FactoryReportOptions): Promise<{ reportPath: string; resultPath: string; result: FactoryResultJson }> {
-  const runRoot = resolve(options.runRoot);
-  const inputMetadata = await readJson<unknown>(resolve(runRoot, 'input-metadata.json'));
-  const walkthrough = await readJson<WorkbookFactoryWalkthrough>(resolve(runRoot, 'walkthrough.json'))
-    ?? await readJson<{ walkthrough?: WorkbookFactoryWalkthrough }>(resolve(runRoot, 'recording-error.json')).then((value) => value?.walkthrough);
-  const motion = await readJson<AnalyzerReport>(resolve(runRoot, 'analysis/motion.json'));
-  const recordingError = await readJson<{ message?: string; stack?: string; failures?: string[] }>(resolve(runRoot, 'recording-error.json'));
+export async function deterministicContractFailures(runRootInput: string): Promise<string[]> {
+  const runRoot = resolve(runRootInput);
+  const inputMetadataJson = await readJsonDetailed<unknown>(resolve(runRoot, 'input-metadata.json'));
+  const walkthroughJson = await readJsonDetailed<WorkbookFactoryWalkthrough>(resolve(runRoot, 'walkthrough.json'));
+  const motionJson = await readJsonDetailed<AnalyzerReport>(resolve(runRoot, 'analysis/motion.json'));
+  const walkthrough = walkthroughJson.value;
+  const motion = motionJson.value;
   const videoPath = walkthrough?.videoPath ?? motion?.videoPath ?? resolve(runRoot, 'walkthrough.webm');
   const videoStats = await stat(videoPath).catch(() => undefined);
-  const aiReviewText = await readFile(resolve(runRoot, 'ai-review.md'), 'utf8').catch(() => '');
-  const semanticFailures = walkthrough?.semanticFailures ?? recordingError?.failures ?? (recordingError?.message ? [recordingError.message] : []);
+  const contactSheetStats = await stat(resolve(runRoot, 'analysis/contact-sheet.png')).catch(() => undefined);
+  return [
+    ...deterministicArtifactFailures({ inputMetadataJson, walkthroughJson, videoStats, motionJson, contactSheetStats }),
+    ...(walkthrough?.semanticFailures ?? []),
+    ...(motion?.findings.map((finding) => `${finding.code}${finding.stepId === undefined ? '' : ` step ${finding.stepId}`}: ${finding.message}`) ?? []),
+  ];
+}
+
+export async function writeFactoryReport(options: FactoryReportOptions): Promise<{ reportPath: string; resultPath: string; result: FactoryResultJson }> {
+  const runRoot = resolve(options.runRoot);
+  const inputMetadataJson = await readJsonDetailed<unknown>(resolve(runRoot, 'input-metadata.json'));
+  const walkthroughJson = await readJsonDetailed<WorkbookFactoryWalkthrough>(resolve(runRoot, 'walkthrough.json'));
+  const motionJson = await readJsonDetailed<AnalyzerReport>(resolve(runRoot, 'analysis/motion.json'));
+  const recordingErrorPath = resolve(runRoot, 'recording-error.json');
+  const recordingError = await readJson<{ message?: string; stack?: string; failures?: string[]; walkthrough?: WorkbookFactoryWalkthrough }>(recordingErrorPath);
+  const recordingErrorStats = await stat(recordingErrorPath).catch(() => undefined);
+  const inputMetadata = inputMetadataJson.value;
+  const walkthrough = walkthroughJson.value ?? recordingError?.walkthrough;
+  const motion = motionJson.value;
+  const videoPath = walkthrough?.videoPath ?? motion?.videoPath ?? resolve(runRoot, 'walkthrough.webm');
+  const videoStats = await stat(videoPath).catch(() => undefined);
+  const contactSheetPath = resolve(runRoot, 'analysis/contact-sheet.png');
+  const contactSheetStats = await stat(contactSheetPath).catch(() => undefined);
+  const aiReviewPath = resolve(runRoot, 'ai-review.md');
+  const aiReviewText = await readFile(aiReviewPath, 'utf8').catch(() => '');
+  const aiReviewStats = await stat(aiReviewPath).catch(() => undefined);
+  const artifactFailures = deterministicArtifactFailures({ inputMetadataJson, walkthroughJson, videoStats, motionJson, contactSheetStats });
+  const semanticFailures = [
+    ...(walkthrough?.semanticFailures ?? recordingError?.failures ?? (recordingError?.message ? [recordingError.message] : [])),
+    ...artifactFailures,
+  ];
   const findings = motion?.findings ?? [];
-  const deterministicOk = options.deterministicPassed && semanticFailures.length === 0 && findings.length === 0 && motion?.ok !== false;
+  const deterministicOk = options.deterministicPassed
+    && artifactFailures.length === 0
+    && semanticFailures.length === 0
+    && motion?.ok === true
+    && findings.length === 0;
   const result: FactoryResultJson = {
     schemaVersion: 1,
     generatedAt: options.finishedAt,
@@ -74,14 +107,14 @@ export async function writeFactoryReport(options: FactoryReportOptions): Promise
     aiStatus: options.ai?.status ?? 'skipped',
     inputIdentity: inputMetadata,
     artifacts: {
-      inputMetadata: link(runRoot, resolve(runRoot, 'input-metadata.json')),
-      walkthrough: link(runRoot, resolve(runRoot, 'walkthrough.json')),
+      inputMetadata: inputMetadataJson.exists ? link(runRoot, resolve(runRoot, 'input-metadata.json')) : undefined,
+      walkthrough: walkthroughJson.exists ? link(runRoot, resolve(runRoot, 'walkthrough.json')) : undefined,
       video: videoStats ? link(runRoot, videoPath) : undefined,
-      motion: motion ? link(runRoot, resolve(runRoot, 'analysis/motion.json')) : undefined,
-      contactSheet: await exists(resolve(runRoot, 'analysis/contact-sheet.png')) ? link(runRoot, resolve(runRoot, 'analysis/contact-sheet.png')) : undefined,
-      recordingError: recordingError ? link(runRoot, resolve(runRoot, 'recording-error.json')) : undefined,
+      motion: motionJson.exists ? link(runRoot, resolve(runRoot, 'analysis/motion.json')) : undefined,
+      contactSheet: contactSheetStats ? link(runRoot, contactSheetPath) : undefined,
+      recordingError: recordingErrorStats ? link(runRoot, recordingErrorPath) : undefined,
       recordingScreenshot: await exists(resolve(runRoot, 'recording-error.png')) ? link(runRoot, resolve(runRoot, 'recording-error.png')) : undefined,
-      aiReview: aiReviewText ? link(runRoot, resolve(runRoot, 'ai-review.md')) : undefined,
+      aiReview: aiReviewStats ? link(runRoot, aiReviewPath) : undefined,
     },
     stations: options.stations,
     deterministic: {
@@ -309,10 +342,49 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
+interface ParsedJson<T> {
+  exists: boolean;
+  value?: T;
+  error?: string;
+}
+
+function deterministicArtifactFailures(args: {
+  inputMetadataJson: ParsedJson<unknown>;
+  walkthroughJson: ParsedJson<WorkbookFactoryWalkthrough>;
+  videoStats?: { size: number };
+  motionJson: ParsedJson<AnalyzerReport>;
+  contactSheetStats?: { size: number };
+}): string[] {
+  const failures: string[] = [];
+  if (!args.inputMetadataJson.exists) failures.push('Required deterministic artifact missing: input-metadata.json.');
+  else if (args.inputMetadataJson.error) failures.push(`Required deterministic artifact is corrupt: input-metadata.json (${args.inputMetadataJson.error}).`);
+
+  if (!args.walkthroughJson.exists) failures.push('Required deterministic artifact missing: walkthrough.json.');
+  else if (args.walkthroughJson.error) failures.push(`Required deterministic artifact is corrupt: walkthrough.json (${args.walkthroughJson.error}).`);
+
+  if (!args.videoStats) failures.push('Required deterministic artifact missing: finalized walkthrough video.');
+
+  if (!args.motionJson.exists) failures.push('Required deterministic artifact missing: analysis/motion.json.');
+  else if (args.motionJson.error) failures.push(`Required deterministic artifact is corrupt: analysis/motion.json (${args.motionJson.error}).`);
+  else if (args.motionJson.value?.ok !== true) failures.push('Required deterministic artifact disagrees: analysis/motion.json ok is not true.');
+
+  if (!args.contactSheetStats) failures.push('Required deterministic artifact missing: analysis/contact-sheet.png.');
+  return failures;
+}
+
 async function readJson<T>(path: string): Promise<T | undefined> {
+  return (await readJsonDetailed<T>(path)).value;
+}
+
+async function readJsonDetailed<T>(path: string): Promise<ParsedJson<T>> {
   try {
-    return JSON.parse(await readFile(path, 'utf8')) as T;
+    const content = await readFile(path, 'utf8');
+    try {
+      return { exists: true, value: JSON.parse(content) as T };
+    } catch (error) {
+      return { exists: true, error: error instanceof Error ? error.message : String(error) };
+    }
   } catch {
-    return undefined;
+    return { exists: false };
   }
 }
