@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 const piSessions = vi.hoisted(() => [] as any[]);
@@ -225,6 +228,72 @@ describe("MainWorkbookTutor", () => {
     expect(sessions[0]!.prompts[0]).toMatch(/do not reveal author guidance/i);
     expect(sessions[0]!.prompts[0]).toMatch(/labelled active terminal context/i);
     expect(sessions[0]!.prompts[0]).not.toMatch(/private briefing/i);
+  });
+
+  it("binds only the exact main-tutor tools and recreates sessions when the active workspace changes", async () => {
+    const liveA = await mkdtemp(resolve(tmpdir(), "main-tutor-live-a-"));
+    const liveB = await mkdtemp(resolve(tmpdir(), "main-tutor-live-b-"));
+    try {
+      await writeFile(resolve(liveA, "sentinel.txt"), "from workspace A\n", "utf8");
+      await writeFile(resolve(liveB, "sentinel.txt"), "from workspace B\n", "utf8");
+      const sessions: FakeSession[] = [];
+      const requests: WorkbookTutorSessionFactoryRequest[] = [];
+      const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", sessionFactory: async (request) => {
+        requests.push(request);
+        const session = new FakeSession(request);
+        session.promptResponses.push("Workspace-aware answer.");
+        sessions.push(session);
+        return session;
+      } });
+      const learnerMessage = message("learner-1", 1, "learner", "user", "What files should I inspect?");
+
+      await expect(tutor.reply({ records: [], activeContext: activeContext(), activeWorkspaceRoot: liveA, learnerMessage })).resolves.toBe("Workspace-aware answer.");
+
+      expect(requests[0]!.tools).toEqual(["accept_current_attempt", "mark_attempt_still_working", "list_files", "read_file"]);
+      expect(requests[0]!.customTools.map((tool: any) => tool.name)).toEqual(["accept_current_attempt", "mark_attempt_still_working", "list_files", "read_file"]);
+      expect(requests[0]!.customTools.map((tool: any) => tool.name)).not.toEqual(expect.arrayContaining(["read", "ls", "grep", "find", "write", "edit", "move", "bash"]));
+      const firstRead = requests[0]!.customTools.find((tool: any) => tool.name === "read_file") as any;
+      await expect(firstRead.execute("read-a", { path: "sentinel.txt" }, undefined, undefined, undefined)).resolves.toMatchObject({ content: [{ text: expect.stringContaining("from workspace A") }] });
+
+      await expect(tutor.reply({ records: [], activeContext: activeContext(), activeWorkspaceRoot: liveA, learnerMessage: message("learner-2", 2, "learner", "user", "Again?") })).resolves.toBe("Needs one more concrete detail.");
+      expect(requests).toHaveLength(1);
+      expect(sessions[0]!.disposed).toBe(false);
+
+      await expect(tutor.reply({ records: [], activeContext: activeContext(), activeWorkspaceRoot: liveB, learnerMessage: message("learner-3", 3, "learner", "user", "Now?") })).resolves.toBe("Workspace-aware answer.");
+      expect(sessions[0]!.disposed).toBe(true);
+      expect(requests).toHaveLength(2);
+      const secondRead = requests[1]!.customTools.find((tool: any) => tool.name === "read_file") as any;
+      const secondReadResult = await secondRead.execute("read-b", { path: "sentinel.txt" }, undefined, undefined, undefined) as any;
+      expect(secondReadResult.content[0].text).toContain("from workspace B");
+      expect(secondReadResult.content[0].text).not.toContain("from workspace A");
+
+      await expect(tutor.reply({ records: [], activeContext: activeContext(), learnerMessage: message("learner-4", 4, "learner", "user", "No files?") })).resolves.toBe("Workspace-aware answer.");
+      expect(sessions[1]!.disposed).toBe(true);
+      expect(requests[2]!.tools).toEqual(["accept_current_attempt", "mark_attempt_still_working"]);
+      expect(requests[2]!.customTools.map((tool: any) => tool.name)).toEqual(["accept_current_attempt", "mark_attempt_still_working"]);
+    } finally {
+      await Promise.all([liveA, liveB].map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("keeps completeBlock constrained while adding workspace tools", async () => {
+    const live = await mkdtemp(resolve(tmpdir(), "main-tutor-live-complete-"));
+    try {
+      const requests: WorkbookTutorSessionFactoryRequest[] = [];
+      const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", sessionFactory: async (request) => {
+        requests.push(request);
+        const session = new FakeSession(request);
+        session.promptResponses.push("Continue.");
+        return session;
+      } });
+
+      await tutor.reply({ records: [], activeContext: activeContext(), activeWorkspaceRoot: live, completionTool: { blockId: "lesson--block" }, learnerMessage: message("learner-1", 1, "learner", "user", "I am ready.") });
+
+      expect(requests[0]!.tools).toEqual(["accept_current_attempt", "mark_attempt_still_working", "completeBlock", "list_files", "read_file"]);
+      expect(requests[0]!.customTools.map((tool: any) => tool.name)).toEqual(["accept_current_attempt", "mark_attempt_still_working", "completeBlock", "list_files", "read_file"]);
+    } finally {
+      await rm(live, { recursive: true, force: true });
+    }
   });
 
   it("distinguishes accepted, feedback, and working review outcomes through real custom tools", async () => {

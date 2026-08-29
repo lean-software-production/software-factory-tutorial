@@ -536,11 +536,16 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       ...(terminal ? { terminal } : {})
     };
   };
+  const activeWorkspaceRootForTutor = (active: OrderedWorkbookBlock | undefined): string | undefined => {
+    if (active?.origin !== "declared") return undefined;
+    if (active.block.type !== "terminal-practice" && active.block.type !== "editor-practice") return undefined;
+    return workspaceRootForLesson(active.chapter.lesson);
+  };
   const mainContext = async (options: { includeTerminalContext?: boolean } = {}): Promise<MainTutorContext> => {
     const projection = currentWorkbookProjection();
     const active = projection.current;
     const completeStatus = active ? canCompleteBlock(active, projection) : { eligible: false };
-    return { records: mainTutorTimelineRecords(loaded, records), activeContext: await activeBlockContext(records, options), completionTool: active && completeStatus.eligible ? { blockId: active.id } : undefined };
+    return { records: mainTutorTimelineRecords(loaded, records), activeContext: await activeBlockContext(records, options), activeWorkspaceRoot: activeWorkspaceRootForTutor(active), completionTool: active && completeStatus.eligible ? { blockId: active.id } : undefined };
   };
   const mainContextForTarget = async (_lessonId: string, blockId: string): Promise<MainTutorContext> => {
     const active = activeOrderedBlock();

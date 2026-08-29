@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile, access } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile, access } from "node:fs/promises";
 import * as terminalModule from "../src/workbook/terminal.js";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -1434,6 +1434,7 @@ describe("workbook browser API", () => {
       const feedback = await waitForWorkbookState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "feedback" && mainTutor.reviews.length === 1, "main tutor editor feedback");
       expect(blockTutor.assessments).toHaveLength(0);
       expect(mainTutor.reviews[0]!.practiceCoachHandoff).toBeUndefined();
+      expect(mainTutor.reviews[0]!.activeWorkspaceRoot).toBe(await realpath(resolve(dir, "workspaces/refactor-line")));
       expect(block(feedback, "lesson--001-first--edit-answer")?.checkpoint?.feedback).toBe("Add the exact marker before this can continue.");
       // The review message is appended to the log after the checkpoint status flips, so waiting on
       // the status alone would let this assert before the record it forbids could exist. Wait for
