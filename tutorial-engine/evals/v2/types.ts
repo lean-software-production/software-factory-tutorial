@@ -1,3 +1,4 @@
+import type { AttemptKind } from "../../src/workbook/attempts.js";
 import type { StartedWorkbookServer, WorkbookServerOptions } from "../../src/workbook/server.js";
 import type { WorkbookTimelineRecord } from "../../src/workbook/timeline.js";
 import type { TutorialSessionPaths } from "../../src/session-workspace.js";
@@ -16,12 +17,16 @@ export interface V2TerminalTranscriptEntry {
   at?: string;
 }
 
+export type V2JudgeTerminalTranscriptEntry = Omit<V2TerminalTranscriptEntry, "at">;
+
 export interface V2ReflectionEntry {
   blockId: string;
   role: "learner" | "tutor";
   text: string;
   at?: string;
 }
+
+export type V2JudgeReflectionEntry = Omit<V2ReflectionEntry, "at">;
 
 export interface V2EditorEntry {
   blockId: string;
@@ -31,11 +36,20 @@ export interface V2EditorEntry {
   at?: string;
 }
 
+export type V2JudgeEditorEntry = Omit<V2EditorEntry, "at">;
+
 export interface V2ArtifactSnapshot {
   path: string;
   content: string;
 }
 
+/**
+ * Internal, in-memory trace used only by deterministic evaluator gates.
+ *
+ * `events` intentionally contains raw `workbook/events.jsonl` timeline records, including private
+ * terminal lifecycle rows, evidence IDs, private Coach handoffs, and future fields. Never serialize
+ * a `V2SessionTrace` into reports, prompts, or public artifacts; project it to `V2JudgeTrace` first.
+ */
 export interface V2SessionTrace {
   scenarioId: string;
   publicStates: V2RecordedPublicState[];
@@ -45,6 +59,42 @@ export interface V2SessionTrace {
   events: WorkbookTimelineRecord[];
   artifacts: V2ArtifactSnapshot[];
 }
+
+export type V2PublicProgressionEvent =
+  | { type: "session_started" }
+  | { type: "lesson_jump_started"; lessonId: string }
+  | { type: "workbook_introduction_completed" }
+  | { type: "attempt_accepted"; lessonId: string; blockId: string; kind: AttemptKind }
+  | { type: "work_accepted"; blockId: string }
+  | { type: "block_completed"; lessonId?: string; blockId: string }
+  | { type: "reflection_submitted"; lessonId: string; blockId: string }
+  | { type: "reflection_follow_up_submitted"; lessonId: string; blockId: string }
+  | { type: "reflection_reply_recorded"; lessonId: string; blockId: string }
+  | { type: "observation_acknowledged"; lessonId: string; blockId: string; kind: "terminal" }
+  | { type: "observation_verified"; lessonId: string; blockId: string; kind: "terminal" }
+  | { type: "block_continued"; lessonId: string; blockId: string }
+  | { type: "reflection_completed"; lessonId: string; blockId: string }
+  | { type: "editor_practice_unlocked"; lessonId: string; blockId: string; kind: "editor" }
+  | { type: "lesson_transitioned"; lessonId: string; blockId: string };
+
+/** Serializable, allowlisted trace given to judges and written to eval reports. */
+export interface V2JudgeTrace {
+  scenarioId: string;
+  publicStates: V2RecordedPublicState[];
+  terminalTranscript: V2JudgeTerminalTranscriptEntry[];
+  reflections: V2JudgeReflectionEntry[];
+  editors: V2JudgeEditorEntry[];
+  progressionEvents: V2PublicProgressionEvent[];
+  artifacts: V2ArtifactSnapshot[];
+}
+
+export type V2JudgeCitation =
+  | { id: number; kind: "publicState"; value: V2RecordedPublicState }
+  | { id: number; kind: "terminalTranscript"; value: V2JudgeTerminalTranscriptEntry }
+  | { id: number; kind: "reflection"; value: V2JudgeReflectionEntry }
+  | { id: number; kind: "editor"; value: V2JudgeEditorEntry }
+  | { id: number; kind: "progressionEvent"; value: V2PublicProgressionEvent }
+  | { id: number; kind: "artifact"; value: V2ArtifactSnapshot };
 
 export interface EvaluationWorkspace {
   repositoryRoot: string;

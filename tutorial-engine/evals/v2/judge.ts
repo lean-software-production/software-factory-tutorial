@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import type { V2GateResult, V2Scenario } from "./scenarios.js";
-import type { V2ArtifactSnapshot, V2SessionTrace } from "./types.js";
+import { copyV2JudgeTrace } from "./session.js";
+import type { V2ArtifactSnapshot, V2JudgeCitation, V2JudgeTrace } from "./types.js";
 
 export interface JudgeDimension { score: 0 | 1 | 2; citations: number[]; rationale: string; }
 
@@ -45,10 +46,10 @@ export interface V2JudgeResult {
 }
 
 export interface V2Report {
-  scenario: Pick<V2Scenario, "id" | "title" | "description" | "criteria" | "actions">;
+  scenario: Pick<V2Scenario, "id" | "title" | "description" | "criteria">;
   modelIdentities: { tutor: string; judge: string };
   gate: V2GateResult;
-  trace: V2SessionTrace;
+  trace: V2JudgeTrace;
   judgeInput: { prompt: string };
   judge: V2JudgeResult;
   artifacts: V2ArtifactSnapshot[];
@@ -59,14 +60,14 @@ export type V2JudgeDimensionName = "protocolUse" | "tutorQuality" | "criteriaFit
 
 const dimensions: V2JudgeDimensionName[] = ["protocolUse", "tutorQuality", "criteriaFit"];
 
-export function buildV2JudgePrompt(scenario: V2Scenario, trace: V2SessionTrace, gate: V2GateResult): string {
+export function buildV2JudgePrompt(scenario: V2Scenario, trace: V2JudgeTrace, gate: V2GateResult): string {
   const citations = enumerateTraceCitations(trace);
   return `You are a strict, stateless evaluator of one live v2 workbook tutoring session. Return JSON only.
 
 Scenario:
 ${JSON.stringify({ id: scenario.id, title: scenario.title, description: scenario.description, criteria: scenario.criteria }, null, 2)}
 
-Recorded checked trace. Citation IDs are the id fields in this array. This list contains public workbook state (including public editor projections), learner-visible terminal transcript, public reflection turns, durable workbook timeline records from workbook/events.jsonl, and allowlisted artifact snapshots. Timeline records may include internal terminal lifecycle records and are not all learner-visible. The trace has passed the existing structural private tutor-field and known private tutor-guidance sentinel checks:
+Allowlisted public judge trace. Citation IDs are the id fields in this array. This list contains public workbook state (including public editor projections and browser-public timeline metadata), learner-visible terminal transcript, public reflection turns, projected structural workbook progression events, and allowlisted artifact snapshots. Raw workbook timeline rows, raw event IDs, raw sequence numbers/timestamps, attempt/evidence/session IDs, terminal lifecycle records, private Coach handoffs, private summaries, private failures, terminal HTML, and unknown future event types are not included. Public scenario/lesson/block/citation IDs and artifact paths remain. Judge-channel entry timestamps are removed; public state may retain browser-public timeline metadata already exposed by the workbook:
 ${JSON.stringify(citations, null, 2)}
 
 Deterministic protocol gate:
@@ -80,25 +81,25 @@ Score these dimensions from 0 to 2:
 Return exactly {"dimensions":{"protocolUse":{"score":0,"citations":[0],"rationale":"..."},"tutorQuality":{"score":0,"citations":[0],"rationale":"..."},"criteriaFit":{"score":0,"citations":[0],"rationale":"..."}},"summary":"..."}. Every citation must identify one trace citation ID above.`;
 }
 
-export async function judgeV2TraceFromPrompt(prompt: string, trace: V2SessionTrace): Promise<V2JudgeResult> {
+export async function judgeV2TraceFromPrompt(prompt: string, trace: V2JudgeTrace): Promise<V2JudgeResult> {
   const raw = await invokeJudge(prompt);
   return verifyV2JudgeResult(raw, trace);
 }
 
-export async function judgeV2Trace(scenario: V2Scenario, trace: V2SessionTrace, gate: V2GateResult): Promise<V2JudgeResult> {
+export async function judgeV2Trace(scenario: V2Scenario, trace: V2JudgeTrace, gate: V2GateResult): Promise<V2JudgeResult> {
   return judgeV2TraceFromPrompt(buildV2JudgePrompt(scenario, trace, gate), trace);
 }
 
-export function verifyV2JudgeResult(value: unknown, trace: V2SessionTrace): V2JudgeResult {
+export function verifyV2JudgeResult(value: unknown, trace: V2JudgeTrace): V2JudgeResult {
   if (!value || typeof value !== "object") throw new Error("Judge response is not an object.");
   const candidate = value as { dimensions?: Record<string, JudgeDimension>; summary?: unknown };
   if (!candidate.dimensions || typeof candidate.summary !== "string") throw new Error("Judge response has no dimensions or summary.");
-  const maxCitation = enumerateTraceCitations(trace).length;
+  const validCitationIds = new Set(enumerateTraceCitations(trace).map((citation) => citation.id));
   const output = {} as Record<V2JudgeDimensionName, JudgeDimension>;
   for (const dimension of dimensions) {
     const score = candidate.dimensions[dimension];
     if (!score || ![0, 1, 2].includes(score.score) || !Array.isArray(score.citations) || typeof score.rationale !== "string") throw new Error(`Judge response is invalid for ${dimension}.`);
-    if (!score.citations.every((id) => Number.isInteger(id) && id >= 0 && id < maxCitation)) throw new Error(`Judge cited an unknown trace citation for ${dimension}.`);
+    if (!score.citations.every((id) => Number.isInteger(id) && validCitationIds.has(id))) throw new Error(`Judge cited an unknown trace citation for ${dimension}.`);
     output[dimension] = score;
   }
   return { dimensions: output, summary: candidate.summary };
@@ -108,31 +109,34 @@ export function v2JudgePass(result: V2JudgeResult): { passed: boolean; percentag
   return judgePass(result);
 }
 
-export function createV2Report(options: { scenario: V2Scenario; trace: V2SessionTrace; gate: V2GateResult; judgeInput: string; judge: V2JudgeResult; tutorModel: string; judgeModel: string }): V2Report {
+export function createV2Report(options: { scenario: V2Scenario; trace: V2JudgeTrace; gate: V2GateResult; judgeInput: string; judge: V2JudgeResult; tutorModel: string; judgeModel: string }): V2Report {
+  const trace = copyV2JudgeTrace(options.trace);
+  const judgeInput = buildV2JudgePrompt(options.scenario, trace, options.gate);
   return {
     scenario: {
       id: options.scenario.id,
       title: options.scenario.title,
       description: options.scenario.description,
-      criteria: options.scenario.criteria,
-      actions: options.scenario.actions
+      criteria: options.scenario.criteria
     },
     modelIdentities: { tutor: options.tutorModel, judge: options.judgeModel },
     gate: options.gate,
-    trace: options.trace,
-    judgeInput: { prompt: options.judgeInput },
+    trace,
+    judgeInput: { prompt: judgeInput },
     judge: options.judge,
-    artifacts: options.trace.artifacts,
+    artifacts: trace.artifacts,
     verdict: v2JudgePass(options.judge)
   };
 }
 
-function enumerateTraceCitations(trace: V2SessionTrace): Array<{ id: number; kind: string; value: unknown }> {
-  return [
-    ...trace.publicStates.map((value) => ({ kind: "publicState", value })),
-    ...trace.terminalTranscript.map((value) => ({ kind: "terminalTranscript", value })),
-    ...trace.reflections.map((value) => ({ kind: "reflection", value })),
-    ...trace.events.map((value) => ({ kind: "event", value })),
-    ...trace.artifacts.map((value) => ({ kind: "artifact", value }))
-  ].map((entry, id) => ({ id, ...entry }));
+export function enumerateTraceCitations(trace: V2JudgeTrace): V2JudgeCitation[] {
+  const safeTrace = copyV2JudgeTrace(trace);
+  const citations: V2JudgeCitation[] = [];
+  for (const value of safeTrace.publicStates) citations.push({ id: citations.length, kind: "publicState", value });
+  for (const value of safeTrace.terminalTranscript) citations.push({ id: citations.length, kind: "terminalTranscript", value });
+  for (const value of safeTrace.reflections) citations.push({ id: citations.length, kind: "reflection", value });
+  for (const value of safeTrace.editors) citations.push({ id: citations.length, kind: "editor", value });
+  for (const value of safeTrace.progressionEvents) citations.push({ id: citations.length, kind: "progressionEvent", value });
+  for (const value of safeTrace.artifacts) citations.push({ id: citations.length, kind: "artifact", value });
+  return citations;
 }
