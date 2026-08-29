@@ -78,7 +78,7 @@ export async function runWorkbookCli(argv: readonly string[], dependencies: Work
     ? (runtimeProvision ? await createJump(parsed.options.target, parsed.options.lesson, runtimeProvision) : await createJump(parsed.options.target, parsed.options.lesson))
     : (runtimeProvision ? await resolveSession(parsed.options.target, parsed.options.session, runtimeProvision) : await resolveSession(parsed.options.target, parsed.options.session));
   const preflightModels = dependencies.preflightModels ?? preflightWorkbookModels;
-  await preflightModels({ contentRoot: session.contentRoot, workspaceRoot: session.workspaceRoot, logger: log });
+  await preflightModels({ contentRoot: session.contentRoot, workspaceRoot: session.sessionRoot, logger: log });
   for (const line of sessionLaunchLines(session, parsed.options.session !== undefined, parsed.options.lesson)) writeLine(line);
   const server = await startServer({ target: session.contentRoot, session, port: parsed.options.port, host: parsed.options.host, webRoot: resolve(packageDirectory, "dist/web-workbook"), logger: log, embeddedTerminal: true, watchContent: parsed.options.watch });
   if (!parsed.options.noOpen) {

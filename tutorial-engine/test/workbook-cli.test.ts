@@ -94,7 +94,7 @@ describe("workbook CLI", () => {
     await Promise.resolve();
 
     expect(resolveSession).toHaveBeenCalledWith("/tmp/workbook", undefined);
-    expect(preflightModels).toHaveBeenCalledWith({ contentRoot: "/content", workspaceRoot: "/content/.tutorial/session-preflight/workspace", logger: log });
+    expect(preflightModels).toHaveBeenCalledWith({ contentRoot: "/content", workspaceRoot: "/content/.tutorial/session-preflight", logger: log });
     expect(startServer).not.toHaveBeenCalled();
     expect(spawnBrowser).not.toHaveBeenCalled();
 
@@ -290,7 +290,7 @@ describe("workbook CLI", () => {
     });
 
     expect(resolveSession).toHaveBeenCalledWith("/tmp/workbook", "lesson-007");
-    expect(preflightModels).toHaveBeenCalledWith(expect.objectContaining({ contentRoot: "/content", workspaceRoot: "/content/.tutorial/lesson-007/workspace" }));
+    expect(preflightModels).toHaveBeenCalledWith(expect.objectContaining({ contentRoot: "/content", workspaceRoot: "/content/.tutorial/lesson-007" }));
     expect(startServer).toHaveBeenCalledWith(expect.objectContaining({
       target: "/content",
       session: sessionFixture("lesson-007"),
