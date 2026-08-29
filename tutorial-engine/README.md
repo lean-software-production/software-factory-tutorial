@@ -92,8 +92,12 @@ npm test            # unit tests, including deterministic eval tests
 npm run check:eval  # type-check the synthetic engine eval runner and deterministic tests
 npm run test:eval   # focused deterministic eval tests
 npm run eval -- --help
+npm run factory:workbook:deterministic # provider-free workbook UX recording + decoded-WebM analysis + report
+npm run factory:workbook               # same factory plus advisory pi review when deterministic checks pass
 npm run check       # TypeScript, eval type-check, unit tests, browser build, and browser smoke
 ```
+
+The workbook UX factory lives in [`test/workbook-factory/`](test/workbook-factory/). It writes a durable `report.md` and `factory-result.json`; deterministic findings gate exit, while the optional AI review is advisory and marked `@needs-human`.
 
 `npm run browser:smoke` is safe to run on its own. It serves the built bundle in
 `dist/web-workbook/`, so before it starts Chromium it compares that bundle against everything vite
