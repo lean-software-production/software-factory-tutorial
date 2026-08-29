@@ -28,7 +28,7 @@ The recorder starts the real `startWorkbookServer()` with:
 - `RecordingPracticeCoach` for deterministic terminal feedback;
 - a protocol-aware fake PTY that accepts xterm keystrokes, echoes visible output, emits OSC-633 `workbook-command`/`workbook-finished` markers on Enter, and never runs shell commands.
 
-The Playwright run launches pinned Chromium at 1280×900, DPR 1, normal motion, with `recordVideo`. It injects the shared marker protocol outside React as early as practical. Each transition is marker-labelled before the learner action and is returned to `settled` only after the DOM/server outcome and scroll geometry have settled.
+The Playwright run launches pinned Chromium at 1280×900, DPR 1, normal motion, with `recordVideo`. It injects the shared marker protocol outside React as early as practical. Learner typing happens through the visible editor/xterm controls while the band is already in the requested geometry state; the state-labelled transition then brackets the feedback-producing pause or Enter key and returns to `settled` only after the authoritative DOM/server outcome and stable geometry. Required-motion ids are reserved for marker transitions that intentionally bracket scroll; the current real-workbook station uses the six state-labelled feedback transitions as analyzer evidence and records scroll/geometry in `walkthrough.json` diagnostics.
 
 The recorded journey includes learner-like typing in both surfaces while the activity band is in all three geometry states:
 

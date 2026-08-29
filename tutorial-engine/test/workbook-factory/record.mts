@@ -110,7 +110,12 @@ function shell(command: string, cwd = ENGINE_ROOT): string {
   return execFileSync(command, { cwd, shell: "/bin/bash", encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 async function exists(path: string): Promise<boolean> { try { await stat(path); return true; } catch { return false; } }
-function delayedOutcome<T>(value: T, delayMs = 350): Promise<T> { return sleep(delayMs).then(() => value); }
+class SlowRecordingPracticeCoach extends RecordingPracticeCoach {
+  override async assess(input: Parameters<RecordingPracticeCoach["assess"]>[0]): ReturnType<RecordingPracticeCoach["assess"]> {
+    await sleep(2_000);
+    return super.assess(input);
+  }
+}
 
 async function collectInputMetadata(runRoot: string, bundleStatus: ReturnType<typeof ensureFreshWebBundle>, browserVersion?: string): Promise<Record<string, unknown>> {
   const packageJson = JSON.parse(await readFile(resolve(ENGINE_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
@@ -250,7 +255,25 @@ async function measureGeometry(page: Page): Promise<GeometryTelemetry> {
 async function positionBand(page: Page, state: WorkbookFactoryGeometryState): Promise<GeometryTelemetry> {
   const target = GEOMETRY_TARGETS[state];
   const before = await measureGeometry(page);
-  await page.evaluate(({ bandDocumentTop, naturalTop }) => window.scrollTo({ top: Math.max(0, bandDocumentTop - naturalTop), behavior: "smooth" }), { bandDocumentTop: before.bandDocumentTop, naturalTop: target.naturalTop });
+  await page.evaluate(async ({ bandDocumentTop, naturalTop }) => {
+    const start = window.scrollY;
+    const end = Math.max(0, bandDocumentTop - naturalTop);
+    if (Math.abs(end - start) < 1) {
+      window.scrollTo(0, end);
+      return;
+    }
+    const durationMs = 900;
+    const startedAt = performance.now();
+    await new Promise<void>((resolvePromise) => {
+      const tick = (now: number) => {
+        const progress = Math.min(1, (now - startedAt) / durationMs);
+        window.scrollTo(0, start + (end - start) * progress);
+        if (progress >= 1) resolvePromise();
+        else requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+  }, { bandDocumentTop: before.bandDocumentTop, naturalTop: target.naturalTop });
   await waitForStableViewport(page);
   const after = await measureGeometry(page);
   if (after.expand < target.minExpand || after.expand > target.maxExpand) {
@@ -273,7 +296,7 @@ async function feedbackTelemetry(page: Page, surface: "editor" | "terminal", exp
 }
 
 async function clickContinue(page: Page): Promise<void> {
-  const button = page.getByRole("button", { name: /^(Ready to continue|Continue)$/ }).first();
+  const button = page.getByRole("button", { name: /^(?:Ready to continue|Continue)/ }).first();
   await button.waitFor({ state: "visible", timeout: 10_000 });
   await button.click();
 }
@@ -288,7 +311,10 @@ async function revealEditor(page: Page): Promise<void> {
 }
 
 async function waitForEditorAccepted(page: Page): Promise<void> {
-  await page.waitForFunction(() => Array.from(document.querySelectorAll(".editor-unlocked, .success-checkpoint")).some((element) => element.textContent?.includes("Accepted revision")), undefined, { timeout: 20_000 });
+  await page.waitForFunction(async () => {
+    const state = await (await fetch("api/workbook/state")).json();
+    return state.progress.blocks.some((block: any) => block.id.endsWith("--editor-draft") && block.checkpoint?.status === "accepted");
+  }, undefined, { timeout: 20_000 });
 }
 
 async function typeEditorRevision(page: Page, text: string): Promise<void> {
@@ -299,34 +325,45 @@ async function typeEditorRevision(page: Page, text: string): Promise<void> {
   await page.keyboard.type(text, { delay: 25 });
 }
 
-async function typeTerminalCommand(page: Page, command: string): Promise<void> {
+async function focusTerminal(page: Page): Promise<void> {
   await page.locator(".terminal-connection-status.connected").waitFor({ state: "attached", timeout: 15_000 });
   await page.locator(".current-activity-band .embedded-terminal").click({ position: { x: 40, y: 40 } });
   const helper = page.locator(".current-activity-band .xterm-helper-textarea").first();
   await helper.waitFor({ state: "attached", timeout: 10_000 });
   await helper.focus();
+}
+
+async function typeTerminalCommand(page: Page, command: string, submit = true): Promise<void> {
+  await focusTerminal(page);
   for (const char of command) await page.keyboard.type(char, { delay: 45 });
-  await page.keyboard.press("Enter");
+  if (submit) await page.keyboard.press("Enter");
+}
+
+async function waitForTerminalText(page: Page, expectedText: string): Promise<void> {
+  await page.waitForFunction((expected) => document.querySelector(".current-activity-band .embedded-terminal")?.textContent?.includes(expected), expectedText, { timeout: 10_000 });
+  await waitForStableViewport(page);
 }
 
 function fakeCounts(mainTutor: QueuedMainTutor, coach: RecordingPracticeCoach, fakePty: ReturnType<typeof createProtocolAwareFakePty>): FakeCallCounts {
   return { mainTutorReviews: mainTutor.reviews.length, practiceCoachAssessments: coach.assessments.length, fakePtyCommands: fakePty.commandCount };
 }
 
-async function runCheckpoint(args: {
+async function runPreparedCheckpoint(args: {
   page: Page;
   walkthrough: MutableWalkthrough;
   step: WorkbookFactoryStepDeclaration;
   mainTutor: QueuedMainTutor;
   coach: RecordingPracticeCoach;
   fakePty: ReturnType<typeof createProtocolAwareFakePty>;
-  action: () => Promise<{ feedback?: FeedbackTelemetry; typedText?: string; command?: string }>;
+  prepare: () => Promise<{ typedText?: string; command?: string }>;
+  trigger: () => Promise<FeedbackTelemetry>;
 }): Promise<void> {
-  const before = await measureGeometry(args.page);
   const startedAt = isoNow();
+  const prepared = await args.prepare();
+  const before = await measureGeometry(args.page);
   const transitionAt = await setMarker(args.page, "transition", args.step);
   await args.page.waitForTimeout(250);
-  const actionResult = await args.action();
+  const feedback = await args.trigger();
   const after = await measureGeometry(args.page);
   const settledMarkerAt = await setMarker(args.page, "settled", args.step);
   await args.page.waitForTimeout(450);
@@ -340,9 +377,9 @@ async function runCheckpoint(args: {
     marker: { transitionAt, settledAt: settledMarkerAt },
     before,
     after,
-    feedback: actionResult.feedback,
-    typedText: actionResult.typedText,
-    command: actionResult.command,
+    feedback,
+    typedText: prepared.typedText,
+    command: prepared.command,
     fakeCallCounts: fakeCounts(args.mainTutor, args.coach, args.fakePty),
   });
 }
@@ -390,13 +427,13 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
     { outcome: "feedback", message: EDITOR_FEEDBACK.full } satisfies TutorDecision,
     { outcome: "accepted", message: EDITOR_ACCEPTED } satisfies TutorDecision,
   );
-  const coach = new RecordingPracticeCoach();
+  const coach = new SlowRecordingPracticeCoach();
   coach.queue.push(
-    delayedOutcome({ outcome: "feedback", text: COACH_FEEDBACK.small } satisfies PracticeCoachOutcome),
-    delayedOutcome({ outcome: "feedback", text: COACH_FEEDBACK.mid } satisfies PracticeCoachOutcome),
-    delayedOutcome({ outcome: "feedback", text: COACH_FEEDBACK.full } satisfies PracticeCoachOutcome),
+    { outcome: "feedback", text: COACH_FEEDBACK.small } satisfies PracticeCoachOutcome,
+    { outcome: "feedback", text: COACH_FEEDBACK.mid } satisfies PracticeCoachOutcome,
+    { outcome: "feedback", text: COACH_FEEDBACK.full } satisfies PracticeCoachOutcome,
   );
-  const fakePty = createProtocolAwareFakePty({ outputForCommand: (command, index) => `\r\nfake terminal ${index}: observed ${command}\r\n` });
+  const fakePty = createProtocolAwareFakePty({ outputForCommand: (command, index) => `\r\nfake terminal ${index}: observed ${command}\r\nworkspace: refactor-line\r\nstatus: deterministic protocol marker received\r\nnext: read the feedback below\r\n` });
 
   let server: StartedWorkbookServer | undefined;
   let browser: Browser | undefined;
@@ -439,84 +476,62 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
     await setMarker(page, "settled", WORKBOOK_FACTORY_STEPS.initial);
     await page.waitForTimeout(600);
 
-    await setMarker(page, "transition", WORKBOOK_FACTORY_STEPS.revealEditor);
-    await page.waitForTimeout(250);
+    await setMarker(page, "settled", WORKBOOK_FACTORY_STEPS.revealEditor);
     await revealEditor(page);
     await positionBand(page, "small");
-    await setMarker(page, "settled", WORKBOOK_FACTORY_STEPS.revealEditor);
     await page.waitForTimeout(450);
 
-    await runCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorSmallFeedback, action: async () => {
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorSmallFeedback, prepare: async () => {
       await positionBand(page!, "small");
-      const typedText = "Small-state draft: the learner notices compact feedback in the editor.";
+      const typedText = "Small-state draft: the learner notices compact feedback in the editor.\nThe typed line stays short enough to look like a first revision.";
       await typeEditorRevision(page!, typedText);
-      return { typedText, feedback: await feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.small) };
-    } });
+      return { typedText };
+    }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.small) });
 
-    await runCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorMidFeedback, action: async () => {
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorMidFeedback, prepare: async () => {
       await positionBand(page!, "mid");
-      const typedText = "Mid-scroll draft: the learner revises while the activity band is partially expanded.";
+      const typedText = "Mid-scroll draft: the learner revises while the activity band is partially expanded.\nThey add a second visible line before pausing for feedback.\nThe surface should keep its feedback welded during the scroll-linked resize.";
       await typeEditorRevision(page!, typedText);
-      return { typedText, feedback: await feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.mid) };
-    } });
+      return { typedText };
+    }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.mid) });
 
-    await runCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorFullFeedback, action: async () => {
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorFullFeedback, prepare: async () => {
       await positionBand(page!, "full");
-      const typedText = "Full-width draft: the learner checks that feedback remains welded to the editor surface.";
+      const typedText = "Full-width draft: the learner checks that feedback remains welded to the editor surface.\nThis longer note creates real text texture across the editor viewport.\nThe final visible line names the full-width state before feedback arrives.\nA fourth line keeps the cursor moving like an actual revision.\nA fifth line makes the full-width editor less empty in the recording.\nA sixth line gives the deterministic analyzer text edges to track.";
       await typeEditorRevision(page!, typedText);
-      return { typedText, feedback: await feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.full) };
-    } });
+      return { typedText };
+    }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.full) });
 
-    await setMarker(page, "transition", WORKBOOK_FACTORY_STEPS.editorAccepted);
-    await page.waitForTimeout(250);
+    await setMarker(page, "settled", WORKBOOK_FACTORY_STEPS.editorAccepted);
     await typeEditorRevision(page, "Accepted final draft: small, mid-scroll, and full-width feedback all stayed stable.");
     await waitForEditorAccepted(page);
-    await setMarker(page, "settled", WORKBOOK_FACTORY_STEPS.editorAccepted);
     await page.waitForTimeout(450);
 
-    {
-      const step = WORKBOOK_FACTORY_STEPS.terminalSmallFeedback;
-      const startedAt = isoNow();
-      const transitionAt = await setMarker(page, "transition", step);
-      await page.waitForTimeout(250);
-      await clickContinue(page);
-      await page.locator('.current-activity-band[data-activity-type="terminal-practice"]').waitFor({ state: "attached", timeout: 15_000 });
-      const before = await positionBand(page, "small");
+    await clickContinue(page);
+    await page.locator('.current-activity-band[data-activity-type="terminal-practice"]').waitFor({ state: "attached", timeout: 15_000 });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalSmallFeedback, prepare: async () => {
+      await positionBand(page!, "small");
       const command = "printf small-terminal-state";
-      await typeTerminalCommand(page, command);
-      const feedback = await feedbackTelemetry(page, "terminal", COACH_FEEDBACK.small);
-      const after = await measureGeometry(page);
-      const settledMarkerAt = await setMarker(page, "settled", step);
-      await page.waitForTimeout(450);
-      walkthrough.checkpoints.push({
-        stepId: step.id,
-        name: step.name,
-        surface: step.surface,
-        requestedState: step.requestedState,
-        startedAt,
-        settledAt: isoNow(),
-        marker: { transitionAt, settledAt: settledMarkerAt },
-        before,
-        after,
-        feedback,
-        command,
-        fakeCallCounts: fakeCounts(mainTutor, coach, fakePty),
-      });
-    }
+      await typeTerminalCommand(page!, command, true);
+      await waitForTerminalText(page!, "fake terminal 1");
+      return { command };
+    }, trigger: async () => feedbackTelemetry(page!, "terminal", COACH_FEEDBACK.small) });
 
-    await runCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalMidFeedback, action: async () => {
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalMidFeedback, prepare: async () => {
       await positionBand(page!, "mid");
       const command = "printf mid-terminal-state";
-      await typeTerminalCommand(page!, command);
-      return { command, feedback: await feedbackTelemetry(page!, "terminal", COACH_FEEDBACK.mid) };
-    } });
+      await typeTerminalCommand(page!, command, true);
+      await waitForTerminalText(page!, "fake terminal 2");
+      return { command };
+    }, trigger: async () => feedbackTelemetry(page!, "terminal", COACH_FEEDBACK.mid) });
 
-    await runCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalFullFeedback, action: async () => {
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalFullFeedback, prepare: async () => {
       await positionBand(page!, "full");
       const command = "printf full-terminal-state";
-      await typeTerminalCommand(page!, command);
-      return { command, feedback: await feedbackTelemetry(page!, "terminal", COACH_FEEDBACK.full) };
-    } });
+      await typeTerminalCommand(page!, command, true);
+      await waitForTerminalText(page!, "fake terminal 3");
+      return { command };
+    }, trigger: async () => feedbackTelemetry(page!, "terminal", COACH_FEEDBACK.full) });
 
     for (const checkpoint of walkthrough.checkpoints) assertCheckpointGeometry(checkpoint, walkthrough.semanticFailures);
     const seenStateSteps = new Set(walkthrough.checkpoints.map((checkpoint) => checkpoint.stepId));
@@ -550,6 +565,8 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
       outputDir: resolve(runRoot, "analysis"),
       requiredMotionStepIds: REQUIRED_MOTION_STEP_IDS,
       sampleHz: 11,
+      roi: { x: 360, y: 90, width: 720, height: 700 },
+      maxMotionWidth: 240,
     });
     const segmentStepIds = analysis.segments.map((segment) => segment.stepId);
     const missingSegmentIds = REQUIRED_STATE_CHECKPOINT_STEP_IDS.filter((stepId) => !segmentStepIds.includes(stepId));
