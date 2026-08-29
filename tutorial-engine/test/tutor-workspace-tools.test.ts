@@ -56,13 +56,13 @@ describe("Main Tutor workspace tools", () => {
 
     const result = await execute(await tool("list_files", workspace), { path: ".", limit: 3, offset: 0 });
 
-    expect(result.details).toMatchObject({ ok: true, path: ".", offset: 0, limit: 3, truncated: true, nextOffset: 3 });
-    expect(result.details.entries.map((entry: any) => entry.name)).toEqual(["README.md", "file-000.txt", "file-001.txt"]);
+    expect(result.details).toMatchObject({ ok: true, path: '"."', offset: 0, limit: 3, truncated: true, nextOffset: 3 });
+    expect(result.details.entries.map((entry: any) => entry.name)).toEqual(['"README.md"', '"file-000.txt"', '"file-001.txt"']);
     expect(result.content[0]!.text).toContain("[TRUNCATED: ");
     expect(result.content[0]!.text).not.toContain(workspace);
 
     const later = await execute(await tool("list_files", workspace), { path: ".", limit: 2, offset: 2 });
-    expect(later.details.entries.map((entry: any) => entry.name)).toEqual(["file-001.txt", "file-002.txt"]);
+    expect(later.details.entries.map((entry: any) => entry.name)).toEqual(['"file-001.txt"', '"file-002.txt"']);
   });
 
   it("reads bounded byte ranges with offsets and deterministic truncation", async () => {
@@ -71,10 +71,29 @@ describe("Main Tutor workspace tools", () => {
 
     const result = await execute(await tool("read_file", workspace), { path: "long.txt", offset: 10, limit: 5 });
 
-    expect(result.details).toMatchObject({ ok: true, path: "long.txt", offset: 10, bytesRead: 5, size: 36, truncated: true, nextOffset: 15 });
+    expect(result.details).toMatchObject({ ok: true, path: '"long.txt"', offset: 10, bytesRead: 5, size: 36, truncated: true, nextOffset: 15 });
     expect(result.content[0]!.text).toContain("abcde");
     expect(result.content[0]!.text).toContain("[TRUNCATED: 21 bytes remain; call read_file with offset 15]");
     expect(result.content[0]!.text).not.toContain(workspace);
+  });
+
+  it("escapes control characters in learner-controlled path and file-name metadata", async () => {
+    const { workspace } = await fixture();
+    await writeFile(resolve(workspace, "line\nbreak.txt"), "newline name contents\n", "utf8");
+    await writeFile(resolve(workspace, "ansi\u001b[31mred.txt"), "ansi name contents\n", "utf8");
+    const list = await execute(await tool("list_files", workspace), { path: ".", limit: 20 });
+
+    expect(list.content[0]!.text).toContain('"line\\nbreak.txt"');
+    expect(list.content[0]!.text).toContain('"ansi\\u001b[31mred.txt"');
+    expect(list.content[0]!.text).not.toContain("line\nbreak.txt");
+    expect(list.content[0]!.text).not.toContain("\u001b[31m");
+    expect(list.details.entries.map((entry: any) => entry.name)).toEqual(expect.arrayContaining(['"line\\nbreak.txt"', '"ansi\\u001b[31mred.txt"']));
+
+    const read = await execute(await tool("read_file", workspace), { path: "line\nbreak.txt", limit: 5 });
+    const readHeader = read.content[0]!.text.split("\n")[0]!;
+    expect(readHeader).toContain('"line\\nbreak.txt"');
+    expect(readHeader).not.toContain("line\nbreak.txt");
+    expect(read.details.path).toBe('"line\\nbreak.txt"');
   });
 
   it("rejects oversized files before reading them", async () => {
@@ -84,7 +103,7 @@ describe("Main Tutor workspace tools", () => {
 
     const result = await execute(await tool("read_file", workspace), { path: "huge.log", offset: 0, limit: 100 });
 
-    expect(result.details).toMatchObject({ ok: false, path: "huge.log", size: TUTOR_READ_MAX_BYTES * 40 });
+    expect(result.details).toMatchObject({ ok: false, path: '"huge.log"', size: TUTOR_READ_MAX_BYTES * 40 });
     expect(result.content[0]!.text).toContain("File is too large to read safely");
     expect(result.content[0]!.text).not.toContain(workspace);
   });

@@ -58,6 +58,23 @@ function childPath(parent: string, name: string): string {
   return parent === "." ? name : `${parent}/${name}`;
 }
 
+function quoteMetadata(value: string): string {
+  let escaped = "";
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    if (character === "\\") escaped += "\\\\";
+    else if (character === '"') escaped += '\\"';
+    else if (character === "\n") escaped += "\\n";
+    else if (character === "\r") escaped += "\\r";
+    else if (character === "\t") escaped += "\\t";
+    else if (character === "\b") escaped += "\\b";
+    else if (character === "\f") escaped += "\\f";
+    else if (codePoint < 0x20 || (codePoint >= 0x7f && codePoint <= 0x9f) || codePoint === 0x2028 || codePoint === 0x2029) escaped += `\\u${codePoint.toString(16).padStart(4, "0")}`;
+    else escaped += character;
+  }
+  return `"${escaped}"`;
+}
+
 function visibleName(name: string): boolean {
   return !RESERVED_TOP_LEVEL_NAMES.has(name);
 }
@@ -70,9 +87,9 @@ function kindFor(info: Awaited<ReturnType<WorkspaceBoundary["stat"]>>): EntryKin
 }
 
 function formatEntry(entry: { name: string; kind: EntryKind; size?: number }): string {
-  if (entry.kind === "directory") return `- ${entry.name}/ (directory)`;
-  if (entry.kind === "file") return `- ${entry.name} (file, ${entry.size ?? 0} bytes)`;
-  return `- ${entry.name} (${entry.kind})`;
+  if (entry.kind === "directory") return `- ${quoteMetadata(`${entry.name}/`)} (directory)`;
+  if (entry.kind === "file") return `- ${quoteMetadata(entry.name)} (file, ${entry.size ?? 0} bytes)`;
+  return `- ${quoteMetadata(entry.name)} (${entry.kind})`;
 }
 
 function boundedListText(header: string, lines: string[], truncationLine: string | undefined): string {
@@ -106,7 +123,7 @@ async function listFiles(boundary: WorkspaceBoundary, params: unknown): Promise<
 
   try {
     const directoryInfo = await boundary.stat(path.path);
-    if (!directoryInfo.isDirectory()) return safeError("Path is not a directory.", { path: path.path });
+    if (!directoryInfo.isDirectory()) return safeError("Path is not a directory.", { path: quoteMetadata(path.path) });
     const names = (await boundary.readdir(path.path)).filter(visibleName).sort(codepointSort);
     const selectedNames = names.slice(offset.value, offset.value + limit.value);
     const entries = [] as Array<{ name: string; kind: EntryKind; size?: number }>;
@@ -119,15 +136,15 @@ async function listFiles(boundary: WorkspaceBoundary, params: unknown): Promise<
     const truncated = nextOffset < names.length;
     const remaining = Math.max(0, names.length - nextOffset);
     const shownRange = entries.length === 0 ? "0-0" : `${offset.value + 1}-${nextOffset}`;
-    const header = `Listing ${path.path} (showing ${shownRange} of ${names.length} entries):`;
+    const header = `Listing ${quoteMetadata(path.path)} (showing ${shownRange} of ${names.length} entries):`;
     const truncationLine = truncated ? `[TRUNCATED: ${remaining} more entries; call list_files with offset ${nextOffset}]` : undefined;
     return textResult(boundedListText(header, entries.map(formatEntry), truncationLine), {
       ok: true,
-      path: path.path,
+      path: quoteMetadata(path.path),
       offset: offset.value,
       limit: limit.value,
       totalEntries: names.length,
-      entries,
+      entries: entries.map((entry) => ({ name: quoteMetadata(entry.kind === "directory" ? `${entry.name}/` : entry.name), kind: entry.kind, ...(entry.kind === "file" ? { size: entry.size } : {}) })),
       truncated,
       ...(truncated ? { nextOffset } : {})
     });
@@ -147,21 +164,21 @@ async function readWorkspaceFile(boundary: WorkspaceBoundary, params: unknown): 
 
   try {
     const before = await boundary.stat(path.path);
-    if (!before.isFile()) return safeError("Path is not a regular file.", { path: path.path });
-    if (before.size > TUTOR_READ_MAX_FILE_BYTES) return safeError(`File is too large to read safely; maximum is ${TUTOR_READ_MAX_FILE_BYTES} bytes.`, { path: path.path, size: before.size });
+    if (!before.isFile()) return safeError("Path is not a regular file.", { path: quoteMetadata(path.path) });
+    if (before.size > TUTOR_READ_MAX_FILE_BYTES) return safeError(`File is too large to read safely; maximum is ${TUTOR_READ_MAX_FILE_BYTES} bytes.`, { path: quoteMetadata(path.path), size: before.size });
     const buffer = await boundary.readFile(path.path);
     const after = await boundary.stat(path.path);
-    if (fileChanged(before, after)) return safeError("File changed while reading; retry after it is stable.", { path: path.path });
+    if (fileChanged(before, after)) return safeError("File changed while reading; retry after it is stable.", { path: quoteMetadata(path.path) });
     const start = Math.min(offset.value, buffer.length);
     const end = Math.min(buffer.length, start + limit.value);
     const chunk = buffer.subarray(start, end).toString("utf8");
     const truncated = end < buffer.length;
     const remaining = Math.max(0, buffer.length - end);
-    const body = [`File ${path.path} (bytes ${start}-${end} of ${buffer.length}):`, chunk];
+    const body = [`File ${quoteMetadata(path.path)} (bytes ${start}-${end} of ${buffer.length}):`, chunk];
     if (truncated) body.push(`[TRUNCATED: ${remaining} bytes remain; call read_file with offset ${end}]`);
     return textResult(body.join("\n"), {
       ok: true,
-      path: path.path,
+      path: quoteMetadata(path.path),
       offset: start,
       limit: limit.value,
       size: buffer.length,

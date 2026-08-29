@@ -1,4 +1,4 @@
-import { access, lstat, mkdir, readFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, open, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
   createEditToolDefinition,
@@ -35,6 +35,16 @@ export interface WorkspaceToolBoundary {
   stat(path: string): Promise<Awaited<ReturnType<typeof stat>>>;
   readdir(path: string): Promise<string[]>;
   exists(path: string): Promise<boolean>;
+}
+
+type FileVersion = Awaited<ReturnType<typeof stat>>;
+
+function sameFileVersion(left: FileVersion, right: FileVersion): boolean {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs;
 }
 
 /**
@@ -77,7 +87,29 @@ export class WorkspaceBoundary {
     return { absolute: candidate, relative: workspaceRelative.split(sep).join("/") };
   }
 
-  async readFile(path: string): Promise<Buffer> { return readFile((await this.resolve(path)).absolute); }
+  async readFile(path: string): Promise<Buffer> {
+    const safePath = await this.resolve(path);
+    const handle = await open(safePath.absolute, "r");
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile()) throw new Error("Path is not a regular file.");
+
+      const currentPath = await this.resolve(path);
+      const current = await stat(currentPath.absolute);
+      if (!sameFileVersion(opened, current)) throw new Error("File changed while reading; retry after it is stable.");
+
+      const buffer = await handle.readFile();
+      const afterRead = await handle.stat();
+      if (!sameFileVersion(opened, afterRead)) throw new Error("File changed while reading; retry after it is stable.");
+
+      const finalPath = await this.resolve(path);
+      const final = await stat(finalPath.absolute);
+      if (!sameFileVersion(opened, final)) throw new Error("File changed while reading; retry after it is stable.");
+      return buffer;
+    } finally {
+      await handle.close();
+    }
+  }
   async access(path: string): Promise<void> { await access((await this.resolve(path)).absolute); }
   async writeFile(path: string, content: string): Promise<void> {
     const safePath = await this.resolve(path, true);
