@@ -61,7 +61,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    The line's name is an argument, not a constant. This watcher would work unchanged on a second line
    that nobody has built.
 
-2. **Watch a run.** Use the tutor's embedded terminal as one shell session at the session workspace.
+2. **Watch a run.** Use the tutor's embedded terminal as one shell session at the active workspace.
    Start the line as a background job, saving its unreadable JSON firehose to a regenerated file:
 
    ```sh
@@ -104,7 +104,7 @@ Build this lesson in this order. Complete each small step before moving to the n
 
 ## Checks
 
-From the session workspace in the embedded terminal, start the line as a background job and run the
+From the active workspace in the embedded terminal, start the line as a background job and run the
 watcher in the foreground:
 
 ```sh

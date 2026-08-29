@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
-import { access, realpath, stat } from "node:fs/promises";
+import { access, lstat, realpath, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { extname, resolve, sep } from "node:path";
+import { basename, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import type { TutorialLogger } from "./runtime-log.js";
 import { createTutorialLogger } from "./runtime-log.js";
@@ -16,13 +16,14 @@ import { TerminalEvidenceRepository } from "./terminal-evidence.js";
 import { tutorialStatePath } from "./tutorial-state.js";
 import { watchWorkbookContent, type ContentWatch, type ContentWatchFactory } from "./content-watch.js";
 import { createWorkbookWorkflow, WorkbookWorkflowCommandError, type TerminalAssessmentScheduler } from "./workflow.js";
+import { AUTHORED_WORKSPACES_DIRECTORY, SESSION_STATE_DIRECTORY, SESSION_WORKSPACES_DIRECTORY, discoverDeclaredLessonWorkspaces, validateLessonWorkspaceId, validateSessionId } from "../session-workspace.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
 const MIME_TYPES: Record<string, string> = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json; charset=utf-8" };
 const MAX_BODY_BYTES = 16_384;
 const MAX_MESSAGE_BYTES = 4_000;
 
-export interface WorkbookRuntimeDescriptor { contentRoot: string; sessionRoot: string; workspaceRoot: string; runtimeProvision?: TrustedRuntimeProvision; }
+export interface WorkbookRuntimeDescriptor { contentRoot: string; sessionRoot: string; workspacesRoot?: string; workspaceRoots: Record<string, string>; runtimeProvision?: TrustedRuntimeProvision; }
 export interface WorkbookServerOptions { target: string; webRoot: string; session?: WorkbookRuntimeDescriptor; runtimeProvision?: RuntimeProvisionProfile; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; terminalAssessmentScheduler?: TerminalAssessmentScheduler; mainTutor?: MainWorkbookTutor; practiceCoach?: PracticeCoach; watchContent?: boolean; contentWatchFactory?: ContentWatchFactory; contentWatchDebounceMs?: number; }
 export interface StartedWorkbookServer { url: string; port: number; host: string; close(): Promise<void>; }
 
@@ -63,17 +64,90 @@ function originAllowed(request: IncomingMessage, port: number): boolean {
 }
 function parseTerminalMessage(data: RawData) { try { return JSON.parse(Buffer.isBuffer(data) ? data.toString("utf8") : Buffer.from(data as any).toString("utf8")); } catch { return undefined; } }
 
+function inside(root: string, candidate: string): boolean {
+  const candidateRelative = relative(root, candidate);
+  return candidateRelative === "" || (candidateRelative !== ".." && !candidateRelative.startsWith(`..${sep}`) && !isAbsolute(candidateRelative));
+}
+
 async function requireDirectoryRoot(path: string, label: string): Promise<string> {
   const real = await realpath(resolve(path));
   if (!(await stat(real)).isDirectory()) throw new Error(`${label} must be a directory: ${path}`);
   return real;
 }
-async function resolveRuntime(options: WorkbookServerOptions): Promise<Required<WorkbookRuntimeDescriptor>> {
+
+async function requireRealDirectory(path: string, label: string): Promise<string> {
+  const resolved = resolve(path);
+  let info;
+  try { info = await lstat(resolved); }
+  catch { throw new Error(`${label} does not exist: ${path}`); }
+  if (info.isSymbolicLink()) throw new Error(`${label} must be a real directory, not a symlink: ${path}`);
+  if (!info.isDirectory()) throw new Error(`${label} must be a directory: ${path}`);
+  return await realpath(resolved);
+}
+
+async function requireExactDirectWorkspaceRoot(parentRoot: string, workspaceId: string, label: string): Promise<string> {
+  const id = validateLessonWorkspaceId(workspaceId, label);
+  const expected = resolve(parentRoot, id);
+  if (!inside(parentRoot, expected) || relative(parentRoot, expected).includes(sep)) throw new Error(`${label} '${id}' must be a direct child of the workspace root.`);
+  const real = await requireRealDirectory(expected, `${label} '${id}'`);
+  if (real !== expected) throw new Error(`${label} '${id}' must be the exact real direct child of the workspace root.`);
+  return real;
+}
+
+async function validateAuthoredWorkspaceRoots(contentRoot: string, workspaceIds: readonly string[]): Promise<Record<string, string>> {
+  const authoredRoot = resolve(contentRoot, AUTHORED_WORKSPACES_DIRECTORY);
+  const workspaceRoots: Record<string, string> = {};
+  for (const workspaceId of workspaceIds) workspaceRoots[workspaceId] = await requireExactDirectWorkspaceRoot(authoredRoot, workspaceId, "Authored workspace");
+  return workspaceRoots;
+}
+
+function assertSameWorkspaceRootKeys(supplied: Record<string, string>, declaredIds: readonly string[]): void {
+  const declared = new Set(declaredIds);
+  for (const id of Object.keys(supplied)) {
+    validateLessonWorkspaceId(id, "session.workspaceRoots key");
+    if (!declared.has(id)) throw new Error(`Session workspaceRoots contains undeclared workspace '${id}'. Start a new session for changed workspace declarations.`);
+  }
+  for (const id of declaredIds) if (!Object.prototype.hasOwnProperty.call(supplied, id)) throw new Error(`Session workspaceRoots is missing declared workspace '${id}'. Start a new session for changed workspace declarations.`);
+}
+
+async function validateSessionWorkspaceRoots(contentRoot: string, session: WorkbookRuntimeDescriptor, declaredIds: readonly string[]): Promise<{ sessionRoot: string; workspacesRoot: string; workspaceRoots: Record<string, string> }> {
+  const stateRoot = await requireRealDirectory(resolve(contentRoot, SESSION_STATE_DIRECTORY), "Tutorial state directory");
+  const sessionRoot = await requireRealDirectory(session.sessionRoot, "Workbook session root");
+  if (!inside(stateRoot, sessionRoot)) throw new Error("Workbook session root must stay inside the tutorial state directory.");
+  const sessionId = "sessionId" in session && typeof session.sessionId === "string" ? session.sessionId : basename(sessionRoot);
+  validateSessionId(sessionId);
+  if (sessionRoot !== resolve(stateRoot, sessionId)) throw new Error("Workbook session root must be the exact real tutorial session directory.");
+
+  const expectedWorkspacesRoot = resolve(sessionRoot, SESSION_WORKSPACES_DIRECTORY);
+  const workspacesRoot = await requireRealDirectory(session.workspacesRoot ?? expectedWorkspacesRoot, "Workbook session workspaces root");
+  if (workspacesRoot !== expectedWorkspacesRoot) throw new Error("Workbook session workspaces root must be the exact real workspaces directory for this session.");
+
+  assertSameWorkspaceRootKeys(session.workspaceRoots ?? {}, declaredIds);
+  const workspaceRoots: Record<string, string> = {};
+  for (const id of declaredIds) {
+    const expectedRoot = await requireExactDirectWorkspaceRoot(workspacesRoot, id, "Session workspace");
+    const supplied = session.workspaceRoots?.[id];
+    if (!supplied) throw new Error(`Session workspaceRoots is missing declared workspace '${id}'. Start a new session for changed workspace declarations.`);
+    const suppliedRoot = await requireRealDirectory(supplied, `Session workspace '${id}' root`);
+    if (suppliedRoot !== expectedRoot) throw new Error(`Session workspace root for '${id}' does not match the declared live workspace root.`);
+    await requireRealDirectory(resolve(expectedRoot, ".git"), `Session workspace '${id}' Git directory`);
+    workspaceRoots[id] = expectedRoot;
+  }
+  return { sessionRoot, workspacesRoot, workspaceRoots };
+}
+
+async function resolveRuntime(options: WorkbookServerOptions): Promise<WorkbookRuntimeDescriptor & { contentRoot: string; sessionRoot: string; workspaceRoots: Record<string, string>; runtimeProvision: TrustedRuntimeProvision }> {
   const contentRoot = await requireDirectoryRoot(options.session?.contentRoot ?? options.target, "Workbook content root");
-  const sessionRoot = options.session ? await requireDirectoryRoot(options.session.sessionRoot, "Workbook session root") : resolve(tutorialStatePath(options.target));
-  const workspaceRoot = await requireDirectoryRoot(options.session?.workspaceRoot ?? options.target, "Workbook workspace root");
   const runtimeProvision = options.session?.runtimeProvision ?? (options.runtimeProvision ? trustRuntimeProvision(options.runtimeProvision) : NO_RUNTIME_PROVISION);
-  return { contentRoot, sessionRoot, workspaceRoot, runtimeProvision };
+  const declaredWorkspaceIds = await discoverDeclaredLessonWorkspaces(contentRoot);
+  for (const id of declaredWorkspaceIds) validateLessonWorkspaceId(id, "declared lesson workspace");
+  if (options.session) {
+    const sessionRuntime = await validateSessionWorkspaceRoots(contentRoot, options.session, declaredWorkspaceIds);
+    return { contentRoot, runtimeProvision, ...sessionRuntime };
+  }
+  const sessionRoot = resolve(tutorialStatePath(options.target));
+  const workspaceRoots = await validateAuthoredWorkspaceRoots(contentRoot, declaredWorkspaceIds);
+  return { contentRoot, sessionRoot, workspaceRoots, runtimeProvision };
 }
 function errorStatus(error: unknown, fallback = 400): number { return error instanceof WorkbookWorkflowCommandError ? error.status : fallback; }
 function errorMessage(error: unknown, fallback = "Bad request."): string { return error instanceof Error ? error.message : fallback; }
@@ -91,11 +165,11 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const attempts = new AttemptStore({ stateRoot: runtime.sessionRoot });
   const terminalEvidence = new TerminalEvidenceRepository({ stateRoot: runtime.sessionRoot });
   const mainTutor = options.mainTutor ?? new DefaultMainWorkbookTutor({ workspace: runtime.contentRoot, log });
-  const practiceCoach = options.practiceCoach ?? new FastPracticeCoach({ workspace: runtime.workspaceRoot, log });
+  const practiceCoach = options.practiceCoach ?? new FastPracticeCoach({ workspace: runtime.sessionRoot, log });
   let terminal: WorkbookTerminalManager | undefined;
   const workflow = await createWorkbookWorkflow({
     contentRoot: runtime.contentRoot,
-    learnerWorkspace: runtime.workspaceRoot,
+    workspaceRootForId: (workspaceId) => runtime.workspaceRoots[workspaceId],
     timeline,
     attempts,
     mainTutor,
@@ -110,7 +184,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   await workflow.start();
 
   terminal = embeddedTerminalEnabled ? new WorkbookTerminalManager({
-    workspace: runtime.workspaceRoot,
+    workspace: runtime.sessionRoot,
     runtimeProvision: runtime.runtimeProvision,
     getActiveBlock: workflow.activeObservedBlock,
     observationSink: workflow.observeTerminalFact,
@@ -119,6 +193,18 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   }) : undefined;
   try { terminal?.start(); }
   catch (error) { terminal?.dispose(); await workflow.close(); mainTutor.dispose(); throw error; }
+
+  const logTerminalStartupFailure = (operation: string, error: unknown): void => {
+    log.info(`Embedded terminal ${operation} failed: ${error instanceof Error ? error.message : String(error)}`);
+  };
+  const startTerminalAfterProgression = (): void => {
+    try { terminal?.start(); }
+    catch (error) { logTerminalStartupFailure("startup after progression", error); }
+  };
+  const reconcileTerminalAfterReload = (): void => {
+    try { terminal?.reconcileActiveTerminal(); }
+    catch (error) { logTerminalStartupFailure("reconciliation after content reload", error); }
+  };
 
   let contentWatch: ContentWatch | undefined;
   let contentReloads: Promise<void> = Promise.resolve();
@@ -129,6 +215,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     contentReloads = contentReloads.then(async () => {
       const result = await workflow.reloadContent();
       if (result.outcome === "reloaded") {
+        reconcileTerminalAfterReload();
         await contentWatch?.rescan().catch((error) => log.info(`Workbook content watcher rescan failed: ${error instanceof Error ? error.message : String(error)}`));
         broadcastSse("content-reloaded", { generation: result.generation });
       } else if (result.outcome === "error") broadcastSse("content-reload-error", { message: result.message });
@@ -154,7 +241,14 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     if (request.method === "GET" && isRoute(url.pathname, "state")) return sendJson(response, 200, await workflow.state());
     if (request.method === "POST" && isRoute(url.pathname, "introduction")) return sendJson(response, 202, (await workflow.completeBlock("workbook--introduction")).state);
     if (request.method === "POST" && (isRoute(url.pathname, "complete-block") || isRoute(url.pathname, "completeBlock") || url.pathname.endsWith("/api/workbook/blocks/complete"))) {
-      try { const body = await readJson(request); const blockId = typeof body.blockId === "string" ? body.blockId : ""; if (!blockId) return sendJson(response, 400, { error: "blockId is required." }); return sendJson(response, 202, await workflow.completeBlock(blockId)); }
+      try {
+        const body = await readJson(request);
+        const blockId = typeof body.blockId === "string" ? body.blockId : "";
+        if (!blockId) return sendJson(response, 400, { error: "blockId is required." });
+        const result = await workflow.completeBlock(blockId);
+        startTerminalAfterProgression();
+        return sendJson(response, 202, result);
+      }
       catch (error) { return sendJson(response, errorStatus(error), { error: errorMessage(error) }); }
     }
     if (request.method === "POST" && isRoute(url.pathname, "messages")) {
@@ -178,7 +272,12 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       } catch (error) { return sendJson(response, errorStatus(error, /accepted work|not active/i.test(errorMessage(error)) ? 409 : 400), { error: errorMessage(error) }); }
     }
     if (request.method === "POST" && isRoute(url.pathname, "events")) {
-      try { const body = await readJson(request); return sendJson(response, 202, await workflow.submitEvent({ blockId: typeof body.blockId === "string" ? body.blockId : "", action: typeof body.action === "string" ? body.action : "", response: typeof body.response === "string" ? body.response : undefined })); }
+      try {
+        const body = await readJson(request);
+        const result = await workflow.submitEvent({ blockId: typeof body.blockId === "string" ? body.blockId : "", action: typeof body.action === "string" ? body.action : "", response: typeof body.response === "string" ? body.response : undefined });
+        startTerminalAfterProgression();
+        return sendJson(response, 202, result);
+      }
       catch (error) { return sendJson(response, errorStatus(error), { error: errorMessage(error) }); }
     }
     if (request.method !== "GET" && request.method !== "HEAD") return sendJson(response, 405, { error: "Method not allowed." });

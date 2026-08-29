@@ -11,7 +11,7 @@ tutor: |-
 
 ## Checks
 
-From the session workspace, make the new script executable and run a doer turn followed by a
+From the active workspace, make the new script executable and run a doer turn followed by a
 validation turn:
 
 ```sh

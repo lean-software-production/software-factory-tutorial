@@ -11,7 +11,7 @@ tutor: |-
 
 ## Checks
 
-From the session workspace:
+From the active workspace:
 
 ```sh
 ./factory/refactor/run.sh

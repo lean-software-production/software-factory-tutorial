@@ -11,7 +11,7 @@ tutor: |-
 
 ## Checks
 
-From the session workspace in the embedded terminal, start the line as a background job and run the
+From the active workspace in the embedded terminal, start the line as a background job and run the
 watcher in the foreground:
 
 ```sh

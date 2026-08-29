@@ -53,7 +53,7 @@ Use `--all --yes` only when you intend to run every scenario. Use `--repeat 2` o
 
 ## What it exercises
 
-The runner copies `evals/workbook/` into a disposable temporary repository under `tutorial/`, materializes a fresh session workspace under `tutorial/.tutorial/<session-id>/workspace/`, and drives the same public workbook API, editor endpoint, and terminal WebSocket used by the browser. It records only public workbook state, public editor status/feedback, learner-visible terminal transcript, reflection turns, public workbook events, and session-local `factory/.tmp` plus `editor-artifacts` artifact snapshots.
+The runner copies `evals/workbook/` into a disposable temporary repository under `tutorial/`, materializes fresh live workspaces under `tutorial/.tutorial/<session-id>/workspaces/<workspace-id>/`, and drives the same public workbook API, editor endpoint, and terminal WebSocket used by the browser. It records only public workbook state, public editor status/feedback, learner-visible terminal transcript, reflection turns, public workbook events, and session-local `factory/.tmp` plus `editor-artifacts` artifact snapshots.
 
 The recorder refuses to store a private `tutor` field or known private tutor-guidance text. Deterministic gates inspect the trace before any judge call. The judge receives the scenario criteria and the recorded public learner session, not the authored curriculum or private tutor guidance.
 
@@ -68,7 +68,7 @@ Each run writes an ignored report directory under `evals/reports/<run-id>/`. Imp
 - `evals/reports/<run-id>/judge.json`: verified judge JSON.
 - `evals/reports/<run-id>/report.json`: combined scenario, model identities, gate, trace, judge input, judge result, artifacts, and verdict.
 - `evals/reports/<run-id>/summary.md`: short human-readable result.
-- `evals/reports/<run-id>/metadata.json`: run metadata, model identities, git revision, and workspace path.
+- `evals/reports/<run-id>/metadata.json`: run metadata, model identities, git revision, and workspace paths.
 - `evals/reports/<run-id>/failure.txt`: exact failure when setup, the live session, deterministic gates, or judge invocation fails.
 
 The latest command also writes `evals/reports/latest.json` with the selected scenarios and report directories.

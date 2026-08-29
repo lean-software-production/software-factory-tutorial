@@ -11,7 +11,7 @@ tutor: |-
 
 ## Checks
 
-From the session workspace, start the line and watcher in the background, then steer the active run:
+From the active workspace, start the line and watcher in the background, then steer the active run:
 
 ```sh
 mkdir -p factory/refactor/.tmp

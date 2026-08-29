@@ -13,7 +13,7 @@ describe("evaluator package scripts", () => {
     const packageJson = await readJson<PackageJson>("package.json");
     const tsconfig = await readJson<TsconfigJson>("evals/tsconfig.json");
 
-    expect(packageJson.workspaces).toEqual(["tutorial/calculator", "tutorial-engine"]);
+    expect(packageJson.workspaces).toEqual(["tutorial/workspaces/refactor-line/calculator", "tutorial-engine"]);
     expect(packageJson.scripts["check:eval"]).toBe("tsc -p evals/tsconfig.json");
     // Asserted by property, not by exact string: the guarantees that matter are that this runs
     // the deterministic vitest suite over this checkout's eval tests only. Pinning the whole
@@ -33,7 +33,7 @@ describe("evaluator package scripts", () => {
     expect(packageJson.scripts.check).toContain("npm run check:eval");
     expect(packageJson.scripts.check).toContain("npm run test:eval");
     expect(packageJson.scripts.check).toContain("npm run --workspace=tutorial-engine check");
-    expect(packageJson.scripts.check).toContain("npm run --workspace=tutorial/calculator test");
+    expect(packageJson.scripts.check).toContain("npm run --workspace=tutorial/workspaces/refactor-line/calculator test");
     expect(packageJson.scripts.check).not.toContain("--workspace=calculator");
     expect(packageJson.scripts.check).not.toContain("npm run eval");
     expect(packageJson.scripts.check).not.toContain("tsx evals/run.ts");

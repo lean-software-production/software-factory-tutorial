@@ -14,7 +14,7 @@ tutor: |-
 
 ## Change only the job to be done
 
-Run this command from the session workspace:
+Run this command from the active workspace:
 
 ```sh command
 echo "What files make up this calculator, and what does each one appear to do?" \

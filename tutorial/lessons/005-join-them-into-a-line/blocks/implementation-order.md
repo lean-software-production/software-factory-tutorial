@@ -4,7 +4,7 @@ outcome: "Create a run script that records a baseline, runs the doer, validates,
 tutor: |-
   Guide the learner through the four build steps: move the Part 1 files into factory/refactor/,
   repair stale paths and names, write success.md, update do.sh and validate.sh to receive
-  success.md, and create run.sh. Success means the moved scripts run from the session workspace, the
+  success.md, and create run.sh. Success means the moved scripts run from the active workspace, the
   validator gives one finding per criterion, run.sh orders baseline, doer, validator, and pause, and
   .tmp/validate-findings.txt holds the last verdict. Accept learner-written success criteria if they
   name runnable evidence for each criterion. Clue from the listed mv commands and the
@@ -16,7 +16,7 @@ tutor: |-
 
 Work in this order. Complete each small step before moving to the next one:
 
-1. **Give the line an edge.** From the session workspace:
+1. **Give the line an edge.** From the active workspace:
 
    ```sh
    mkdir -p factory/refactor/.tmp
@@ -48,7 +48,7 @@ Work in this order. Complete each small step before moving to the next one:
      `.tmp/validate-findings.txt`;
    - the guard's message now names the script you would actually run: `./do.sh`.
 
-   Run `./factory/refactor/do.sh` and `./factory/refactor/validate.sh` once from the session workspace
+   Run `./factory/refactor/do.sh` and `./factory/refactor/validate.sh` once from the active workspace
    before going on. A rename that nobody exercises is a rename nobody has checked.
 
    Nothing behaves differently after this step, which is the point worth making. What you bought

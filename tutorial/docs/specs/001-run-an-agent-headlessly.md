@@ -41,7 +41,7 @@ The learner creates no files in this lesson. Teach it in this order:
 
 1. **Run a simple Pi prompt.** Run `pi -p "What is the capital of France?"` and observe that Pi
    prints an answer and exits. The answer is unremarkable; the mechanics are the lesson.
-2. **Run the project-specific command.** From the session workspace, run the calculator command
+2. **Run the project-specific command.** From the active workspace, run the calculator command
    above and read what comes back.
 3. **Change the job.** Have the learner replace the sentence on standard input with a question of
    their own and run it again. The harness did not change; only the job did. Ask them what would

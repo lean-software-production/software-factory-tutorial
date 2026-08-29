@@ -2,7 +2,7 @@
 type: terminal-practice
 outcome: "Run the doer once and review its diff after the run."
 tutor: |-
-  Have the learner run the displayed commands from the session workspace. Success means
+  Have the learner run the displayed commands from the active workspace. Success means
   factory/refactor-do.sh becomes executable and one doer turn starts through
   ./factory/refactor-do.sh. The script should announce the quality baseline phase before announcing
   the doer phase. If the run
@@ -12,7 +12,7 @@ tutor: |-
 
 ## Run the doer
 
-From the session workspace, make the script executable and run one doer turn:
+From the active workspace, make the script executable and run one doer turn:
 
 ```sh
 chmod +x factory/refactor-do.sh

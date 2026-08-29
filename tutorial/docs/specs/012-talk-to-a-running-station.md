@@ -112,7 +112,7 @@ Build this lesson in this order. Complete each small step before moving to the n
          else empty end'
    ```
 
-6. **Steer a run.** Start the line and watcher in the background from the session workspace, using a
+6. **Steer a run.** Start the line and watcher in the background from the active workspace, using a
    writable log directory under `factory/`. Then, while the doer is working, send these messages:
 
    ```sh
@@ -151,7 +151,7 @@ has been shell all the way down. Mention it as the thing to reach for outside a 
 
 ## Checks
 
-From the session workspace:
+From the active workspace:
 
 ```sh
 mkdir -p factory/refactor/.tmp

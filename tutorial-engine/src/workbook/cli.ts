@@ -59,7 +59,7 @@ function sessionLaunchLines(session: TutorialSessionPaths, reopened: boolean, le
     `${action}: ${session.sessionId}`,
     ...(lesson ? [`Lesson jump: ${lesson} (prior blocks are marked completed).`] : []),
     `Session state: ${session.sessionRoot}`,
-    `Learner workspace: ${session.workspaceRoot}`,
+    `Learner workspaces: ${Object.entries(session.workspaceRoots).map(([id, root]) => `${id}=${root}`).join(", ") || "none declared"}`,
     `Reopen with: npm run tutorial:workbook -- --session ${session.sessionId}`,
   ];
 }

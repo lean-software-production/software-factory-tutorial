@@ -34,9 +34,9 @@ No new files. Run this cycle, in this order:
    until the validator reports `VERDICT: FAIL`. If everything passes, have the learner make the
    validator stricter, or hand-edit the calculator to introduce something worth reporting — a
    failing verdict is the material this lesson works with.
-2. **Hand the findings back.** From the session workspace, run the doer again with the findings
+2. **Hand the findings back.** From the active workspace, run the doer again with the findings
    appended to its prompt. The whole command sits inside a subshell, so the learner is back at the
-   session workspace when it finishes:
+   active workspace when it finishes:
 
    ```sh
    (cd factory \
@@ -50,7 +50,7 @@ No new files. Run this cycle, in this order:
 
    Nothing about the doer changed. Its job to be done is the same file it always was. The only
    difference is what else was in its context.
-3. **Validate again.** You are back at the session workspace, so run `./factory/refactor-validate.sh`
+3. **Validate again.** You are back at the active workspace, so run `./factory/refactor-validate.sh`
    and read the new verdict. Ask the learner what they did in this cycle that neither agent did.
 
 ## Checks

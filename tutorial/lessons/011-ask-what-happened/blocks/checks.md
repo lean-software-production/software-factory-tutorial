@@ -11,7 +11,7 @@ tutor: |-
 
 ## Checks
 
-From the session workspace, after a run has finished:
+From the active workspace, after a run has finished:
 
 ```sh
 ./factory/ask.sh refactor "What did each iteration change, in one line each?"

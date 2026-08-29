@@ -183,7 +183,7 @@ Three things, none of which needed a lesson of its own:
 
 ## Checks
 
-From the session workspace:
+From the active workspace:
 
 ```sh
 ./factory/refactor/run.sh

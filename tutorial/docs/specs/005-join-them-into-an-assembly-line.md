@@ -22,7 +22,7 @@ thing; it is the order they run in, and the edge around them.
 
 Build this lesson in this order. Complete each small step before moving to the next one:
 
-1. **Give the line an edge.** From the session workspace:
+1. **Give the line an edge.** From the active workspace:
 
    ```sh
    mkdir -p factory/refactor/.tmp
@@ -53,7 +53,7 @@ Build this lesson in this order. Complete each small step before moving to the n
      `.tmp/validate-findings.txt`;
    - the guard's message now names the script the learner would actually run: `./do.sh`.
 
-   Run `./factory/refactor/do.sh` and `./factory/refactor/validate.sh` once from the session workspace
+   Run `./factory/refactor/do.sh` and `./factory/refactor/validate.sh` once from the active workspace
    before going on. A rename that nobody exercises is a rename nobody has checked.
 
    Nothing behaves differently after this step, which is the point worth making. What the learner
@@ -176,7 +176,7 @@ Build this lesson in this order. Complete each small step before moving to the n
 
 ## Checks
 
-From the session workspace, make the new script executable and run it:
+From the active workspace, make the new script executable and run it:
 
 ```sh
 chmod +x factory/refactor/run.sh

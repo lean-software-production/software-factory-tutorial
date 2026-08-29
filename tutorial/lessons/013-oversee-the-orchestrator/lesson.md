@@ -1,5 +1,6 @@
 ---
 durationMinutes: 20
+workspace: refactor-line
 blocks:
   - key-concept
   - implementation-order

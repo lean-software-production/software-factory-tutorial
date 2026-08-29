@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile, access } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile, access } from "node:fs/promises";
 import * as terminalModule from "../src/workbook/terminal.js";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -40,7 +40,7 @@ async function fixture(options: { editorPath?: string; firstLessonWorkspace?: st
   ].join("\n"));
   await mkdir(resolve(dir, "parts"), { recursive: true });
   await writeFile(resolve(dir, "parts/loop.md"), ["---", "---", "# Part 1 — Loop", "", "Part copy."].join("\n"));
-  await writeLesson(first, "First lesson", ["orientation", "edit-answer", "run-supplied-command", "change-job", "reflection", "transition"], "Fixture lesson introduction.", options.firstLessonWorkspace);
+  await writeLesson(first, "First lesson", ["orientation", "edit-answer", "run-supplied-command", "change-job", "reflection", "transition"], "Fixture lesson introduction.", options.firstLessonWorkspace ?? "refactor-line");
   await writeBlock(first, "orientation", "narrative", "Orientation", "Start with the concept.");
   await writeBlock(first, "edit-answer", "editor-practice", "Edit", "Write the answer in the editor.", "Private editor rubric: mention the factory acceptance marker.", options.editorPath ?? "factory/answer.md");
   await writeBlock(first, "run-supplied-command", "terminal-practice", "Run", "Run the supplied command.", "Observe run result.");
@@ -50,16 +50,21 @@ async function fixture(options: { editorPath?: string; firstLessonWorkspace?: st
   await writeLesson(second, "Second lesson", ["second-orientation", "second-finish"]);
   await writeBlock(second, "second-orientation", "narrative", "Second orientation", "Second lesson starts here.");
   await writeBlock(second, "second-finish", "narrative", "Second finish", "Second lesson done.");
+  const firstWorkspace = options.firstLessonWorkspace ?? "refactor-line";
+  await mkdir(resolve(dir, "workspaces", firstWorkspace, "factory"), { recursive: true });
+  await writeFile(resolve(dir, "workspaces", firstWorkspace, "factory/answer.md"), "authored answer\n", "utf8");
+  if (firstWorkspace === "refactor-line") {
+    await mkdir(resolve(dir, "workspaces/refactor-line/calculator"), { recursive: true });
+    await writeFile(resolve(dir, "workspaces/refactor-line/calculator/package.json"), "{\"type\":\"module\"}\n", "utf8");
+  }
   await mkdir(resolve(dir, "web")); await writeFile(resolve(dir, "web/index.html"), "<!doctype html><div id=\"root\"></div>");
   return dir;
 }
 
 async function sessionFixture() {
   const dir = await fixture();
-  await mkdir(resolve(dir, "calculator/src"), { recursive: true });
-  await writeFile(resolve(dir, "calculator/package.json"), "{\"type\":\"module\"}\n", "utf8");
-  await mkdir(resolve(dir, "factory"), { recursive: true });
-  await writeFile(resolve(dir, "factory/answer.md"), "authored answer\n", "utf8");
+  await mkdir(resolve(dir, "workspaces/refactor-line/calculator/src"), { recursive: true });
+  await writeFile(resolve(dir, "workspaces/refactor-line/calculator/src/index.ts"), "export const value = 1;\n", "utf8");
   const session = await (await SessionWorkspaceManager.create(dir)).createSession({ id: "runtime-split" });
   return { dir, session };
 }
@@ -309,6 +314,15 @@ async function submitTerminalAttempt(serverUrl: string, blockId: string) {
   ws.close();
 }
 
+async function tryStartWorkbookServer(options: Parameters<typeof startWorkbookServer>[0]) {
+  let server: Awaited<ReturnType<typeof startWorkbookServer>> | undefined;
+  let error: unknown;
+  try { server = await startWorkbookServer(options); }
+  catch (caught) { error = caught; }
+  finally { await server?.close(); }
+  return { started: !!server, error };
+}
+
 let originalOpenCodeApiKey: string | undefined;
 beforeEach(() => {
   originalOpenCodeApiKey = process.env.OPENCODE_API_KEY;
@@ -323,11 +337,107 @@ afterEach(async () => {
 });
 
 describe("workbook browser API", () => {
+  it("rejects forged session workspace roots instead of trusting arbitrary host paths", async () => {
+    const { dir, session } = await sessionFixture();
+    const outside = await mkdtemp(resolve(tmpdir(), "forged-workspace-")); dirs.push(outside);
+    await mkdir(resolve(outside, ".git"), { recursive: true });
+
+    const result = await tryStartWorkbookServer({
+      target: dir,
+      session: { ...session, workspaceRoots: { ...session.workspaceRoots, "refactor-line": outside } },
+      webRoot: resolve(dir, "web"),
+      port: 0,
+      embeddedTerminal: false,
+      mainTutor: new FakeMainTutor(),
+      practiceCoach: new FakePracticeCoach()
+    });
+
+    expect(result.started).toBe(false);
+    expect(result.error).toBeInstanceOf(Error);
+    expect((result.error as Error).message).toMatch(/refactor-line|workspace root|does not match/i);
+  });
+
+  it("rejects escaping session roots and invalid workspace IDs before startup", async () => {
+    const escaping = await sessionFixture();
+    const outside = await mkdtemp(resolve(tmpdir(), "escaping-workspaces-")); dirs.push(outside);
+    await mkdir(resolve(outside, "refactor-line/.git"), { recursive: true });
+    const escapingResult = await tryStartWorkbookServer({
+      target: escaping.dir,
+      session: { ...escaping.session, workspacesRoot: outside, workspaceRoots: { "refactor-line": resolve(outside, "refactor-line") } },
+      webRoot: resolve(escaping.dir, "web"),
+      port: 0,
+      embeddedTerminal: false,
+      mainTutor: new FakeMainTutor(),
+      practiceCoach: new FakePracticeCoach()
+    });
+    expect(escapingResult.started).toBe(false);
+    expect((escapingResult.error as Error).message).toMatch(/workspaces root|session.*workspace/i);
+
+    const invalid = await sessionFixture();
+    const invalidResult = await tryStartWorkbookServer({
+      target: invalid.dir,
+      session: { ...invalid.session, workspaceRoots: { ...invalid.session.workspaceRoots, "../escape": invalid.session.workspaceRoots["refactor-line"]! } },
+      webRoot: resolve(invalid.dir, "web"),
+      port: 0,
+      embeddedTerminal: false,
+      mainTutor: new FakeMainTutor(),
+      practiceCoach: new FakePracticeCoach()
+    });
+    expect(invalidResult.started).toBe(false);
+    expect((invalidResult.error as Error).message).toMatch(/workspace.*id|lowercase-hyphenated/i);
+  });
+
+  it("rejects missing, extra, and symlinked session workspace roots before startup", async () => {
+    const missing = await sessionFixture();
+    const missingResult = await tryStartWorkbookServer({
+      target: missing.dir,
+      session: { ...missing.session, workspaceRoots: {} },
+      webRoot: resolve(missing.dir, "web"),
+      port: 0,
+      embeddedTerminal: false,
+      mainTutor: new FakeMainTutor(),
+      practiceCoach: new FakePracticeCoach()
+    });
+    expect(missingResult.started).toBe(false);
+    expect((missingResult.error as Error).message).toMatch(/missing.*refactor-line|refactor-line.*missing/i);
+
+    const extra = await sessionFixture();
+    const extraRoot = resolve(extra.session.workspacesRoot, "extra-space");
+    await mkdir(resolve(extraRoot, ".git"), { recursive: true });
+    const extraResult = await tryStartWorkbookServer({
+      target: extra.dir,
+      session: { ...extra.session, workspaceRoots: { ...extra.session.workspaceRoots, "extra-space": extraRoot } },
+      webRoot: resolve(extra.dir, "web"),
+      port: 0,
+      embeddedTerminal: false,
+      mainTutor: new FakeMainTutor(),
+      practiceCoach: new FakePracticeCoach()
+    });
+    expect(extraResult.started).toBe(false);
+    expect((extraResult.error as Error).message).toMatch(/extra-space|extra/i);
+
+    const symlinked = await sessionFixture();
+    const outside = await mkdtemp(resolve(tmpdir(), "symlinked-workspace-")); dirs.push(outside);
+    await rm(symlinked.session.workspaceRoots["refactor-line"]!, { recursive: true, force: true });
+    await symlink(outside, symlinked.session.workspaceRoots["refactor-line"]!);
+    const symlinkResult = await tryStartWorkbookServer({
+      target: symlinked.dir,
+      session: symlinked.session,
+      webRoot: resolve(symlinked.dir, "web"),
+      port: 0,
+      embeddedTerminal: false,
+      mainTutor: new FakeMainTutor(),
+      practiceCoach: new FakePracticeCoach()
+    });
+    expect(symlinkResult.started).toBe(false);
+    expect((symlinkResult.error as Error).message).toMatch(/symlink|real directory/i);
+  });
+
   it("hot reloads authored prose in place while retaining progress, attempts, and learner workspace files", async () => {
     const { dir, session } = await sessionFixture();
     const fakeWatch = fakeContentWatchFactory();
     const tutor = new FakeMainTutor({ outcome: "feedback", message: "Old feedback." });
-    await writeFile(resolve(session.workspaceRoot, "factory/sentinel.txt"), "keep me\n", "utf8");
+    await writeFile(resolve(session.workspaceRoots["refactor-line"]!, "factory/sentinel.txt"), "keep me\n", "utf8");
     const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, watchContent: true, contentWatchFactory: fakeWatch.factory, contentWatchDebounceMs: 1, mainTutor: tutor, practiceCoach: new FakePracticeCoach() });
     try {
       await waitForWatchPath(fakeWatch, resolve(session.contentRoot, "lessons/001-first"));
@@ -354,8 +464,8 @@ describe("workbook browser API", () => {
       expect(next.progress.completedBlocks).toEqual(before.progress.completedBlocks);
       expect(next.timeline?.filter((record: any) => record.type === "message" && record.source === "learner").map((record: any) => record.text)).toContain("I'm still here.");
       expect(block(next, "lesson--001-first--edit-answer")?.checkpoint?.status).toBe("feedback");
-      await expect(readFile(resolve(session.workspaceRoot, "factory/sentinel.txt"), "utf8")).resolves.toBe("keep me\n");
-      await expect(access(resolve(session.workspaceRoot, ".git"))).resolves.toBeUndefined();
+      await expect(readFile(resolve(session.workspaceRoots["refactor-line"]!, "factory/sentinel.txt"), "utf8")).resolves.toBe("keep me\n");
+      await expect(access(resolve(session.workspaceRoots["refactor-line"]!, ".git"))).resolves.toBeUndefined();
 
       const authoredAfter = next.timeline.find((record: any) => record.type === "message" && record.source === "authored" && record.blockId === "lesson--001-first--edit-answer");
       expect(authoredAfter?.id).toBe(authoredBefore.id);
@@ -406,7 +516,7 @@ describe("workbook browser API", () => {
 
       const reloaded = nextSseEvent(server.url, "content-reloaded");
       await rm(resolve(dir, "lessons/001-first/blocks/edit-answer.md"));
-      await writeLesson(resolve(dir, "lessons/001-first"), "First lesson", ["orientation", "run-supplied-command", "change-job", "reflection", "transition"]);
+      await writeLesson(resolve(dir, "lessons/001-first"), "First lesson", ["orientation", "run-supplied-command", "change-job", "reflection", "transition"], "Fixture lesson introduction.", "refactor-line");
       fakeWatch.emit(resolve(session.contentRoot, "lessons/001-first"), "lesson.md");
       await reloaded;
 
@@ -448,6 +558,43 @@ describe("workbook browser API", () => {
       expect(next.progress.activeBlockId).toBe("workbook--introduction");
       expect(next.orderedBlocks.map((entry: any) => entry.id)).toContain("lesson--003-third--third-orientation");
       await waitForWatchPath(fakeWatch, resolve(session.contentRoot, "lessons/003-third/blocks"));
+    } finally { await server.close(); }
+  });
+
+  it("rejects hot reloads that add an interactive workspace missing from the running session", async () => {
+    const { dir, session } = await sessionFixture();
+    const fakeWatch = fakeContentWatchFactory();
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, watchContent: true, contentWatchFactory: fakeWatch.factory, contentWatchDebounceMs: 1, mainTutor: new FakeMainTutor(), practiceCoach: new FakePracticeCoach() });
+    try {
+      await waitForWatchPath(fakeWatch, session.contentRoot);
+      const before = await state(server.url);
+      expect(before.orderedBlocks.map((entry: any) => entry.id)).not.toContain("lesson--003-third--new-editor");
+
+      await mkdir(resolve(dir, "lessons/003-third/blocks"), { recursive: true });
+      await writeLesson(resolve(dir, "lessons/003-third"), "Third lesson", ["new-editor"], "New workspace lesson.", "new-workspace");
+      await writeBlock(resolve(dir, "lessons/003-third"), "new-editor", "editor-practice", "New editor", "Edit in a new live workspace.", "Private new workspace rubric.", "answer.md");
+      const rejected = nextSseEvent(server.url, "content-reload-error");
+      await writeFile(resolve(dir, "workbook.md"), [
+        "---",
+        "parts:",
+        "  - id: loop",
+        "    lessons:",
+        "      - 001-first",
+        "      - 002-second",
+        "      - 003-third",
+        "---",
+        "# Fixture workbook",
+        "",
+        "Welcome to the fixture workbook.",
+      ].join("\n"), "utf8");
+      fakeWatch.emit(session.contentRoot, "workbook.md");
+      const error = await rejected;
+      expect(error.message).toMatch(/new-workspace|start a new session/i);
+
+      const after = await state(server.url);
+      expect(after.workbook.title).toBe(before.workbook.title);
+      expect(after.orderedBlocks.map((entry: any) => entry.id)).not.toContain("lesson--003-third--new-editor");
+      await expect(access(resolve(session.workspacesRoot, "new-workspace"))).rejects.toThrow();
     } finally { await server.close(); }
   });
 
@@ -513,11 +660,7 @@ describe("workbook browser API", () => {
   });
 
   it("keeps scoped lesson workspace private while editor attempts resolve beneath it", async () => {
-    const dir = await fixture({ editorPath: "answer.md", firstLessonWorkspace: "workspaces/scoped-lesson" });
-    await mkdir(resolve(dir, "calculator/src"), { recursive: true });
-    await writeFile(resolve(dir, "calculator/package.json"), "{\"type\":\"module\"}\n", "utf8");
-    await mkdir(resolve(dir, "factory"), { recursive: true });
-    await writeFile(resolve(dir, "factory/answer.md"), "authored answer\n", "utf8");
+    const dir = await fixture({ editorPath: "answer.md", firstLessonWorkspace: "scoped-lesson" });
     const session = await (await SessionWorkspaceManager.create(dir)).createSession({ id: "scoped-runtime" });
     const tutor = new FakeMainTutor();
     tutor.queue.push({ outcome: "accepted", message: "Editor accepted." });
@@ -533,14 +676,14 @@ describe("workbook browser API", () => {
 
       expect(JSON.stringify(accepted)).not.toContain("workspaces/scoped-lesson");
       expect(block(accepted, "edit-answer")?.checkpoint.evidence.text).toBe("scoped learner answer");
-      await expect(readFile(resolve(session.workspaceRoot, "workspaces/scoped-lesson/answer.md"), "utf8")).resolves.toBe("scoped learner answer");
-      await expect(access(resolve(session.workspaceRoot, "answer.md"))).rejects.toThrow();
-      await expect(readFile(resolve(dir, "factory/answer.md"), "utf8")).resolves.toBe("authored answer\n");
+      await expect(readFile(resolve(session.workspaceRoots["scoped-lesson"]!, "answer.md"), "utf8")).resolves.toBe("scoped learner answer");
+      await expect(access(resolve(session.workspacesRoot, "refactor-line/answer.md"))).rejects.toThrow();
+      await expect(readFile(resolve(dir, "workspaces/scoped-lesson/factory/answer.md"), "utf8")).resolves.toBe("authored answer\n");
     } finally { await server.close(); }
   });
 
   it("starts a scoped terminal block in its lesson workspace", async () => {
-    const dir = await fixture({ firstLessonWorkspace: "workspaces/scoped-lesson" });
+    const dir = await fixture({ firstLessonWorkspace: "scoped-lesson" });
     await mkdir(resolve(dir, "workspaces/scoped-lesson"), { recursive: true });
     const ptys: ServerFakePty[] = [];
     const optionsSeen: terminalModule.TerminalPtyOptions[] = [];
@@ -563,7 +706,7 @@ describe("workbook browser API", () => {
       await waitMs(20);
       ws.close();
 
-      expect(optionsSeen.map((options) => options.containerWorkdir)).toContain("/workspace/workspaces/scoped-lesson");
+      expect(optionsSeen.map((options) => options.containerWorkdir)).toContain("/workspace");
       expect(ptys.at(-1)?.writes).toEqual(["pwd\r"]);
     } finally { await server.close(); }
   });
@@ -578,8 +721,8 @@ describe("workbook browser API", () => {
       await postEditor(server.url, { blockId: "edit-answer", text: "learner answer with factory acceptance marker" });
       await waitForWorkbookState(server.url, (value) => block(value, "edit-answer")?.checkpoint?.status === "accepted", "accepted session-root editor attempt");
 
-      await expect(readFile(resolve(dir, "factory/answer.md"), "utf8")).resolves.toBe("authored answer\n");
-      await expect(readFile(resolve(session.workspaceRoot, "factory/answer.md"), "utf8")).resolves.toBe("learner answer with factory acceptance marker");
+      await expect(readFile(resolve(dir, "workspaces/refactor-line/factory/answer.md"), "utf8")).resolves.toBe("authored answer\n");
+      await expect(readFile(resolve(session.workspaceRoots["refactor-line"]!, "factory/answer.md"), "utf8")).resolves.toBe("learner answer with factory acceptance marker");
       await expect(readFile(tutorialSessionStatePath(session.sessionRoot, "workbook/events.jsonl"), "utf8")).resolves.toContain("session_started");
       await expect(readFile(tutorialSessionStatePath(session.sessionRoot, "workbook/attempts/by-id", tutor.reviews[0]!.attempt.id + ".json"), "utf8")).resolves.toContain(tutor.reviews[0]!.attempt.id);
       await expect(access(tutorialStatePath(dir, "workbook", "events.jsonl"))).rejects.toThrow();
@@ -592,7 +735,7 @@ describe("workbook browser API", () => {
     let terminalOptions: any;
     const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
     const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: (options) => { terminalOptions = options; return pty; }, terminalDebounceMs: 1, mainTutor: tutor, practiceCoach: new FakePracticeCoach() });
-    expect(terminalOptions.cwd).toBe(resolve(session.workspaceRoot));
+    expect(terminalOptions).toBeUndefined();
     expect(pty.writes).toEqual([]);
     try {
       await introduceAndOpenEditor(server.url);
@@ -602,10 +745,125 @@ describe("workbook browser API", () => {
       const ws = await connect(server.url);
       await waitMs(20);
       ws.close();
-      await expect(access(resolve(session.workspaceRoot, ".git"))).resolves.toBeUndefined();
+      await expect(access(resolve(session.workspaceRoots["refactor-line"]!, ".git"))).resolves.toBeUndefined();
       await expect(access(resolve(dir, ".git"))).rejects.toThrow();
     } finally { await server.close(); }
     expect(pty.killed).toBe(true);
+  });
+
+  it("returns the committed completeBlock transition when terminal prestart fails", async () => {
+    const dir = await fixture();
+    let starts = 0;
+    const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const server = await startWorkbookServer({
+      target: dir,
+      webRoot: resolve(dir, "web"),
+      port: 0,
+      terminalPtyFactory: () => { starts += 1; throw new Error("PTY factory failed"); },
+      mainTutor: tutor,
+      practiceCoach: new FakePracticeCoach(),
+    });
+    try {
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "edit-answer", text: "factory acceptance marker" })).status).toBe(202);
+      await waitForWorkbookState(server.url, (value) => block(value, "edit-answer")?.checkpoint?.status === "accepted", "accepted editor before failed terminal prestart");
+
+      const response = await completeBlock(server.url, "lesson--001-first--edit-answer");
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toMatchObject({ outcome: "completed", state: { progress: { activeBlockId: "lesson--001-first--run-supplied-command" } } });
+      expect(starts).toBeGreaterThan(0);
+
+      const ws = await connect(server.url, server.url);
+      const terminalError = await waitFor(ws, (message) => message.type === "terminal-error");
+      expect(terminalError.message).toMatch(/embedded terminal could not start/i);
+      ws.close();
+    } finally { await server.close(); }
+  });
+
+  it("returns the committed submitEvent transition when terminal prestart fails", async () => {
+    const dir = await fixture();
+    let starts = 0;
+    const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const server = await startWorkbookServer({
+      target: dir,
+      webRoot: resolve(dir, "web"),
+      port: 0,
+      terminalPtyFactory: () => { starts += 1; throw new Error("PTY factory failed"); },
+      mainTutor: tutor,
+      practiceCoach: new FakePracticeCoach(),
+    });
+    try {
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "edit-answer", text: "factory acceptance marker" })).status).toBe(202);
+      await waitForWorkbookState(server.url, (value) => block(value, "edit-answer")?.checkpoint?.status === "accepted", "accepted editor before failed terminal event prestart");
+
+      const response = await postEvent(server.url, { blockId: "edit-answer", action: "continue" });
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toMatchObject({ progress: { activeBlockId: "lesson--001-first--run-supplied-command" } });
+      expect(starts).toBeGreaterThan(0);
+    } finally { await server.close(); }
+  });
+
+  it("preserves an active terminal across watched prose-only reloads of the same block and workspace", async () => {
+    const { dir, session } = await sessionFixture();
+    const fakeWatch = fakeContentWatchFactory();
+    const ptys: ServerFakePty[] = [];
+    const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, watchContent: true, contentWatchFactory: fakeWatch.factory, contentWatchDebounceMs: 1, terminalPtyFactory: () => { const pty = new ServerFakePty(); ptys.push(pty); return pty; }, mainTutor: tutor, practiceCoach: new FakePracticeCoach() });
+    try {
+      await waitForWatchPath(fakeWatch, resolve(session.contentRoot, "lessons/001-first/blocks"));
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      const ws = await connect(server.url, server.url);
+      let closed = false;
+      ws.once("close", () => { closed = true; });
+
+      const reloaded = nextSseEvent(server.url, "content-reloaded");
+      await writeBlock(resolve(dir, "lessons/001-first"), "run-supplied-command", "terminal-practice", "Run", "Reloaded terminal prose.", "Observe run result.");
+      fakeWatch.emit(resolve(session.contentRoot, "lessons/001-first/blocks"), "run-supplied-command.md");
+      await reloaded;
+      await waitMs(20);
+      expect(ptys).toHaveLength(1);
+      expect(ptys[0]!.killed).toBe(false);
+      expect(closed).toBe(false);
+
+      const output = waitFor(ws, (message) => message.type === "output" && message.data.includes("ran:after reload"));
+      ws.send(JSON.stringify({ type: "input", data: "after reload\r" }));
+      await output;
+      expect(ptys).toHaveLength(1);
+      expect(ptys[0]!.writes).toContain("after reload\r");
+      ws.close();
+    } finally { await server.close(); }
+  });
+
+  it("reconciles watched reloads by closing a terminal whose active block changed and ignoring its stale output", async () => {
+    const { dir, session } = await sessionFixture();
+    const fakeWatch = fakeContentWatchFactory();
+    const ptys: ServerFakePty[] = [];
+    const messages: any[] = [];
+    const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, watchContent: true, contentWatchFactory: fakeWatch.factory, contentWatchDebounceMs: 1, terminalPtyFactory: () => { const pty = new ServerFakePty(false); ptys.push(pty); return pty; }, mainTutor: tutor, practiceCoach: new FakePracticeCoach() });
+    try {
+      await waitForWatchPath(fakeWatch, resolve(session.contentRoot, "lessons/001-first/blocks"));
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      expect((await state(server.url)).progress.activeBlockId).toBe("lesson--001-first--run-supplied-command");
+      const ws = await connect(server.url, server.url);
+      ws.on("message", (data) => messages.push(JSON.parse(data.toString())));
+      const closed = new Promise<[number, string]>((resolvePromise) => ws.once("close", (code, reason) => resolvePromise([code, reason.toString()])));
+
+      const reloaded = nextSseEvent(server.url, "content-reloaded");
+      await writeBlock(resolve(dir, "lessons/001-first"), "run-supplied-command", "narrative", "Run", "Reloaded as prose.");
+      fakeWatch.emit(resolve(session.contentRoot, "lessons/001-first/blocks"), "run-supplied-command.md");
+      await reloaded;
+      await expect(closed).resolves.toEqual([1012, "Terminal content reloaded."]);
+      ptys[0]!.data?.(`${bashCommandMarker("stale after reload")}stale output\r\n${bashFinishedMarker()}`);
+      await waitMs(20);
+
+      expect(ptys[0]!.killed).toBe(true);
+      expect(JSON.stringify(messages)).not.toContain("stale output");
+      await expect(privateTimeline(session.sessionRoot)).resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "terminal-command-submitted", command: "stale after reload" })]));
+    } finally { await server.close(); }
   });
 
   it("rejects an explicit invalid runtime provision source instead of silently falling back", async () => {

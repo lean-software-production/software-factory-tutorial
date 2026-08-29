@@ -9,7 +9,7 @@
     "npm": ">=11.0.0"
   },
   "workspaces": [
-    "tutorial/calculator",
+    "tutorial/workspaces/refactor-line/calculator",
     "tutorial-engine"
   ],
   "scripts": {
@@ -19,7 +19,7 @@
     "test:eval": "vitest run --root . --exclude '**/.claude/**' --exclude '**/.worktrees/**' --exclude '**/node_modules/**' ./evals/test/*.test.ts",
     "check:eval": "tsc -p evals/tsconfig.json",
     "eval": "npm run --workspace=tutorial-engine build && tsx evals/run.ts",
-    "check": "npm run test:onboarding && npm run check:eval && npm run test:eval && npm run --workspace=tutorial-engine check && npm run --workspace=tutorial-engine check:workbook && npm run --workspace=tutorial/calculator test && npm run check:visual",
+    "check": "npm run test:onboarding && npm run check:eval && npm run test:eval && npm run --workspace=tutorial-engine check && npm run --workspace=tutorial-engine check:workbook && npm run --workspace=tutorial/workspaces/refactor-line/calculator test && npm run check:visual",
     "tutorial:workbook": "node scripts/tutorial-workbook.mjs",
     "check:visual": "node scripts/check-visual.mjs",
     "approve:visual": "node scripts/approve-visual.mjs"

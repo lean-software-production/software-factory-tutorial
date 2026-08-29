@@ -11,7 +11,7 @@ tutor: |-
 
 ## Checks
 
-From the session workspace, run a fresh line and then inspect what it left behind:
+From the active workspace, run a fresh line and then inspect what it left behind:
 
 ```sh
 ./factory/refactor/run.sh

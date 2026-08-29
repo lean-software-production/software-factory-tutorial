@@ -4,7 +4,7 @@ Date: 2026-08-29
 
 ## Status
 
-accepted
+superseded by [0024](0024-isolate-lesson-workspaces-as-live-repositories.md)
 
 ## Context
 

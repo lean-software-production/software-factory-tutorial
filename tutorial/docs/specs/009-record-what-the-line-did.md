@@ -72,7 +72,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    another program's output, which it has been pretending not to be since the `grep` in lesson 007.
 
 4. **Ask the record what the last run cost.** This is the point of the lesson, so do it immediately
-   rather than at the end. From the session workspace:
+   rather than at the end. From the active workspace:
 
    ```sh
    jq -r 'select(.type=="tool_execution_start") | .toolName' \
@@ -106,7 +106,7 @@ it up to get a record, and that getting it back is a separate job.
 
 ## Checks
 
-From the session workspace, run a fresh line and then inspect what it left behind:
+From the active workspace, run a fresh line and then inspect what it left behind:
 
 ```sh
 ./factory/refactor/run.sh

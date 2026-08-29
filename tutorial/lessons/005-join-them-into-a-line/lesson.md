@@ -1,5 +1,6 @@
 ---
 durationMinutes: 40
+workspace: refactor-line
 blocks:
   - part-2-entry-checkpoint
   - key-concept

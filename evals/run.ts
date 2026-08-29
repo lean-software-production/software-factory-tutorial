@@ -83,7 +83,7 @@ async function runOnce(scenario: V2Scenario, repetition: number): Promise<{ pass
         scenario: scenario.id,
         timestamps: { started, ended },
         contentRoot: workspace.root,
-        workspaceRoot: workspace.latestSession().workspaceRoot,
+        workspaceRoots: workspace.latestSession().workspaceRoots,
         sessionRoot: workspace.latestSession().sessionRoot,
         sessionId: workspace.latestSession().sessionId
       }, null, 2))

@@ -36,6 +36,7 @@ async function fixture() {
   await writeFile(resolve(migrated, "lesson.md"), [
     "---",
     "durationMinutes: 12",
+    "workspace: refactor-line",
     "blocks:",
     "  - intro",
     "  - practice",
@@ -101,6 +102,7 @@ function alphaLessonMd(dek: string, introduction = "") {
   return [
     "---",
     "durationMinutes: 12",
+    "workspace: refactor-line",
     "blocks:",
     "  - intro",
     "  - practice",
@@ -174,7 +176,7 @@ describe("workbook lesson contract", () => {
     await writeFile(resolve(dir, "lessons/001-first-lesson/lesson.md"), [
       "---",
       "durationMinutes: 5",
-      "workspace: workspaces/first-lesson",
+      "workspace: first-lesson",
       "blocks:",
       "  - only",
       "---",
@@ -196,7 +198,7 @@ describe("workbook lesson contract", () => {
 
     const loaded = await loadWorkbook(dir);
 
-    expect(loaded.chapters[0]?.lesson.workspace).toBe("workspaces/first-lesson");
+    expect(loaded.chapters[0]?.lesson.workspace).toBe("first-lesson");
     const block = loaded.chapters[0]?.lesson.blocks[0];
     expect(block).toMatchObject({ type: "editor-practice", path: "spec.md" });
   });
@@ -468,8 +470,8 @@ describe("workbook lesson contract", () => {
 
   it("rejects malformed block ids and lesson workspaces", () => {
     expect(() => validateLessonFrontMatter({ durationMinutes: 5, blocks: ["Bad Id!"] }, "lesson.md")).toThrow(/blocks/);
-    expect(validateLessonFrontMatter({ durationMinutes: 5, workspace: "workspaces/scoped-lesson", blocks: ["ok"] }, "lesson.md")).toEqual({ durationMinutes: 5, workspace: "workspaces/scoped-lesson", blocks: ["ok"] });
-    for (const workspace of ["scoped-lesson", "workspaces/Bad", "workspaces/with_underscore", "workspaces/", "workspaces/a/b", "../workspaces/x"]) {
+    expect(validateLessonFrontMatter({ durationMinutes: 5, workspace: "scoped-lesson", blocks: ["ok"] }, "lesson.md")).toEqual({ durationMinutes: 5, workspace: "scoped-lesson", blocks: ["ok"] });
+    for (const workspace of ["workspaces/scoped-lesson", "Bad", "with_underscore", "workspaces/", "workspaces/a/b", "../workspaces/x"]) {
       expect(() => validateLessonFrontMatter({ durationMinutes: 5, workspace, blocks: ["ok"] }, "lesson.md"), workspace).toThrow(/workspace/);
     }
   });

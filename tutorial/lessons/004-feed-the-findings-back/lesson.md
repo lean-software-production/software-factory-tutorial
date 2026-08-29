@@ -1,5 +1,6 @@
 ---
 durationMinutes: 15
+workspace: refactor-line
 blocks:
   - key-concept
   - the-loop-you-just-ran

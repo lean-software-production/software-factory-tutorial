@@ -43,8 +43,8 @@ describe("workbook content watch", () => {
     expect(isAuthoredWorkbookMarkdown(root, "/tutorial/lessons/001/lesson.md")).toBe(true);
     expect(isAuthoredWorkbookMarkdown(root, "/tutorial/lessons/001/blocks/a.md")).toBe(true);
     expect(isAuthoredWorkbookMarkdown(root, "/tutorial/.tutorial/session/workbook.md")).toBe(false);
-    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/factory/refactor.md")).toBe(false);
-    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/calculator/README.md")).toBe(false);
+    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/workspaces/refactor-line/factory/refactor.md")).toBe(false);
+    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/workspaces/refactor-line/calculator/README.md")).toBe(false);
     expect(isAuthoredWorkbookMarkdown(root, "/tutorial/lessons/001/notes.md")).toBe(false);
     expect(isAuthoredWorkbookMarkdown(root, "/tutorial/lessons/001/blocks/a.md.swp")).toBe(false);
   });

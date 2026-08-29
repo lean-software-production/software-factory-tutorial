@@ -4,21 +4,23 @@ You're going to build one assembly line: software that improves a codebase a lit
 
 A software factory is made of lines like it. A real one runs several — one that refactors, one that upgrades dependencies, one that writes the tests nobody got round to — each with its own agents, its own criteria, and its own definition of done, with the factory deciding which runs when. You are building the first, and everything you learn doing it is how you would build the rest.
 
-The tutorial is two pieces of work. **Part 1** builds one agent at a time and runs each of them by hand — a doer that changes the code, then a validator that gathers independent evidence about the change — so you can see what each one contributes before anything is automated. **Part 2** joins them into an assembly line, takes you out of the loop, and then builds the instruments you need to operate something you are no longer driving: a record of what it did, a live view of what it is doing, a way to ask about a finished run, and a way to say something to a station while it works.
+The tutorial has three parts: first you learn what a factory is and run a tiny one, then you build a manual validation loop, then you turn that loop into an observable software factory.
 
 ## About the calculator
 
-The raw material is a natural-language calculator written in TypeScript. It has a solid set of automated tests to provide your first validation evidence, but its code has become messy and hard to maintain. You can inspect the code in [`./calculator`](./calculator). Your job is to make safe, repeated refactorings that clean it up without changing what it does.
+The raw material is a natural-language calculator written in TypeScript. It has a solid set of automated tests to provide your first validation evidence, but its code has become messy and hard to maintain. You can inspect the code in [`./workspaces/refactor-line/calculator`](./workspaces/refactor-line/calculator). Your job is to make safe, repeated refactorings that clean it up without changing what it does.
 
-See the calculator's [README](./calculator/README.md) for more details.
+See the calculator's [README](./workspaces/refactor-line/calculator/README.md) for more details.
 
 ## Your goal
 
 You begin with a single headless `pi -p` command that reads the calculator and answers a question. It creates no files and there is no loop yet. From there you build a doer that changes the code, then a validator that checks the change against written criteria, then carry the validator's findings back to the doer by hand. Only once you have run that loop yourself do you automate it.
 
-Thirteen lessons: 001–004 are Part 1, and 005–013 are Part 2.
+Fifteen lessons in three parts:
 
-The two parts are comparable homework, but not comparable in length. Part 2 is roughly twice the lessons, because automating something you were doing by hand is the easy half — the other half is being able to see what it did once you stopped watching, and neither half is optional. Every lesson in it is the same size as a lesson in Part 1, and there are simply more of them.
+- Part 1, `what-is-a-factory` and `your-first-factory`, establishes the factory model.
+- Part 2, lessons 001–004, builds the validation loop by hand.
+- Part 3, lessons 005–013, automates and operates the factory.
 
 ## Setup
 
@@ -39,22 +41,21 @@ npm install
 npm run setup
 ```
 
-After setup, start the tutor from the repository root. It prints a learner workspace path;
-use that path for lesson commands:
+After setup, start the tutor from the repository root. It prints learner workspace paths; use the
+active `refactor-line` path for the main lesson commands:
 
 ```sh
 npm run tutorial:workbook
-cd tutorial/.tutorial/<session-id>/workspace
+cd tutorial/.tutorial/<session-id>/workspaces/refactor-line
 ```
 
-The lessons run from this session workspace, where `factory/` and `calculator/` are
-siblings. The lessons call `pi` directly, so it has to be on your `PATH`. `npm install`
-already fetched the version this repository pins. From the session workspace, exporting
-the repository's local binary directory is enough; install Pi globally if you would
-rather:
+The lessons run from this live workspace, where `factory/` and `calculator/` are siblings. The
+lessons call `pi` directly, so it has to be on your `PATH`. `npm install` already fetched the
+version this repository pins. From the live workspace, exporting the repository's local binary
+directory is enough; install Pi globally if you would rather:
 
 ```sh
-export PATH="$PWD/../../../../node_modules/.bin:$PATH"
+export PATH="$PWD/../../../../../node_modules/.bin:$PATH"
 ```
 
 `npm run setup` checks that Pi has an authenticated model for the web tutor. If it reports that Pi needs authentication, run `pi`, enter `/login`, and choose a provider. Pi keeps those credentials in its user-level configuration; this repository does not store them.
@@ -148,18 +149,18 @@ npm run --workspace=tutorial-engine check:workbook
 This uses the same loader as the tutor. It checks lesson and optional-part structure, manifests,
 blocks, and lesson references, then prints the workbook's lesson and part counts.
 
-Leave the tutor running and open a second terminal, then `cd` to the printed learner workspace
-path: `tutorial/.tutorial/<session-id>/workspace`. Stay there: every command the lessons give
-you is written to run from that learner workspace, and the scripts you build take their paths
-relative to it. If you put `pi` on your `PATH` with the `export` above rather than installing it
+Leave the tutor running and open a second terminal, then `cd` to the printed active live workspace
+path, for example `tutorial/.tutorial/<session-id>/workspaces/refactor-line`. Stay there: every
+command the lessons give you is written to run from that live workspace, and the scripts you build
+take their paths relative to it. If you put `pi` on your `PATH` with the `export` above rather than installing it
 globally, repeat that export in this terminal after changing directory — from lesson 002 the
 scripts you write call `pi` themselves.
 
-Most files you write by hand live under `factory/` in that session workspace, which is where the
-tutor looks for your work. A lesson may also put you in a smaller lesson folder under
-`workspaces/`; when that happens, the workbook's embedded editor and terminal start there, while
-the surrounding session workspace and Git repository remain shared. Edit files with your usual
-editor as the tutor instructs, then go back to the tutor for the next step or for feedback. Once
+Most files you write by hand live under `factory/` in the active live workspace, which is where the
+tutor looks for your work. The workbook's embedded editor and terminal are confined to the active
+live workspace; sibling workspaces from the same session are separate repositories and are not
+mounted in the terminal. Edit files with your usual editor as the tutor instructs, then go back to
+the tutor for the next step or for feedback. Once
 you have created `factory/refactor-do.sh` in lesson 002, run it directly:
 
 ```sh
@@ -172,8 +173,8 @@ Lesson 005 moves the whole line into `factory/refactor/`, and from then on you r
 ## Where to begin, and how to resume
 
 Every plain `npm run tutorial:workbook` launch creates a new session. The launcher prints the
-session ID, the session state path, and the learner workspace path. Save the ID if you want to come
-back to that exact work later:
+session ID, the session state path, and the learner workspace paths. Save the ID if you want to
+come back to that exact work later:
 
 ```sh
 npm run tutorial:workbook -- --session <session-id>
@@ -183,15 +184,15 @@ Only an explicit `--session <session-id>` resumes a previous session. Legacy sta
 `.tutorial/.tmp/` is ignored by the launcher and is not resumed or deleted automatically.
 
 The tutor keeps its transcript and progress in `.tutorial/<session-id>/workbook/`. Your editable
-copy of `factory/` and `calculator/` lives in `.tutorial/<session-id>/workspace/`. Regenerated
-evidence still belongs in `factory/**/.tmp/` inside that workspace. Both `.tutorial/` and those
-`.tmp/` directories are ignored by git; the scripts, prompts, calculator changes, and commits you
-make are private to the session-local repository.
+copies live in `.tutorial/<session-id>/workspaces/<workspace-id>/`; lessons 001–013 use
+`refactor-line`. Regenerated evidence still belongs in `factory/**/.tmp/` inside that workspace.
+Both `.tutorial/` and those `.tmp/` directories are ignored by the product repository; the scripts,
+prompts, calculator changes, and commits you make are private to the live workspace repository.
 
 From lesson 007 your line commits to the session-local calculator, and from 008 it does so
-without asking, so those commits land in `.tutorial/<session-id>/workspace/.git` rather than in
-the cloned tutorial repository.
+without asking, so those commits land in `.tutorial/<session-id>/workspaces/refactor-line/.git`
+rather than in the cloned tutorial repository.
 
 ## Inspiration
 
-This independent TypeScript kata was inspired by Chelsea Troy's natural-language calculator exercise. See [`calculator/ATTRIBUTION.md`](calculator/ATTRIBUTION.md).
+This independent TypeScript kata was inspired by Chelsea Troy's natural-language calculator exercise. See [`workspaces/refactor-line/calculator/ATTRIBUTION.md`](workspaces/refactor-line/calculator/ATTRIBUTION.md).

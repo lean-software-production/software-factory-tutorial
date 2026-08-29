@@ -330,7 +330,7 @@ describe("v2 workbook driver", () => {
       ]);
       const session = workspace.latestSession();
       expect(session.sessionRoot.endsWith(`/.tutorial/${session.sessionId}`)).toBe(true);
-      expect(session.workspaceRoot).toBe(resolve(session.sessionRoot, "workspace"));
+      expect(session.workspaceRoots["refactor-line"]!).toBe(resolve(session.sessionRoot, "workspaces/refactor-line"));
       trace.events = await readWorkbookTimeline(session.sessionRoot);
       expect(trace.events).toEqual(expect.arrayContaining([
         expect.objectContaining({ type: "reflection_submitted", blockId: "lesson--001-live-session--reflection" }),

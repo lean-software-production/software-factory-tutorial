@@ -45,7 +45,7 @@ export interface BlockFrontMatter { type: WorkbookBlockType; path?: string; tuto
 
 const BLOCK_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 export const WORKBOOK_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-export const LESSON_WORKSPACE_PATTERN = /^workspaces\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const LESSON_WORKSPACE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function isNonEmptyString(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -141,7 +141,7 @@ export function validateLessonFrontMatter(data: unknown, location: string): Less
 
   const workspace = record.workspace;
   if (workspace !== undefined && (!isNonEmptyString(workspace) || !LESSON_WORKSPACE_PATTERN.test(workspace))) {
-    errors.push(`${location}: workspace must be workspaces/<lowercase-hyphenated-slug>`);
+    errors.push(`${location}: workspace must be a lowercase-hyphenated workspace id`);
   }
 
   if (errors.length) fail(location, errors);
@@ -202,7 +202,9 @@ export function validateWorkbookLesson(value: unknown, location = "lesson"): Wor
   if (!isNonEmptyString(lesson.dek)) errors.push(`${location}.dek is required`);
   if (typeof lesson.introduction !== "string") errors.push(`${location}.introduction is required and must be a string`);
   if (typeof lesson.durationMinutes !== "number" || !Number.isFinite(lesson.durationMinutes) || lesson.durationMinutes <= 0) errors.push(`${location}.durationMinutes must be a positive number`);
-  if (lesson.workspace !== undefined && (!isNonEmptyString(lesson.workspace) || !LESSON_WORKSPACE_PATTERN.test(lesson.workspace))) errors.push(`${location}.workspace must be workspaces/<lowercase-hyphenated-slug>`);
+  if (lesson.workspace !== undefined && (!isNonEmptyString(lesson.workspace) || !LESSON_WORKSPACE_PATTERN.test(lesson.workspace))) errors.push(`${location}.workspace must be a lowercase-hyphenated workspace id`);
+  const hasWorkspaceRequiredBlock = Array.isArray(lesson.blocks) && lesson.blocks.some((block) => block && (block.type === "terminal-practice" || block.type === "editor-practice"));
+  if (hasWorkspaceRequiredBlock && !isNonEmptyString(lesson.workspace)) errors.push(`${location}.workspace is required when a lesson has terminal-practice or editor-practice blocks`);
   const hasInteractiveBlock = Array.isArray(lesson.blocks) && lesson.blocks.some((block) => block && block.type !== "narrative");
   if (!isStringArray(lesson.outcomes)) errors.push(`${location}.outcomes must be a list of strings`);
   else if (hasInteractiveBlock && (lesson.outcomes.length === 0 || lesson.outcomes.some((item) => !isNonEmptyString(item)))) errors.push(`${location}.outcomes must be a non-empty list of non-empty strings derived from its interactive blocks`);

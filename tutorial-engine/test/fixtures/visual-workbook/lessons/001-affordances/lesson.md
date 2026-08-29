@@ -1,5 +1,6 @@
 ---
 durationMinutes: 5
+workspace: refactor-line
 blocks:
   - orientation
   - editing

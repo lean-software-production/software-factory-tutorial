@@ -4,11 +4,11 @@
 .worktrees/
 *.log
 *.swp
-# tutorial/factory/ holds the learner's own work, and is tracked so a mistake is
-# recoverable. Everything that is not theirs to keep goes in a .tmp/ beside the
-# script that writes it: the engine's state, and the evidence, findings,
-# baselines, commit messages and iteration records a run regenerates.
-tutorial/factory/**/.tmp/
+# tutorial/workspaces/ holds authored learner workspace templates and is tracked so a
+# session can copy a clean baseline. Everything that is not theirs to keep goes in a
+# .tmp/ beside the script that writes it: the engine's state, and the evidence,
+# findings, baselines, commit messages and iteration records a run regenerates.
+tutorial/workspaces/**/factory/**/.tmp/
 tutorial/.tutorial/
 # Existing checkouts may still have pre-migration learner-local state at the root.
 factory/**/.tmp/

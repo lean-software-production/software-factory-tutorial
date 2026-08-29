@@ -5,13 +5,13 @@
 - The repository root is the developer workspace: npm orchestration, setup scripts, evals, and the
   tutorial engine live here.
 - The authored tutorial template is [`tutorial/`](tutorial/). Its [`README`](tutorial/README.md),
-  `workbook.md`, `parts/`, `lessons/`, `docs/specs/`, `docs/seeds/`, `factory/`, and
-  `calculator/` move together. Treat this content as immutable during learner runs.
-- Each learner session has a private workspace at `tutorial/.tutorial/<session-id>/workspace/`.
-  Learner shell commands, edits, and commits happen there, not in the authored template and not in
-  the repository root. A lesson may optionally declare `workspace: workspaces/<slug>`; that scopes
-  editor paths and terminal starting directories beneath the shared session workspace, but it does
-  not isolate the filesystem or create a separate Git repository.
+  `workbook.md`, `parts/`, `lessons/`, `docs/specs/`, `docs/seeds/`, and `workspaces/` move
+  together. Treat this content as immutable during learner runs.
+- Each learner session has private live workspaces at
+  `tutorial/.tutorial/<session-id>/workspaces/<workspace-id>/`. Learner shell commands, edits, and
+  commits happen in the active live workspace, not in the authored template and not in the
+  repository root. A lesson may declare a lowercase ID such as `workspace: refactor-line`; the
+  launcher copies `tutorial/workspaces/<id>/` and initializes that copy as its own Git repository.
 - The root `npm run tutorial:workbook` command launches the workbook. By default it creates a fresh
   session and prints the session ID and workspace path. `npm run tutorial:workbook -- --session <id>`
   is the only way to reopen that ID; browser-tutor state is not resumed.
@@ -80,10 +80,10 @@ workbook tutor keeps its event log, attempts, and learner workspace under
 ledger would hand everyone who clones the tutorial a copy that claims to be part finished, so the
 ledger's rows carry a specification link and a goal, and no status.
 
-Inside a session workspace, `factory/` sorts into three kinds, and the split is what `.gitignore`
-encodes. Lessons that declare `workspace: workspaces/<slug>` use the same rules inside that scoped
-folder: files the learner writes are session-local work, and regenerated evidence belongs under a
-nearby `.tmp/` rather than in the authored tutorial.
+Inside a live workspace, `factory/` sorts into three kinds, and the split is what `.gitignore`
+encodes. Lessons that declare the same workspace ID share that live workspace and Git history;
+files the learner writes are session-local work, and regenerated evidence belongs under a nearby
+`.tmp/` rather than in the authored tutorial.
 
 - **The learner's line** — every `.sh` and `.md` they write — is tracked by the session-local Git
   repository, so their own work survives a mistake inside that session and can be committed there.
@@ -102,15 +102,15 @@ resumed or migrated by the launcher.
 ## The line commits to the session-local repository
 
 From lesson 007 the line commits to the calculator, and from 008 it does so unattended. Those commits
-land in `tutorial/.tutorial/<session-id>/workspace/.git`, not in the cloned tutorial repository. A
-plain `npm run tutorial:workbook` creates a new session-local repository; `--session <id>` reopens
-that same repository so the learner can inspect or continue its private history.
+land in `tutorial/.tutorial/<session-id>/workspaces/refactor-line/.git`, not in the cloned tutorial
+repository. A plain `npm run tutorial:workbook` creates new live workspace repositories; `--session
+<id>` reopens those same repositories so the learner can inspect or continue private history.
 
 ## Changing a Part 1 lesson means changing the Part 2 seed
 
-`tutorial/docs/seeds/part-2/` holds what lessons 002 to 004 leave in `tutorial/factory/`. Change
-what those lessons have the learner write, and change the seed to match — the two are the same
-artefact taught two ways.
+`tutorial/docs/seeds/part-2/` holds what lessons 002 to 004 leave in the refactor-line live
+workspace's `factory/`. Change what those lessons have the learner write, and change the seed to
+match — the two are the same artefact taught two ways.
 
 `seed.test.ts` reads lesson 005's `mv` commands and fails if the seed does not supply every source
 path they name. That catches a renamed file, not a rewritten one, so the content is still yours to

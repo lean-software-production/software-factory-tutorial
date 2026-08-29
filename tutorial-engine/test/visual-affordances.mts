@@ -125,8 +125,8 @@ async function main(): Promise<void> {
   // Copy the fixture so the server's own writes never touch the committed workbook.
   const workspace = await mkdtemp(resolve(tmpdir(), "visual-affordances-"));
   await cp(fixtureRoot, workspace, { recursive: true });
-  await mkdir(resolve(workspace, "factory"), { recursive: true });
-  await writeFile(resolve(workspace, "factory/answer.md"), "A first draft of the answer.\n");
+  await mkdir(resolve(workspace, "workspaces/refactor-line/factory"), { recursive: true });
+  await writeFile(resolve(workspace, "workspaces/refactor-line/factory/answer.md"), "A first draft of the answer.\n");
 
   // The first editor draft draws feedback, which is what the welded panel has to show; the second
   // is accepted, which is how the terminal block becomes the active surface.

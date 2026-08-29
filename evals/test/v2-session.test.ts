@@ -81,9 +81,9 @@ describe("v2 public session trace", () => {
       trace.events = await readWorkbookTimeline(session.sessionRoot);
 
       expect(session.contentRoot).toBe(await realpath(workspace.root));
-      expect(session.workspaceRoot).toBe(resolve(session.sessionRoot, "workspace"));
-      await expect(stat(resolve(session.workspaceRoot, "factory"))).resolves.toBeDefined();
-      await expect(stat(resolve(session.workspaceRoot, "calculator"))).resolves.toBeDefined();
+      expect(session.workspaceRoots["refactor-line"]!).toBe(resolve(session.sessionRoot, "workspaces/refactor-line"));
+      await expect(stat(resolve(session.workspaceRoots["refactor-line"]!, "factory"))).resolves.toBeDefined();
+      await expect(stat(resolve(session.workspaceRoots["refactor-line"]!, "calculator"))).resolves.toBeDefined();
 
       expect(trace).toMatchObject({
         scenarioId: "public-state",
@@ -140,7 +140,7 @@ describe("v2 public session trace", () => {
     tempRoots.push(workspace.repositoryRoot);
     const server = await workspace.startServer({ embeddedTerminal: false, mainTutor: new SessionFakeMainTutor() });
     await server.close();
-    const { workspaceRoot } = workspace.latestSession();
+    const workspaceRoot = workspace.latestSession().workspaceRoots["refactor-line"]!;
     await mkdir(resolve(workspaceRoot, "factory/.tmp"), { recursive: true });
     await mkdir(resolve(workspaceRoot, "editor-artifacts"), { recursive: true });
     await writeFile(resolve(workspaceRoot, "factory/.tmp/evaluator-command.txt"), "command block complete\n");

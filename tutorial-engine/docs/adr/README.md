@@ -44,4 +44,5 @@ Update the index below whenever you create a record or change its status.
 | [0020](0020-bound-terminal-assessment-retries-with-recoverable-feedback.md) | superseded | Bound terminal assessment retries with recoverable feedback |
 | [0021](0021-preflight-model-backed-roles-before-workbook-startup.md) | accepted | Preflight model-backed roles before workbook startup |
 | [0022](0022-use-one-shot-terminal-workflow-assessment.md) | accepted | Use one-shot terminal workflow assessment |
-| [0023](0023-scope-lesson-work-to-optional-shared-session-folders.md) | accepted | Scope lesson work to optional shared-session folders |
+| [0023](0023-scope-lesson-work-to-optional-shared-session-folders.md) | superseded | Scope lesson work to optional shared-session folders |
+| [0024](0024-isolate-lesson-workspaces-as-live-repositories.md) | accepted | Isolate lesson workspaces as live repositories |

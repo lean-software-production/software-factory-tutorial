@@ -1,5 +1,6 @@
 ---
 durationMinutes: 10
+workspace: refactor-line
 blocks:
   - run-simple-pi-prompt
   - run-supplied-command

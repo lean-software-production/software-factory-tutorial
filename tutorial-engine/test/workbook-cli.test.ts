@@ -22,13 +22,13 @@ async function contentFixture(): Promise<string> {
   await write(join(root, "workbook.md"), ["---", "parts:", "  - id: validation-loop", "    lessons:", "      - 001-run-an-agent-headlessly", "      - 007-compose-and-branch", "      - 008-missing-seed", "---", "# CLI fixture", "", "Welcome."].join("\n"));
   await write(join(root, "parts/validation-loop.md"), "---\n---\n# Validation loop\n\nPart preamble.\n");
   for (const id of ["001-run-an-agent-headlessly", "007-compose-and-branch", "008-missing-seed"]) {
-    await write(join(root, `lessons/${id}/lesson.md`), "---\ndurationMinutes: 1\nblocks:\n  - read\n---\n# Lesson\n\nLesson dek.\n");
+    await write(join(root, `lessons/${id}/lesson.md`), "---\ndurationMinutes: 1\nworkspace: refactor-line\nblocks:\n  - read\n---\n# Lesson\n\nLesson dek.\n");
     await write(join(root, `lessons/${id}/blocks/read.md`), "---\ntype: narrative\n---\n## Read\n\nRead this.\n");
   }
   await write(join(root, "README.md"), "# CLI fixture\n");
-  await write(join(root, "calculator/package.json"), "{\"type\":\"module\"}\n");
-  await write(join(root, "calculator/src/index.ts"), "export const value = 1;\n");
-  await write(join(root, "factory/refactor.md"), "factory seed\n");
+  await write(join(root, "workspaces/refactor-line/calculator/package.json"), "{\"type\":\"module\"}\n");
+  await write(join(root, "workspaces/refactor-line/calculator/src/index.ts"), "export const value = 1;\n");
+  await write(join(root, "workspaces/refactor-line/factory/refactor.md"), "factory seed\n");
   return root;
 }
 
@@ -37,7 +37,8 @@ function sessionFixture(id: string): TutorialSessionPaths {
     contentRoot: "/content",
     sessionId: id,
     sessionRoot: `/content/.tutorial/${id}`,
-    workspaceRoot: `/content/.tutorial/${id}/workspace`,
+    workspacesRoot: `/content/.tutorial/${id}/workspaces`,
+    workspaceRoots: { "refactor-line": `/content/.tutorial/${id}/workspaces/refactor-line` },
   };
 }
 
@@ -184,7 +185,7 @@ describe("workbook CLI", () => {
     expect(lines).toEqual([
       "Created tutorial session: session-20260824-120000-a1b2c3d4",
       "Session state: /content/.tutorial/session-20260824-120000-a1b2c3d4",
-      "Learner workspace: /content/.tutorial/session-20260824-120000-a1b2c3d4/workspace",
+      "Learner workspaces: refactor-line=/content/.tutorial/session-20260824-120000-a1b2c3d4/workspaces/refactor-line",
       "Reopen with: npm run tutorial:workbook -- --session session-20260824-120000-a1b2c3d4",
     ]);
     expect(startServer.mock.calls[0]![0]).not.toHaveProperty("terminalPtyFactory");
@@ -260,8 +261,8 @@ describe("workbook CLI", () => {
 
     try {
       const session = startServer.mock.calls[0]![0].session as TutorialSessionPaths;
-      await expect(readFile(resolve(session.workspaceRoot, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
-      await expect(readFile(resolve(session.workspaceRoot, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
+      await expect(readFile(resolve(session.workspaceRoots["refactor-line"]!, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
+      await expect(readFile(resolve(session.workspaceRoots["refactor-line"]!, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
       const records = await new WorkbookTimeline({ stateRoot: session.sessionRoot }).read();
       const target = lesson.startsWith("001") ? "001-run-an-agent-headlessly" : "007-compose-and-branch";
       expect(records[0]).toMatchObject({ type: "lesson_jump_started", lessonId: target });
@@ -295,14 +296,14 @@ describe("workbook CLI", () => {
       session: sessionFixture("lesson-007"),
     }));
     expect(lines[0]).toBe("Reopened tutorial session: lesson-007");
-    expect(lines).toContain("Learner workspace: /content/.tutorial/lesson-007/workspace");
+    expect(lines).toContain("Learner workspaces: refactor-line=/content/.tutorial/lesson-007/workspaces/refactor-line");
   });
 
   it("reopens an explicit materialized session instead of creating another one", async () => {
     const contentRoot = await contentFixture();
     const manager = await SessionWorkspaceManager.create(contentRoot);
     const existing = await manager.createSession({ id: "resume-me" });
-    await write(resolve(existing.workspaceRoot, "factory/resume-note.md"), "keep this session-local file\n");
+    await write(resolve(existing.workspaceRoots["refactor-line"]!, "factory/resume-note.md"), "keep this session-local file\n");
     const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
     const lines: string[] = [];
 
@@ -316,9 +317,9 @@ describe("workbook CLI", () => {
 
     const options = startServer.mock.calls[0]![0];
     expect(options.session).toEqual(existing);
-    await expect(readFile(resolve(existing.workspaceRoot, "factory/resume-note.md"), "utf8")).resolves.toBe("keep this session-local file\n");
+    await expect(readFile(resolve(existing.workspaceRoots["refactor-line"]!, "factory/resume-note.md"), "utf8")).resolves.toBe("keep this session-local file\n");
     expect(lines[0]).toBe("Reopened tutorial session: resume-me");
-    expect(lines).toContain(`Learner workspace: ${existing.workspaceRoot}`);
+    expect(lines).toContain(`Learner workspaces: refactor-line=${existing.workspaceRoots["refactor-line"]!}`);
   });
 
   it("materializes a fresh default session and ignores legacy .tutorial/.tmp state", async () => {
@@ -343,12 +344,12 @@ describe("workbook CLI", () => {
     expect(options.target).toBe(canonicalContentRoot);
     expect(options.session?.contentRoot).toBe(canonicalContentRoot);
     expect(session.sessionId).toMatch(/^session-\d{8}-\d{6}-[a-f0-9]{8}$/);
-    expect(options.session?.workspaceRoot).toBe(resolve(canonicalContentRoot, ".tutorial", session.sessionId, "workspace"));
-    await expect(readFile(resolve(session.workspaceRoot, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
-    await expect(readFile(resolve(session.workspaceRoot, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
-    await expect(stat(resolve(session.workspaceRoot, ".git"))).resolves.toBeDefined();
+    expect(options.session?.workspaceRoots["refactor-line"]).toBe(resolve(canonicalContentRoot, ".tutorial", session.sessionId, "workspaces/refactor-line"));
+    await expect(readFile(resolve(session.workspaceRoots["refactor-line"]!, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
+    await expect(readFile(resolve(session.workspaceRoots["refactor-line"]!, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
+    await expect(stat(resolve(session.workspaceRoots["refactor-line"]!, ".git"))).resolves.toBeDefined();
     await expect(readFile(resolve(contentRoot, ".tutorial/.tmp/workbook/events.jsonl"), "utf8")).resolves.toBe("legacy state stays put\n");
     expect(lines[0]).toBe(`Created tutorial session: ${session.sessionId}`);
-    expect(lines).toContain(`Learner workspace: ${session.workspaceRoot}`);
+    expect(lines).toContain(`Learner workspaces: refactor-line=${session.workspaceRoots["refactor-line"]!}`);
   });
 });

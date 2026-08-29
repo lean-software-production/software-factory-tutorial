@@ -11,7 +11,7 @@ tutor: |-
 
 ## Checks
 
-From the session workspace, make the new script executable and run it:
+From the active workspace, make the new script executable and run it:
 
 ```sh
 chmod +x factory/refactor/run.sh

@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -29,13 +29,12 @@ describe("resolveEditorTarget", () => {
     expect(target).toBe(resolve(await realpath(workspace), "factory/refactor.md"));
   });
 
-  it("resolves authored editor paths beneath a declared lesson workspace", async () => {
+  it("resolves authored editor paths beneath the active live workspace only", async () => {
     const workspace = await temporaryWorkspace("workbook-editor-scoped-target-");
-    await mkdir(resolve(workspace, "workspaces/scoped-lesson"), { recursive: true });
 
-    const target = await resolveEditorTarget(workspace, "spec.md", "workspaces/scoped-lesson");
+    const target = await resolveEditorTarget(workspace, "spec.md");
 
-    expect(target).toBe(resolve(await realpath(workspace), "workspaces/scoped-lesson/spec.md"));
+    expect(target).toBe(resolve(await realpath(workspace), "spec.md"));
   });
 
   it("rejects traversal, absolute paths, tutor state, temp paths, git internals, and escaping symlinks", async () => {
@@ -45,19 +44,31 @@ describe("resolveEditorTarget", () => {
     await symlink(outside, resolve(workspace, "factory/escape"));
 
     for (const path of ["../x", "/tmp/x", ".git/config", ".tutorial/state", ".tmp/output", "factory/escape/refactor.md"]) {
-      await expect(resolveEditorTarget(workspace, path), path).rejects.toThrow(/outside|reserved|unsafe|absolute/i);
+      await expect(resolveEditorTarget(workspace, path), path).rejects.toThrow(/outside|reserved|unsafe|absolute|symlink/i);
     }
   });
 
-  it("rejects lesson workspace declarations that are missing or escaping symlinks", async () => {
+  it("rejects escaping symlinks inside the active live workspace", async () => {
     const workspace = await temporaryWorkspace("workbook-editor-scoped-unsafe-");
     const outside = await temporaryWorkspace("workbook-editor-scoped-outside-");
-    await mkdir(resolve(workspace, "workspaces"), { recursive: true });
-    await symlink(outside, resolve(workspace, "workspaces/escape"));
+    await symlink(outside, resolve(workspace, "escape"));
 
-    await expect(resolveEditorTarget(workspace, "spec.md", "workspaces/missing")).rejects.toThrow();
-    await expect(resolveEditorTarget(workspace, "spec.md", "workspaces/escape")).rejects.toThrow(/inside|outside/i);
-    await expect(resolveEditorTarget(workspace, "spec.md", "../escape")).rejects.toThrow(/workspace/);
+    await expect(resolveEditorTarget(workspace, "escape/spec.md")).rejects.toThrow(/symlink/i);
+  });
+
+  it("rejects final-file and parent-directory symlinks, including symlinks to .git", async () => {
+    const workspace = await temporaryWorkspace("workbook-editor-git-symlink-");
+    await mkdir(resolve(workspace, ".git"));
+    await mkdir(resolve(workspace, "factory"));
+    await writeFile(resolve(workspace, ".git/config"), "repo metadata\n", "utf8");
+    await symlink(resolve(workspace, ".git/config"), resolve(workspace, "factory/answer.md"));
+
+    await expect(resolveEditorTarget(workspace, "factory/answer.md")).rejects.toThrow(/symlink/i);
+    await expect(readFile(resolve(workspace, ".git/config"), "utf8")).resolves.toBe("repo metadata\n");
+
+    await symlink(resolve(workspace, ".git"), resolve(workspace, "factory/git-parent"));
+    await expect(resolveEditorTarget(workspace, "factory/git-parent/config")).rejects.toThrow(/symlink/i);
+    await expect(readFile(resolve(workspace, ".git/config"), "utf8")).resolves.toBe("repo metadata\n");
   });
 });
 
@@ -83,9 +94,8 @@ describe("promoteCurrentEditorAttempt", () => {
     await expect(attempts.current("lesson-id", block.id)).resolves.toMatchObject({ id: attempt.id, status: "reviewing" });
   });
 
-  it("promotes current editor attempts under a lesson workspace while keeping the authored path relative", async () => {
+  it("promotes current editor attempts into the active live workspace", async () => {
     const workspace = await temporaryWorkspace("workbook-editor-scoped-attempt-");
-    await mkdir(resolve(workspace, "workspaces/scoped-lesson"), { recursive: true });
     const attempts = new AttemptStore(workspace);
     const block: EditorPracticeBlock = {
       id: "block-id",
@@ -100,9 +110,8 @@ describe("promoteCurrentEditorAttempt", () => {
     const attempt = await attempts.create({ lessonId: "lesson-id", blockId: block.id, evidence: { kind: "editor", text: "scoped draft" } });
     await attempts.markReviewing(attempt.id);
 
-    await expect(promoteCurrentEditorAttempt({ workspace, attempts, lessonId: "lesson-id", block, attemptId: attempt.id, lessonWorkspace: "workspaces/scoped-lesson" })).resolves.toEqual({ path: resolve(await realpath(workspace), "workspaces/scoped-lesson/spec.md") });
-    await expect(readFile(resolve(workspace, "workspaces/scoped-lesson/spec.md"), "utf8")).resolves.toBe("scoped draft");
-    await expect(access(resolve(workspace, "spec.md"))).rejects.toThrow();
+    await expect(promoteCurrentEditorAttempt({ workspace, attempts, lessonId: "lesson-id", block, attemptId: attempt.id })).resolves.toEqual({ path: resolve(await realpath(workspace), "spec.md") });
+    await expect(readFile(resolve(workspace, "spec.md"), "utf8")).resolves.toBe("scoped draft");
   });
 });
 
@@ -140,5 +149,26 @@ describe("promoteAcceptedEditorAttempt", () => {
 
     await expect(promoteAcceptedEditorAttempt({ workspace, attempts, lessonId: "lesson-id", block, attemptId: terminal.id })).resolves.toBeUndefined();
     await expect(access(resolve(workspace, "factory/refactor.md"))).rejects.toThrow();
+  });
+
+  it("rejects accepted promotion through final-file and parent-directory symlinks without changing .git", async () => {
+    const workspace = await temporaryWorkspace("workbook-editor-promote-git-symlink-");
+    const attempts = new AttemptStore(workspace);
+    await mkdir(resolve(workspace, ".git"));
+    await mkdir(resolve(workspace, "factory"));
+    await writeFile(resolve(workspace, ".git/config"), "repo metadata\n", "utf8");
+    const block: EditorPracticeBlock = { id: "block-id", type: "editor-practice", title: "Edit", markdown: "Edit.", path: "factory/refactor.md", outcome: "Edit the draft.", tutor: "private" };
+    const attempt = await attempts.create({ lessonId: "lesson-id", blockId: block.id, evidence: { kind: "editor", text: "malicious overwrite" } });
+    await attempts.acceptCurrent(attempt.id, "Accepted.");
+
+    await symlink(resolve(workspace, ".git/config"), resolve(workspace, "factory/refactor.md"));
+    await expect(promoteAcceptedEditorAttempt({ workspace, attempts, lessonId: "lesson-id", block, attemptId: attempt.id })).rejects.toThrow(/symlink|too many levels/i);
+    await expect(readFile(resolve(workspace, ".git/config"), "utf8")).resolves.toBe("repo metadata\n");
+    await rm(resolve(workspace, "factory/refactor.md"));
+
+    await symlink(resolve(workspace, ".git"), resolve(workspace, "factory/git-parent"));
+    const parentBlock = { ...block, path: "factory/git-parent/config" };
+    await expect(promoteAcceptedEditorAttempt({ workspace, attempts, lessonId: "lesson-id", block: parentBlock, attemptId: attempt.id })).rejects.toThrow(/symlink/i);
+    await expect(readFile(resolve(workspace, ".git/config"), "utf8")).resolves.toBe("repo metadata\n");
   });
 });

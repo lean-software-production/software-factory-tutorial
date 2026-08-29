@@ -149,7 +149,7 @@ export async function runV2ScenarioSession(options: { scenario: V2Scenario; work
   await driveV2Scenario(driver, options.scenario);
   const session = options.workspace.latestSession();
   options.trace.events = await readWorkbookTimeline(session.sessionRoot);
-  options.trace.artifacts = await snapshotArtifacts(session.workspaceRoot);
+  options.trace.artifacts = await snapshotArtifacts(session.workspaceRoots["refactor-line"]!);
   return options.trace;
 }
 

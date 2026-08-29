@@ -1,8 +1,8 @@
 # Software factory tutorial developer workspace
 
 This repository contains the learner workbook and the local engine that runs it. The authored tutorial
-template lives under [`tutorial/`](tutorial/). Each launch creates or reopens a private learner workspace
-under `tutorial/.tutorial/<session-id>/workspace/`.
+template lives under [`tutorial/`](tutorial/). Each launch creates or reopens private live learner
+workspaces under `tutorial/.tutorial/<session-id>/workspaces/<workspace-id>/`.
 
 ## Architecture map
 
@@ -28,9 +28,10 @@ npm run check
 ```
 
 `npm run tutorial:workbook` supplies the embedded terminal with one read-only runtime mount: root
-`node_modules/` at the session workspace's `node_modules/`. A normal launch creates a new session;
-`--session <id>` reopens an existing workbook session. Earlier workbook event and attempt records remain
-readable. The removed browser tutor's ignored state is neither resumed nor migrated.
+`node_modules/` at the active live workspace's `node_modules/`. A normal launch creates a new
+session and copies each declared workspace template; `--session <id>` reopens an existing workbook
+session. Earlier workbook event and attempt records remain readable. The removed browser tutor's
+ignored state is neither resumed nor migrated.
 
 ## Start points
 

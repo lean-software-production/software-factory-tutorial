@@ -87,7 +87,7 @@ Build this lesson in this order. Complete each small step before moving to the n
 
 ## Checks
 
-From the session workspace:
+From the active workspace:
 
 ```sh
 ./factory/refactor/run.sh

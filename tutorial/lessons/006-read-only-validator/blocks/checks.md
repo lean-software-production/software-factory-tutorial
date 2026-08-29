@@ -11,7 +11,7 @@ tutor: |-
 
 ## Checks
 
-From the session workspace, run a doer turn and then a validation turn:
+From the active workspace, run a doer turn and then a validation turn:
 
 ```sh
 ./factory/refactor/do.sh

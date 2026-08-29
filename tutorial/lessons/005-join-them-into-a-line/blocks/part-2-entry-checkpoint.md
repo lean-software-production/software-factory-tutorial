@@ -15,7 +15,7 @@ tutor: |-
 Part 2 assumes a doer and a validator are already sitting in `factory/`, whichever way they got
 there.
 
-Check now, from the session workspace:
+Check now, from the active workspace:
 
 ```sh
 ls factory/ factory/.tmp/

@@ -17,7 +17,7 @@ describe("tutorial launcher", () => {
 
   it("keeps the calculator workspace under the tutorial workspace", async () => {
     const manifest = JSON.parse(await readFile(resolve(repositoryRoot, "package.json"), "utf8"));
-    assert.deepEqual(manifest.workspaces, ["tutorial/calculator", "tutorial-engine"]);
+    assert.deepEqual(manifest.workspaces, ["tutorial/workspaces/refactor-line/calculator", "tutorial-engine"]);
   });
 
   it("launches the workbook with a trusted root node_modules runtime profile", () => {

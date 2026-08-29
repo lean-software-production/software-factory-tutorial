@@ -1,23 +1,22 @@
 import { execFile } from "node:child_process";
 import { randomBytes as defaultRandomBytes } from "node:crypto";
-import { chmod, copyFile, lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
-import { parse } from "yaml";
 import { LESSON_WORKSPACE_PATTERN } from "./workbook/contract.js";
+import { loadWorkbook } from "./workbook/load.js";
 import { NO_RUNTIME_PROVISION, trustRuntimeProvision, type RuntimeProvisionInput, type SafeWorkspaceRelativePath, type TrustedRuntimeProvision } from "./workbook/runtime-provision.js";
 
 const run = promisify(execFile);
 
 export const SESSION_STATE_DIRECTORY = ".tutorial";
-export const SESSION_WORKSPACE_DIRECTORY = "workspace";
-export const MATERIALIZED_WORKSPACE_DIRECTORIES = ["calculator", "factory"] as const;
-export const LESSON_WORKSPACES_DIRECTORY = "workspaces";
+export const SESSION_WORKSPACES_DIRECTORY = "workspaces";
+export const AUTHORED_WORKSPACES_DIRECTORY = "workspaces";
 export const SAFE_SESSION_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+export const LESSON_WORKSPACE_GITIGNORE_LINES = ["factory/**/.tmp/"] as const;
 
 const SESSION_ID_MAX_LENGTH = 64;
-const SESSION_GITIGNORE_LINES = ["factory/**/.tmp/"] as const;
-const EMPTY_LESSON_WORKSPACE_MARKER = ".gitkeep";
+const SKIPPED_AUTHORED_DIRECTORIES = new Set(["node_modules", ".tmp"]);
 
 export class SessionWorkspaceError extends Error {}
 
@@ -25,7 +24,8 @@ export interface TutorialSessionPaths {
   contentRoot: string;
   sessionId: string;
   sessionRoot: string;
-  workspaceRoot: string;
+  workspacesRoot: string;
+  workspaceRoots: Record<string, string>;
   runtimeProvision?: TrustedRuntimeProvision;
 }
 
@@ -53,6 +53,13 @@ export function validateSessionId(id: string): string {
   if (!id) throw new SessionWorkspaceError("A session ID is required.");
   if (id.length > SESSION_ID_MAX_LENGTH || !SAFE_SESSION_ID.test(id)) {
     throw new SessionWorkspaceError("Session IDs may contain only lowercase letters, digits, and hyphens, and must not be paths.");
+  }
+  return id;
+}
+
+export function validateLessonWorkspaceId(id: string, location = "workspace"): string {
+  if (typeof id !== "string" || !LESSON_WORKSPACE_PATTERN.test(id)) {
+    throw new SessionWorkspaceError(`${location}: workspace must be a lowercase-hyphenated workspace id`);
   }
   return id;
 }
@@ -95,6 +102,11 @@ async function ensureSessionStateDirectory(contentRoot: string): Promise<string>
   return stateRoot;
 }
 
+async function pathExists(path: string): Promise<boolean> {
+  try { await lstat(path); return true; }
+  catch { return false; }
+}
+
 async function copyAuthoredDirectory(source: string, destination: string, contentRoot: string): Promise<void> {
   const sourceInfo = await lstat(source);
   if (sourceInfo.isSymbolicLink()) throw new SessionWorkspaceError(`Refusing to materialize symlinked content: ${source}`);
@@ -103,7 +115,8 @@ async function copyAuthoredDirectory(source: string, destination: string, conten
   if (!inside(contentRoot, realSource)) throw new SessionWorkspaceError(`Refusing to materialize a path outside the content root: ${source}`);
   await mkdir(destination, { recursive: true });
   for (const entry of await readdir(source, { withFileTypes: true })) {
-    if (entry.name === "node_modules") continue;
+    if (entry.name === ".git") throw new SessionWorkspaceError(`Authored workspace templates must not contain .git: ${resolve(source, entry.name)}`);
+    if (entry.isDirectory() && SKIPPED_AUTHORED_DIRECTORIES.has(entry.name)) continue;
     const from = resolve(source, entry.name);
     const to = resolve(destination, entry.name);
     if (entry.isSymbolicLink()) throw new SessionWorkspaceError(`Refusing to materialize symlinked content: ${from}`);
@@ -113,7 +126,6 @@ async function copyAuthoredDirectory(source: string, destination: string, conten
     }
     if (entry.isFile()) {
       await copyFile(from, to);
-      // copyFile does not promise a portable executable-mode contract; learner scripts do.
       await chmod(to, (await stat(from)).mode);
       continue;
     }
@@ -121,66 +133,29 @@ async function copyAuthoredDirectory(source: string, destination: string, conten
   }
 }
 
-async function pathExists(path: string): Promise<boolean> {
-  try { await lstat(path); return true; }
-  catch { return false; }
-}
-
-async function directoryEntries(path: string) {
-  try { return await readdir(path, { withFileTypes: true }); }
-  catch (error: any) { if (error?.code === "ENOENT") return []; throw error; }
-}
-
-function parseWorkspaceFromLessonFrontMatter(text: string, location: string): string | undefined {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  if (lines[0] !== "---") return undefined;
-  const closingIndex = lines.indexOf("---", 1);
-  if (closingIndex === -1) return undefined;
-  const data = parse(lines.slice(1, closingIndex).join("\n")) as Record<string, unknown> | null;
-  const workspace = data?.workspace;
-  if (workspace === undefined) return undefined;
-  if (typeof workspace !== "string" || !LESSON_WORKSPACE_PATTERN.test(workspace)) {
-    throw new SessionWorkspaceError(`${location}: workspace must be workspaces/<lowercase-hyphenated-slug>`);
-  }
-  return workspace;
-}
-
-async function discoverDeclaredLessonWorkspaces(contentRoot: string): Promise<SafeWorkspaceRelativePath[]> {
-  const lessonsRoot = resolve(contentRoot, "lessons");
-  const entries = await directoryEntries(lessonsRoot);
-  const workspaces = new Set<SafeWorkspaceRelativePath>();
-  for (const entry of entries.filter((candidate) => candidate.isDirectory())) {
-    const lessonPath = resolve(lessonsRoot, entry.name, "lesson.md");
-    let text: string;
-    try { text = await readFile(lessonPath, "utf8"); }
-    catch (error: any) { if (error?.code === "ENOENT") continue; throw error; }
-    const workspace = parseWorkspaceFromLessonFrontMatter(text, lessonPath);
-    if (workspace) workspaces.add(workspace as SafeWorkspaceRelativePath);
-  }
+export async function discoverDeclaredLessonWorkspaces(contentRoot: string): Promise<string[]> {
+  const workbook = await loadWorkbook(contentRoot);
+  const workspaces = new Set<string>();
+  for (const chapter of workbook.chapters) if (chapter.lesson.workspace) workspaces.add(chapter.lesson.workspace);
   return [...workspaces].sort();
 }
 
-async function directoryContainsFile(path: string): Promise<boolean> {
-  for (const entry of await readdir(path, { withFileTypes: true })) {
-    if (entry.isFile()) return true;
-    if (entry.isDirectory() && await directoryContainsFile(resolve(path, entry.name))) return true;
+async function validateAuthoredWorkspaceTemplate(contentRoot: string, workspaceId: string): Promise<string> {
+  validateLessonWorkspaceId(workspaceId, "lesson workspace");
+  const authoredRoot = resolve(contentRoot, AUTHORED_WORKSPACES_DIRECTORY);
+  const source = resolve(authoredRoot, workspaceId);
+  const realContentRoot = await realpath(contentRoot);
+  let info;
+  try { info = await lstat(source); }
+  catch {
+    throw new SessionWorkspaceError(`Declared workspace '${workspaceId}' is missing; expected ${AUTHORED_WORKSPACES_DIRECTORY}/${workspaceId}.`);
   }
-  return false;
-}
-
-async function ensureLessonWorkspaceTrackedWhenEmpty(destination: string): Promise<void> {
-  if (!(await directoryContainsFile(destination))) await writeFile(resolve(destination, EMPTY_LESSON_WORKSPACE_MARKER), "", "utf8");
-}
-
-async function materializeLessonWorkspaces(contentRoot: string, workspaceRoot: string, targets: readonly SafeWorkspaceRelativePath[]): Promise<void> {
-  await mkdir(resolve(workspaceRoot, LESSON_WORKSPACES_DIRECTORY), { recursive: true });
-  for (const target of targets) {
-    const destination = resolve(workspaceRoot, target);
-    const source = resolve(contentRoot, target);
-    if (await pathExists(source)) await copyAuthoredDirectory(source, destination, contentRoot);
-    else await mkdir(destination, { recursive: true });
-    await ensureLessonWorkspaceTrackedWhenEmpty(destination);
-  }
+  if (info.isSymbolicLink()) throw new SessionWorkspaceError(`Authored workspace template must be a real directory, not a symlink: ${source}`);
+  if (!info.isDirectory()) throw new SessionWorkspaceError(`Authored workspace template must be a directory: ${source}`);
+  const realSource = await realpath(source);
+  if (!inside(realContentRoot, realSource)) throw new SessionWorkspaceError(`Authored workspace template must stay inside the content root: ${source}`);
+  if (await pathExists(resolve(source, ".git"))) throw new SessionWorkspaceError(`Authored workspace templates must not contain .git: ${source}`);
+  return source;
 }
 
 async function git(workspaceRoot: string, ...args: string[]): Promise<string> {
@@ -189,10 +164,10 @@ async function git(workspaceRoot: string, ...args: string[]): Promise<string> {
 }
 
 function sessionGitignore(runtimeTargets: readonly SafeWorkspaceRelativePath[]): string {
-  return [...SESSION_GITIGNORE_LINES, ...runtimeTargets.map((target) => `${target}/`)].join("\n") + "\n";
+  return [...LESSON_WORKSPACE_GITIGNORE_LINES, ...runtimeTargets.map((target) => `${target}/`)].join("\n") + "\n";
 }
 
-async function ensureEmptyWorkspaceDirectory(workspaceRoot: string, target: SafeWorkspaceRelativePath): Promise<void> {
+async function ensureEmptyRuntimeDirectory(workspaceRoot: string, target: SafeWorkspaceRelativePath): Promise<void> {
   const realWorkspace = await realpath(workspaceRoot);
   const destination = resolve(workspaceRoot, target);
   const parent = resolve(dirname(destination));
@@ -213,14 +188,33 @@ async function ensureEmptyWorkspaceDirectory(workspaceRoot: string, target: Safe
   }
 }
 
-async function initializeLocalRepository(workspaceRoot: string, runtimeTargets: readonly SafeWorkspaceRelativePath[] = []): Promise<void> {
+async function initializeLiveWorkspaceRepository(workspaceRoot: string, workspaceId: string, runtimeTargets: readonly SafeWorkspaceRelativePath[] = []): Promise<void> {
   await writeFile(resolve(workspaceRoot, ".gitignore"), sessionGitignore(runtimeTargets), "utf8");
   await git(workspaceRoot, "init", "-q", "-b", "main");
   await git(workspaceRoot, "config", "user.email", "learner@example.invalid");
   await git(workspaceRoot, "config", "user.name", "Tutorial Learner");
-  await git(workspaceRoot, "add", ".gitignore", ...MATERIALIZED_WORKSPACE_DIRECTORIES, LESSON_WORKSPACES_DIRECTORY);
+  await git(workspaceRoot, "add", "-A");
   const status = await git(workspaceRoot, "status", "--porcelain");
-  if (status.trim()) await git(workspaceRoot, "commit", "-qm", "Materialize tutorial workspace");
+  if (status.trim()) await git(workspaceRoot, "commit", "-qm", `Materialize tutorial workspace ${workspaceId}`);
+}
+
+async function validateLiveWorkspaceRepository(workspacesRoot: string, workspaceId: string, workspaceRoot: string): Promise<void> {
+  await requireDirectoryInside(workspaceRoot, `Session workspace '${workspaceId}'`, workspacesRoot);
+  const top = (await git(workspaceRoot, "rev-parse", "--show-toplevel")).trim();
+  const realTop = await realpath(top);
+  const realWorkspace = await realpath(workspaceRoot);
+  if (realTop !== realWorkspace) throw new SessionWorkspaceError(`Session workspace '${workspaceId}' must be its own Git repository.`);
+}
+
+function workspaceRootsFor(workspacesRoot: string, ids: readonly string[]): Record<string, string> {
+  return Object.fromEntries(ids.map((id) => [id, resolve(workspacesRoot, id)]));
+}
+
+export function workspaceRootFor(paths: TutorialSessionPaths, workspaceId: string): string {
+  validateLessonWorkspaceId(workspaceId, "lesson workspace");
+  const root = paths.workspaceRoots[workspaceId];
+  if (!root) throw new SessionWorkspaceError(`Session does not contain workspace '${workspaceId}'.`);
+  return root;
 }
 
 export class SessionWorkspaceManager {
@@ -232,43 +226,41 @@ export class SessionWorkspaceManager {
     if (!contentRoot) throw new SessionWorkspaceError("A content root is required.");
     await requireDirectory(contentRoot, "Content root");
     const canonicalContentRoot = await realpath(contentRoot);
-    for (const directory of MATERIALIZED_WORKSPACE_DIRECTORIES) {
-      const source = resolve(canonicalContentRoot, directory);
-      await requireDirectory(source, `${directory}/ content`);
-      const realSource = await realpath(source);
-      if (!inside(canonicalContentRoot, realSource)) throw new SessionWorkspaceError(`${directory}/ must stay inside the content root.`);
-    }
     return new SessionWorkspaceManager(canonicalContentRoot);
   }
 
-  pathsFor(sessionId: string): TutorialSessionPaths {
+  pathsFor(sessionId: string, workspaceIds: readonly string[] = []): TutorialSessionPaths {
     const safeId = validateSessionId(sessionId);
     const sessionRoot = resolve(this.contentRoot, SESSION_STATE_DIRECTORY, safeId);
     const stateRoot = resolve(this.contentRoot, SESSION_STATE_DIRECTORY);
     if (!inside(stateRoot, sessionRoot)) throw new SessionWorkspaceError("Session root must stay inside the tutorial state directory.");
+    const workspacesRoot = resolve(sessionRoot, SESSION_WORKSPACES_DIRECTORY);
     return {
       contentRoot: this.contentRoot,
       sessionId: safeId,
       sessionRoot,
-      workspaceRoot: resolve(sessionRoot, SESSION_WORKSPACE_DIRECTORY),
+      workspacesRoot,
+      workspaceRoots: workspaceRootsFor(workspacesRoot, workspaceIds),
     };
   }
 
   async createSession(options: CreateTutorialSessionOptions = {}): Promise<TutorialSessionPaths> {
     const runtimeProvision = options.runtimeProvision ? trustRuntimeProvision(options.runtimeProvision) : NO_RUNTIME_PROVISION;
     const sessionId = options.id === undefined ? createSessionId(options) : validateSessionId(options.id);
-    const paths = this.pathsFor(sessionId);
+    const workspaceIds = await discoverDeclaredLessonWorkspaces(this.contentRoot);
+    const paths = this.pathsFor(sessionId, workspaceIds);
     await ensureSessionStateDirectory(this.contentRoot);
     if (await pathExists(paths.sessionRoot)) throw new SessionWorkspaceError(`Session '${sessionId}' already exists.`);
 
-    await mkdir(paths.workspaceRoot, { recursive: true });
+    await mkdir(paths.workspacesRoot, { recursive: true });
     try {
-      for (const directory of MATERIALIZED_WORKSPACE_DIRECTORIES) {
-        await copyAuthoredDirectory(resolve(this.contentRoot, directory), resolve(paths.workspaceRoot, directory), this.contentRoot);
+      for (const workspaceId of workspaceIds) {
+        const source = await validateAuthoredWorkspaceTemplate(this.contentRoot, workspaceId);
+        const destination = workspaceRootFor(paths, workspaceId);
+        await copyAuthoredDirectory(source, destination, this.contentRoot);
+        for (const target of runtimeProvision.workspaceMountTargets) await ensureEmptyRuntimeDirectory(destination, target);
+        await initializeLiveWorkspaceRepository(destination, workspaceId, runtimeProvision.workspaceMountTargets);
       }
-      await materializeLessonWorkspaces(this.contentRoot, paths.workspaceRoot, await discoverDeclaredLessonWorkspaces(this.contentRoot));
-      for (const target of runtimeProvision.workspaceMountTargets) await ensureEmptyWorkspaceDirectory(paths.workspaceRoot, target);
-      await initializeLocalRepository(paths.workspaceRoot, runtimeProvision.workspaceMountTargets);
     } catch (error) {
       await rm(paths.sessionRoot, { recursive: true, force: true });
       throw error;
@@ -277,10 +269,12 @@ export class SessionWorkspaceManager {
   }
 
   async reopenSession(sessionId: string): Promise<TutorialSessionPaths> {
-    const paths = this.pathsFor(sessionId);
+    const workspaceIds = await discoverDeclaredLessonWorkspaces(this.contentRoot);
+    const paths = this.pathsFor(sessionId, workspaceIds);
     const stateRoot = resolve(this.contentRoot, SESSION_STATE_DIRECTORY);
     await requireDirectoryInside(paths.sessionRoot, `Session '${paths.sessionId}'`, stateRoot);
-    await requireDirectoryInside(paths.workspaceRoot, `Session '${paths.sessionId}' workspace`, paths.sessionRoot);
+    await requireDirectoryInside(paths.workspacesRoot, `Session '${paths.sessionId}' workspaces`, paths.sessionRoot);
+    for (const workspaceId of workspaceIds) await validateLiveWorkspaceRepository(paths.workspacesRoot, workspaceId, workspaceRootFor(paths, workspaceId));
     return paths;
   }
 }

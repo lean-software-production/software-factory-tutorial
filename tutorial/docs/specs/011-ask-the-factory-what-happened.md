@@ -70,7 +70,7 @@ Build this lesson in this order. Complete each small step before moving to the n
    This is the first time the line has run into a limit that belongs to the model rather than to the
    shell, and it will not be the last. A record that does not fit is a record nobody can ask about.
 
-3. **Ask it something `jq` cannot answer.** From the session workspace:
+3. **Ask it something `jq` cannot answer.** From the active workspace:
 
    ```sh
    ./factory/ask.sh refactor "Did this run make progress, or did it keep changing the same code?"
@@ -84,7 +84,7 @@ Build this lesson in this order. Complete each small step before moving to the n
 
 ## Checks
 
-From the session workspace, after a run has finished:
+From the active workspace, after a run has finished:
 
 ```sh
 ./factory/ask.sh refactor "What did each iteration change, in one line each?"

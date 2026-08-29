@@ -23,10 +23,10 @@ export async function createEvaluationWorkspace(options: CreateEvaluationWorkspa
 
   await mkdir(root, { recursive: true });
   await cp(options.fixtureRoot ?? defaultFixtureRoot, root, { recursive: true });
-  await mkdir(resolve(root, "factory"), { recursive: true });
-  await mkdir(resolve(root, "calculator"), { recursive: true });
-  await writeFile(resolve(root, "factory/.gitkeep"), "");
-  await writeFile(resolve(root, "calculator/.gitkeep"), "");
+  await mkdir(resolve(root, "workspaces/refactor-line/factory"), { recursive: true });
+  await mkdir(resolve(root, "workspaces/refactor-line/calculator"), { recursive: true });
+  await writeFile(resolve(root, "workspaces/refactor-line/factory/.gitkeep"), "");
+  await writeFile(resolve(root, "workspaces/refactor-line/calculator/.gitkeep"), "");
   await mkdir(webRoot, { recursive: true });
   await writeFile(resolve(webRoot, "index.html"), "<!doctype html><title>V2 evaluator workbook</title><div id=\"root\"></div>\n");
 
