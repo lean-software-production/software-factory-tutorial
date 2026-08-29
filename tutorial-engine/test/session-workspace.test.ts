@@ -72,6 +72,15 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await run("git", ["-C", cwd, ...args])).stdout.trim();
 }
 
+async function initializeProductRepository(root: string): Promise<void> {
+  await write(join(root, ".gitignore"), ".tutorial/\n");
+  await git(root, "init", "-q", "-b", "main");
+  await git(root, "config", "user.name", "Product Maintainer");
+  await git(root, "config", "user.email", "maintainer@example.invalid");
+  await git(root, "add", "-A");
+  await git(root, "commit", "-qm", "Authored product baseline");
+}
+
 describe("session IDs", () => {
   it("generates path-safe IDs and rejects IDs that could address paths", () => {
     const id = createSessionId({ now: new Date(2026, 7, 24, 9, 5, 6), randomBytes: () => Buffer.from("a1b2c3d4", "hex") });
@@ -189,6 +198,93 @@ describe("SessionWorkspaceManager", () => {
       expect(await git(root, "ls-files", ".gitignore")).toBe(".gitignore");
       expect(await git(root, "status", "--porcelain")).toBe("");
     }
+  });
+
+  it("ignores inherited Git identity, paths, signing, hooks, and config while materializing a repository", async () => {
+    const contentRoot = await contentFixture();
+    await initializeProductRepository(contentRoot);
+    const productHead = await git(contentRoot, "rev-parse", "HEAD");
+    const hostileConfig = join(contentRoot, ".git/host-gitconfig");
+    await write(hostileConfig, [
+      "[user]",
+      "  name = Host User",
+      "  email = host@example.invalid",
+      "[commit]",
+      "  gpgSign = true",
+      "[core]",
+      `  hooksPath = ${join(contentRoot, ".git/host-hooks")}`,
+    ].join("\n"));
+    const overrides: Record<string, string> = {
+      GIT_DIR: join(contentRoot, ".git"),
+      GIT_WORK_TREE: contentRoot,
+      GIT_AUTHOR_NAME: "Injected Author",
+      GIT_AUTHOR_EMAIL: "injected-author@example.invalid",
+      GIT_COMMITTER_NAME: "Injected Committer",
+      GIT_COMMITTER_EMAIL: "injected-committer@example.invalid",
+      GIT_CONFIG_GLOBAL: hostileConfig,
+      GIT_CONFIG_SYSTEM: hostileConfig,
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "commit.gpgSign",
+      GIT_CONFIG_VALUE_0: "true",
+    };
+    const previous = Object.fromEntries(Object.keys(overrides).map((key) => [key, process.env[key]]));
+
+    let session;
+    try {
+      Object.assign(process.env, overrides);
+      session = await (await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "isolated-git" });
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+
+    const workspaceRoot = refactorRoot(session);
+    expect(await git(workspaceRoot, "rev-parse", "--show-toplevel")).toBe(workspaceRoot);
+    expect(await git(workspaceRoot, "config", "--local", "--get", "user.name")).toBe("Tutorial Factory Worker");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "user.email")).toBe("factory-worker@example.invalid");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "user.useConfigOnly")).toBe("true");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "commit.gpgSign")).toBe("false");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "tag.gpgSign")).toBe("false");
+    expect(await git(workspaceRoot, "config", "--local", "--get-all", "credential.helper")).toBe("");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "credential.interactive")).toBe("false");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "core.hooksPath")).toBe("/dev/null");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "protocol.allow")).toBe("never");
+    expect(await git(workspaceRoot, "log", "-1", "--format=%an <%ae>")).toBe("Tutorial Factory Worker <factory-worker@example.invalid>");
+    expect(await git(contentRoot, "rev-parse", "HEAD")).toBe(productHead);
+    expect(await git(contentRoot, "status", "--porcelain")).toBe("");
+  });
+
+  it("keeps useful worker commits in the live repository across reopen without running hooks or changing authored product history", async () => {
+    const contentRoot = await contentFixture();
+    await initializeProductRepository(contentRoot);
+    const authoredBefore = await snapshotAuthoredFiles(contentRoot);
+    const productHead = await git(contentRoot, "rev-parse", "HEAD");
+    const manager = await SessionWorkspaceManager.create(contentRoot);
+    const session = await manager.createSession({ id: "worker-commits" });
+    const workspaceRoot = refactorRoot(session);
+    const hookMarker = join(contentRoot, "worker-hook-ran");
+    const hook = join(workspaceRoot, ".git/hooks/pre-commit");
+    await write(hook, `#!/bin/sh\nprintf hook-ran > ${JSON.stringify(hookMarker)}\nexit 1\n`);
+    await chmod(hook, 0o755);
+
+    await write(join(workspaceRoot, "calculator/src/worker-change.ts"), "export const workerChange = true;\n");
+    await git(workspaceRoot, "add", "calculator/src/worker-change.ts");
+    await git(workspaceRoot, "commit", "-m", "Apply useful worker change");
+
+    await expect(lstat(hookMarker)).rejects.toThrow();
+    expect(await git(workspaceRoot, "log", "-1", "--format=%s|%an <%ae>")).toBe("Apply useful worker change|Tutorial Factory Worker <factory-worker@example.invalid>");
+    await expect(run("git", ["-C", workspaceRoot, "ls-remote", `file://${workspaceRoot}`])).rejects.toThrow(/transport 'file' not allowed/);
+    const commitCount = await git(workspaceRoot, "rev-list", "--count", "HEAD");
+    await expect(run("git", ["-C", workspaceRoot, "commit", "-m", "No empty pass"])).rejects.toMatchObject({ code: 1 });
+    expect(await git(workspaceRoot, "rev-list", "--count", "HEAD")).toBe(commitCount);
+
+    const reopened = await manager.reopenSession("worker-commits");
+    expect(await git(refactorRoot(reopened), "log", "-1", "--format=%s")).toBe("Apply useful worker change");
+    expect(await snapshotAuthoredFiles(contentRoot)).toEqual(authoredBefore);
+    expect(await git(contentRoot, "rev-parse", "HEAD")).toBe(productHead);
+    expect(await git(contentRoot, "status", "--porcelain")).toBe("");
   });
 
   it("rejects declared workspaces with no authored template", async () => {

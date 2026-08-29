@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -62,6 +62,18 @@ function setup(options: { initialActiveBlock?: ActiveObservedTerminalBlock } = {
   });
   return { manager, ptys, facts, active };
 }
+
+describe("workbook terminal image", () => {
+  it("installs Git without recommendations and isolates its ambient configuration", async () => {
+    const dockerfile = await readFile(resolve("docker/workbook-terminal.Dockerfile"), "utf8");
+
+    expect(dockerfile).toMatch(/apt-get install\s+--yes\s+--no-install-recommends\s+git/);
+    expect(dockerfile).toContain("rm -rf /var/lib/apt/lists/*");
+    expect(dockerfile).toMatch(/ENV GIT_CONFIG_NOSYSTEM=1/);
+    expect(dockerfile).toMatch(/ENV GIT_CONFIG_GLOBAL=\/dev\/null/);
+    expect(dockerfile).toMatch(/ENV GIT_TERMINAL_PROMPT=0/);
+  });
+});
 
 describe("WorkbookTerminalManager", () => {
   it("sanitizes control sequences and common secrets before durable terminal output", () => {

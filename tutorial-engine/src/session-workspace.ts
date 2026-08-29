@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { randomBytes as defaultRandomBytes } from "node:crypto";
 import { chmod, copyFile, lstat, mkdir, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { devNull } from "node:os";
 import { promisify } from "node:util";
 import { LESSON_WORKSPACE_PATTERN } from "./workbook/contract.js";
 import { loadWorkbook } from "./workbook/load.js";
@@ -17,6 +18,17 @@ export const LESSON_WORKSPACE_GITIGNORE_LINES = ["factory/**/.tmp/"] as const;
 
 const SESSION_ID_MAX_LENGTH = 64;
 const SKIPPED_AUTHORED_DIRECTORIES = new Set(["node_modules", ".tmp"]);
+const WORKER_REPOSITORY_GIT_CONFIG = [
+  ["user.name", "Tutorial Factory Worker"],
+  ["user.email", "factory-worker@example.invalid"],
+  ["user.useConfigOnly", "true"],
+  ["commit.gpgSign", "false"],
+  ["tag.gpgSign", "false"],
+  ["credential.helper", ""],
+  ["credential.interactive", "false"],
+  ["core.hooksPath", "/dev/null"],
+  ["protocol.allow", "never"],
+] as const;
 
 export class SessionWorkspaceError extends Error {}
 
@@ -158,8 +170,13 @@ async function validateAuthoredWorkspaceTemplate(contentRoot: string, workspaceI
   return source;
 }
 
+function isolatedGitEnvironment(): NodeJS.ProcessEnv {
+  const ambient = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")));
+  return { ...ambient, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_TERMINAL_PROMPT: "0" };
+}
+
 async function git(workspaceRoot: string, ...args: string[]): Promise<string> {
-  const result = await run("git", ["-C", workspaceRoot, ...args]);
+  const result = await run("git", ["-C", workspaceRoot, ...args], { env: isolatedGitEnvironment() });
   return result.stdout;
 }
 
@@ -191,8 +208,7 @@ async function ensureEmptyRuntimeDirectory(workspaceRoot: string, target: SafeWo
 async function initializeLiveWorkspaceRepository(workspaceRoot: string, workspaceId: string, runtimeTargets: readonly SafeWorkspaceRelativePath[] = []): Promise<void> {
   await writeFile(resolve(workspaceRoot, ".gitignore"), sessionGitignore(runtimeTargets), "utf8");
   await git(workspaceRoot, "init", "-q", "-b", "main");
-  await git(workspaceRoot, "config", "user.email", "learner@example.invalid");
-  await git(workspaceRoot, "config", "user.name", "Tutorial Learner");
+  for (const [key, value] of WORKER_REPOSITORY_GIT_CONFIG) await git(workspaceRoot, "config", "--local", key, value);
   await git(workspaceRoot, "add", "-A");
   const status = await git(workspaceRoot, "status", "--porcelain");
   if (status.trim()) await git(workspaceRoot, "commit", "-qm", `Materialize tutorial workspace ${workspaceId}`);
