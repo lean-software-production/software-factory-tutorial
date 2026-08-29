@@ -41,7 +41,120 @@ function sessionFixture(id: string): TutorialSessionPaths {
   };
 }
 
+type WorkbookCliTestDependencies = NonNullable<Parameters<typeof runWorkbookCli>[1]>;
+
+function runCli(argv: readonly string[], dependencies: WorkbookCliTestDependencies = {}) {
+  return runWorkbookCli(argv, { preflightModels: async () => undefined, ...dependencies });
+}
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
 describe("workbook CLI", () => {
+  it("does not preflight models for --help", async () => {
+    const preflightModels = vi.fn(async () => undefined);
+    const startServer = vi.fn();
+    const lines: string[] = [];
+
+    await runWorkbookCli(["--help"], {
+      preflightModels,
+      startServer,
+      writeLine: (line) => lines.push(line),
+    });
+
+    expect(preflightModels).not.toHaveBeenCalled();
+    expect(startServer).not.toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("Usage:");
+  });
+
+  it("waits for model preflight before starting the server or browser", async () => {
+    const preflight = deferred();
+    const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
+    const resolveSession = vi.fn(async () => sessionFixture("session-preflight"));
+    const spawnBrowser = vi.fn(() => ({ once: vi.fn(), unref: vi.fn() }) as any);
+    const log = { info: vi.fn(), error: vi.fn() };
+    const preflightModels = vi.fn(() => preflight.promise);
+
+    const launch = runWorkbookCli(["/tmp/workbook"], {
+      startServer,
+      resolveSession,
+      preflightModels,
+      browserCommand: () => ({ command: "open", args: ["url"] }),
+      spawnBrowser,
+      installSignalHandlers: false,
+      packageDirectory: "/pkg",
+      logger: log,
+      writeLine: () => undefined,
+    });
+    await Promise.resolve();
+
+    expect(resolveSession).toHaveBeenCalledWith("/tmp/workbook", undefined);
+    expect(preflightModels).toHaveBeenCalledWith({ contentRoot: "/content", workspaceRoot: "/content/.tutorial/session-preflight/workspace", logger: log });
+    expect(startServer).not.toHaveBeenCalled();
+    expect(spawnBrowser).not.toHaveBeenCalled();
+
+    preflight.resolve();
+    await expect(launch).resolves.toBeDefined();
+    expect(startServer).toHaveBeenCalledOnce();
+    expect(spawnBrowser).toHaveBeenCalledOnce();
+  });
+
+  it("does not print launch lines, start the server, or open the browser when preflight fails", async () => {
+    const startServer = vi.fn();
+    const spawnBrowser = vi.fn();
+    const lines: string[] = [];
+
+    await expect(runWorkbookCli(["/tmp/workbook"], {
+      startServer,
+      resolveSession: vi.fn(async () => sessionFixture("session-fails")),
+      preflightModels: vi.fn(async () => { throw new Error("Main Tutor model preflight failed: usage limit"); }),
+      browserCommand: () => ({ command: "open", args: [] }),
+      spawnBrowser: spawnBrowser as any,
+      installSignalHandlers: false,
+      packageDirectory: "/pkg",
+      logger: { info: vi.fn(), error: vi.fn() },
+      writeLine: (line) => lines.push(line),
+    })).rejects.toThrow("usage limit");
+
+    expect(startServer).not.toHaveBeenCalled();
+    expect(spawnBrowser).not.toHaveBeenCalled();
+    expect(lines).toEqual([]);
+  });
+
+  it("starts the server before spawning the browser after successful preflight", async () => {
+    const order: string[] = [];
+    const startServer = vi.fn(async (_options: WorkbookServerOptions) => {
+      order.push("server");
+      return { url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) };
+    });
+    const browserCommand = vi.fn((url: string) => {
+      order.push(`browser-command:${url}`);
+      return { command: "open", args: [url] };
+    });
+    const spawnBrowser = vi.fn(() => {
+      order.push("spawn-browser");
+      return { once: vi.fn(), unref: vi.fn() } as any;
+    });
+
+    await runWorkbookCli(["/tmp/workbook"], {
+      startServer,
+      resolveSession: vi.fn(async () => sessionFixture("session-opens")),
+      preflightModels: vi.fn(async () => { order.push("preflight"); }),
+      browserCommand,
+      spawnBrowser,
+      installSignalHandlers: false,
+      packageDirectory: "/pkg",
+      logger: { info: vi.fn(), error: vi.fn() },
+      writeLine: () => undefined,
+    });
+
+    expect(order).toEqual(["preflight", "server", "browser-command:http://127.0.0.1:4310", "spawn-browser"]);
+  });
+
   it("starts the normal launch path with the embedded terminal enabled", async () => {
     const close = vi.fn(async () => {});
     const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close }));
@@ -49,7 +162,7 @@ describe("workbook CLI", () => {
     const resolveSession = vi.fn(async () => sessionFixture("session-20260824-120000-a1b2c3d4"));
     const lines: string[] = [];
 
-    const server = await runWorkbookCli(["/tmp/workbook", "--no-open"], {
+    const server = await runCli(["/tmp/workbook", "--no-open"], {
       startServer,
       resolveSession,
       installSignalHandlers: false,
@@ -86,7 +199,7 @@ describe("workbook CLI", () => {
       runtimeProvision,
     }));
 
-    await runWorkbookCli(["/tmp/workbook", "--no-open"], {
+    await runCli(["/tmp/workbook", "--no-open"], {
       startServer,
       resolveSession,
       runtimeProvision: { mounts: [{ source: runtimeSource, target: "runtime-tools", readonly: true }] },
@@ -106,7 +219,7 @@ describe("workbook CLI", () => {
     const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
     const resolveSession = vi.fn(async () => sessionFixture("lesson-007"));
 
-    await runWorkbookCli(["/tmp/workbook", "--session", "lesson-007", "--port", "4310", "--watch", "--no-open"], {
+    await runCli(["/tmp/workbook", "--session", "lesson-007", "--port", "4310", "--watch", "--no-open"], {
       startServer,
       resolveSession,
       installSignalHandlers: false,
@@ -125,7 +238,7 @@ describe("workbook CLI", () => {
     const resolveSession = vi.fn(async () => sessionFixture("must-not-reopen"));
     const lines: string[] = [];
 
-    await runWorkbookCli(["/tmp/workbook", "--lesson=007", "--no-open"], {
+    await runCli(["/tmp/workbook", "--lesson=007", "--no-open"], {
       startServer, createLessonJumpSession, resolveSession, installSignalHandlers: false,
       packageDirectory: "/pkg", logger: { info: vi.fn(), error: vi.fn() }, writeLine: (line) => lines.push(line),
     });
@@ -141,7 +254,7 @@ describe("workbook CLI", () => {
     const mainTutor = { restore: async () => {}, reply: async () => "Continue with the active block.", review: async () => ({ outcome: "feedback" as const, message: "Try again." }), summarizeBlock: async () => "", summarizeLesson: async () => "", dispose: () => {} };
     const startServer = vi.fn(async (options: WorkbookServerOptions) => await startWorkbookServer({ ...options, webRoot: resolve(contentRoot, "web"), embeddedTerminal: false, mainTutor, practiceCoach: { assess: async () => ({ outcome: "ready" as const, text: "" }) } }));
 
-    const server = await runWorkbookCli([contentRoot, "--lesson", lesson, "--no-open"], {
+    const server = await runCli([contentRoot, "--lesson", lesson, "--no-open"], {
       startServer, installSignalHandlers: false, packageDirectory: "/pkg", logger: { info: vi.fn(), error: vi.fn() }, writeLine: () => undefined,
     });
 
@@ -162,11 +275,13 @@ describe("workbook CLI", () => {
   it("passes an explicit --session ID through to reopening and prints the reopened workspace", async () => {
     const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
     const resolveSession = vi.fn(async () => sessionFixture("lesson-007"));
+    const preflightModels = vi.fn(async () => undefined);
     const lines: string[] = [];
 
-    await runWorkbookCli(["/tmp/workbook", "--session", "lesson-007", "--no-open"], {
+    await runCli(["/tmp/workbook", "--session", "lesson-007", "--no-open"], {
       startServer,
       resolveSession,
+      preflightModels,
       installSignalHandlers: false,
       packageDirectory: "/pkg",
       logger: { info: vi.fn(), error: vi.fn() },
@@ -174,6 +289,7 @@ describe("workbook CLI", () => {
     });
 
     expect(resolveSession).toHaveBeenCalledWith("/tmp/workbook", "lesson-007");
+    expect(preflightModels).toHaveBeenCalledWith(expect.objectContaining({ contentRoot: "/content", workspaceRoot: "/content/.tutorial/lesson-007/workspace" }));
     expect(startServer).toHaveBeenCalledWith(expect.objectContaining({
       target: "/content",
       session: sessionFixture("lesson-007"),
@@ -190,7 +306,7 @@ describe("workbook CLI", () => {
     const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
     const lines: string[] = [];
 
-    await runWorkbookCli([contentRoot, "--session", "resume-me", "--no-open"], {
+    await runCli([contentRoot, "--session", "resume-me", "--no-open"], {
       startServer,
       installSignalHandlers: false,
       packageDirectory: "/pkg",
@@ -211,7 +327,7 @@ describe("workbook CLI", () => {
     const startServer = vi.fn(async (_options: WorkbookServerOptions) => ({ url: "http://127.0.0.1:4310", port: 4310, host: "127.0.0.1", close: vi.fn(async () => {}) }));
     const lines: string[] = [];
 
-    await runWorkbookCli([contentRoot, "--no-open"], {
+    await runCli([contentRoot, "--no-open"], {
       startServer,
       installSignalHandlers: false,
       packageDirectory: "/pkg",

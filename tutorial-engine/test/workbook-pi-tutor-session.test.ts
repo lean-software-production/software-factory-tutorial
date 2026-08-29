@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import {
   createResilientTutorSession,
   type PiTutorSession,
@@ -67,13 +67,26 @@ test("retries an assistant terminal provider error twice, then returns its next 
   expect(logs.errors.join("\n")).not.toContain("private learner prompt");
 });
 
-test("rejects with the terminal error after the third failed attempt", async () => {
+test("rejects with the terminal error after the third failed attempt by default", async () => {
   const session = fakeSession([assistantError("fetch failed"), assistantError("fetch failed"), assistantError("fetch failed")]);
   const logs = logger();
 
   await expect(createResilientTutorSession(session, logs.log, "Workbook tutor", { wait: async () => {} }).prompt("message"))
     .rejects.toThrow("fetch failed");
   expect(session.prompts).toHaveLength(3);
+});
+
+test("honours a one-attempt preflight prompt without waiting", async () => {
+  const session = fakeSession([assistantError("usage limit")]);
+  const logs = logger();
+  const wait = vi.fn(async () => {});
+
+  await expect(createResilientTutorSession(session, logs.log, "Workbook tutor", { attempts: 1, wait }).prompt("message"))
+    .rejects.toThrow("usage limit");
+
+  expect(session.prompts).toEqual(["message"]);
+  expect(wait).not.toHaveBeenCalled();
+  expect(logs.errors).toContain("Workbook tutor prompt failed (attempt 1/1; anthropic/claude): usage limit");
 });
 
 test("redacts a learner prompt echoed by rejected provider errors from logs but preserves it in the final error", async () => {

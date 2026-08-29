@@ -9,10 +9,12 @@ import { SessionWorkspaceError, SessionWorkspaceManager, type TutorialSessionPat
 import { startWorkbookServer, type StartedWorkbookServer, type WorkbookServerOptions } from "./server.js";
 import { trustRuntimeProvision, type RuntimeProvisionProfile, type TrustedRuntimeProvision } from "./runtime-provision.js";
 import { initializeLessonJump, LessonJumpError, loadAndResolveLessonJump } from "./lesson-jump.js";
+import { WorkbookModelPreflightError, preflightWorkbookModels, type WorkbookModelPreflightOptions } from "./model-preflight.js";
 
 type BrowserCommand = (url: string) => { command: string; args: string[] };
 type BrowserSpawner = typeof spawn;
 type SignalInstaller = Pick<NodeJS.Process, "once">;
+type WorkbookModelPreflight = (options: WorkbookModelPreflightOptions) => Promise<unknown>;
 
 export interface WorkbookCliDependencies {
   startServer?: (options: WorkbookServerOptions) => Promise<StartedWorkbookServer>;
@@ -23,6 +25,7 @@ export interface WorkbookCliDependencies {
   packageDirectory?: string;
   runtimeProvision?: RuntimeProvisionProfile;
   logger?: TutorialLogger;
+  preflightModels?: WorkbookModelPreflight;
   writeLine?: (message: string) => void;
   signalTarget?: SignalInstaller;
   installSignalHandlers?: boolean;
@@ -74,6 +77,8 @@ export async function runWorkbookCli(argv: readonly string[], dependencies: Work
   const session = parsed.options.lesson
     ? (runtimeProvision ? await createJump(parsed.options.target, parsed.options.lesson, runtimeProvision) : await createJump(parsed.options.target, parsed.options.lesson))
     : (runtimeProvision ? await resolveSession(parsed.options.target, parsed.options.session, runtimeProvision) : await resolveSession(parsed.options.target, parsed.options.session));
+  const preflightModels = dependencies.preflightModels ?? preflightWorkbookModels;
+  await preflightModels({ contentRoot: session.contentRoot, workspaceRoot: session.workspaceRoot, logger: log });
   for (const line of sessionLaunchLines(session, parsed.options.session !== undefined, parsed.options.lesson)) writeLine(line);
   const server = await startServer({ target: session.contentRoot, session, port: parsed.options.port, host: parsed.options.host, webRoot: resolve(packageDirectory, "dist/web-workbook"), logger: log, embeddedTerminal: true, watchContent: parsed.options.watch });
   if (!parsed.options.noOpen) {
@@ -98,7 +103,7 @@ async function main(): Promise<void> { await runWorkbookCli(process.argv.slice(2
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : undefined;
 if (invokedPath && resolve(fileURLToPath(import.meta.url)) === invokedPath) {
   main().catch((error) => {
-    console.error(error instanceof ArgumentError || error instanceof SessionWorkspaceError || error instanceof LessonJumpError ? `${error.message}\n${USAGE.replace("tutorial-engine", "tutorial-workbook")}` : error);
+    console.error(error instanceof ArgumentError || error instanceof SessionWorkspaceError || error instanceof LessonJumpError ? `${error.message}\n${USAGE.replace("tutorial-engine", "tutorial-workbook")}` : error instanceof WorkbookModelPreflightError ? error.message : error);
     process.exitCode = 1;
   });
 }

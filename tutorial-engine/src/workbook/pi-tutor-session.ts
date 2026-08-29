@@ -25,9 +25,10 @@ export interface ResilientTutorSession {
 
 export interface ResilientTutorSessionOptions {
   wait?: (milliseconds: number) => Promise<void>;
+  attempts?: number;
 }
 
-const attempts = 3;
+const DEFAULT_PROMPT_ATTEMPTS = 3;
 
 function defaultWait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, milliseconds); });
@@ -75,16 +76,18 @@ export function createResilientTutorSession<Event>(
   options: ResilientTutorSessionOptions = {}
 ): ResilientTutorSession {
   const wait = options.wait ?? defaultWait;
+  const maxAttempts = options.attempts ?? DEFAULT_PROMPT_ATTEMPTS;
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) throw new Error("Tutor session attempts must be a positive integer.");
   return {
     async prompt(prompt: string): Promise<string> {
-      for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         try {
           return await promptOnce(session, prompt);
         } catch (error) {
           const reason = errorReason(error);
           const logReason = redactPromptFromLog(reason, prompt);
-          log.error(`${label} prompt failed (attempt ${attempt}/${attempts}; ${session.state.model.provider}/${session.state.model.id}): ${logReason}`);
-          if (attempt === attempts) throw error instanceof Error ? error : new Error(reason);
+          log.error(`${label} prompt failed (attempt ${attempt}/${maxAttempts}; ${session.state.model.provider}/${session.state.model.id}): ${logReason}`);
+          if (attempt === maxAttempts) throw error instanceof Error ? error : new Error(reason);
           await wait(attempt * 250);
         }
       }

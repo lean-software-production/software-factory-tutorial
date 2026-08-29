@@ -5,6 +5,8 @@ export const PRACTICE_COACH_MODEL_ENV = "PRACTICE_COACH_MODEL";
 
 /** Pi chooses its configured default when no usable tutor model is requested. */
 export interface TutorModelChoice extends Partial<ScopedModel> {
+  /** The configured model that matched the environment request, even when not usable for selection. */
+  requestedModel?: ScopedModel["model"];
   warning?: string;
 }
 
@@ -14,9 +16,9 @@ function resolveConfiguredTutorModel(modelRuntime: ModelRuntime, requested: stri
   const resolved = resolveCliModel({ cliModel: wanted, modelRuntime });
   if (!resolved.model) return { warning: `${envName}="${wanted}" did not match a model (${resolved.error ?? "no match"}); letting Pi choose.` };
   if (!modelRuntime.hasConfiguredAuth(resolved.model.provider)) {
-    return { warning: `${envName}="${wanted}" matched ${resolved.model.provider}/${resolved.model.id}, which has no configured auth; letting Pi choose.` };
+    return { requestedModel: resolved.model, warning: `${envName}="${wanted}" matched ${resolved.model.provider}/${resolved.model.id}, which has no configured auth; letting Pi choose.` };
   }
-  return { model: resolved.model, thinkingLevel: resolved.thinkingLevel, warning: resolved.warning };
+  return { model: resolved.model, requestedModel: resolved.model, thinkingLevel: resolved.thinkingLevel, warning: resolved.warning };
 }
 
 export function resolveTutorModel(modelRuntime: ModelRuntime, requested: string | undefined): TutorModelChoice {
