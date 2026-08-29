@@ -865,6 +865,49 @@ describe("workbook browser API", () => {
     } finally { await secondServer.close(); }
   });
 
+  it("omits an old-session finished command from ordinary chat when finished evidence is missing or inconsistent", async () => {
+    for (const scenario of ["missing", "inconsistent"] as const) {
+      const dir = await fixture();
+      const oldPty = new ServerFakePty(false);
+      const firstTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+      const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => oldPty, mainTutor: firstTutor, practiceCoach: new FakePracticeCoach() });
+      const blockId = "lesson--001-first--run-supplied-command";
+      const staleCommand = `printf stale-old-finished-${scenario}-context`;
+      try {
+        await introduceAndOpenEditor(firstServer.url);
+        await acceptEditor(firstServer.url, firstTutor);
+        const ws = await connect(firstServer.url, firstServer.url);
+        oldPty.data?.(bashCommandMarker(staleCommand));
+        ws.send(JSON.stringify({ type: "input", data: `${staleCommand}\r` }));
+        await waitForWorkbookState(firstServer.url, () => oldPty.writes.includes(`${staleCommand}\r`), "terminal input to reach the pty");
+        oldPty.data?.(`stale-finished-output\r\n${bashFinishedMarker(7)}`);
+        const records = await waitForPrivateTimeline(dir, (latest) => latest.some((record) => record.type === "terminal-command-finished"), "old finished command evidence");
+        const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished")!;
+        const evidence = new TerminalEvidenceRepository({ stateRoot: tutorialStatePath(dir) });
+        const evidencePath = resolve(evidence.evidenceDirectory, `${finished.evidenceRef}.json`);
+        if (scenario === "missing") await rm(evidencePath);
+        else await writeFile(evidencePath, `${JSON.stringify({ kind: "finished", command: "tampered command", exitStatus: 0, interactions: [{ kind: "output", data: "tampered output" }] })}\n`, "utf8");
+        ws.close();
+      } finally { await firstServer.close(); }
+
+      const newPty = new ServerFakePty(false);
+      const secondTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+      const secondServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => newPty, mainTutor: secondTutor, practiceCoach: new FakePracticeCoach() });
+      try {
+        const ws = await connect(secondServer.url, secondServer.url);
+        newPty.data?.(`fresh-${scenario}-session-output\r\n`);
+
+        const response = await postMessage(secondServer.url, { blockId, text: `What does the terminal show after the ${scenario} stale evidence?` });
+        expect(response.status).toBe(202);
+        const replyContext = secondTutor.replies.at(-1)!.activeContext as any;
+        expect(replyContext.terminal).toMatchObject({ transcript: expect.stringContaining(`fresh-${scenario}-session-output`) });
+        expect(replyContext.terminal.latestCommand).toBeUndefined();
+        expect(JSON.stringify(await response.json())).not.toMatch(/fresh-missing-session-output|fresh-inconsistent-session-output|stale-old-finished|tampered output|workbook-command|evidenceRef|attemptId/);
+        ws.close();
+      } finally { await secondServer.close(); }
+    }
+  });
+
   it("gives ordinary Main Tutor chat private active terminal context for a running command only", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty(false);
