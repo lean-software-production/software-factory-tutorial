@@ -160,7 +160,7 @@ function syntheticHtml(): string {
   </style>
 </head>
 <body>
-  <div class="chrome"><strong>Workbook factory synthetic contract</strong></div>
+  <div class="chrome"><strong>Workbook UX synthetic contract</strong></div>
   <div class="viewport"><div class="content" id="content">${syntheticRows()}</div></div>
   ${markerHtml({ phase: 'settled', stepId: 0 })}
   <script>

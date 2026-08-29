@@ -47,7 +47,7 @@ export async function runWorkbookFactory(options: WorkbookFactoryRunOptions = {}
     await record({ runRoot, analyze: true, headless: options.headless });
     const contractFailures = await deterministicContractFailures(runRoot);
     if (contractFailures.length > 0) {
-      throw new Error(`Workbook factory deterministic artifact contract failed:\n${contractFailures.map((failure) => ` - ${failure}`).join('\n')}`);
+      throw new Error(`Workbook UX deterministic artifact contract failed:\n${contractFailures.map((failure) => ` - ${failure}`).join('\n')}`);
     }
     deterministicPassed = true;
     stations.push(station('record-and-deterministic-analysis', 'passed', recordStationStartedAt, recordStationStartMs));
@@ -122,7 +122,7 @@ function parseCliOptions(argv: readonly string[]): WorkbookFactoryRunOptions {
       printHelp();
       process.exit(0);
     } else {
-      throw new Error(`Unknown workbook factory option: ${arg}`);
+      throw new Error(`Unknown workbook UX test option: ${arg}`);
     }
   }
 
@@ -178,13 +178,13 @@ function serializeError(error: unknown): SerializedError {
 }
 
 function printHelp(): void {
-  console.log(`Usage: tsx test/workbook-factory/run.mts [--ai|--no-ai] [--headed] [--run-root=PATH] [--ai-command=pi] [--ai-model=MODEL] [--ai-timeout-ms=MS]\n\nRuns the linear workbook factory: checked-out engine input -> provider-free fixture walkthrough/WebM -> deterministic decoded-WebM analysis -> optional advisory pi review -> durable report.\n\nExit is nonzero only when the recording/deterministic station fails. AI unavailability or findings never gate exit.`);
+  console.log(`Usage: tsx test/workbook-factory/run.mts [--ai|--no-ai] [--headed] [--run-root=PATH] [--ai-command=pi] [--ai-model=MODEL] [--ai-timeout-ms=MS]\n\nRuns the workbook UX test: checked-out engine input -> provider-free fixture walkthrough/WebM -> deterministic decoded-WebM analysis -> optional advisory pi review -> durable report.\n\nExit is nonzero only when the recording/deterministic station fails. AI unavailability or findings never gate exit.`);
 }
 
 if (basename(process.argv[1] ?? '') === 'run.mts') {
   runWorkbookFactory(parseCliOptions(process.argv.slice(2))).then((result) => {
-    console.log(`Workbook factory report: ${result.reportPath}`);
-    console.log(`Workbook factory result: ${result.resultPath}`);
+    console.log(`Workbook UX test report: ${result.reportPath}`);
+    console.log(`Workbook UX test result: ${result.resultPath}`);
     if (result.ai?.status === 'unavailable') console.log(`AI review unavailable: ${result.ai.reason}`);
     process.exitCode = result.exitCode;
   }).catch((error) => {

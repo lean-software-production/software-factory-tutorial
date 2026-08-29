@@ -656,7 +656,7 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
     if (server) await server.close().catch(() => undefined);
   }
 
-  if (!videoPath) throw new Error("Playwright did not produce a workbook factory video.");
+  if (!videoPath) throw new Error("Playwright did not produce a workbook UX test video.");
   walkthrough.videoPath = videoPath;
 
   let analysis: AnalyzerReport | undefined;
@@ -700,8 +700,8 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
   await writeFile(resolve(runRoot, WALKTHROUGH_PATH), JSON.stringify(walkthrough, null, 2));
   const failures = [...walkthrough.semanticFailures, ...(analysis?.findings.map((finding) => `${finding.code}${finding.stepId === undefined ? "" : ` step ${finding.stepId}`}: ${finding.message}`) ?? [])];
   if (failures.length > 0) {
-    await writeFile(resolve(runRoot, "recording-error.json"), JSON.stringify({ at: isoNow(), message: "Workbook factory deterministic run failed.", failures, walkthrough }, null, 2));
-    throw new Error(`Workbook factory deterministic run failed:\n${failures.map((failure) => ` - ${failure}`).join("\n")}`);
+    await writeFile(resolve(runRoot, "recording-error.json"), JSON.stringify({ at: isoNow(), message: "Workbook UX deterministic run failed.", failures, walkthrough }, null, 2));
+    throw new Error(`Workbook UX deterministic run failed:\n${failures.map((failure) => ` - ${failure}`).join("\n")}`);
   }
 
   return { runRoot, videoPath, walkthroughPath: resolve(runRoot, WALKTHROUGH_PATH), analysis, walkthrough };
@@ -716,7 +716,7 @@ function parseCliOptions(argv: readonly string[]): WorkbookFactoryRecorderOption
 
 if (basename(process.argv[1] ?? "") === "record.mts") {
   recordWorkbookFactory(parseCliOptions(process.argv.slice(2))).then((result) => {
-    console.log(`Workbook factory recording complete: ${result.videoPath}`);
+    console.log(`Workbook UX test recording complete: ${result.videoPath}`);
     console.log(`Walkthrough: ${result.walkthroughPath}`);
     if (result.analysis) console.log(`Analysis: ${resolve(result.runRoot, "analysis/motion.json")}`);
   }).catch((error) => {

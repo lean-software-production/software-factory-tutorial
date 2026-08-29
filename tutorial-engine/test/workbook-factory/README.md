@@ -1,6 +1,6 @@
-# Workbook UX video factory
+# Workbook UX video test
 
-This directory contains the linear workbook UX factory. It never calls production providers during recording. The optional AI station runs only after deterministic checks pass and is advisory.
+This directory contains the linear workbook UX test family. It never calls production providers during recording. The optional AI station runs only after deterministic checks pass and is advisory.
 
 ## Station graph
 
@@ -20,15 +20,15 @@ Input checked-out tutorial-engine version → copied fixture workbook → provid
 From the repository root:
 
 ```bash
-npm run --workspace=tutorial-engine test:video-analyser
-npm run --workspace=tutorial-engine factory:workbook:record
-npm run --workspace=tutorial-engine factory:workbook:deterministic
-npm run --workspace=tutorial-engine factory:workbook
+npm run --workspace=tutorial-engine test:workbook-ux:analyser
+npm run --workspace=tutorial-engine test:workbook-ux:record
+npm run --workspace=tutorial-engine test:workbook-ux:deterministic
+npm run --workspace=tutorial-engine test:workbook-ux
 ```
 
-- `factory:workbook:record` records only and preserves the pre-existing command contract.
-- `factory:workbook:deterministic` runs the linear factory without AI and exits nonzero only if recording semantics or deterministic analyzer findings fail.
-- `factory:workbook` runs the full linear factory with `--ai`. AI findings or AI unavailability never gate exit.
+- `test:workbook-ux:record` records only and preserves the recording-only command contract.
+- `test:workbook-ux:deterministic` runs the linear UX test without AI and exits nonzero only if recording semantics or deterministic analyzer findings fail.
+- `test:workbook-ux` runs the full UX test with `--ai`. AI findings or AI unavailability never gate exit.
 
 Useful direct CLI options:
 
@@ -60,15 +60,15 @@ The deterministic recorder/analyzer is authoritative. Its semantic failures and 
 
 ## Periodic invocation example
 
-Run the non-AI factory before cutting a tutorial-engine change, and optionally run the full advisory version during a weekly visual-health sweep:
+Run the non-AI workbook UX test before cutting a tutorial-engine change, and optionally run the full advisory version during a weekly visual-health sweep:
 
 ```bash
-npm run --workspace=tutorial-engine factory:workbook:deterministic
-npm run --workspace=tutorial-engine factory:workbook || true  # inspect report.md if AI is quota-limited/unavailable
+npm run --workspace=tutorial-engine test:workbook-ux:deterministic
+npm run --workspace=tutorial-engine test:workbook-ux || true  # inspect report.md if AI is quota-limited/unavailable
 ```
 
 No scheduled CI job is installed yet.
 
 ## Synthetic analyzer contract
 
-`npm run --workspace=tutorial-engine test:video-analyser` records a synthetic workbook-like page and verifies stable analyzer finding code/step pairs for deliberate failures. It uses pinned Playwright Chromium, the shared marker protocol, and no ffmpeg/ffprobe, sidecar motion telemetry, pixel-golden baseline, internet access, or AI calls. Leading/trailing invalid marker samples are counted but tolerated outside the valid marker envelope; invalid marker gaps inside the envelope fail closed.
+`npm run --workspace=tutorial-engine test:workbook-ux:analyser` records a synthetic workbook-like page and verifies stable analyzer finding code/step pairs for deliberate failures. It uses pinned Playwright Chromium, the shared marker protocol, and no ffmpeg/ffprobe, sidecar motion telemetry, pixel-golden baseline, internet access, or AI calls. Leading/trailing invalid marker samples are counted but tolerated outside the valid marker envelope; invalid marker gaps inside the envelope fail closed.

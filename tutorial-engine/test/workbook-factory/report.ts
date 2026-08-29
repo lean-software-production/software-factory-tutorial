@@ -160,7 +160,7 @@ function renderMarkdownReport(args: {
   aiReviewText: string;
 }): string {
   const lines: string[] = [];
-  lines.push('# Workbook factory report', '');
+  lines.push('# Workbook UX test report', '');
   lines.push(`Generated: ${args.finishedAt}`);
   lines.push(`Run root: ${args.runRoot}`);
   lines.push(`Deterministic verdict: **${args.result.deterministicVerdict.toUpperCase()}**`);
