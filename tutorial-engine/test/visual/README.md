@@ -5,7 +5,7 @@ These are approval tests. Each `.approved.png` is the blessed rendering; a faili
 
 ## Approve from the devcontainer, not your host
 
-**Environment: the image built from `.devcontainer/Dockerfile`. Approved 2026-08-28.**
+**Devcontainer image/environment approved 2026-08-28: the image built from `.devcontainer/Dockerfile`.**
 
 The previous set was approved from an unrecorded environment, and nothing else could reproduce it —
 every screenshot failed by 1.5–5.3% against a 0.5% budget, on any commit, including the one they
@@ -26,6 +26,11 @@ Layout, not typography as a learner sees it. The workbook server runs in the con
 learner's browser runs on their own machine, so what a learner sees depends on their OS. These
 shots exist to catch the band geometry regressing — at rest versus expanded, the composer capping
 at its maximum height, the feedback strip welded to the terminal's bottom edge.
+
+The band approvals pin only the visible `main` canvas, from its left edge to the viewport right.
+They deliberately exclude the sticky lesson rail, which is not part of the band affordance, and they
+neutralize `main`'s decorative notebook grid so unrelated document height changes cannot move the
+grid phase and fail an otherwise unchanged band.
 
 `.embedded-terminal` and `.cm-editor` are masked magenta: xterm's canvas and CodeMirror's caret do
 not reproduce deterministically.

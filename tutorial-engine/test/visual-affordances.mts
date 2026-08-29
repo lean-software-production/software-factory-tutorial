@@ -247,10 +247,12 @@ async function main(): Promise<void> {
         }
       }
 
-      // Shoot the whole page, not just the band: the affordance is how wide the band sits relative
-      // to the column around it, which a crop of the band's own interior cannot show. Both work
-      // surfaces are masked — xterm's canvas and CodeMirror's caret and selection do not reproduce
-      // between runs — which leaves the band's own chrome, including its welded feedback.
+      // Shoot the visible main canvas, not just the band: the affordance is how wide the band sits
+      // relative to the column around it, which a crop of the band's own interior cannot show. The
+      // lesson rail is outside this affordance, and Chromium can incompletely capture its sticky
+      // descendants immediately after a deep scroll, so including it would approve compositor noise.
+      // Both work surfaces are masked — xterm's canvas and CodeMirror's caret and selection do not
+      // reproduce between runs — which leaves the band's own chrome, including its welded feedback.
       const masked = page.locator(".embedded-terminal, .cm-editor");
       // The band focuses its work surface when it scrolls into view, and :focus-within paints a
       // ring. Whether that has landed by the time the shot is taken depends on how the scroll
@@ -260,7 +262,17 @@ async function main(): Promise<void> {
       const shoot = async () => {
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.());
         await page.waitForTimeout(80);
-        return page.screenshot({ mask: [masked] });
+        const clip = await page.evaluate(() => {
+          const main = document.querySelector("main") as HTMLElement | null;
+          if (!main) throw new Error("Cannot screenshot the band without a main canvas");
+          const rect = main.getBoundingClientRect();
+          const x = Math.max(0, Math.round(rect.left));
+          const y = 0;
+          const width = Math.max(1, Math.round(window.innerWidth - x));
+          const height = Math.max(1, Math.round(window.innerHeight));
+          return { x, y, width, height };
+        });
+        return page.screenshot({ clip, mask: [masked] });
       };
       await at(320);
       await approve(page, `${label}-band-at-rest`, await shoot());
@@ -269,6 +281,11 @@ async function main(): Promise<void> {
     };
 
     // ---- Affordance 4: the editor rides the same band, and wears the same feedback ------------
+    // The band approvals are about the band's geometry inside the main canvas, not about the
+    // decorative notebook grid. The grid is anchored to the document, so unrelated content above
+    // the practice can require a different absolute scrollY to put the same band at the same
+    // viewport position, shifting the 25px grid phase while the band geometry remains correct.
+    const bandGridNeutralizer = await page.addStyleTag({ content: "main { background-image: none !important; }" });
     if (promoted) {
       const editorReached = await page.waitForFunction(() => document.querySelector('.current-activity-band[data-activity-type="editor-practice"]') !== null, undefined, { timeout: 10_000 })
         .then(() => true)
@@ -324,6 +341,7 @@ async function main(): Promise<void> {
         }
       }
     }
+    await bandGridNeutralizer.evaluate((style: HTMLElement) => style.remove());
 
     // ---- Affordance 3: the composer grows with the draft, then caps and scrolls ---------------
     const composer = page.locator(".timeline-composer-textarea");
