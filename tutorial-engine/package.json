@@ -25,6 +25,7 @@
     "browser:install": "playwright install chromium",
     "browser:install:ci": "playwright install --with-deps chromium",
     "browser:smoke": "tsx test/browser-smoke.mts",
+    "test:visual": "node scripts/test-visual.mjs",
     "check": "npm run lint && tsc --noEmit && tsc -p tsconfig.check.json && npm run check:eval && npm run test && npm run build:web:workbook && npm run browser:smoke",
     "postinstall": "node scripts/fix-node-pty-helper.mjs",
     "prepublishOnly": "npm run build && npm run check",
