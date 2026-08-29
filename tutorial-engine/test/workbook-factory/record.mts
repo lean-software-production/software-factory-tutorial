@@ -20,6 +20,8 @@ const VIEWPORT = { width: 1280, height: 900 } as const;
 const VIDEO_PATH = "walkthrough.webm";
 const WALKTHROUGH_PATH = "walkthrough.json";
 const INPUT_METADATA_PATH = "input-metadata.json";
+export const REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX = 20;
+export const REAL_JOURNEY_MIN_REQUIRED_MOTION_PX = 12;
 const GEOMETRY_TARGETS: Record<WorkbookFactoryGeometryState, { naturalTop: number; minExpand: number; maxExpand: number }> = {
   small: { naturalTop: 285, minExpand: 0, maxExpand: 0.08 },
   mid: { naturalTop: 130, minExpand: 0.25, maxExpand: 0.75 },
@@ -466,12 +468,21 @@ function assertCheckpointGeometry(checkpoint: SemanticCheckpoint, failures: stri
   if (checkpoint.feedback && !checkpoint.feedback.safeRegion.unoccluded) failures.push(`${checkpoint.name}: feedback is occluded at representative points (${JSON.stringify(checkpoint.feedback.safeRegion.occlusionChecks)}).`);
 }
 
+export function assertRealJourneyMotionThresholdCalibration(): void {
+  // The real workbook journey's mid-to-full expansion produces a smaller visible translation than
+  // synthetic fixtures. A scenario floor of 12px remains well above zero/static codec noise while
+  // staying below the semantic browser-scroll floor that makes a checkpoint motion-required.
+  if (REAL_JOURNEY_MIN_REQUIRED_MOTION_PX <= 0 || REAL_JOURNEY_MIN_REQUIRED_MOTION_PX >= REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX) {
+    throw new Error(`Real journey motion threshold ${REAL_JOURNEY_MIN_REQUIRED_MOTION_PX}px must be > 0 and < semantic scroll delta ${REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX}px.`);
+  }
+}
+
 function assertRequiredScrollTelemetry(checkpoint: SemanticCheckpoint, failures: string[]): void {
   if (!checkpoint.requiredMotion) return;
   const scrollDelta = Math.abs(checkpoint.after.scrollY - checkpoint.before.scrollY);
   const expandDelta = Math.abs(checkpoint.after.expand - checkpoint.before.expand);
   if (checkpoint.kind !== "scroll") failures.push(`${checkpoint.name}: required-motion checkpoint is not a scroll step.`);
-  if (scrollDelta < 20 && expandDelta < 0.2) failures.push(`${checkpoint.name}: required scroll telemetry did not move enough (scroll delta ${scrollDelta}, expand delta ${expandDelta}).`);
+  if (scrollDelta < REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX && expandDelta < 0.2) failures.push(`${checkpoint.name}: required scroll telemetry did not move enough (scroll delta ${scrollDelta}, expand delta ${expandDelta}).`);
 }
 
 async function copyFixture(runRoot: string): Promise<string> {
@@ -493,6 +504,7 @@ async function finalizeVideo(page: Page | undefined, context: BrowserContext | u
 }
 
 export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOptions = {}): Promise<WorkbookFactoryRecorderResult> {
+  assertRealJourneyMotionThresholdCalibration();
   const runRoot = options.runRoot ? resolve(options.runRoot) : RUN_ROOT;
   await rm(runRoot, { recursive: true, force: true });
   await mkdir(resolve(runRoot, "analysis"), { recursive: true });
@@ -651,6 +663,7 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
       sampleHz: 11,
       roi: { x: 360, y: 90, width: 720, height: 700 },
       maxMotionWidth: 240,
+      thresholds: { minRequiredMotionPx: REAL_JOURNEY_MIN_REQUIRED_MOTION_PX },
     });
     const segmentStepIds = analysis.segments.map((segment) => segment.stepId);
     const missingSegmentIds = REQUIRED_STATE_CHECKPOINT_STEP_IDS.filter((stepId) => !segmentStepIds.includes(stepId));

@@ -3,6 +3,7 @@ import { TerminalShellProtocol } from "../../src/workbook/terminal-shell-protoco
 import { ProtocolAwareFakePty } from "./fake-pty.js";
 import { REQUIRED_MOTION_STEP_IDS, REQUIRED_STATE_CHECKPOINT_STEP_IDS, SCROLL_CHECKPOINT_STEP_IDS, WORKBOOK_FACTORY_STEP_LIST } from "./steps.js";
 import { encodeStepBits } from "./marker-protocol.js";
+import { assertRealJourneyMotionThresholdCalibration, REAL_JOURNEY_MIN_REQUIRED_MOTION_PX, REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX } from "./record.mjs";
 
 describe("protocol-aware fake PTY", () => {
   it("frames typed characters as authoritative workbook command and finished markers", () => {
@@ -25,6 +26,12 @@ describe("protocol-aware fake PTY", () => {
 });
 
 describe("workbook factory marker declarations", () => {
+  it("keeps the real journey video motion floor below semantic scroll motion", () => {
+    expect(() => assertRealJourneyMotionThresholdCalibration()).not.toThrow();
+    expect(REAL_JOURNEY_MIN_REQUIRED_MOTION_PX).toBeGreaterThan(0);
+    expect(REAL_JOURNEY_MIN_REQUIRED_MOTION_PX).toBeLessThan(REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX);
+  });
+
   it("use unique marker ids and keep feedback and required scroll phases separate", () => {
     const ids = WORKBOOK_FACTORY_STEP_LIST.map((step) => step.id);
     expect(new Set(ids).size).toBe(ids.length);
