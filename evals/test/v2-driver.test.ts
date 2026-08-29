@@ -157,13 +157,22 @@ describe("v2 workbook driver", () => {
       const initial = await driver.readState("initial");
       expect(initial.introductionComplete).toBe(false);
 
+      const orientationId = "lesson--001-live-session--orientation";
+      const editorPracticeId = "lesson--001-live-session--editor-practice";
+
       const introduced = await driver.completeIntroduction();
-      expect(introduced.progress.activeBlockId).toBe("lesson--001-live-session--orientation");
-      expect(introduced.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["lesson--001-live-session--orientation"]);
+      expect(introduced.progress.activeBlockId).toBe(orientationId);
+      expect(introduced.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual([orientationId, editorPracticeId]);
+      expect(introduced.readyBlockIds).toEqual([editorPracticeId]);
+      expect(introduced.renderedBlockIds).toEqual(expect.arrayContaining([orientationId, editorPracticeId]));
+      expect(introduced.revealedBlockIds).toContain(orientationId);
+      expect(introduced.revealedBlockIds).not.toContain(editorPracticeId);
+      expect(introduced.progress.blocks.find((block: any) => block.id === orientationId)).toMatchObject({ active: true, completed: false, ready: false, emerged: true, workAccepted: true });
+      expect(introduced.progress.blocks.find((block: any) => block.id === editorPracticeId)).toMatchObject({ active: false, completed: false, ready: true, emerged: true, workAccepted: false });
 
       const continued = await driver.continueBlock("orientation");
-      expect(continued.progress.activeBlockId).toBe("lesson--001-live-session--editor-practice");
-      expect(continued.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual(["lesson--001-live-session--orientation", "lesson--001-live-session--editor-practice"]);
+      expect(continued.progress.activeBlockId).toBe(editorPracticeId);
+      expect(continued.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual([orientationId, editorPracticeId]);
       expect(trace.publicStates.map((state) => state.label)).toEqual(["initial", "introduction", "introduction:structural:part--evaluator", "introduction:structural:lesson--001-live-session", "continue:orientation"]);
       expect(JSON.stringify(trace)).not.toContain('"tutor"');
     } finally {
