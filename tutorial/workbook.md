@@ -3,6 +3,7 @@ parts:
   - id: what-is-a-factory
     lessons:
       - what-is-a-factory
+      - your-first-factory
   - id: validation-loop
     lessons:
       - 001-run-an-agent-headlessly
