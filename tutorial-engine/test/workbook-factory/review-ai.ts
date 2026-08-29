@@ -52,7 +52,7 @@ export interface ExecFileRunResult {
 
 export type ExecFileRunner = (command: string, args: string[], options: ExecFileRunOptions) => Promise<ExecFileRunResult>;
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_MAX_BUFFER = 4 * 1024 * 1024;
 const MAX_FRAME_ATTACHMENTS = 8;
 const PROMPT_TEMPLATE_PATH = new URL('./review-ai-prompt.md', import.meta.url);

@@ -35,7 +35,7 @@ Useful direct CLI options:
 ```bash
 tsx test/workbook-factory/run.mts --no-ai --run-root=test/.tmp/workbook-factory/manual
 tsx test/workbook-factory/run.mts --ai --headed
-tsx test/workbook-factory/run.mts --ai --ai-command=/path/to/pi --ai-model='provider/model' --ai-timeout-ms=120000
+tsx test/workbook-factory/run.mts --ai --ai-command=/path/to/pi --ai-model='provider/model' --ai-timeout-ms=180000
 ```
 
 ## Artifact contract
