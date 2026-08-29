@@ -30,6 +30,11 @@ async function replaceWithEscapingSymlink(target: string, outsideSecret: string)
   await symlink(outsideSecret, target);
 }
 
+async function restoreInsideFile(target: string): Promise<void> {
+  await rm(target, { force: true });
+  await writeFile(target, "inside restored\n", "utf8");
+}
+
 describe("WorkspaceBoundary read races", () => {
   it("does not leak outside contents when the resolved pathname is swapped before the read opens it", async () => {
     const { workspace, target, outsideSecret } = await fixture();
@@ -59,18 +64,36 @@ describe("WorkspaceBoundary read races", () => {
     const originalResolve = WorkspaceBoundary.prototype.resolve;
     let resolveCount = 0;
     vi.spyOn(WorkspaceBoundary.prototype, "resolve").mockImplementation(async function (this: WorkspaceBoundary, rawPath: string, forWrite?: boolean) {
-      if (rawPath === "race.txt" && !forWrite && resolveCount === 1) {
-        await rm(target, { force: true });
-        await writeFile(target, "inside restored\n", "utf8");
-      }
+      if (rawPath === "race.txt" && !forWrite && resolveCount === 1) await restoreInsideFile(target);
       const resolved = await originalResolve.call(this, rawPath, forWrite);
-      if (rawPath === "race.txt" && !forWrite && resolveCount === 0) {
-        await replaceWithEscapingSymlink(target, outsideSecret);
-      }
+      if (rawPath === "race.txt" && !forWrite && resolveCount === 0) await replaceWithEscapingSymlink(target, outsideSecret);
       if (rawPath === "race.txt" && !forWrite) resolveCount += 1;
       return resolved;
     });
 
     await expect(boundary.readFile("race.txt")).rejects.toThrow(/changed|outside|stable/i);
+  });
+
+  it("does not validate an escaping descriptor through a pathname swapped between resolve and stat", async () => {
+    const { workspace, target, outsideSecret } = await fixture();
+    const boundary = await WorkspaceBoundary.create(workspace);
+    const originalResolve = WorkspaceBoundary.prototype.resolve;
+    let resolveCount = 0;
+    vi.spyOn(WorkspaceBoundary.prototype, "resolve").mockImplementation(async function (this: WorkspaceBoundary, rawPath: string, forWrite?: boolean) {
+      if (rawPath === "race.txt" && !forWrite && resolveCount > 0) await restoreInsideFile(target);
+      const resolved = await originalResolve.call(this, rawPath, forWrite);
+      if (rawPath === "race.txt" && !forWrite) {
+        await replaceWithEscapingSymlink(target, outsideSecret);
+        resolveCount += 1;
+      }
+      return resolved;
+    });
+
+    const result = await boundary.readFile("race.txt").then(
+      (buffer) => buffer.toString("utf8"),
+      (error: unknown) => error instanceof Error ? error.message : String(error)
+    );
+
+    expect(result).not.toContain("outside secret");
   });
 });

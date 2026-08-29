@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { access, lstat, mkdir, open, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
@@ -38,6 +39,17 @@ export interface WorkspaceToolBoundary {
 }
 
 type FileVersion = Awaited<ReturnType<typeof stat>>;
+type FileIdentity = Pick<FileVersion, "dev" | "ino">;
+type WorkspaceFileHandle = Awaited<ReturnType<typeof open>>;
+
+// Node 24 exposes O_NOFOLLOW, but not macOS's stronger whole-path flag.
+// <sys/fcntl.h> defines this value on the supported macOS host runtime.
+const MACOS_O_NOFOLLOW_ANY = 0x20000000;
+const LINUX_DESCRIPTOR_PATH = "/proc/self/fd";
+
+function sameFileIdentity(left: FileIdentity, right: FileIdentity): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
 
 function sameFileVersion(left: FileVersion, right: FileVersion): boolean {
   return left.dev === right.dev
@@ -47,6 +59,26 @@ function sameFileVersion(left: FileVersion, right: FileVersion): boolean {
     && left.ctimeMs === right.ctimeMs;
 }
 
+function workspaceSegments(relativePath: string): string[] {
+  if (relativePath === ".") return [];
+  const segments = relativePath.split("/");
+  if (segments.some((segment) => !segment || segment === "." || segment === ".." || segment.includes("\0"))) throw new Error("Path is outside the tutorial workspace.");
+  return segments;
+}
+
+function linuxDescriptorChildPath(fd: number, segment: string): string {
+  return `${LINUX_DESCRIPTOR_PATH}/${fd}/${segment}`;
+}
+
+function errorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : undefined;
+}
+
+function isSymlinkTraversalError(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "ELOOP" || code === "ENOTDIR";
+}
+
 /**
  * Resolves every path through the real workspace root. This is deliberately a
  * filesystem boundary, not a prompt convention: absolute paths, `..`, and
@@ -54,11 +86,15 @@ function sameFileVersion(left: FileVersion, right: FileVersion): boolean {
  */
 export class WorkspaceBoundary {
   readonly #root: string;
+  readonly #rootIdentity: FileIdentity;
 
-  private constructor(root: string) { this.#root = root; }
+  private constructor(root: string, rootIdentity: FileIdentity) { this.#root = root; this.#rootIdentity = rootIdentity; }
 
   static async create(workspace: string): Promise<WorkspaceBoundary> {
-    return new WorkspaceBoundary(await realpath(workspace));
+    const root = await realpath(workspace);
+    const rootInfo = await stat(root);
+    if (!rootInfo.isDirectory()) throw new Error("Workspace root must be a directory.");
+    return new WorkspaceBoundary(root, rootInfo);
   }
 
   get root(): string { return this.#root; }
@@ -89,22 +125,14 @@ export class WorkspaceBoundary {
 
   async readFile(path: string): Promise<Buffer> {
     const safePath = await this.resolve(path);
-    const handle = await open(safePath.absolute, "r");
+    const handle = await this.openWorkspaceFileNoSymlinks(safePath.relative);
     try {
       const opened = await handle.stat();
       if (!opened.isFile()) throw new Error("Path is not a regular file.");
 
-      const currentPath = await this.resolve(path);
-      const current = await stat(currentPath.absolute);
-      if (!sameFileVersion(opened, current)) throw new Error("File changed while reading; retry after it is stable.");
-
       const buffer = await handle.readFile();
       const afterRead = await handle.stat();
       if (!sameFileVersion(opened, afterRead)) throw new Error("File changed while reading; retry after it is stable.");
-
-      const finalPath = await this.resolve(path);
-      const final = await stat(finalPath.absolute);
-      if (!sameFileVersion(opened, final)) throw new Error("File changed while reading; retry after it is stable.");
       return buffer;
     } finally {
       await handle.close();
@@ -152,6 +180,64 @@ export class WorkspaceBoundary {
         current = parent;
       }
     }
+  }
+
+  private async openWorkspaceFileNoSymlinks(relativePath: string): Promise<WorkspaceFileHandle> {
+    try {
+      if (process.platform === "darwin") return await this.openDarwinWorkspaceFileNoSymlinks(relativePath);
+      if (process.platform === "linux") return await this.openLinuxWorkspaceFileNoSymlinks(relativePath);
+      throw new Error(`Race-safe workspace reads are not supported on ${process.platform}.`);
+    } catch (error) {
+      if (isSymlinkTraversalError(error)) throw new Error("Path is outside the tutorial workspace or uses a symlink.");
+      throw error;
+    }
+  }
+
+  private async openDarwinWorkspaceFileNoSymlinks(relativePath: string): Promise<WorkspaceFileHandle> {
+    // macOS provides O_NOFOLLOW_ANY, which makes the kernel reject a symlink in
+    // any component of this canonical absolute path at open time. That closes
+    // the resolve-to-open/stat swap without exposing extra tutor capabilities.
+    try {
+      return await open(this.absolutePathFromRelative(relativePath), constants.O_RDONLY | MACOS_O_NOFOLLOW_ANY);
+    } catch (error) {
+      if (errorCode(error) === "EINVAL") throw new Error("Race-safe workspace reads require macOS O_NOFOLLOW_ANY support.");
+      throw error;
+    }
+  }
+
+  private async openLinuxWorkspaceFileNoSymlinks(relativePath: string): Promise<WorkspaceFileHandle> {
+    // Node/libuv do not expose openat(2). On Linux, /proc/self/fd/<dirfd>/<name>
+    // gives us descriptor-relative traversal; opening one segment at a time with
+    // O_NOFOLLOW means a racing symlink is either rejected by the kernel or is
+    // never traversed outside the already-opened trusted directory descriptor.
+    const segments = workspaceSegments(relativePath);
+    let directory: WorkspaceFileHandle | undefined = await open(this.#root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try {
+      const rootInfo = await directory.stat();
+      if (!rootInfo.isDirectory() || !sameFileIdentity(rootInfo, this.#rootIdentity)) throw new Error("Workspace root changed; retry after it is stable.");
+      if (segments.length === 0) {
+        const root = directory;
+        directory = undefined;
+        return root;
+      }
+      for (const segment of segments.slice(0, -1)) {
+        const next = await open(linuxDescriptorChildPath(directory.fd, segment), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+        await directory.close();
+        directory = next;
+      }
+      const last = segments.at(-1)!;
+      const file = await open(linuxDescriptorChildPath(directory.fd, last), constants.O_RDONLY | constants.O_NOFOLLOW);
+      await directory.close();
+      directory = undefined;
+      return file;
+    } finally {
+      if (directory) await directory.close();
+    }
+  }
+
+  private absolutePathFromRelative(relativePath: string): string {
+    const segments = workspaceSegments(relativePath);
+    return segments.length === 0 ? this.#root : resolve(this.#root, ...segments);
   }
 }
 
