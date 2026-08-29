@@ -12,7 +12,7 @@ Input checked-out tutorial-engine version → copied fixture workbook → provid
    - `RecordingPracticeCoach` for terminal feedback;
    - a protocol-aware fake PTY that accepts xterm keystrokes, emits visible output and OSC-633 workbook markers, and never runs shell commands.
 3. **Deterministic analysis** — the analyzer decodes the recorded WebM in Chromium, reads only the test marker embedded in the video, checks required scroll motion, and writes `analysis/motion.json`, selected evidence frames, and `analysis/contact-sheet.png`.
-4. **Optional advisory AI** — `review-ai.ts` invokes `pi` with `execFile`, `-p -nt --no-session`, and `@...` attachments for the contact sheet, decoded frames, provider-safe `ai-walkthrough-summary.json`, and `analysis/motion.json`. It asks only for UX/scroll glitch observations and requires `@needs-human` evidence citations. Missing/quota-limited/nonzero/timeout/empty/thrown AI output is reported as unavailable and never changes the exit code.
+4. **Optional advisory AI** — `review-ai.ts` invokes `pi` with `execFile`, `-p -nt --no-session --thinking low`, and `@...` attachments for the contact sheet, decoded frames, provider-safe `ai-walkthrough-summary.json`, and `analysis/motion.json`. It asks only for UX/scroll glitch observations and requires `@needs-human` evidence citations. Missing/quota-limited/nonzero/timeout/empty/thrown AI output is reported as unavailable and never changes the exit code.
 5. **Report** — `report.ts` always writes `report.md` and `factory-result.json`, even when recording or deterministic analysis throws. The report renders whatever metadata, screenshot, video, walkthrough, analyzer, and AI artifacts exist.
 
 ## Commands

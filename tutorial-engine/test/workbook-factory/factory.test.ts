@@ -130,10 +130,11 @@ describe('workbook factory report', () => {
 });
 
 describe('workbook factory AI review', () => {
-  it('builds pi args with no tools/session and evidence attachments', () => {
+  it('builds pi args with no tools/session, low thinking, and evidence attachments', () => {
     const args = buildPiArgs({ attachments: ['analysis/contact-sheet.png', 'ai-walkthrough-summary.json', 'analysis/motion.json', 'analysis/frame.png'], prompt: 'review' });
 
-    expect(args).toEqual(expect.arrayContaining(['-p', '-nt', '--no-session', '@analysis/contact-sheet.png', '@ai-walkthrough-summary.json', '@analysis/motion.json', '@analysis/frame.png', 'review']));
+    expect(args.slice(0, 5)).toEqual(['-p', '-nt', '--no-session', '--thinking', 'low']);
+    expect(args).toEqual(expect.arrayContaining(['@analysis/contact-sheet.png', '@ai-walkthrough-summary.json', '@analysis/motion.json', '@analysis/frame.png', 'review']));
   });
 
   it('captures nonzero pi as unavailable while preserving stdout/stderr artifacts', async () => {
@@ -147,7 +148,8 @@ describe('workbook factory AI review', () => {
     const result = await runAiReview({ runRoot, command: 'fake-pi', execFileRunner: runner });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.args).toEqual(expect.arrayContaining(['-p', '-nt', '--no-session', '@analysis/contact-sheet.png', '@ai-walkthrough-summary.json', '@analysis/motion.json']));
+    expect(calls[0]?.args.slice(0, 5)).toEqual(['-p', '-nt', '--no-session', '--thinking', 'low']);
+    expect(calls[0]?.args).toEqual(expect.arrayContaining(['@analysis/contact-sheet.png', '@ai-walkthrough-summary.json', '@analysis/motion.json']));
     expect(calls[0]?.args).not.toContain('@walkthrough.json');
     expect(result.status).toBe('unavailable');
     expect(result.reason).toContain('nonzero');

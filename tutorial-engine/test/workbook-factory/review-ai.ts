@@ -140,7 +140,7 @@ export async function runAiReview(options: AiReviewOptions): Promise<AiReviewRes
 }
 
 export function buildPiArgs(options: { model?: string; attachments: string[]; prompt: string }): string[] {
-  const args = ['-p', '-nt', '--no-session'];
+  const args = ['-p', '-nt', '--no-session', '--thinking', 'low'];
   if (options.model) args.push('--model', options.model);
   args.push(...options.attachments.map((attachment) => `@${attachment}`));
   args.push(options.prompt);
