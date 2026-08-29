@@ -22,13 +22,13 @@ describe("projectTerminalAttempts", () => {
     events.push(finished());
     expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "checking" });
 
-    events.push(record({ type: "terminal-feedback-recorded", attemptId: "attempt-1", text: "Fix the path." }, 3));
-    const feedback = projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block");
+    const feedbackEvents = [...events, record({ type: "terminal-feedback-recorded", attemptId: "attempt-1", text: "Fix the path." }, 3)];
+    const feedback = projectTerminalAttempts(feedbackEvents, reader(finalEvidence), "terminal-1").get("block");
     expect(feedback).toEqual({ state: "feedback", feedback: "Fix the path." });
     expect(JSON.stringify(feedback)).not.toMatch(/attempt|command|evidence|rubric|handoff/i);
 
-    events.push(record({ type: "terminal-coach-handoff-recorded", attemptId: "attempt-1", outcome: "ready", text: "Ready for Main Tutor review." }, 4));
-    events.push(record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Accepted." }, 5));
+    events.push(record({ type: "terminal-coach-handoff-recorded", attemptId: "attempt-1", outcome: "ready", text: "Ready for Main Tutor review." }, 3));
+    events.push(record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Accepted." }, 4));
     expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "complete", successMessage: "Accepted." });
   });
 
@@ -41,7 +41,7 @@ describe("projectTerminalAttempts", () => {
     expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running" });
   });
 
-  it("requires a prior positive Coach handoff before terminal acceptance can complete", () => {
+  it("requires a prior positive Coach handoff and no final feedback before terminal acceptance can complete", () => {
     const events: WorkbookTimelineRecord[] = [
       submitted(),
       finished(),
@@ -53,8 +53,17 @@ describe("projectTerminalAttempts", () => {
     events.push(record({ type: "terminal-coach-handoff-recorded", attemptId: "attempt-1", outcome: "interesting", text: "Worth Main Tutor review." }, 4));
     expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "checking" });
 
-    events.push(record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Accepted after handoff." }, 5));
-    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "complete", successMessage: "Accepted after handoff." });
+    events.push(record({ type: "terminal-feedback-recorded", attemptId: "attempt-1", text: "Review is temporarily unavailable. Run the command again." }, 5));
+    events.push(record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Late acceptance after feedback." }, 6));
+    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "feedback", feedback: "Review is temporarily unavailable. Run the command again." });
+
+    const acceptedEvents: WorkbookTimelineRecord[] = [
+      submitted(),
+      finished(),
+      record({ type: "terminal-coach-handoff-recorded", attemptId: "attempt-1", outcome: "interesting", text: "Worth Main Tutor review." }, 3),
+      record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Accepted after handoff." }, 4),
+    ];
+    expect(projectTerminalAttempts(acceptedEvents, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "complete", successMessage: "Accepted after handoff." });
   });
 
   it("drops stale model output when a newer Bash command is current", () => {
