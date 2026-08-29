@@ -356,13 +356,32 @@ function editorStatusText(state: BlockProgress | undefined, completed: boolean):
 
 function editorProgressIn(next: State, blockId: string): BlockProgress | undefined { return next.progress.blocks.find((block) => block.id === blockId); }
 
-function EditorPracticeBlockView({ block, state, refresh }: { block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void }) {
+type EditorLocalRevisionHandler = (blockId: string, revision: number) => void;
+
+function stateLagsLocalEditorRevision(next: State, localRevisions: ReadonlyMap<string, number>): boolean {
+  for (const [blockId, localRevision] of localRevisions) {
+    const progress = editorProgressIn(next, blockId);
+    if (progress && (progress.revision ?? 0) < localRevision) return true;
+  }
+  return false;
+}
+
+function clearSatisfiedLocalEditorRevisions(next: State, localRevisions: Map<string, number>): void {
+  for (const [blockId, localRevision] of localRevisions) {
+    const progress = editorProgressIn(next, blockId);
+    if (progress && (progress.revision ?? 0) >= localRevision) localRevisions.delete(blockId);
+  }
+}
+
+function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void; onLocalRevision?: EditorLocalRevisionHandler }) {
   const editorElement = useRef<HTMLDivElement | null>(null);
   const editor = useRef<EditorView | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const activeRef = useRef(false);
   const baseRevision = useRef(state?.revision ?? 0);
   const latestSubmittedRevision = useRef(state?.revision ?? 0);
+  const pendingDraftRevision = useRef(state?.revision ?? 0);
+  const latestDraftGeneration = useRef(0);
   const [localError, setLocalError] = useState<string>();
   const [retainedFeedback, setRetainedFeedback] = useState<string | undefined>(state?.checkpoint?.feedback);
   const accepted = state?.checkpoint?.status === "accepted";
@@ -397,20 +416,24 @@ function EditorPracticeBlockView({ block, state, refresh }: { block: EditorPract
     const parent = editorElement.current;
     const scheduleReview = (text: string) => {
       if (!activeRef.current) return;
+      const revision = Math.max(baseRevision.current, latestSubmittedRevision.current) + 1;
+      pendingDraftRevision.current = revision;
+      const generation = latestDraftGeneration.current + 1;
+      latestDraftGeneration.current = generation;
+      onLocalRevision?.(block.id, revision);
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => {
-        if (!activeRef.current) return;
-        const revision = baseRevision.current + 1;
+        if (!activeRef.current || pendingDraftRevision.current !== revision || latestDraftGeneration.current !== generation) return;
         baseRevision.current = revision;
         latestSubmittedRevision.current = revision;
         setLocalError(undefined);
         postEditorDraft(block.id, revision, text).then((next) => {
-          if (latestSubmittedRevision.current !== revision) return;
+          if (latestSubmittedRevision.current !== revision || pendingDraftRevision.current !== revision || latestDraftGeneration.current !== generation) return;
           const returnedRevision = editorProgressIn(next, block.id)?.revision;
           if (returnedRevision !== undefined && returnedRevision < revision) return;
           refresh(next);
         }).catch((error) => {
-          if (latestSubmittedRevision.current !== revision) return;
+          if (latestSubmittedRevision.current !== revision || pendingDraftRevision.current !== revision || latestDraftGeneration.current !== generation) return;
           console.error(error);
           const message = error instanceof Error ? error.message : "Editor review failed.";
           setLocalError(`${message} Please retry after your connection recovers.`);
@@ -435,7 +458,7 @@ function EditorPracticeBlockView({ block, state, refresh }: { block: EditorPract
       view.destroy();
       if (editor.current === view) editor.current = null;
     };
-  }, [block.id, canEdit, refresh]);
+  }, [block.id, canEdit, onLocalRevision, refresh]);
 
   // One channel, as the terminal has: whatever the learner most needs to read sits welded to the
   // bottom of the work surface. Prior actionable feedback stays in place during replacement review;
@@ -460,11 +483,11 @@ function EditorPracticeBlockView({ block, state, refresh }: { block: EditorPract
   </div>;
 }
 
-export function BlockView({ lessonId, block, progress, refresh, onTerminalInsertionChange }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+export function BlockView({ lessonId, block, progress, refresh, onTerminalInsertionChange, onEditorLocalRevision }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onEditorLocalRevision?: EditorLocalRevisionHandler }) {
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
   if (block.type === "terminal-practice") return <TerminalBlock block={block} state={state} onTerminalInsertionChange={onTerminalInsertionChange} />;
-  if (block.type === "editor-practice") return <EditorPracticeBlockView key={block.id} block={block} state={state} refresh={refresh} />;
+  if (block.type === "editor-practice") return <EditorPracticeBlockView key={block.id} block={block} state={state} refresh={refresh} onLocalRevision={onEditorLocalRevision} />;
   return null;
 }
 
@@ -636,10 +659,21 @@ export function App() {
   const scrollCompletionPending = useRef(false);
   const sseStateRequestSequence = useRef(0);
   const initialAnchorReconciled = useRef(false);
+  const localEditorRevisions = useRef(new Map<string, number>());
+  const rememberEditorLocalRevision = useCallback<EditorLocalRevisionHandler>((blockId, revision) => {
+    if (revision > (localEditorRevisions.current.get(blockId) ?? 0)) localEditorRevisions.current.set(blockId, revision);
+  }, []);
+  const applyWorkbookState = useCallback((next: State) => {
+    setState((current) => {
+      if (stateLagsLocalEditorRevision(next, localEditorRevisions.current)) return current ?? next;
+      clearSatisfiedLocalEditorRevisions(next, localEditorRevisions.current);
+      return next;
+    });
+  }, []);
   const registerTerminalInsertion = useCallback((blockId: string, insertCommand: (() => void) | undefined) => {
     setTerminalInsertion((current) => insertCommand ? { blockId, insertCommand } : current?.blockId === blockId ? undefined : current);
   }, []);
-  useEffect(() => { readWorkbookState().then(setState).catch((error) => console.error(error)); }, []);
+  useEffect(() => { readWorkbookState().then(applyWorkbookState).catch((error) => console.error(error)); }, [applyWorkbookState]);
   const hasInitialState = Boolean(state);
   useEffect(() => {
     if (!hasInitialState || typeof EventSource === "undefined") return;
@@ -649,7 +683,7 @@ export function App() {
       readWorkbookState().then((next) => {
         if (requestSequence !== sseStateRequestSequence.current) return;
         if (options.contentReload) setContentReloadError(undefined);
-        setState(next);
+        applyWorkbookState(next);
       }).catch((error) => {
         if (requestSequence !== sseStateRequestSequence.current) return;
         console.error(error);
@@ -668,7 +702,7 @@ export function App() {
       }
     });
     return () => events.close();
-  }, [hasInitialState]);
+  }, [applyWorkbookState, hasInitialState]);
   const workbookTitle = state?.workbook.title;
   useEffect(() => { if (workbookTitle) document.title = workbookTitle; }, [workbookTitle]);
   useEffect(() => {
@@ -705,13 +739,13 @@ export function App() {
       if (top > READING_LINE_TOP_PX || scrollCompletionPending.current) return;
       scrollCompletionPending.current = true;
       completeBlockRequest(activeId).then((result) => {
-        setState(stateFromCompletion(result));
+        applyWorkbookState(stateFromCompletion(result));
         const target = navigationTargetFrom(result);
         if (target) replaceUrlAnchor(target);
       }).catch((error) => {
         scrollCompletionPending.current = false;
         console.error(error);
-        readWorkbookState().then((next) => { if (next.progress.completedBlocks?.includes(activeId)) setState(next); }).catch(() => undefined);
+        readWorkbookState().then((next) => { if (next.progress.completedBlocks?.includes(activeId)) applyWorkbookState(next); }).catch(() => undefined);
       });
     };
     const observer = new IntersectionObserver(([entry]) => {
@@ -727,7 +761,7 @@ export function App() {
       removeEventListener("scroll", checkReadySuccessorPosition);
       removeEventListener("resize", checkReadySuccessorPosition);
     };
-  }, [readySuccessorAnchorId, runwayActiveBlockId, runwayWorkbookComplete]);
+  }, [applyWorkbookState, readySuccessorAnchorId, runwayActiveBlockId, runwayWorkbookComplete]);
   useEffect(() => {
     if (!state) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -756,11 +790,11 @@ export function App() {
   const sendTutorText = (text: string) => {
     if (state.introductionComplete && activeBlock?.type === "reflection") {
       const turns = state.progress.reflectionConversations[activeBlock.id] ?? [];
-      return post(activeBlock.id, { action: turns.length > 0 ? "reflection-follow-up" : "reflection-submit", response: text }).then((next) => setState(stateFromCompletion(next)));
+      return post(activeBlock.id, { action: turns.length > 0 ? "reflection-follow-up" : "reflection-submit", response: text }).then((next) => applyWorkbookState(stateFromCompletion(next)));
     }
     const before = state.progress.activeBlockId;
     return postTutorMessage(state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID, text, state.introductionComplete ? blockInView() : undefined).then((next) => {
-      setState(next);
+      applyWorkbookState(next);
       if (next.progress.activeBlockId !== before || next.progress.workbookComplete && !state.progress.workbookComplete) requestAnimationFrame(() => navigateToAnchor(next.progress.activeAnchorId ?? next.progress.activeBlockId, "push"));
     });
   };
@@ -774,7 +808,7 @@ export function App() {
     const blockProgress = state.progress.blocks.find((block) => block.id === record.blockId);
     const recordIsActive = record.blockId === effectiveActiveBlockId && (record.lessonId === effectiveActiveLessonId || effectiveActiveBlockId.includes("--"));
     if (recordIsActive && activeContinuationEligible && effectiveActiveBlockProgress) {
-      return <ContinueControls block={activeContinueBlock} state={effectiveActiveBlockProgress} refresh={setState} label={continueLabelFor(state, effectiveActiveBlockId)} />;
+      return <ContinueControls block={activeContinueBlock} state={effectiveActiveBlockProgress} refresh={applyWorkbookState} label={continueLabelFor(state, effectiveActiveBlockId)} />;
     }
     if (!recordIsActive && blockProgress?.completed) return <ContinuationPageBreak completedAt={blockProgress.completedAt} />;
     return null;
@@ -784,7 +818,7 @@ export function App() {
     <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
-      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} renderTerminalHistory={(record) => <TerminalHistory state={state.progress.blocks.find((block) => block.id === record.blockId)} />} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand key={activitySource.block.id} lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
+      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => applyWorkbookState(next))} onDoItForMe={terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} renderTerminalHistory={(record) => <TerminalHistory state={state.progress.blocks.find((block) => block.id === record.blockId)} />} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand key={activitySource.block.id} lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={applyWorkbookState} onTerminalInsertionChange={registerTerminalInsertion} onEditorLocalRevision={rememberEditorLocalRevision} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => applyWorkbookState(next))} />} />
     </article></main>
   </div>;
 }

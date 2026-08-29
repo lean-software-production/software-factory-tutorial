@@ -50,12 +50,13 @@ function documentTopFromLayout(element: HTMLElement) {
  * The only live practice surface. Its sticky wrapper lets the learner refer to the
  * activity while the durable conversation scrolls below it.
  */
-export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTerminalInsertionChange }: {
+export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTerminalInsertionChange, onEditorLocalRevision }: {
   lessonId: string;
   activeBlock: Block;
   progress: Progress;
   refresh(state: State): void;
   onTerminalInsertionChange?(blockId: string, insertCommand: (() => void) | undefined): void;
+  onEditorLocalRevision?(blockId: string, revision: number): void;
 }) {
   const bandRef = useRef<HTMLElement | null>(null);
   const focusedForBlock = useRef<string | undefined>(undefined);
@@ -143,7 +144,7 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, onTermi
 
   return <>
     <section ref={bandRef} className="current-activity-band" data-activity-type={activeBlock.type} data-activity-layout="scroll-linked" data-activity-preloaded={readyTerminalPreload ? "true" : undefined} aria-label="Activity">
-      <BlockView lessonId={lessonId} block={activeBlock} progress={progress} refresh={refresh} onTerminalInsertionChange={forwardTerminalInsertion} />
+      <BlockView lessonId={lessonId} block={activeBlock} progress={progress} refresh={refresh} onTerminalInsertionChange={forwardTerminalInsertion} onEditorLocalRevision={onEditorLocalRevision} />
     </section>
   </>;
 }

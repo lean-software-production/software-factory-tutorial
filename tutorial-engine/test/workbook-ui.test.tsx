@@ -418,6 +418,51 @@ describe("workbook lesson UI", () => {
     expect(container.textContent).not.toContain("Older tutor review that must not win.");
   });
 
+  it("ignores stale editor SSE state that accepts a draft after the learner has typed a newer one", async () => {
+    vi.useFakeTimers();
+    FakeEventSource.reset();
+    const editorLesson = { ...lesson, blocks: [editorBlock] } as Lesson;
+    const editorChapter = { ...chapter(), lesson: editorLesson } as Chapter & { lesson: Lesson };
+    const initialState = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [editorChapter],
+      progress: activeEditorProgress({ revision: 0, draftText: "" } as any),
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Edit the answer" }],
+    } as State;
+    const firstReviewState = { ...initialState, progress: activeEditorProgress({ revision: 1, draftText: "submitted draft", editorStatus: "reviewing", checkpoint: { status: "reviewing", evidence: { kind: "editor", text: "submitted draft" } } } as any) } as State;
+    const staleAcceptedState = { ...initialState, progress: activeEditorProgress({ revision: 1, draftText: "submitted draft", editorStatus: "unlocked", completed: true, checkpoint: { status: "accepted", successMessage: "Old draft accepted.", evidence: { kind: "editor", text: "submitted draft" } } } as any) } as State;
+    let stateFetches = 0;
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL, _init?: RequestInit) => {
+      if (String(input).endsWith("api/workbook/editor")) return { ok: true, json: async () => firstReviewState };
+      expect(String(input)).toMatch(/api\/workbook\/state$/);
+      stateFetches += 1;
+      return { ok: true, json: async () => stateFetches === 1 ? initialState : staleAcceptedState };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", FakeEventSource as any);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+    const events = FakeEventSource.instances[0]!;
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+
+    editor.textContent = "submitted draft";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); vi.advanceTimersByTime(750); await Promise.resolve(); await Promise.resolve(); });
+    expect(JSON.parse(String(fetchMock.mock.calls.find(([url]) => String(url).endsWith("api/workbook/editor"))![1]!.body))).toMatchObject({ revision: 1, text: "submitted draft" });
+
+    editor.textContent = "unsent newer draft";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); vi.advanceTimersByTime(749); await Promise.resolve(); });
+    await act(async () => { events.emit("state", { blockId: editorBlock.id, revision: 1 }); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(container.querySelector("[role='textbox'][contenteditable='true']")).toBe(editor);
+    expect(editor.textContent).toBe("unsent newer draft");
+    expect(container.textContent).not.toContain("Old draft accepted.");
+    expect(container.textContent).not.toContain("Accepted revision unlocked the next step.");
+  });
+
   it("falls back to the active anchor without a modal when the URL anchor is no longer valid", async () => {
     const { completedState } = scrollPromotionFixture();
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => completedState }));
@@ -1106,6 +1151,46 @@ describe("workbook lesson UI", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
     const refreshedEditorBlock = (refresh.mock.calls[0]![0] as State).progress.blocks.find((candidate) => candidate.id === "edit-answer");
     expect(refreshedEditorBlock?.checkpoint?.feedback).toBe("New feedback.");
+  });
+
+  it("ignores an in-flight editor response after a local edit before the next debounce fires", async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn();
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    const fetchMock = vi.fn((_input?: RequestInfo | URL, _init?: RequestInit) => fetchMock.mock.calls.length === 1 ? first.promise : second.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: "" } as any), refresh }));
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+
+    editor.textContent = "submitted draft";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); vi.advanceTimersByTime(750); await Promise.resolve(); });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toMatchObject({ revision: 1, text: "submitted draft" });
+
+    editor.textContent = "unsent newer draft";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); vi.advanceTimersByTime(749); await Promise.resolve(); });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      first.resolve({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, editorStatus: "unlocked", completed: true, checkpoint: { status: "accepted", successMessage: "Old draft accepted.", evidence: { kind: "editor", text: "submitted draft" } } } as any)) } as Response);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(container.querySelector("[role='textbox'][contenteditable='true']")).toBe(editor);
+    expect(editor.textContent).toBe("unsent newer draft");
+
+    await act(async () => { vi.advanceTimersByTime(1); await Promise.resolve(); });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]![1]!.body))).toMatchObject({ revision: 2, text: "unsent newer draft" });
+    await act(async () => {
+      second.resolve({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 2, editorStatus: "feedback", checkpoint: { status: "feedback", feedback: "Review of newer draft.", evidence: { kind: "editor", text: "unsent newer draft" } } } as any)) } as Response);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    const refreshedEditorBlock = (refresh.mock.calls[0]![0] as State).progress.blocks.find((candidate) => candidate.id === "edit-answer");
+    expect(refreshedEditorBlock?.revision).toBe(2);
+    expect(refreshedEditorBlock?.checkpoint?.feedback).toBe("Review of newer draft.");
   });
 
   it("retains previous editor feedback with a retry status when a resubmission transport fails", async () => {

@@ -81,7 +81,7 @@ function publicCheckpoint(attempt: Attempt | undefined, projected: AcceptedCheck
     const evidence = publicAttemptEvidence(attempt);
     if (attempt.status === "accepted") return projected ? { status: "accepted", successMessage: attempt.successMessage ?? projected.summary, evidence } : { status: "reviewing", evidence };
     if (attempt.evidence.kind === "editor" && attempt.status === "reviewing" && attempt.retainedFeedback) return { status: "reviewing", feedback: attempt.retainedFeedback, reviewNotice: "Updating feedback…", evidence };
-    if (attempt.evidence.kind === "editor" && attempt.status === "feedback" && attempt.retainedFeedback && attempt.feedback === REVIEW_FAILURE_FEEDBACK) return { status: "feedback", feedback: attempt.retainedFeedback, reviewNotice: REVIEW_FAILURE_FEEDBACK, evidence };
+    if (attempt.evidence.kind === "editor" && attempt.status === "feedback" && attempt.retainedFeedback && attempt.reviewUnavailable) return { status: "feedback", feedback: attempt.retainedFeedback, reviewNotice: attempt.feedback ?? REVIEW_FAILURE_FEEDBACK, evidence };
     return { status: attempt.status, feedback: attempt.status === "feedback" ? attempt.feedback : undefined, evidence };
   }
   return projected ? { status: "accepted", successMessage: projected.summary, evidence: { kind: projected.kind } } : undefined;

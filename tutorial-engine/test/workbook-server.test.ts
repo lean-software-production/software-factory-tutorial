@@ -703,7 +703,8 @@ describe("workbook browser API", () => {
   it("retains prior editor feedback while a newer review is pending and when that provider fails", async () => {
     const { dir, session } = await sessionFixture();
     const providerFailure = deferred<TutorDecision>();
-    const tutor = new FakeMainTutor({ outcome: "feedback", message: "Mention the factory acceptance marker." }, providerFailure.promise);
+    const nextPendingReview = deferred<TutorDecision>();
+    const tutor = new FakeMainTutor({ outcome: "feedback", message: "Mention the factory acceptance marker." }, providerFailure.promise, nextPendingReview.promise);
     const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: tutor, practiceCoach: new FakePracticeCoach() });
     try {
       await introduceAndOpenEditor(server.url);
@@ -721,6 +722,13 @@ describe("workbook browser API", () => {
       expect(block(failed, "edit-answer")?.checkpoint?.feedback).toBe("Mention the factory acceptance marker.");
       expect(block(failed, "edit-answer")?.checkpoint?.status).toBe("feedback");
       expect(block(failed, "edit-answer")?.checkpoint?.reviewNotice).toMatch(/try another attempt/i);
+
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", revision: 3, text: "third draft" })).status).toBe(202);
+      const pendingAfterFailure = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.revision === 3 && block(next, "edit-answer")?.checkpoint?.status === "reviewing", "third editor review pending after failure");
+      expect(block(pendingAfterFailure, "edit-answer")?.checkpoint?.feedback).toBe("Mention the factory acceptance marker.");
+      expect(block(pendingAfterFailure, "edit-answer")?.checkpoint?.reviewNotice).toMatch(/updating feedback/i);
+      expect(block(pendingAfterFailure, "edit-answer")?.checkpoint?.feedback).not.toMatch(/temporarily unavailable/i);
+      nextPendingReview.resolve({ outcome: "feedback", message: "Now mention the marker and batch size." });
     } finally { await server.close(); }
   });
 
