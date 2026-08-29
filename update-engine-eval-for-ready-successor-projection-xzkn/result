@@ -1,0 +1,1 @@
+Merged as e2b4118 via implementation 24f7197. Evaluator now asserts orientation active/revealed and editor-practice ready/rendered but unrevealed. Post-merge: 63 eval tests and eval TypeScript check pass.
