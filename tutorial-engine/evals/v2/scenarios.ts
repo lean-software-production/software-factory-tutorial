@@ -1,4 +1,4 @@
-import { readWorkbookTimeline, snapshotArtifacts } from "./session.js";
+import { projectV2JudgeTrace, readWorkbookTimeline, snapshotArtifacts } from "./session.js";
 import { createV2WorkbookDriver, type V2WorkbookDriver } from "./driver.js";
 import type { EvaluationWorkspace, V2ArtifactSnapshot, V2SessionTrace } from "./types.js";
 
@@ -284,14 +284,20 @@ function editorUnlocked(trace: V2SessionTrace): V2GateAssertion {
   const legacyPassed = legacyUnlock?.revisionId === 1 && legacyUnlock.path === "editor-artifacts/evaluator-editor.txt";
   const attemptPassed = Boolean(acceptedAttempt && recordedUnlockedRevision && promotedArtifact);
   const passed = completed && (legacyPassed || attemptPassed);
-  const detail = legacyUnlock ? `revision=${legacyUnlock.revisionId}, path=${legacyUnlock.path}, completed=${completed}` : `accepted=${Boolean(acceptedAttempt)}, revision=${recordedUnlockedRevision}, artifact=${promotedArtifact}, completed=${completed}`;
+  const detail = legacyUnlock ? `legacyUnlock=${Boolean(legacyUnlock)}, expectedRevision=${legacyUnlock.revisionId === 1}, expectedPath=${legacyUnlock.path === "editor-artifacts/evaluator-editor.txt"}, completed=${completed}` : `accepted=${Boolean(acceptedAttempt)}, revision=${recordedUnlockedRevision}, artifact=${promotedArtifact}, completed=${completed}`;
   return { name: "editor unlocked", passed, detail };
 }
 
 function publicStateClean(trace: V2SessionTrace): V2GateAssertion {
-  const serialized = JSON.stringify(trace);
-  const leaked = /"tutor"\s*:|This is private tutor guidance|Do not reveal an exact command|Follow up until the learner|Private editor criterion/i.test(serialized);
-  return { name: "checked trace has no hidden tutor instructions", passed: !leaked, detail: leaked ? "Hidden tutor instructions appeared in the trace." : "Trace passed structural tutor-field and known sentinel checks across public state, learner-visible exchanges, durable timeline records, and artifacts." };
+  let serializedPublicTrace = "";
+  let projectionError = "";
+  try {
+    serializedPublicTrace = JSON.stringify(projectV2JudgeTrace(trace));
+  } catch (error) {
+    projectionError = error instanceof Error ? error.message : String(error);
+  }
+  const leaked = projectionError.length > 0 || /"tutor"\s*:|This is private tutor guidance|Do not reveal an exact command|Follow up until the learner|Private editor criterion/i.test(serializedPublicTrace);
+  return { name: "checked trace has no hidden tutor instructions", passed: !leaked, detail: leaked ? `Hidden tutor instructions appeared in public/projected judge channels. ${projectionError}`.trim() : "Trace passed structural tutor-field and known sentinel checks across public state, learner-visible exchanges, projected progression events, and artifacts." };
 }
 
 function exactCommandInput(trace: V2SessionTrace): V2GateAssertion {

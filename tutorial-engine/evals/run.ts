@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildV2JudgePrompt, createV2Report, judgeV2TraceFromPrompt, v2JudgePass } from "./v2/judge.js";
-import { createEmptyV2SessionTrace } from "./v2/session.js";
+import { createEmptyV2SessionTrace, projectV2JudgeTrace } from "./v2/session.js";
 import { deterministicV2Gate, runV2ScenarioSession, v2Scenarios, type V2Scenario } from "./v2/scenarios.js";
 import { createEvaluationWorkspace } from "./v2/workspace.js";
 
@@ -50,10 +50,11 @@ async function runOnce(scenario: V2Scenario, repetition: number): Promise<{ pass
     server = await workspace.startServer();
     await runV2ScenarioSession({ scenario, workspace, serverUrl: server.url, trace });
     const gate = deterministicV2Gate(scenario, trace);
+    const judgeTrace = projectV2JudgeTrace(trace);
     await Promise.all([
-      writeFile(join(directory, "trace.json"), JSON.stringify(trace, null, 2)),
+      writeFile(join(directory, "trace.json"), JSON.stringify(judgeTrace, null, 2)),
       writeFile(join(directory, "gate.json"), JSON.stringify(gate, null, 2)),
-      writeFile(join(directory, "artifacts.json"), JSON.stringify(trace.artifacts, null, 2))
+      writeFile(join(directory, "artifacts.json"), JSON.stringify(judgeTrace.artifacts, null, 2))
     ]);
     if (!gate.passed) {
       const failures = gate.assertions.filter((assertion) => !assertion.passed).map((assertion) => `${assertion.name}: ${assertion.detail}`).join("\n");
@@ -61,13 +62,13 @@ async function runOnce(scenario: V2Scenario, repetition: number): Promise<{ pass
       return { passed: false, directory, error: "deterministic gate failed" };
     }
 
-    const judgeInput = buildV2JudgePrompt(scenario, trace, gate);
+    const judgeInput = buildV2JudgePrompt(scenario, judgeTrace, gate);
     await writeFile(join(directory, "judge-input.txt"), judgeInput);
-    const judge = await judgeV2TraceFromPrompt(judgeInput, trace);
+    const judge = await judgeV2TraceFromPrompt(judgeInput, judgeTrace);
     const verdict = v2JudgePass(judge);
     const report = createV2Report({
       scenario,
-      trace,
+      trace: judgeTrace,
       gate,
       judgeInput,
       judge,

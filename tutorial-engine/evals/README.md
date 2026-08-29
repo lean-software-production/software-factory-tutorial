@@ -55,20 +55,20 @@ Use `--all --yes` only when you intend to run every scenario. Use `--repeat 2` o
 
 ## What it exercises
 
-The runner copies `evals/workbook/` from the `tutorial-engine` workspace into a disposable temporary repository under `tutorial/`, materializes fresh live workspaces under `tutorial/.tutorial/<session-id>/workspaces/<workspace-id>/`, and drives the same public workbook API, editor endpoint, and terminal WebSocket used by the browser. It records public workbook state, public editor status/feedback, learner-visible terminal transcript, public reflection turns, durable workbook timeline records from `workbook/events.jsonl`, and allowlisted session-local `factory/.tmp` plus `editor-artifacts` artifact snapshots.
+The runner copies `evals/workbook/` from the `tutorial-engine` workspace into a disposable temporary repository under `tutorial/`, materializes fresh live workspaces under `tutorial/.tutorial/<session-id>/workspaces/<workspace-id>/`, and drives the same public workbook API, editor endpoint, and terminal WebSocket used by the browser. It records public workbook state, public editor status/feedback, learner-visible terminal transcript, public reflection turns, raw `workbook/events.jsonl` rows for deterministic gates, and allowlisted session-local `factory/.tmp` plus `editor-artifacts` artifact snapshots.
 
-Timeline records are durable evaluator inputs and may include internal terminal lifecycle records; do not read them as all learner-visible events. The recorder refuses to store a private `tutor` field or known private tutor-guidance sentinel text. Deterministic gates inspect the trace before any judge call. The judge receives the scenario criteria and this checked trace, not the authored curriculum or private tutor guidance.
+Raw `workbook/events.jsonl` rows remain internal and gate-only. They may include private terminal lifecycle rows, evidence IDs, private Coach handoffs, summaries, failures, timestamps, and future fields. Before anything is written to reports or sent to a judge, the runner projects the internal trace into an allowlisted public judge trace. That public trace contains learner-visible channels, artifacts, and projected structural progression events built from explicit fields only. Deterministic gates inspect the internal trace before any judge call, but judge input and reports receive only the allowlisted public judge trace, not raw timeline rows, authored curriculum, or private tutor guidance.
 
 ## Results
 
 Each run writes an ignored report directory under `evals/reports/<run-id>/` relative to the `tutorial-engine` workspace. Important files are:
 
-- `evals/reports/<run-id>/trace.json`: public state/editor/reflection/terminal learner trace, durable workbook timeline records, and artifacts.
+- `evals/reports/<run-id>/trace.json`: allowlisted public judge trace with public state/editor/reflection/terminal learner channels, projected structural progression events, and artifacts.
 - `evals/reports/<run-id>/gate.json`: deterministic gate assertions.
 - `evals/reports/<run-id>/artifacts.json`: captured `factory/.tmp` and `editor-artifacts` artifact contents.
-- `evals/reports/<run-id>/judge-input.txt`: exact prompt sent to the judge, including scenario criteria and checked trace citations.
+- `evals/reports/<run-id>/judge-input.txt`: exact prompt sent to the judge, including scenario criteria and allowlisted public judge trace citations.
 - `evals/reports/<run-id>/judge.json`: verified judge JSON.
-- `evals/reports/<run-id>/report.json`: combined scenario, model identities, gate, trace, judge input, judge result, artifacts, and verdict.
+- `evals/reports/<run-id>/report.json`: combined scenario, model identities, gate, allowlisted public judge trace, judge input, judge result, artifacts, and verdict.
 - `evals/reports/<run-id>/summary.md`: short human-readable result.
 - `evals/reports/<run-id>/metadata.json`: run metadata, model identities, git revision, and workspace paths.
 - `evals/reports/<run-id>/failure.txt`: exact failure when setup, the live session, deterministic gates, or judge invocation fails.

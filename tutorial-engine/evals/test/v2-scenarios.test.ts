@@ -3,7 +3,7 @@ import type { WorkbookTimelineRecord } from "../../src/workbook/timeline.js";
 import { selectV2Scenarios } from "../run.js";
 import { buildV2JudgePrompt, createV2Report, verifyV2JudgeResult } from "../v2/judge.js";
 import { clueCommand, deterministicV2Gate, exactCommand, findV2Scenario, satisfactoryEditorDraft, v2Scenarios } from "../v2/scenarios.js";
-import { createEmptyV2SessionTrace } from "../v2/session.js";
+import { createEmptyV2SessionTrace, projectV2JudgeTrace } from "../v2/session.js";
 import type { V2SessionTrace } from "../v2/types.js";
 
 const lessonId = "001-live-session";
@@ -150,6 +150,13 @@ describe("v2 live evaluator scenarios", () => {
     allGateAssertionsPass(trace);
   });
 
+  it("does not fail deterministic gates because private terminal lifecycle rows remain internal", () => {
+    const trace = exactCommandTrace();
+    trace.events.push(event({ type: "terminal-coach-handoff-recorded", attemptId: "private-attempt", outcome: "ready", text: "This is private tutor guidance in a gate-only terminal lifecycle row." }));
+
+    allGateAssertionsPass(trace);
+  });
+
   it("gates incomplete editor drafts on public feedback without unlocking", () => {
     const trace = editorFeedbackTrace();
     allGateAssertionsPass(trace);
@@ -187,6 +194,21 @@ describe("v2 live evaluator scenarios", () => {
     missingArtifact.artifacts = [];
     const failed = deterministicV2Gate(findV2Scenario(missingArtifact.scenarioId), missingArtifact);
     expect(failed.assertions.find((assertion) => assertion.name === "editor-artifacts/evaluator-editor.txt artifact")?.passed).toBe(false);
+  });
+
+  it("keeps raw timeline fields out of deterministic gate details", () => {
+    const trace = editorUnlockedTrace();
+    const unlock = trace.events.find((item) => item.type === "editor_practice_unlocked") as any;
+    unlock.path = "path-secret-from-raw-event";
+    unlock.revisionId = 99;
+
+    const failed = deterministicV2Gate(findV2Scenario(trace.scenarioId), trace);
+    const detail = failed.assertions.find((assertion) => assertion.name === "editor unlocked")?.detail ?? "";
+
+    expect(detail).toContain("expectedPath=false");
+    expect(detail).toContain("expectedRevision=false");
+    expect(detail).not.toContain("path-secret-from-raw-event");
+    expect(detail).not.toContain("revision=99");
   });
 
   it("gates a clue-only task on public clues, learner-chosen command, output, completion, and artifact", () => {
@@ -266,12 +288,15 @@ describe("v2 live evaluator scenarios", () => {
     const trace = exactCommandTrace();
     const scenario = findV2Scenario(trace.scenarioId);
     const gate = allGateAssertionsPass(trace);
-    const prompt = buildV2JudgePrompt(scenario, trace, gate);
+    const judgeTrace = projectV2JudgeTrace(trace);
+    const prompt = buildV2JudgePrompt(scenario, judgeTrace, gate);
 
     expect(prompt).toContain(scenario.criteria[0]!);
     expect(prompt).toContain("terminalTranscript");
-    expect(prompt).toContain("durable workbook timeline records from workbook/events.jsonl");
-    expect(prompt).toContain("not all learner-visible");
+    expect(prompt).toContain("projected structural workbook progression events");
+    expect(prompt).toContain("Allowlisted public judge trace");
+    expect(prompt).not.toContain("durable workbook timeline records from workbook/events.jsonl");
+    expect(prompt).not.toContain("not all learner-visible");
     expect(prompt).not.toContain("Recorded public trace");
     expect(prompt).not.toContain("Active specification");
     expect(prompt).not.toContain("private tutor guidance");
@@ -283,14 +308,15 @@ describe("v2 live evaluator scenarios", () => {
         criteriaFit: { score: 2, citations: [2], rationale: "The criteria were met." }
       },
       summary: "The session meets the scenario criteria."
-    }, trace);
-    expect(() => verifyV2JudgeResult({ ...judge, dimensions: { ...judge.dimensions, protocolUse: { score: 2, citations: [99], rationale: "bad" } } }, trace)).toThrow(/unknown trace citation/i);
+    }, judgeTrace);
+    expect(() => verifyV2JudgeResult({ ...judge, dimensions: { ...judge.dimensions, protocolUse: { score: 2, citations: [99], rationale: "bad" } } }, judgeTrace)).toThrow(/unknown trace citation/i);
 
-    const report = createV2Report({ scenario, trace, gate, judgeInput: prompt, judge, tutorModel: "tutor-model", judgeModel: "judge-model" });
+    const report = createV2Report({ scenario, trace: judgeTrace, gate, judgeInput: prompt, judge, tutorModel: "tutor-model", judgeModel: "judge-model" });
     expect(report.modelIdentities).toEqual({ tutor: "tutor-model", judge: "judge-model" });
     expect(report.judgeInput).toEqual({ prompt });
-    expect(report.trace).toBe(trace);
+    expect(report.trace).toEqual(judgeTrace);
+    expect(report.trace).not.toBe(judgeTrace);
     expect(report.judge).toBe(judge);
-    expect(report.artifacts).toEqual(trace.artifacts);
+    expect(report.artifacts).toEqual(judgeTrace.artifacts);
   });
 });

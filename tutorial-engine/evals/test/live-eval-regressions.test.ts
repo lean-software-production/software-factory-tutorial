@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { WorkbookTimelineRecord } from "../../src/workbook/timeline.js";
 import { buildV2JudgePrompt, createV2Report, verifyV2JudgeResult } from "../v2/judge.js";
 import { deterministicV2Gate, findV2Scenario, satisfactoryEditorDraft, v2Scenarios } from "../v2/scenarios.js";
-import { createEmptyV2SessionTrace } from "../v2/session.js";
+import { createEmptyV2SessionTrace, projectV2JudgeTrace } from "../v2/session.js";
 import type { V2GateResult } from "../v2/scenarios.js";
 import type { V2SessionTrace } from "../v2/types.js";
 
@@ -92,9 +92,9 @@ describe("live v2 evaluator regressions", () => {
     expect(readme).toContain("evals/reports/<run-id>/trace.json");
     expect(readme).toContain("evals/reports/<run-id>/judge-input.txt");
     expect(readme).toContain("evals/reports/latest.json");
-    expect(readme).toContain("durable workbook timeline records from `workbook/events.jsonl`");
-    expect(readme).toContain("may include internal terminal lifecycle records");
-    expect(readme).toContain("checked trace citations");
+    expect(readme).toContain("Raw `workbook/events.jsonl` rows remain internal and gate-only");
+    expect(readme).toContain("allowlisted public judge trace");
+    expect(readme).toContain("projected structural progression events");
     expect(readme).not.toContain("public workbook events");
     for (const scenario of v2Scenarios) expect(readme).toContain(scenario.id);
   });
@@ -103,16 +103,18 @@ describe("live v2 evaluator regressions", () => {
     const trace = auditableTrace();
     const scenario = findV2Scenario(trace.scenarioId);
     const gate = passingGate(trace);
-    const judgeInput = buildV2JudgePrompt(scenario, trace, gate);
+    const judgeTrace = projectV2JudgeTrace(trace);
+    const judgeInput = buildV2JudgePrompt(scenario, judgeTrace, gate);
 
     expect(judgeInput).toContain(scenario.criteria[0]!);
     expect(judgeInput).toContain("terminal:exact-command:verified");
     expect(judgeInput).toContain("command block complete");
     expect(judgeInput).toContain("The public workbook state showed the command block.");
     expect(judgeInput).toContain("factory/.tmp/evaluator-command.txt");
-    expect(judgeInput).toContain("Recorded checked trace");
-    expect(judgeInput).toContain("durable workbook timeline records from workbook/events.jsonl");
-    expect(judgeInput).toContain("not all learner-visible");
+    expect(judgeInput).toContain("Allowlisted public judge trace");
+    expect(judgeInput).toContain("projected structural workbook progression events");
+    expect(judgeInput).not.toContain("durable workbook timeline records from workbook/events.jsonl");
+    expect(judgeInput).not.toContain("not all learner-visible");
     expect(judgeInput).not.toContain("Recorded public trace");
     expect(judgeInput).not.toContain('"tutor":');
     expect(judgeInput).not.toContain("This is private tutor guidance");
@@ -125,11 +127,12 @@ describe("live v2 evaluator regressions", () => {
         criteriaFit: { score: 2, citations: [4], rationale: "The artifact snapshot was recorded." }
       },
       summary: "The judge received the checked learner trace."
-    }, trace);
-    const report = createV2Report({ scenario, trace, gate, judge, judgeInput, tutorModel: "tutor-model", judgeModel: "judge-model" });
+    }, judgeTrace);
+    const report = createV2Report({ scenario, trace: judgeTrace, gate, judge, judgeInput, tutorModel: "tutor-model", judgeModel: "judge-model" });
 
     expect(report.judgeInput).toEqual({ prompt: judgeInput });
-    expect(report.trace).toBe(trace);
-    expect(report.artifacts).toEqual(trace.artifacts);
+    expect(report.trace).toEqual(judgeTrace);
+    expect(report.trace).not.toBe(judgeTrace);
+    expect(report.artifacts).toEqual(judgeTrace.artifacts);
   });
 });

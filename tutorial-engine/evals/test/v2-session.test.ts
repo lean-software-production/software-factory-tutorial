@@ -5,7 +5,7 @@ import { loadWorkbook } from "../../src/workbook/load.js";
 import type { WorkbookServerOptions } from "../../src/workbook/server.js";
 import type { TutorDecision } from "../../src/workbook/tutor.js";
 import { RecordingMainTutor } from "../../test/support/fake-tutors.js";
-import { createEmptyV2SessionTrace, readWorkbookTimeline, recordPublicState, snapshotArtifacts } from "../v2/session.js";
+import { createEmptyV2SessionTrace, projectV2JudgeTrace, readWorkbookTimeline, recordPublicState, snapshotArtifacts } from "../v2/session.js";
 import { createEvaluationWorkspace } from "../v2/workspace.js";
 
 const tempRoots: string[] = [];
@@ -111,7 +111,7 @@ describe("v2 public session trace", () => {
     }
   });
 
-  it("rejects private tutor text in workbook events before they enter the trace", async () => {
+  it("keeps raw private timeline records internal while projecting only public judge fields", async () => {
     const workspace = await createEvaluationWorkspace();
     tempRoots.push(workspace.repositoryRoot);
     const server = await workspace.startServer({ embeddedTerminal: false, mainTutor: new SessionFakeMainTutor() });
@@ -119,16 +119,35 @@ describe("v2 public session trace", () => {
     const { sessionRoot } = workspace.latestSession();
     await mkdir(resolve(sessionRoot, "workbook"), { recursive: true });
     await writeFile(resolve(sessionRoot, "workbook/events.jsonl"), `${JSON.stringify({
-      type: "observation_verified",
+      type: "terminal-coach-handoff-recorded",
+      id: "raw-id-secret",
+      sequence: 42,
       at: "2026-08-20T00:00:00.000Z",
+      attemptId: "attempt-secret",
+      outcome: "ready",
+      text: "This is private tutor guidance for the live evaluator's exact-command scenario."
+    })}\n${JSON.stringify({
+      type: "attempt_accepted",
+      id: "raw-accepted-secret",
+      sequence: 43,
+      at: "2026-08-20T00:00:01.000Z",
       lessonId: "001-live-session",
       blockId: "exact-command",
-      source: "terminal_observer",
-      summary: "This is private tutor guidance for the live evaluator's exact-command scenario.",
-      terminalHtml: ""
+      attemptId: "attempt-secret",
+      version: 1,
+      kind: "terminal",
+      summary: "accepted summary secret"
     })}\n`);
 
-    await expect(readWorkbookTimeline(sessionRoot)).rejects.toThrow(/private tutor/i);
+    const trace = createEmptyV2SessionTrace("raw-internal");
+    trace.events = await readWorkbookTimeline(sessionRoot);
+
+    expect(JSON.stringify(trace.events)).toContain("attempt-secret");
+    expect(JSON.stringify(trace.events)).toContain("raw-id-secret");
+    const projected = projectV2JudgeTrace(trace);
+    expect(projected.progressionEvents).toEqual([{ type: "attempt_accepted", lessonId: "001-live-session", blockId: "exact-command", kind: "terminal" }]);
+    expect(JSON.stringify(projected)).not.toContain("attempt-secret");
+    expect(JSON.stringify(projected)).not.toContain("terminal-coach-handoff-recorded");
 
     await workspace.close();
     tempRoots.length = 0;
