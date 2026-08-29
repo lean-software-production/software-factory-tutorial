@@ -22,7 +22,7 @@ Now write `prompt.md`, the instruction each Pi pass will follow.
 
 Use plain language. For example, tell the worker to read `spec.md`, maintain `plan.md`, choose one
 next task, make the change, run a useful check if there is one, commit the result, and update the
-plan before it stops.
+plan before it stops. If a pass changes nothing, it does not need to create an empty commit.
 
 Do not ask the worker to run forever. The shell script in the next step will decide how many passes
 happen.
