@@ -167,6 +167,24 @@ function validateFlatParts(manifestParts: readonly WorkbookPartManifest[], lesso
   if (errors.length) throw new Error(errors.join("\n"));
 }
 
+function explicitPartNumber(title: string): number | undefined {
+  const match = /^Part\s+(\d+)\b/i.exec(title);
+  if (!match) return undefined;
+  return Number(match[1]);
+}
+
+function validatePartTitleNumbers(parts: readonly LoadedPart[], workbookPath: string): void {
+  const errors = parts.flatMap((part, index) => {
+    const authoredNumber = explicitPartNumber(part.title);
+    const expectedNumber = index + 1;
+    if (authoredNumber === undefined || authoredNumber === expectedNumber) return [];
+    return [
+      `${part.path}: H1 says "Part ${authoredNumber}", but ${workbookPath} lists this part at position ${expectedNumber}.`,
+    ];
+  });
+  if (errors.length) throw new Error(errors.join("\n"));
+}
+
 /** A block id resolves to blocks/<id>.md by convention; the filename supplies its id. */
 async function loadWorkbookBlock(lessonDir: string, blockId: string, lessonPath: string): Promise<WorkbookBlock> {
   const path = resolve(lessonDir, BLOCKS_DIR, `${blockId}.md`);
@@ -244,6 +262,7 @@ async function flatChapterGroups(workspace: string, manifest: WorkbookManifest, 
   validateFlatParts(manifest.parts, lessons, workbookPath);
   const lessonById = new Map(lessons.map((lesson) => [lesson.id, lesson]));
   const parts = await Promise.all(manifest.parts.map((part) => readPartDocument(workspace, part.id)));
+  validatePartTitleNumbers(parts, workbookPath);
   const groups = await Promise.all(manifest.parts.map(async (part, partIndex) => {
     const loadedPart = parts[partIndex]!;
     return Promise.all(part.lessons.map((lessonId) => {
