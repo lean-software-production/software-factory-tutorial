@@ -91,9 +91,9 @@ and transitions.
 ```sh
 npm run build       # compile server and browser client
 npm test            # unit tests, including deterministic eval tests
-npm run check:eval  # type-check the synthetic engine eval runner and deterministic tests
-npm run test:eval   # focused deterministic eval tests
-npm run eval -- --help
+npm run check:eval  # deterministic/model-free type-check for synthetic engine eval code
+npm run test:eval   # deterministic/model-free synthetic engine eval tests
+npm run eval -- --help # paid Docker-backed live engine eval CLI
 npm run test:workbook-ux:deterministic # provider-free workbook UX recording + decoded-WebM analysis + report
 npm run test:workbook-ux               # same workbook UX test plus advisory pi review when deterministic checks pass
 npm run check       # TypeScript, eval type-check, unit tests, browser build, and browser smoke
@@ -133,9 +133,17 @@ cannot omit the browser smoke. CI provisions Chromium with its Linux dependencie
 `npm run browser:install:ci`. Docker terminal-image builds and live provider-backed evaluations are
 intentionally separate from this mandatory gate.
 
-The synthetic tutorial-engine mechanics eval lives in [`evals/`](evals/). Its live command is
-`npm run eval -- --scenario <v2-id>` from this workspace; `npm run eval:release` runs the bounded
-six-scenario release profile once per scenario. From the repository root,
-`npm run eval:engine -- --scenario <v2-id>` forwards here, `npm run eval:release` delegates through
-`--workspace=tutorial-engine`, and root `npm run eval -- ...` remains only as a temporary compatibility
-alias. These evals are distinct from any future authored-workbook eval suite for the learner curriculum.
+The synthetic tutorial-engine mechanics eval lives in [`evals/`](evals/). `npm run check:eval`
+and `npm run test:eval` are deterministic and model-free. The live command is
+`npm run eval -- --scenario <v2-id>` from this workspace; it is paid, requires Docker, and writes
+active reports under `tutorial-engine/evals/reports/` from the repository root. `npm run eval:release`
+runs the bounded six-scenario release profile once per scenario. Exploratory scopes use `--scenario`,
+`--all --yes`, and optional repeats.
+
+From the repository root, `npm run eval:engine -- --scenario <v2-id>` forwards here,
+`npm run eval:release` delegates through `--workspace=tutorial-engine`, and root `npm run eval -- ...`
+remains only as a temporary compatibility alias to `eval:engine`. It is not an authored-workbook eval.
+These evals are distinct from the root-owned authored-workbook evaluator foundations in
+[`../evals/workbook/`](../evals/workbook/), whose current deterministic commands are
+`npm run check:eval:workbook` and `npm run test:eval:workbook`. The root `eval:workbook` command is
+reserved until that live runner lands.

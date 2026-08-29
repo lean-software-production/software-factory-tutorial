@@ -79,7 +79,7 @@ describe("live v2 evaluator regressions", () => {
     const readme = await readFile("evals/README.md", "utf8");
 
     expect(readme).toContain("# Synthetic tutorial-engine mechanics evals");
-    expect(readme).toContain("not the future authored-workbook eval suite");
+    expect(readme).toContain("not the root-owned authored-workbook eval suite");
     expect(readme).toContain("npm run --workspace=tutorial-engine eval -- --scenario v2-exact-command-success");
     expect(readme).toContain("npm run --workspace=tutorial-engine eval -- --all --yes");
     expect(readme).toContain("npm run --workspace=tutorial-engine eval -- --release");
@@ -92,6 +92,12 @@ describe("live v2 evaluator regressions", () => {
     expect(readme).toContain("OPENCODE_API_KEY");
     expect(readme).toContain("build:workbook-terminal");
     expect(readme).toMatch(/paid|cost|tokens/i);
+    expect(readme).toContain("Main Tutor");
+    expect(readme).toContain("Practice Coach");
+    expect(readme).toContain("Judge");
+    expect(readme).toContain("tutorial-engine/evals/reports/<run-id>/");
+    expect(readme).toContain("root `evals/workbook/reports/`");
+    expect(readme).toContain("`eval:workbook` name remains reserved and unwired");
     expect(readme).toContain("bounded release profile");
     expect(readme).toContain("six current engine scenarios exactly once each");
     expect(readme).toContain("evals/reports/<run-id>/trace.json");
