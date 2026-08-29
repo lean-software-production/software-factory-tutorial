@@ -4,7 +4,7 @@ import type { TutorialLogger } from "./runtime-log.js";
 import { loadWorkbook, type LoadedWorkbook } from "./load.js";
 import { INTRODUCTION_BLOCK_ID, INTRODUCTION_LESSON_ID, LESSON_FRAME_BLOCK_ID, PART_BLOCK_ID, partLessonId } from "./pi-history.js";
 import { WORKBOOK_COMPLETE_ANCHOR_ID, WORKBOOK_INTRODUCTION_BLOCK_ID, blockText, buildWorkbookBlockStream, declaredBlockId, declaredSourceFromBlockId, successorAnchor, type AnchorId, type BlockId, type DeclaredWorkbookBlock, type OrderedWorkbookBlock } from "./workbook-blocks.js";
-import type { ActiveObservedTerminalBlock } from "./terminal.js";
+import type { ActiveObservedTerminalBlock, ActiveTerminalTranscriptContext } from "./terminal.js";
 import type { TerminalObservationFact } from "./terminal-observation.js";
 import { TerminalEvidenceRepository, type TerminalEvidence, type TerminalEvidenceRef } from "./terminal-evidence.js";
 import { projectTerminalAttempts, type ProjectedTerminalAttempt } from "./terminal-attempt-projector.js";
@@ -357,6 +357,7 @@ export interface WorkbookWorkflowDependencies {
   practiceCoach: PracticeCoach;
   terminalEvidence: TerminalEvidenceRepository;
   terminalAssessmentScheduler?: TerminalAssessmentScheduler;
+  activeTerminalContext?: () => ActiveTerminalTranscriptContext | undefined;
   log: TutorialLogger;
 }
 
@@ -384,7 +385,7 @@ export interface WorkbookWorkflow {
   retry(failureId: string): Promise<Awaited<ReturnType<typeof publicState>>>;
 }
 
-export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, timeline, attempts, mainTutor, practiceCoach, terminalEvidence, terminalAssessmentScheduler: injectedTerminalAssessmentScheduler, log }: WorkbookWorkflowDependencies): Promise<WorkbookWorkflow> {
+export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, timeline, attempts, mainTutor, practiceCoach, terminalEvidence, terminalAssessmentScheduler: injectedTerminalAssessmentScheduler, activeTerminalContext: currentActiveTerminalContext, log }: WorkbookWorkflowDependencies): Promise<WorkbookWorkflow> {
   const assessmentScheduler = injectedTerminalAssessmentScheduler ?? terminalAssessmentScheduler;
   let loaded = await loadWorkbook(contentRoot);
   let stream = buildWorkbookBlockStream(loaded);
@@ -452,27 +453,61 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
     else if (hasWorkAccepted(active.id)) await ensureReadySuccessor(active);
   };
 
-  const activeBlockContext = async (source = records) => {
+  const activeTerminalPrivateContext = async (active: DeclaredWorkbookBlock) => {
+    if (active.block.type !== "terminal-practice") return undefined;
+    const transcriptContext = currentActiveTerminalContext?.();
+    if (!transcriptContext || transcriptContext.lessonId !== active.lessonId || transcriptContext.blockId !== active.id) return undefined;
+    const finishedForAttempt = (attemptId: string) => records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> =>
+      record.type === "terminal-command-finished" && record.attemptId === attemptId);
+    const submissions = [...records].reverse().filter((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
+      record.type === "terminal-command-submitted" &&
+      record.lessonId === active.lessonId &&
+      record.blockId === active.id);
+    for (const submission of submissions) {
+      const finished = finishedForAttempt(submission.attemptId);
+      const runningCommand = { attemptId: submission.attemptId, command: submission.command, status: "running" as const };
+      if (submission.terminalSessionId === terminalSessionId && !finished) return { transcript: transcriptContext.transcript, latestCommand: runningCommand };
+      if (!finished) continue;
+      const finishedEvidence = await terminalEvidence.read(finished.evidenceRef);
+      if (!finishedEvidence || finishedEvidence.kind !== "finished" || finishedEvidence.command !== submission.command || finishedEvidence.exitStatus !== finished.exitStatus) {
+        if (submission.terminalSessionId === terminalSessionId) return { transcript: transcriptContext.transcript, latestCommand: runningCommand };
+        continue;
+      }
+      return {
+        transcript: transcriptContext.transcript,
+        latestCommand: {
+          attemptId: submission.attemptId,
+          command: submission.command,
+          status: "finished" as const,
+          exitStatus: finished.exitStatus,
+          evidenceRef: finished.evidenceRef,
+          finishedEvidence
+        }
+      };
+    }
+    return { transcript: transcriptContext.transcript };
+  };
+  const activeBlockContext = async (source = records, options: { includeTerminalContext?: boolean } = {}) => {
     const active = activeDeclaredBlock(source);
     if (!active) return undefined;
+    const terminal = options.includeTerminalContext === false ? undefined : await activeTerminalPrivateContext(active);
     return {
       lessonId: active.lessonId,
       blockId: active.id,
       title: active.block.title,
       markdown: active.block.markdown,
       authorGuidance: "tutor" in active.block ? active.block.tutor : "",
-      // Terminal lifecycle evidence is supplied to the Main Tutor only as the one transient final
-      // attempt below; it must not leak back through the general active-block history projection.
       attempts: isEvaluatedBlock(active.block) && active.block.type !== "terminal-practice"
         ? (await attempts.list(active.lessonId, active.id)).filter((attempt) => !attempt.privateQuickFeedback)
-        : []
+        : [],
+      ...(terminal ? { terminal } : {})
     };
   };
-  const mainContext = async (): Promise<MainTutorContext> => {
+  const mainContext = async (options: { includeTerminalContext?: boolean } = {}): Promise<MainTutorContext> => {
     const projection = currentWorkbookProjection();
     const active = projection.current;
     const completeStatus = active ? canCompleteBlock(active, projection) : { eligible: false };
-    return { records: mainTutorTimelineRecords(loaded, records), activeContext: await activeBlockContext(), completionTool: active && completeStatus.eligible ? { blockId: active.id } : undefined };
+    return { records: mainTutorTimelineRecords(loaded, records), activeContext: await activeBlockContext(records, options), completionTool: active && completeStatus.eligible ? { blockId: active.id } : undefined };
   };
   const mainContextForTarget = async (_lessonId: string, blockId: string): Promise<MainTutorContext> => {
     const active = activeOrderedBlock();
@@ -784,7 +819,7 @@ export async function createWorkbookWorkflow({ contentRoot, learnerWorkspace, ti
         const recordedHandoff = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-coach-handoff-recorded" }> =>
           record.type === "terminal-coach-handoff-recorded" && record.attemptId === request.attemptId);
         if (!active || !recordedHandoff || recordedHandoff.outcome !== handoff.outcome || recordedHandoff.text !== handoff.text) return undefined;
-        return { context: await mainContext(), active };
+        return { context: await mainContext({ includeTerminalContext: false }), active };
       });
       if (!review) return;
 

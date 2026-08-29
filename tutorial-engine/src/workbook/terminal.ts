@@ -46,6 +46,13 @@ export interface ActiveObservedTerminalBlock {
   blockId: string;
 }
 
+export interface ActiveTerminalTranscriptContext {
+  lessonId: string;
+  blockId: string;
+  /** Private, bounded, session-memory-only transcript for Main Tutor context. */
+  transcript: string;
+}
+
 export interface WorkbookTerminalManagerOptions {
   workspace: string;
   runtimeProvision?: TrustedRuntimeProvision;
@@ -57,6 +64,7 @@ export interface WorkbookTerminalManagerOptions {
 }
 
 const MAX_REPLAY_BYTES = 64_000;
+const MAX_ACTIVE_TERMINAL_CONTEXT_BYTES = 64_000;
 const MAX_INPUT_BYTES = 16_384;
 const MAX_COLS = 500;
 const MAX_ROWS = 200;
@@ -152,8 +160,10 @@ export function dockerRunArguments(options: DockerRunArgumentsOptions): string[]
   return args;
 }
 
+export const WORKBOOK_TERMINAL_PROMPT_COMMAND = "status=$?; printf '\\033]633;workbook-finished;%s\\007' \"$status\"; trap 'trap - DEBUG; __workbook_command_file=$(mktemp /tmp/workbook-command.XXXXXX 2>/dev/null || true); command=; if [ -n \"$__workbook_command_file\" ] && fc -ln -1 > \"$__workbook_command_file\" 2>/dev/null; then command=$(<\"$__workbook_command_file\"); fi; if [ -n \"$__workbook_command_file\" ]; then rm -f \"$__workbook_command_file\"; fi; command=${command#	}; command=${command# }; if [ -z \"$command\" ]; then command=$BASH_COMMAND; fi; printf \"\\033]633;workbook-command;\"; printf '%s' \"$command\" | base64 -w 0; printf \"\\007\"' DEBUG";
+
 export function dockerExecArguments(name: string): string[] {
-  return ["exec", "-it", "--env", "PS1=$ ", "--env", "PROMPT_COMMAND=status=$?; printf '\\033]633;workbook-finished;%s\\007' \"$status\"; trap 'command=$BASH_COMMAND; trap - DEBUG; printf \"\\033]633;workbook-command;\"; printf '%s' \"$command\" | base64 -w 0; printf \"\\007\"' DEBUG", "--workdir", "/workspace", name, "/bin/bash", "--noprofile", "--norc", "-i"];
+  return ["exec", "-it", "--env", "PS1=$ ", "--env", `PROMPT_COMMAND=${WORKBOOK_TERMINAL_PROMPT_COMMAND}`, "--workdir", "/workspace", name, "/bin/bash", "--noprofile", "--norc", "-i"];
 }
 
 /** Starts a hardened, per-practice container; browser bytes can only reach docker exec. */
@@ -227,6 +237,8 @@ export class WorkbookTerminalManager {
   #terminalShellProtocol = new TerminalShellProtocol();
   #terminalObservation: TerminalObservation | undefined;
   #terminalObservationBlockKey: string | undefined;
+  #activeTranscript = "";
+  #activeTranscriptBlockKey: string | undefined;
   readonly #getActiveBlock: () => ActiveObservedTerminalBlock | undefined;
   readonly #observationSink: (fact: TerminalObservationFact) => Promise<void> | void;
   readonly #ptyFactory: TerminalPtyFactory;
@@ -273,13 +285,21 @@ export class WorkbookTerminalManager {
       // is harmless then, but input cannot reach the shell until the workflow makes a terminal
       // block active; otherwise a preloaded canvas would bypass progression authority.
       if (!this.#getActiveBlock()) return;
-      shell.write(message.data);
+      this.#appendActiveTranscript("input", message.data);
       this.#terminalObservation?.observeInteractiveInput(message.data);
+      shell.write(message.data);
       return;
     }
     if (message.type === "resize" && Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols > 0 && message.rows > 0) {
       shell.resize(Math.min(message.cols, MAX_COLS), Math.min(message.rows, MAX_ROWS));
     }
+  }
+
+  activeTranscriptContext(): ActiveTerminalTranscriptContext | undefined {
+    const block = this.#getActiveBlock();
+    if (!block) return undefined;
+    if (this.#activeTranscriptBlockKey !== terminalKey(block) || !this.#activeTranscript) return undefined;
+    return { lessonId: block.lessonId, blockId: block.blockId, transcript: this.#activeTranscript };
   }
 
   dispose(): void { this.#stopTerminal(); }
@@ -288,6 +308,8 @@ export class WorkbookTerminalManager {
     this.#terminalObservation?.close();
     this.#terminalObservation = undefined;
     this.#terminalObservationBlockKey = undefined;
+    this.#activeTranscript = "";
+    this.#activeTranscriptBlockKey = undefined;
     this.#client?.close(1001, "Workbook terminal stopped.");
     this.#client = undefined;
     const shell = this.#pty as DockerPty | undefined;
@@ -314,13 +336,28 @@ export class WorkbookTerminalManager {
       this.#terminalObservation?.close();
       this.#terminalObservation = undefined;
       this.#terminalObservationBlockKey = undefined;
+      this.#activeTranscript = "";
+      this.#activeTranscriptBlockKey = undefined;
     });
   }
 
   #forwardTerminalOutput(data: string): void {
     this.#replay = boundedAppend(this.#replay, data, MAX_REPLAY_BYTES);
+    this.#appendActiveTranscript("output", data);
     this.#client?.send(publicTerminalFrame({ type: "output", data }));
     this.#terminalObservation?.observeTerminalOutput(data);
+  }
+
+  #appendActiveTranscript(kind: "input" | "output", data: string): void {
+    if (!data) return;
+    const block = this.#getActiveBlock();
+    if (!block) return;
+    const key = terminalKey(block);
+    if (this.#activeTranscriptBlockKey !== key) {
+      this.#activeTranscriptBlockKey = key;
+      this.#activeTranscript = "";
+    }
+    this.#activeTranscript = boundedAppend(this.#activeTranscript, `[TERMINAL ${kind.toUpperCase()}]\n${data}`, MAX_ACTIVE_TERMINAL_CONTEXT_BYTES);
   }
 
   #observeCommandSubmitted(command: string): void {

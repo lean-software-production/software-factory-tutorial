@@ -8,7 +8,12 @@ class FakePty implements TerminalPty {
   opened = 0;
   #data: Array<(data: string) => void> = [];
   #exit: Array<(event: { exitCode: number }) => void> = [];
-  write(data: string): void { this.writes.push(data); }
+  constructor(private readonly synchronousOutput?: (data: string) => string | undefined) {}
+  write(data: string): void {
+    this.writes.push(data);
+    const output = this.synchronousOutput?.(data);
+    if (output) this.emit(output);
+  }
   resize(cols: number, rows: number): void { this.resizes.push([cols, rows]); }
   kill(): void {}
   open(): void { if (!this.opened) this.opened += 1; }
@@ -106,6 +111,46 @@ describe("WorkbookTerminalManager", () => {
     expect(facts).toEqual([expect.objectContaining({ type: "terminal-command-submitted", command: "cat -n" })]);
     expect(JSON.stringify(client.messages)).toContain("waiting");
     expect(JSON.stringify(client.messages)).not.toContain("workbook-command");
+  });
+
+  it("keeps private active terminal transcript scoped to the current block", () => {
+    const { manager, ptys, active } = setup();
+    manager.attach(new FakeClient());
+    manager.receive({ type: "input", data: "private command\r" });
+    ptys[0]!.emit("private output\r\n");
+
+    expect(manager.activeTranscriptContext()).toEqual({
+      lessonId: "lesson",
+      blockId: "practice",
+      transcript: "[TERMINAL INPUT]\nprivate command\r[TERMINAL OUTPUT]\nprivate output\r\n"
+    });
+
+    active.block = { lessonId: "lesson", blockId: "other" };
+    expect(manager.activeTranscriptContext()).toBeUndefined();
+  });
+
+  it("records accepted input before synchronous PTY output caused by that input", async () => {
+    const facts: TerminalObservationFact[] = [];
+    const pty = new FakePty((data) => `sync-output:${data}`);
+    const manager = new WorkbookTerminalManager({
+      workspace: "/tmp/workspace",
+      getActiveBlock: () => ({ lessonId: "lesson", blockId: "practice" }),
+      observationSink: async (fact) => { facts.push(fact); },
+      ptyFactory: () => pty,
+    });
+    manager.attach(new FakeClient());
+    pty.emit(marker("cat"));
+
+    manager.receive({ type: "input", data: "typed line\r" });
+    pty.emit(finished(0));
+    await Promise.resolve();
+
+    const transcript = manager.activeTranscriptContext()?.transcript ?? "";
+    expect(transcript.indexOf("[TERMINAL INPUT]\ntyped line\r")).toBeLessThan(transcript.indexOf("[TERMINAL OUTPUT]\nsync-output:typed line\r"));
+    expect(facts[1]).toMatchObject({ type: "terminal-command-finished", evidence: { interactions: [
+      { type: "interactive-input", data: "typed line\r" },
+      { type: "terminal-output", data: "sync-output:typed line\r" },
+    ] } });
   });
 
   it("captures one immutable final command fact and no output checkpoints", async () => {
