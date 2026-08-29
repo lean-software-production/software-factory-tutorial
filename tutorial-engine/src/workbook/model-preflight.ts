@@ -91,6 +91,8 @@ export interface WorkbookModelPreflightOptions {
 }
 
 const PREFLIGHT_PROMPT = "Connectivity check for workbook startup. Reply with a short non-empty acknowledgement. Do not use tools.";
+export const WORKBOOK_MODEL_PREFLIGHT_TIMEOUT_MS = 60_000;
+const WORKBOOK_MODEL_PREFLIGHT_TIMEOUT_MESSAGE = "Workbook model preflight timed out before returning a bounded assistant completion.";
 
 interface PiModelLike { provider: string; id: string }
 
@@ -100,6 +102,16 @@ function identity(model: PiModelLike | undefined): WorkbookModelIdentity | undef
 
 function resolverForRole(role: WorkbookModelBackedRole): (runtime: ModelRuntime, requested: string | undefined) => TutorModelChoice {
   return role === "Main Tutor" ? resolveTutorModel : resolvePracticeCoachModel;
+}
+
+async function withModelPreflightTimeout<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((_resolve, reject) => {
+    timer = setTimeout(() => { reject(new Error(WORKBOOK_MODEL_PREFLIGHT_TIMEOUT_MESSAGE)); }, WORKBOOK_MODEL_PREFLIGHT_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  try { return await Promise.race([operation, timeout]); }
+  finally { if (timer) clearTimeout(timer); }
 }
 
 export async function probePiWorkbookRoleModel(request: WorkbookRolePreflightRequest): Promise<WorkbookModelPreflightResult> {
@@ -156,7 +168,7 @@ export async function probePiWorkbookRoleModel(request: WorkbookRolePreflightReq
     session = created.session;
     selectedModel = identity(session.state.model ?? choice.model);
     resilient = createResilientTutorSession(session, request.logger, `${request.role} preflight`, { attempts: 1 });
-    const response = await resilient.prompt(PREFLIGHT_PROMPT);
+    const response = await withModelPreflightTimeout(resilient.prompt(PREFLIGHT_PROMPT));
     if (!response.trim()) throw new Error(`${request.role} preflight returned an empty assistant completion.`);
     return { role: request.role, envVar: request.envVar, requested, requestedModel, selectedModel };
   } catch (cause) {

@@ -8,12 +8,13 @@ Before running a live eval:
 
 1. Install dependencies from the repository root: `npm install`.
 2. Build the embedded terminal image: `npm run --workspace=tutorial-engine build:workbook-terminal`.
-3. Start Docker. The workbook terminal preflight requires `docker info` to succeed and the `lean-software-production/workbook-terminal:latest` image to exist.
-4. Export `OPENCODE_API_KEY`. The embedded terminal passes this key into its isolated container so Pi can authenticate there.
-5. Ensure Pi is authenticated on the host for the tutor and judge providers.
+3. Start Docker. The workbook terminal preflight requires bounded `docker info`, image inspect, container start, in-container Pi authentication, and cleanup commands to succeed for the `lean-software-production/workbook-terminal:latest` image.
+4. Export `OPENCODE_API_KEY`. The embedded terminal passes this key into `docker run` through a minimal Docker-client child environment and uses `--env OPENCODE_API_KEY`; it must not appear in Docker argv or error text. The Docker child environment is limited to `PATH`, `HOME`, documented Docker client configuration variables, XDG config/runtime variables, and this key; arbitrary parent secrets and proxy variables are not forwarded.
+5. Ensure Pi is authenticated on the host for the tutor, Practice Coach, and judge providers.
 6. Export `EVAL_JUDGE_MODEL` as the judge model, for example `provider/model-name`.
-7. Optionally export `TUTOR_MODEL` as the tutor model. If it is unset, the workbook tutor lets Pi choose its configured default.
-8. Optionally export `EVAL_JUDGE_COMMAND` for a Pi-compatible judge wrapper. The default is `pi --no-session`.
+7. Optionally export `TUTOR_MODEL` and `PRACTICE_COACH_MODEL` as the workbook role models. If they are unset, the workbook roles let Pi choose configured defaults.
+8. Leave `PRACTICE_COACH_LOG_PROMPT` unset. The eval runner refuses live runs when private Practice Coach prompt logging is enabled.
+9. Optionally export `EVAL_JUDGE_COMMAND` for a Pi-compatible judge wrapper. The default is `pi --no-session`.
 
 ## Cost warning
 
@@ -29,7 +30,9 @@ A scope is mandatory:
 export OPENCODE_API_KEY='...'
 export EVAL_JUDGE_MODEL='provider/model-name'
 # optional: export TUTOR_MODEL='provider/model-name'
+# optional: export PRACTICE_COACH_MODEL='provider/model-name'
 # optional: export EVAL_JUDGE_COMMAND='pi --no-session'
+# required privacy default: do not set PRACTICE_COACH_LOG_PROMPT=1
 
 npm run --workspace=tutorial-engine eval -- --scenario v2-exact-command-success
 npm run --workspace=tutorial-engine eval -- --scenario v2-exact-command-success --repeat 3
@@ -41,6 +44,22 @@ npm run --workspace=tutorial-engine eval:release
 From the repository root, `npm run eval:engine -- ...` forwards to the same workspace command. `npm run eval:release` delegates to the tutorial-engine release profile with `--workspace=tutorial-engine`. `npm run eval -- ...` is a temporary compatibility alias for that forwarding command.
 
 The v2 live evaluator does not support the legacy `--lesson` or `--calibrate` scopes.
+
+## Fail-fast live preflight
+
+The runner performs setup checks before it creates `evals/reports/`, creates a live evaluation workspace, starts a workbook server, or drives any tutor/judge model session. Help output, malformed arguments, scope conflicts, and missing `--all --yes` confirmation remain entirely model-free and return before probes.
+
+The live preflight order is fixed:
+
+1. Parse scope and confirmation.
+2. Require explicit `EVAL_JUDGE_MODEL`.
+3. Refuse forbidden private prompt logging (`PRACTICE_COACH_LOG_PROMPT=1`).
+4. Copy and load the disposable evaluator fixture to prove it is readable and valid.
+5. Check Docker CLI/daemon access, the canonical `lean-software-production/workbook-terminal:latest` image, a disposable container start, the same in-container Pi authentication probe used by the production workbook terminal, and bounded container cleanup.
+6. Preflight the Main Tutor and Practice Coach model identities/auth/connectivity with the same no-tools disposable Pi-session convention used by workbook startup. The provider prompt is wrapped in a local timeout and the disposable session is disposed in all cases.
+7. Preflight the judge command/model with a minimal JSON connectivity check. Judge prompts and stdout are byte-bounded; judge child processes have a bounded lifetime and are killed on timeout or noisy output.
+
+The live CLI, paid run, preflight, and metadata all read the actual `process.env`; there is no alternate run-level environment injection that could let tests pass with configuration different from the real run. Only pure config helpers and low-level preflight/probe APIs accept explicit environments. The preflight records only model identities, fixed structural judge command labels (`default-pi` or `configured-command`), and coarse capabilities such as JSON-response support or terminal container readiness. It never records credentials, prompt bodies, response bodies, raw Docker/model/judge command causes, command paths/arguments, or disposable absolute paths.
 
 ## Scenario selection
 

@@ -69,7 +69,9 @@ launcher never resets or recopies it on progression, reload, revisit, or resume.
 
 Editor-practice paths remain learner-visible as authored, such as `spec.md`, but reads and accepted
 promotions resolve them under the active live workspace. Terminal-practice shells start in
-`/workspace`, where Docker has mounted only that active live workspace. Authored templates must be
+`/workspace`, where Docker has mounted only that active live workspace. Docker child processes receive
+only the minimal client environment needed to reach local Docker plus `OPENCODE_API_KEY` by name;
+arbitrary parent secrets and proxy variables are not forwarded. Authored templates must be
 real in-root directories, contain no `.git`, and contain no symlinks; `node_modules/` and generated
 `.tmp/` evidence are not copied.
 

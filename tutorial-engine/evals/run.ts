@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile as nodeWriteFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildV2JudgePrompt, createV2Report, judgeV2TraceFromPrompt, v2JudgePass, type V2JudgeResult } from "./v2/judge.js";
+import { buildV2JudgePrompt, createV2Report, judgeV2TraceFromPrompt, probeV2JudgeCommandModel, v2JudgePass, type V2JudgeCommandPreflightResult, type V2JudgeResult } from "./v2/judge.js";
 import { createEmptyV2SessionTrace, projectV2JudgeTrace } from "./v2/session.js";
 import { deterministicV2Gate, runV2ScenarioSession, v2Scenarios, type V2GateResult, type V2Scenario } from "./v2/scenarios.js";
 import { V2_ENGINE_EVAL_MARKERS, type EvaluationWorkspace, type V2EvalRunFailureStage, type V2EvalRunStatus, type V2JudgeTrace, type V2SessionTrace } from "./v2/types.js";
 import { createEvaluationWorkspace } from "./v2/workspace.js";
+import { loadWorkbook } from "../src/workbook/load.js";
+import { preflightWorkbookModels, type WorkbookModelPreflightOptions, type WorkbookModelPreflightResult } from "../src/workbook/model-preflight.js";
+import { PRACTICE_COACH_LOG_PROMPT_ENV } from "../src/workbook/practice-coach.js";
+import { OPENCODE_API_KEY_ENV, WORKBOOK_TERMINAL_IMAGE, DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS, WORKBOOK_TERMINAL_AUTH_PUBLIC_ERROR, assertDockerDaemonAndImage, assertDockerPiAuthentication, dockerClientEnvironment, dockerRunArguments, dockerRunEnvironment, type DockerCommandRunner } from "../src/workbook/terminal.js";
+import { createTutorialLogger, type TutorialLogger } from "../src/workbook/runtime-log.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const reports = join(root, "evals/reports");
@@ -83,6 +89,38 @@ export interface V2EvalRunnerDependencies {
   writeFile?: EvalWriteFile;
 }
 
+export interface V2EvalPreflightFixture {
+  contentRoot: string;
+  workspaceRoot: string;
+  close(): Promise<void>;
+}
+
+export interface V2EvalTerminalPreflightResult {
+  image: typeof WORKBOOK_TERMINAL_IMAGE;
+  capabilities: { dockerInfo: true; imageInspect: true; containerStart: true; piAuthentication: true };
+}
+
+export interface V2EvalPreflightResult {
+  fixture: { title: string };
+  terminal: V2EvalTerminalPreflightResult;
+  workbookModels: WorkbookModelPreflightResult[];
+  judge: V2JudgeCommandPreflightResult;
+}
+
+export interface V2EvalPreflightDependencies {
+  createDisposableFixture?: (engineRoot: string) => Promise<V2EvalPreflightFixture>;
+  assertTerminalReady?: (fixture: V2EvalPreflightFixture, environment: NodeJS.ProcessEnv) => Promise<V2EvalTerminalPreflightResult>;
+  preflightWorkbookModels?: (options: WorkbookModelPreflightOptions) => Promise<WorkbookModelPreflightResult[]>;
+  probeJudgeCommandModel?: (environment: NodeJS.ProcessEnv) => Promise<V2JudgeCommandPreflightResult>;
+  dockerCommandRunner?: DockerCommandRunner;
+  logger?: TutorialLogger;
+}
+
+export interface V2EvalCliOptions extends V2EvalRunOptions {
+  preflightDependencies?: V2EvalPreflightDependencies;
+  stdout?: Pick<NodeJS.WriteStream, "write">;
+}
+
 export interface V2EvalRunOptions {
   reportsRoot?: string;
   engineRoot?: string;
@@ -104,11 +142,7 @@ Usage from the repository root:
   npm run eval:release
   npm run eval -- --scenario v2-exact-command-success  # temporary compatibility alias
 
-A scope is required. --release runs the bounded six-scenario release profile once per scenario. EVAL_JUDGE_MODEL selects the judge model. TUTOR_MODEL optionally selects the tutor model used by the workbook tutor. Reports are written under tutorial-engine/evals/reports/.`;
-}
-
-function usage(): void {
-  console.log(v2EvalUsageText());
+A scope is required. --release runs the bounded six-scenario release profile once per scenario. EVAL_JUDGE_MODEL selects the judge model and is mandatory. TUTOR_MODEL and PRACTICE_COACH_MODEL optionally select the workbook role models. Before any report directory, workspace, tutor session, or judge session is created, the runner fail-fast checks scope/confirmation, judge model, disabled private prompt logging, disposable fixture validity, Docker/workbook-terminal readiness, Tutor and Practice Coach connectivity, and judge command connectivity. Reports are written under tutorial-engine/evals/reports/.`;
 }
 
 export type V2EvalScope = "scenario" | "all" | "release";
@@ -187,12 +221,120 @@ export function prepareV2EvalCliRun(args: string[], env: NodeJS.ProcessEnv = pro
   const plan = parseV2EvalArgs(args);
   if (!plan) return undefined;
   if (plan.requiresAllConfirmation) throw new Error(`--all can spend model tokens across ${v2Scenarios.length} live scenarios. Re-run with --yes to confirm.`);
-  if (!env.EVAL_JUDGE_MODEL) throw new Error("Set EVAL_JUDGE_MODEL before running paid live evals.");
+  if (!env.EVAL_JUDGE_MODEL?.trim()) throw new Error("Set EVAL_JUDGE_MODEL before running paid live evals.");
   return plan;
 }
 
-function modelIdentities(): { tutor: string; judge: string } {
-  return { tutor: process.env.TUTOR_MODEL ?? "tutorial default", judge: process.env.EVAL_JUDGE_MODEL ?? "unset" };
+export function assertV2EvalPrivatePromptLoggingDisabled(env: NodeJS.ProcessEnv = process.env): void {
+  if (env[PRACTICE_COACH_LOG_PROMPT_ENV] === "1") throw new Error(`Unset ${PRACTICE_COACH_LOG_PROMPT_ENV} before running live evals; private prompt logging is forbidden.`);
+}
+
+export async function createDisposableV2EvalPreflightFixture(engineRoot = root): Promise<V2EvalPreflightFixture> {
+  const disposableRoot = await mkdtemp(join(tmpdir(), "v2-eval-preflight-"));
+  const contentRoot = join(disposableRoot, "tutorial");
+  const workspaceRoot = join(disposableRoot, "workspace");
+  try {
+    await cp(join(engineRoot, "evals/workbook"), contentRoot, { recursive: true });
+    await mkdir(workspaceRoot, { recursive: true });
+    await loadWorkbook(contentRoot);
+  } catch (error) {
+    await rm(disposableRoot, { recursive: true, force: true });
+    throw error;
+  }
+  return { contentRoot, workspaceRoot, close: async () => { await rm(disposableRoot, { recursive: true, force: true }); } };
+}
+
+const V2_EVAL_TERMINAL_CLEANUP_PUBLIC_ERROR = "Live eval preflight failed while cleaning up the disposable workbook terminal container.";
+const V2_EVAL_TERMINAL_STARTUP_PUBLIC_ERROR = "Could not start isolated terminal container for the workbook terminal preflight.";
+const V2_EVAL_TERMINAL_STARTUP_CLEANUP_PUBLIC_ERROR = "Could not start isolated terminal container for the workbook terminal preflight, and cleanup could not be confirmed.";
+const V2_EVAL_TERMINAL_AUTH_CLEANUP_PUBLIC_ERROR = `Could not authenticate Pi with ${OPENCODE_API_KEY_ENV} inside the workbook terminal preflight, and cleanup could not be confirmed.`;
+
+function runDockerCommand(commandRunner: DockerCommandRunner | undefined, args: string[], options: Parameters<DockerCommandRunner>[2]): void {
+  if (commandRunner) commandRunner("docker", args, options);
+  else execFileSync("docker", args, options);
+}
+
+export async function assertV2EvalTerminalReady(fixture: V2EvalPreflightFixture, environment: NodeJS.ProcessEnv = process.env, commandRunner?: DockerCommandRunner): Promise<V2EvalTerminalPreflightResult> {
+  const apiKey = environment[OPENCODE_API_KEY_ENV]?.trim();
+  if (!apiKey) throw new Error(`Embedded terminal requires ${OPENCODE_API_KEY_ENV}.`);
+  const name = `workbook-terminal-preflight-${randomUUID()}`;
+  assertDockerDaemonAndImage(commandRunner, environment);
+  const args = dockerRunArguments({ workspace: fixture.workspaceRoot, name });
+  args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
+  let stage: "startup" | "auth" | undefined;
+  let stageError: Error | undefined;
+  let cleanupFailed = false;
+  let runAttempted = false;
+  try {
+    runAttempted = true;
+    try { runDockerCommand(commandRunner, args, { stdio: "ignore", env: dockerRunEnvironment(apiKey, environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.containerStart }); }
+    catch { stage = "startup"; stageError = new Error(V2_EVAL_TERMINAL_STARTUP_PUBLIC_ERROR); }
+    if (!stageError) {
+      try { assertDockerPiAuthentication(name, commandRunner, environment); }
+      catch { stage = "auth"; stageError = new Error(WORKBOOK_TERMINAL_AUTH_PUBLIC_ERROR); }
+    }
+  } finally {
+    if (runAttempted) {
+      try { runDockerCommand(commandRunner, ["rm", "-f", name], { stdio: "ignore", env: dockerClientEnvironment(environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.cleanup }); }
+      catch { cleanupFailed = true; }
+    }
+  }
+  if (stageError) {
+    if (cleanupFailed && stage === "startup") throw new Error(V2_EVAL_TERMINAL_STARTUP_CLEANUP_PUBLIC_ERROR);
+    if (cleanupFailed && stage === "auth") throw new Error(V2_EVAL_TERMINAL_AUTH_CLEANUP_PUBLIC_ERROR);
+    throw stageError;
+  }
+  if (cleanupFailed) throw new Error(V2_EVAL_TERMINAL_CLEANUP_PUBLIC_ERROR);
+  return { image: WORKBOOK_TERMINAL_IMAGE, capabilities: { dockerInfo: true, imageInspect: true, containerStart: true, piAuthentication: true } };
+}
+
+async function safeV2EvalPreflightStage<T>(action: () => Promise<T>, publicMessage: string): Promise<T> {
+  try { return await action(); }
+  catch { throw new Error(publicMessage); }
+}
+
+export async function preflightV2EvalLiveEngine(options: { plan: V2EvalCliPlan; engineRoot?: string; environment?: NodeJS.ProcessEnv; dependencies?: V2EvalPreflightDependencies }): Promise<V2EvalPreflightResult> {
+  void options.plan;
+  const environment = options.environment ?? process.env;
+  const deps = options.dependencies ?? {};
+  const logger = deps.logger ?? createTutorialLogger();
+  assertV2EvalPrivatePromptLoggingDisabled(environment);
+  const fixture = await safeV2EvalPreflightStage(
+    () => (deps.createDisposableFixture ?? createDisposableV2EvalPreflightFixture)(options.engineRoot ?? root),
+    "Live eval preflight failed while validating the disposable evaluator fixture."
+  );
+  let preflightError: unknown;
+  try {
+    const workbook = await safeV2EvalPreflightStage(
+      () => loadWorkbook(fixture.contentRoot),
+      "Live eval preflight failed while validating the disposable evaluator fixture."
+    );
+    const terminal = await safeV2EvalPreflightStage(
+      () => deps.assertTerminalReady ? deps.assertTerminalReady(fixture, environment) : assertV2EvalTerminalReady(fixture, environment, deps.dockerCommandRunner),
+      "Live eval preflight failed while checking Docker and workbook terminal readiness."
+    );
+    const workbookModels = await safeV2EvalPreflightStage(
+      () => (deps.preflightWorkbookModels ?? preflightWorkbookModels)({ contentRoot: fixture.contentRoot, workspaceRoot: fixture.workspaceRoot, logger, environment }),
+      "Live eval preflight failed while checking Tutor and Practice Coach model connectivity."
+    );
+    const judge = await safeV2EvalPreflightStage(
+      () => (deps.probeJudgeCommandModel ?? probeV2JudgeCommandModel)(environment),
+      "Live eval preflight failed while checking judge command/model connectivity."
+    );
+    return { fixture: { title: workbook.identity.title }, terminal, workbookModels, judge };
+  } catch (error) {
+    preflightError = error;
+    throw error;
+  } finally {
+    try { await fixture.close(); }
+    catch {
+      if (!preflightError) throw new Error("Live eval preflight failed while cleaning up the disposable preflight fixture.");
+    }
+  }
+}
+
+function modelIdentities(environment: NodeJS.ProcessEnv = process.env): { tutor: string; judge: string } {
+  return { tutor: environment.TUTOR_MODEL ?? "tutorial default", judge: environment.EVAL_JUDGE_MODEL ?? "unset" };
 }
 
 function unixRelative(from: string, to: string): string {
@@ -265,6 +407,7 @@ function createRunMetadata(options: {
   lifecycle: V2RunMetadata["lifecycle"];
   workspace?: EvaluationWorkspace;
   files: Record<string, string>;
+  environment?: NodeJS.ProcessEnv;
 }): V2RunMetadata {
   const session = safeLatestSession(options.workspace);
   return {
@@ -277,7 +420,7 @@ function createRunMetadata(options: {
     ...(options.failure === undefined ? {} : { failure: options.failure }),
     gitRevision: options.gitRevision,
     node: process.version,
-    modelIdentities: modelIdentities(),
+    modelIdentities: modelIdentities(options.environment),
     timestamps: options.ended === undefined ? { started: options.started } : { started: options.started, ended: options.ended },
     lifecycle: options.lifecycle,
     identifiers: {
@@ -330,6 +473,7 @@ export async function runV2EvalOnce(scenario: V2Scenario, repetition: number, op
   const now = deps.now ?? (() => new Date());
   const engineRoot = options.engineRoot ?? root;
   const reportsRoot = options.reportsRoot ?? reports;
+  const environment = process.env;
   const started = safeNowIso(now);
   const runNonce = safeRunNonce(deps.runNonce ?? (() => randomUUID().slice(0, 8))).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 16) || "run";
   const runId = `${started.replace(/[:.]/g, "-")}-${scenario.id}-${repetition}-${runNonce}`;
@@ -418,8 +562,8 @@ export async function runV2EvalOnce(scenario: V2Scenario, repetition: number, op
         gate,
         judgeInput,
         judge,
-        tutorModel: modelIdentities().tutor,
-        judgeModel: modelIdentities().judge
+        tutorModel: modelIdentities(environment).tutor,
+        judgeModel: modelIdentities(environment).judge
       });
       await writeJson(writeFile, join(directory, "judge.json"), judge);
       files.judge = "judge.json";
@@ -500,7 +644,8 @@ export async function runV2EvalOnce(scenario: V2Scenario, repetition: number, op
     gitRevision,
     lifecycle,
     workspace,
-    files
+    files,
+    environment
   });
   let metadataWritten = true;
   try {
@@ -529,29 +674,46 @@ export async function runV2EvalOnce(scenario: V2Scenario, repetition: number, op
   };
 }
 
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  if (args.includes("--help")) { usage(); return; }
-  const plan = prepareV2EvalCliRun(args);
-  if (!plan) { usage(); process.exitCode = 1; return; }
+function writeStream(stream: Pick<NodeJS.WriteStream, "write">, text: string): void {
+  stream.write(text);
+}
+
+function modelIdentityLabel(result: WorkbookModelPreflightResult): string {
+  const selected = result.selectedModel ? `${result.selectedModel.provider}/${result.selectedModel.id}` : "unknown selected model";
+  return `${result.role}: ${selected}`;
+}
+
+export async function runV2EvalCli(args: string[], options: V2EvalCliOptions = {}): Promise<number> {
+  const environment = process.env;
+  const stdout = options.stdout ?? process.stdout;
+  const engineRoot = options.engineRoot ?? root;
+  const reportsRoot = options.reportsRoot ?? reports;
+  if (args.includes("--help")) { writeStream(stdout, v2EvalUsageText()); writeStream(stdout, "\n"); return 0; }
+  const plan = prepareV2EvalCliRun(args, environment);
+  if (!plan) { writeStream(stdout, v2EvalUsageText()); writeStream(stdout, "\n"); return 1; }
+  const preflight = await preflightV2EvalLiveEngine({ plan, engineRoot, environment, dependencies: options.preflightDependencies });
   const chosen = plan.scenarios;
   const repeat = plan.repeat;
 
-  await mkdir(reports, { recursive: true });
-  console.log(`Selected: ${chosen.map((item) => item.id).join(", ")}\nScope: ${plan.scope}\nRuns per scenario: ${repeat}\nTutor: ${process.env.TUTOR_MODEL ?? "tutorial default"}\nJudge: ${process.env.EVAL_JUDGE_MODEL}`);
+  await mkdir(reportsRoot, { recursive: true });
+  writeStream(stdout, `Selected: ${chosen.map((item) => item.id).join(", ")}\nScope: ${plan.scope}\nRuns per scenario: ${repeat}\nTutor: ${environment.TUTOR_MODEL ?? "tutorial default"}\nJudge: ${environment.EVAL_JUDGE_MODEL}\nPreflight: fixture '${preflight.fixture.title}', terminal ${preflight.terminal.image}, ${preflight.workbookModels.map(modelIdentityLabel).join(", ")}, judge ${preflight.judge.commandLabel}/${preflight.judge.model}\n`);
   const results: Array<{ scenario: string; runs: V2EvalRunResult[] }> = [];
   for (const scenario of chosen) {
     const runs = [];
     for (let attempt = 0; attempt < repeat; attempt++) {
-      const result = await runV2EvalOnce(scenario, attempt + 1);
+      const result = await runV2EvalOnce(scenario, attempt + 1, { reportsRoot, engineRoot, dependencies: options.dependencies });
       runs.push(result);
-      console.log(`${scenario.id}: ${result.passed ? "PASS" : "FAIL"} — ${result.directory}`);
+      writeStream(stdout, `${scenario.id}: ${result.passed ? "PASS" : "FAIL"} — ${result.directory}\n`);
     }
     results.push({ scenario: scenario.id, runs });
   }
-  await writeJson(nodeWriteFile, join(reports, "latest.json"), createV2LatestReport(results));
+  await writeJson(nodeWriteFile, join(reportsRoot, "latest.json"), createV2LatestReport(results));
   const stable = results.every(({ runs }) => repeat === 1 ? runs[0]?.passed === true : runs.filter((run) => run.passed).length >= 2);
-  if (!stable) process.exitCode = 1;
+  return stable ? 0 : 1;
+}
+
+async function main(): Promise<void> {
+  process.exitCode = await runV2EvalCli(process.argv.slice(2));
 }
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
