@@ -13,9 +13,27 @@ mkdir -p "${PI_CODING_AGENT_DIR}"
 # doer's is Pi state, so it has to be seeded into that directory.
 node .devcontainer/seed-doer-model.mjs
 
-# The tutor and the calculator both run from the workspace, so install the
-# workspace dependencies now rather than making the first lesson wait on them.
-npm install
+# The tutor and the calculator both run from the workspace. Each npm install
+# location is a named Linux volume mounted over the host checkout, and fresh
+# Docker volumes start as root-owned when the target path is dynamic, so make
+# every dependency directory writable before npm populates it. npm ci installs
+# exactly from the lockfile; --include=optional keeps platform-specific packages
+# such as Rollup's Linux native package present even if a user-level npm config
+# omits optional deps.
+dependency_directories=(
+  node_modules
+  tutorial-engine/node_modules
+  tutorial/workspaces/refactor-line/calculator/node_modules
+)
+
+for dependency_directory in "${dependency_directories[@]}"; do
+  mkdir -p "${dependency_directory}"
+  if [ ! -w "${dependency_directory}" ]; then
+    sudo chown -R "$(id -u):$(id -g)" "${dependency_directory}"
+  fi
+done
+
+npm ci --include=optional
 
 # `npm run check` ends in a Chromium smoke test. The image carries Chromium's
 # system libraries; the browser binary is deliberately not baked in, because it

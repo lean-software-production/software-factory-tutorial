@@ -9,14 +9,37 @@ import { trustedNodeRuntimeProvision, tutorialWorkbookArguments } from "../scrip
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const tutorialRoot = resolve(repositoryRoot, "tutorial");
 
+async function readPackageManifest() {
+  return JSON.parse(await readFile(resolve(repositoryRoot, "package.json"), "utf8"));
+}
+
+async function readDevcontainerConfigSource() {
+  return readFile(resolve(repositoryRoot, ".devcontainer/devcontainer.json"), "utf8");
+}
+
+const workspaceDependencyDirectories = [
+  "node_modules",
+  "tutorial-engine/node_modules",
+  "tutorial/workspaces/refactor-line/calculator/node_modules"
+];
+
+const dependencyVolumeMounts = [
+  { volume: "node_modules", target: "node_modules" },
+  { volume: "tutorial-engine-node_modules", target: "tutorial-engine/node_modules" },
+  {
+    volume: "tutorial-refactor-line-calculator-node_modules",
+    target: "tutorial/workspaces/refactor-line/calculator/node_modules"
+  }
+];
+
 describe("tutorial launcher", () => {
   it("starts the workbook from npm start", async () => {
-    const manifest = JSON.parse(await readFile(resolve(repositoryRoot, "package.json"), "utf8"));
+    const manifest = await readPackageManifest();
     assert.equal(manifest.scripts.start, "npm run tutorial:workbook");
   });
 
   it("keeps the calculator workspace under the tutorial workspace", async () => {
-    const manifest = JSON.parse(await readFile(resolve(repositoryRoot, "package.json"), "utf8"));
+    const manifest = await readPackageManifest();
     assert.deepEqual(manifest.workspaces, ["tutorial/workspaces/refactor-line/calculator", "tutorial-engine"]);
   });
 
@@ -29,6 +52,37 @@ describe("tutorial launcher", () => {
         { source: resolve(repositoryRoot, "node_modules"), target: "node_modules", readonly: true }
       ]
     });
+  });
+});
+
+describe("devcontainer dependency isolation", () => {
+  it("masks every npm dependency directory with per-devcontainer Linux volumes", async () => {
+    const manifest = await readPackageManifest();
+    const configSource = await readDevcontainerConfigSource();
+    assert.deepEqual(workspaceDependencyDirectories, [
+      "node_modules",
+      ...manifest.workspaces.map((workspace) => `${workspace}/node_modules`).sort()
+    ]);
+
+    for (const { volume, target } of dependencyVolumeMounts) {
+      assert.match(
+        configSource,
+        new RegExp(`"source=\\$\\{devcontainerId\\}-${volume},target=\\$\\{containerWorkspaceFolder\\}/${target},type=volume"`)
+      );
+    }
+    assert.doesNotMatch(configSource, /\/workspaces\/software-factory-tutorial\/.*node_modules/);
+  });
+
+  it("makes mounted dependency volumes writable before installing from the lockfile", async () => {
+    const postCreate = await readFile(resolve(repositoryRoot, ".devcontainer/post-create.sh"), "utf8");
+
+    for (const dependencyDirectory of workspaceDependencyDirectories) {
+      assert.match(postCreate, new RegExp(`^  ${dependencyDirectory}$`, "m"));
+    }
+    assert.match(postCreate, /sudo chown -R "\$\(id -u\):\$\(id -g\)" "\$\{dependency_directory\}"/);
+    assert.ok(postCreate.indexOf("sudo chown") < postCreate.indexOf("npm ci --include=optional"));
+    assert.match(postCreate, /npm ci --include=optional/);
+    assert.doesNotMatch(postCreate, /^npm install(?:\s|$)/m);
   });
 });
 
