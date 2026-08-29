@@ -180,10 +180,10 @@ describe("v2 live evaluator scenarios", () => {
     const statusOnlyFailed = deterministicV2Gate(findV2Scenario(feedbackStatusOnly.scenarioId), feedbackStatusOnly);
     expect(statusOnlyFailed.assertions.find((assertion) => assertion.name === "editor feedback visible")?.passed).toBe(false);
 
-    const leaky = editorFeedbackTrace();
-    (leaky.publicStates[1]!.state as any).progress.blocks[0].feedback = "Private editor criterion: mention promotion.";
-    const leakyFailed = deterministicV2Gate(findV2Scenario(leaky.scenarioId), leaky);
-    expect(leakyFailed.assertions.find((assertion) => assertion.name === "checked trace has no hidden tutor instructions")?.passed).toBe(false);
+    const publicVocabulary = editorFeedbackTrace();
+    (publicVocabulary.publicStates[1]!.state as any).progress.blocks[0].feedback = "Private editor criterion can appear as public learner-visible prose; terminal-command-submitted and Coach handoff can too.";
+    const vocabularyGate = deterministicV2Gate(findV2Scenario(publicVocabulary.scenarioId), publicVocabulary);
+    expect(vocabularyGate.assertions.find((assertion) => assertion.name === "checked trace uses projected judge structure")?.passed).toBe(true);
   });
 
   it("gates satisfactory editor drafts on unlock and promoted artifact", () => {
@@ -222,10 +222,17 @@ describe("v2 live evaluator scenarios", () => {
     const wrongPathFailed = deterministicV2Gate(findV2Scenario(wrongPath.scenarioId), wrongPath);
     expect(wrongPathFailed.assertions.find((assertion) => assertion.name === "clue-only learner command")?.passed).toBe(false);
 
-    const leaky = clueOnlyTrace();
-    (leaky.publicStates[2]!.state as any).chapters[0].lesson.blocks[0].markdown += `\n\`\`\`sh command\n${clueCommand}\n\`\`\``;
-    const failed = deterministicV2Gate(findV2Scenario(leaky.scenarioId), leaky);
-    expect(failed.assertions.find((assertion) => assertion.name === "clue-only public prompt")?.passed).toBe(false);
+    const publicVocabulary = clueOnlyTrace();
+    (publicVocabulary.publicStates[2]!.state as any).chapters[0].lesson.blocks[0].markdown += "\nPublic prose may mention terminal-command-submitted, Coach handoff, \"tutor\":, and unrelated shell-looking text such as printf 'hello\\n' > notes/example.txt && cat notes/example.txt.";
+    const vocabularyGate = deterministicV2Gate(findV2Scenario(publicVocabulary.scenarioId), publicVocabulary);
+    expect(vocabularyGate.assertions.find((assertion) => assertion.name === "clue-only public prompt")?.passed).toBe(true);
+
+    const exposedCommand = clueOnlyTrace();
+    (exposedCommand.publicStates[2]!.state as any).chapters[0].lesson.blocks[0].markdown += `\nDo not include this canonical solution in the public prompt: ${clueCommand}`;
+    const exposedCommandGate = deterministicV2Gate(findV2Scenario(exposedCommand.scenarioId), exposedCommand);
+    const exposedCommandAssertion = exposedCommandGate.assertions.find((assertion) => assertion.name === "clue-only public prompt");
+    expect(exposedCommandAssertion?.passed).toBe(false);
+    expect(exposedCommandAssertion?.detail).toContain("canonical solution command");
   });
 
   it("gates reflection follow-up on learner, tutor, follow-up, second tutor reply, and completion", () => {
@@ -299,7 +306,6 @@ describe("v2 live evaluator scenarios", () => {
     expect(prompt).not.toContain("not all learner-visible");
     expect(prompt).not.toContain("Recorded public trace");
     expect(prompt).not.toContain("Active specification");
-    expect(prompt).not.toContain("private tutor guidance");
 
     const judge = verifyV2JudgeResult({
       dimensions: {
@@ -316,7 +322,8 @@ describe("v2 live evaluator scenarios", () => {
     expect(report.judgeInput).toEqual({ prompt });
     expect(report.trace).toEqual(judgeTrace);
     expect(report.trace).not.toBe(judgeTrace);
-    expect(report.judge).toBe(judge);
+    expect(report.judge).toEqual(judge);
+    expect(report.judge).not.toBe(judge);
     expect(report.artifacts).toEqual(judgeTrace.artifacts);
   });
 });

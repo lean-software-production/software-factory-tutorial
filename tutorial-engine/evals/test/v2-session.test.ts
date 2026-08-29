@@ -56,7 +56,7 @@ describe("v2 public session trace", () => {
     expect(trace.publicStates.map((entry) => entry.label)).toEqual(["poll:1", "poll:3"]);
   });
 
-  it("records only public workbook state and rejects private tutor fields", async () => {
+  it("records complete browser-public state without vocabulary or key-name bans", async () => {
     const trace = createEmptyV2SessionTrace("public-state");
     const workspace = await createEvaluationWorkspace();
     tempRoots.push(workspace.repositoryRoot);
@@ -97,13 +97,13 @@ describe("v2 public session trace", () => {
       const serialized = JSON.stringify(trace);
       expect(serialized).toContain("Draft the editor artifact");
       expect(serialized).toContain("editor-artifacts/evaluator-editor.txt");
-      expect(serialized).not.toContain("Private editor criterion");
-      expect(serialized).not.toContain("This is private tutor guidance");
-      expect(serialized).not.toContain("Do not reveal an exact command");
-      expect(serialized).not.toContain("Follow up until the learner");
       expect(serialized).toContain('"source":"authored"');
 
-      expect(() => recordPublicState(trace, "leaky", { tutor: "private tutor guidance" })).toThrow(/private tutor/i);
+      const arbitrary = recordPublicState(trace, "public-prose", {
+        tutor: "Public prose may contain a tutor key, This is private tutor guidance, Do not reveal an exact command, Follow up until the learner, Private editor criterion, terminal-command-submitted, Coach handoff, and JSON-looking text like \"tutor\":."
+      });
+      expect(arbitrary.state).toHaveProperty("tutor");
+      expect(JSON.stringify(arbitrary)).toContain("Coach handoff");
     } finally {
       await server.close();
       await workspace.close();
@@ -125,7 +125,7 @@ describe("v2 public session trace", () => {
       at: "2026-08-20T00:00:00.000Z",
       attemptId: "attempt-secret",
       outcome: "ready",
-      text: "This is private tutor guidance for the live evaluator's exact-command scenario."
+      text: "private-handoff-secret-for-gate-only-event"
     })}\n${JSON.stringify({
       type: "attempt_accepted",
       id: "raw-accepted-secret",
@@ -171,7 +171,7 @@ describe("v2 public session trace", () => {
       { path: "editor-artifacts/evaluator-editor.txt", content: "editor draft complete\n" },
       { path: "factory/.tmp/evaluator-command.txt", content: "command block complete\n" }
     ]);
-    expect(JSON.stringify(trace)).not.toContain("private tutor guidance");
+    expect(JSON.stringify(trace)).not.toContain("private-handoff-secret-for-gate-only-event");
 
     await workspace.close();
     tempRoots.length = 0;

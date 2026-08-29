@@ -57,20 +57,42 @@ Use `--all --yes` only when you intend to run every scenario. Use `--repeat 2` o
 
 The runner copies `evals/workbook/` from the `tutorial-engine` workspace into a disposable temporary repository under `tutorial/`, materializes fresh live workspaces under `tutorial/.tutorial/<session-id>/workspaces/<workspace-id>/`, and drives the same public workbook API, editor endpoint, and terminal WebSocket used by the browser. It records public workbook state, public editor status/feedback, learner-visible terminal transcript, public reflection turns, raw `workbook/events.jsonl` rows for deterministic gates, and allowlisted session-local `factory/.tmp` plus `editor-artifacts` artifact snapshots.
 
-Raw `workbook/events.jsonl` rows remain internal and gate-only. They may include private terminal lifecycle rows, evidence IDs, private Coach handoffs, summaries, failures, timestamps, and future fields. Before anything is written to reports or sent to a judge, the runner projects the internal trace into an allowlisted public judge trace. That public trace contains learner-visible channels, artifacts, and projected structural progression events built from explicit fields only. Deterministic gates inspect the internal trace before any judge call, but judge input and reports receive only the allowlisted public judge trace, not raw timeline rows, authored curriculum, or private tutor guidance.
+Raw `workbook/events.jsonl` rows remain internal and gate-only. They may include private terminal lifecycle rows, evidence IDs, private Coach handoffs, summaries, failures, timestamps, and future fields. Before anything is written to reports or sent to a judge, the runner projects the internal trace into an allowlisted public judge trace. That public trace contains learner-visible channels, artifacts, and projected structural progression events built from explicit fields only. Deterministic gates inspect the internal trace before any judge call, but judge input and reports receive only the allowlisted public judge trace plus a public gate summary with assertion counts/pass flags; raw gate assertion details stay out of `report.json` and `judge-input.txt`.
+
+## Output ownership and schema markers
+
+Every active v2 engine-eval envelope is marked so these synthetic tutorial-engine mechanics outputs cannot be confused with future authored-workbook evals:
+
+```json
+{
+  "namespace": "tutorial-engine/evals/engine-v2",
+  "owner": "tutorial-engine",
+  "suite": "engine-v2",
+  "schemaVersion": 1
+}
+```
+
+The marker fields appear at the top level of per-run `report.json`, per-run `metadata.json`, and `evals/reports/latest.json`. Treat `schemaVersion` as the output envelope schema for these active engine eval artifacts.
 
 ## Results
 
-Each run writes an ignored report directory under `evals/reports/<run-id>/` relative to the `tutorial-engine` workspace. Important files are:
+Each run writes an ignored report directory under `evals/reports/<run-id>/` relative to the `tutorial-engine` workspace.
+
+Public/curated files are safe to use as the evaluation record:
 
 - `evals/reports/<run-id>/trace.json`: allowlisted public judge trace with public state/editor/reflection/terminal learner channels, projected structural progression events, and artifacts.
-- `evals/reports/<run-id>/gate.json`: deterministic gate assertions.
-- `evals/reports/<run-id>/artifacts.json`: captured `factory/.tmp` and `editor-artifacts` artifact contents.
-- `evals/reports/<run-id>/judge-input.txt`: exact prompt sent to the judge, including scenario criteria and allowlisted public judge trace citations.
+- `evals/reports/<run-id>/artifacts.json`: captured `factory/.tmp` and `editor-artifacts` artifact contents that passed the public trace projection.
+- `evals/reports/<run-id>/judge-input.txt`: exact prompt sent to the judge, including scenario criteria, allowlisted public judge trace citations, and public gate counts/pass flags only.
 - `evals/reports/<run-id>/judge.json`: verified judge JSON.
-- `evals/reports/<run-id>/report.json`: combined scenario, model identities, gate, allowlisted public judge trace, judge input, judge result, artifacts, and verdict.
+- `evals/reports/<run-id>/report.json`: marked combined scenario, model identities, public gate summary, allowlisted public judge trace, judge input, judge result, artifacts, and verdict. It is written only after the deterministic gate passes and the judge returns a verified result.
 - `evals/reports/<run-id>/summary.md`: short human-readable result.
-- `evals/reports/<run-id>/metadata.json`: run metadata, model identities, git revision, and workspace paths.
-- `evals/reports/<run-id>/failure.txt`: exact failure when setup, the live session, deterministic gates, or judge invocation fails.
+- `evals/reports/<run-id>/metadata.json`: marked run metadata, model identities, git revision, lifecycle status, public failure stage when applicable, report file names, and stable identifiers such as `sessionId` and workspace IDs. It intentionally does not persist disposable temporary workspace/session paths, because those paths are normally deleted during cleanup.
+- `evals/reports/latest.json`: marked latest envelope with `generatedAt` and the selected scenario run results/report directories.
 
-The latest command also writes `evals/reports/latest.json` with the selected scenarios and report directories.
+Local diagnostic files are not public report artifacts:
+
+- `evals/reports/<run-id>/gate.json`: deterministic gate assertions. It is never sent to the judge and is not embedded in `report.json` or `latest.json`.
+- `evals/reports/<run-id>/failure.txt`: exact failure when setup, workspace creation, server startup, the live session, deterministic gates, judge invocation, report writing, or cleanup fails, when the diagnostic file can be written. Cleanup failures include resource locations such as temporary workspace paths and server URL here, not in curated metadata. If only `metadata.json` writing fails, the returned run result and `latest.json` record the public `metadata` failure and omit `metadataFile` instead of claiming a missing per-run metadata artifact.
+- `evals/reports/<run-id>/cleanup-failure.txt`: supplemental cleanup failure details when cleanup fails after an earlier failure. It can also include temporary workspace paths and server URL.
+
+Do not publish diagnostic files blindly: they may contain internal assertion details, exact error stacks, disposable paths, server URLs, or other local debugging context. Failure metadata is still written on normal failure paths with a public failure stage and `diagnosticStatus`; if `metadata.json` itself cannot be written, the run result and `latest.json` omit `metadataFile` and report the `metadata` failure publicly. Deterministic gate failures write metadata before any judge invocation.

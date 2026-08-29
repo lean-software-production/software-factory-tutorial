@@ -116,9 +116,6 @@ describe("live v2 evaluator regressions", () => {
     expect(judgeInput).not.toContain("durable workbook timeline records from workbook/events.jsonl");
     expect(judgeInput).not.toContain("not all learner-visible");
     expect(judgeInput).not.toContain("Recorded public trace");
-    expect(judgeInput).not.toContain('"tutor":');
-    expect(judgeInput).not.toContain("This is private tutor guidance");
-    expect(judgeInput).not.toContain("Do not reveal an exact command");
 
     const judge = verifyV2JudgeResult({
       dimensions: {

@@ -1,6 +1,6 @@
 import { WebSocket } from "ws";
 import { parsePublicTerminalMessage, type PublicTerminalFrame } from "../../src/workbook/public-terminal-contract.js";
-import { assertNoPrivateTutorState, recordEditorStatus, recordPublicState, recordReflectionTurn, recordTerminalTranscript } from "./session.js";
+import { recordEditorStatus, recordPublicState, recordReflectionTurn, recordTerminalTranscript } from "./session.js";
 import type { PublicWorkbookState, V2SessionTrace, V2TerminalTranscriptEntry } from "./types.js";
 
 export type WorkbookApiState = PublicWorkbookState & { [key: string]: any };
@@ -131,7 +131,6 @@ export class V2WorkbookDriver {
     let json: unknown;
     try { json = text ? JSON.parse(text) : {}; }
     catch { throw new Error(`${method} ${path} returned non-JSON response (${response.status}).`); }
-    assertNoPrivateTutorState(json);
     if (!response.ok) {
       const message = json && typeof json === "object" && "error" in json && typeof (json as { error?: unknown }).error === "string"
         ? (json as { error: string }).error
@@ -249,7 +248,7 @@ export class V2WorkbookDriver {
           const payload = data.toString();
           let frame: PublicTerminalFrame | undefined;
           try {
-            assertNoPrivateTutorState(JSON.parse(payload), "terminal message");
+            JSON.parse(payload);
             frame = parsePublicTerminalMessage(payload);
           } catch (error) {
             finish(error instanceof SyntaxError ? new Error("Workbook terminal sent a non-JSON message.") : error instanceof Error ? error : new Error(String(error)));

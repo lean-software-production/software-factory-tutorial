@@ -3,6 +3,22 @@ import type { StartedWorkbookServer, WorkbookServerOptions } from "../../src/wor
 import type { WorkbookTimelineRecord } from "../../src/workbook/timeline.js";
 import type { TutorialSessionPaths } from "../../src/session-workspace.js";
 
+export const V2_ENGINE_EVAL_NAMESPACE = "tutorial-engine/evals/engine-v2" as const;
+export const V2_ENGINE_EVAL_OWNER = "tutorial-engine" as const;
+export const V2_ENGINE_EVAL_SUITE = "engine-v2" as const;
+export const V2_ENGINE_EVAL_SCHEMA_VERSION = 1 as const;
+
+export const V2_ENGINE_EVAL_MARKERS = Object.freeze({
+  namespace: V2_ENGINE_EVAL_NAMESPACE,
+  owner: V2_ENGINE_EVAL_OWNER,
+  suite: V2_ENGINE_EVAL_SUITE,
+  schemaVersion: V2_ENGINE_EVAL_SCHEMA_VERSION
+});
+
+export type V2EngineEvalMarkers = typeof V2_ENGINE_EVAL_MARKERS;
+export type V2EvalRunStatus = "passed" | "failed";
+export type V2EvalRunFailureStage = "workspace-creation" | "server-startup" | "session" | "deterministic-gate" | "judge" | "report" | "cleanup" | "metadata" | "unexpected";
+
 export type PublicWorkbookState = Record<string, unknown>;
 
 export interface V2RecordedPublicState {

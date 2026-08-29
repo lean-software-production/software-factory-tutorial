@@ -177,7 +177,8 @@ describe("v2 public judge trace projection", () => {
       },
       summary: "ok"
     }, unsafeTrace);
-    const report = createV2Report({ scenario, trace: unsafeTrace, gate, judgeInput: "raw prompt secret top-level-events-secret", judge, tutorModel: "tutor", judgeModel: "judge" });
+    expect(() => createV2Report({ scenario, trace: unsafeTrace, gate, judgeInput: "raw prompt secret top-level-events-secret", judge, tutorModel: "tutor", judgeModel: "judge" })).toThrow("Judge input does not match the sanitized v2 judge prompt.");
+    const report = createV2Report({ scenario, trace: unsafeTrace, gate, judgeInput: prompt, judge, tutorModel: "tutor", judgeModel: "judge" });
 
     expect(citations).toHaveLength(6);
     expect(citations[0]).toEqual({
@@ -219,13 +220,14 @@ describe("v2 public judge trace projection", () => {
     expect(() => buildV2JudgePrompt(scenario, { scenarioId: "x", publicStates: [] } as unknown as ReturnType<typeof projectV2JudgeTrace>, { passed: true, assertions: [] })).toThrow("Invalid public judge trace.");
   });
 
-  it("keeps whole browser-public states but rejects private tutor state", () => {
+  it("keeps whole browser-public states including vocabulary and keys that used to be banned", () => {
     const trace = createEmptyV2SessionTrace("v2-exact-command-success");
     trace.publicStates.push({
       label: "state",
       state: {
         arbitraryPublicField: { nested: ["kept"] },
-        timeline: [{ type: "message", id: "public-id", at: "public-at", text: "public tutor failure shown to learner" }]
+        timeline: [{ type: "message", id: "public-id", at: "public-at", text: "public tutor failure shown to learner" }],
+        tutor: { text: "Public state can mention This is private tutor guidance, Do not reveal an exact command, Follow up until the learner, Private editor criterion, terminal-command-submitted, Coach handoff, and JSON-looking \"tutor\":" }
       }
     });
 
@@ -233,10 +235,51 @@ describe("v2 public judge trace projection", () => {
 
     expect(judgeTrace.publicStates[0]?.state).toEqual({
       arbitraryPublicField: { nested: ["kept"] },
-      timeline: [{ type: "message", id: "public-id", at: "public-at", text: "public tutor failure shown to learner" }]
+      timeline: [{ type: "message", id: "public-id", at: "public-at", text: "public tutor failure shown to learner" }],
+      tutor: { text: "Public state can mention This is private tutor guidance, Do not reveal an exact command, Follow up until the learner, Private editor criterion, terminal-command-submitted, Coach handoff, and JSON-looking \"tutor\":" }
     });
-    trace.publicStates.push({ label: "private", state: { tutor: { text: "private" } } });
-    expect(() => projectV2JudgeTrace(trace)).toThrow(/private tutor field/i);
+    expect(JSON.stringify(judgeTrace)).toContain("Coach handoff");
+    expect(JSON.stringify(judgeTrace)).toContain('"tutor"');
+  });
+
+  it("allows public text to discuss Coach handoffs and raw event labels while still dropping undeclared structure", () => {
+    const trace = createEmptyV2SessionTrace("v2-exact-command-success");
+    trace.publicStates.push({ label: "public", state: { note: "The learner says no Coach handoff was exposed and terminal-command-submitted is only a label they learned about." } });
+    trace.terminalTranscript.push({ blockId: "exact-command", direction: "observer", text: "Public observer text can mention terminal-coach-handoff-recorded as vocabulary." });
+    trace.artifacts.push({ path: "factory/.tmp/public-vocabulary.txt", content: "No Coach handoff was exposed; terminal-command-submitted stayed internal.\n" });
+    trace.events.push(record({ type: "terminal-coach-handoff-recorded", attemptId: "attempt-secret", outcome: "ready", text: "private-handoff-secret" }));
+    const judgeTrace = projectV2JudgeTrace(trace);
+    const unsafeTrace = {
+      ...judgeTrace,
+      events: [{ type: "terminal-coach-handoff-recorded", text: "injected-raw-event-secret" }],
+      terminalTranscript: judgeTrace.terminalTranscript.map((entry) => ({ ...entry, attemptId: "injected-attempt-secret" })),
+      artifacts: judgeTrace.artifacts.map((artifact) => ({ ...artifact, rawEvent: { type: "terminal-command-submitted", text: "injected-artifact-secret" } }))
+    } as unknown as typeof judgeTrace;
+    const scenario = findV2Scenario(trace.scenarioId);
+    const gate = { passed: true, assertions: [{ name: "private assertion secret", passed: true, detail: "private detail secret" }] };
+    const prompt = buildV2JudgePrompt(scenario, unsafeTrace, gate);
+    const judge = verifyV2JudgeResult({
+      dimensions: {
+        protocolUse: { score: 2, citations: [0], rationale: "No Coach handoff was exposed in the public trace; the phrase This is private tutor guidance is only discussed as public prose." },
+        tutorQuality: { score: 2, citations: [1], rationale: "terminal-command-submitted was discussed only as public vocabulary, as were Do not reveal an exact command and \"tutor\":." },
+        criteriaFit: { score: 2, citations: [2], rationale: "The artifact says no Coach handoff was exposed and can mention Private editor criterion." }
+      },
+      summary: "The judge may mention Coach handoff, terminal-command-submitted, Follow up until the learner, and JSON-looking \"tutor\": as public prose."
+    }, unsafeTrace);
+    const report = createV2Report({ scenario, trace: unsafeTrace, gate, judgeInput: prompt, judge, tutorModel: "tutor", judgeModel: "judge" });
+
+    expect(prompt).toContain("No Coach handoff was exposed");
+    expect(prompt).toContain("terminal-command-submitted");
+    expect(report.judge.summary).toContain("Coach handoff");
+    expect(JSON.stringify(report)).toContain("terminal-command-submitted");
+    for (const serialized of [prompt, JSON.stringify(report)]) {
+      expect(serialized).not.toContain("private-handoff-secret");
+      expect(serialized).not.toContain("injected-raw-event-secret");
+      expect(serialized).not.toContain("injected-attempt-secret");
+      expect(serialized).not.toContain("injected-artifact-secret");
+      expect(serialized).not.toContain("private assertion secret");
+      expect(serialized).not.toContain("private detail secret");
+    }
   });
 
   it("validates judge citations against projected citation IDs only", () => {
@@ -270,5 +313,13 @@ describe("v2 public judge trace projection", () => {
       },
       summary: "bad"
     }, judgeTrace)).toThrow(/unknown trace citation/i);
+    expect(verifyV2JudgeResult({
+      dimensions: {
+        protocolUse: { score: 2, citations: [0], rationale: "terminal-coach-handoff-recorded is safe as public vocabulary" },
+        tutorQuality: { score: 2, citations: [1], rationale: "No Coach handoff was exposed." },
+        criteriaFit: { score: 2, citations: [0], rationale: "public state" }
+      },
+      summary: "The judge can say terminal-command-submitted was not exposed."
+    }, judgeTrace).summary).toContain("terminal-command-submitted");
   });
 });

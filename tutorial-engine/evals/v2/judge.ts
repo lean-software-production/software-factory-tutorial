@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import type { V2GateResult, V2Scenario } from "./scenarios.js";
 import { copyV2JudgeTrace } from "./session.js";
-import type { V2ArtifactSnapshot, V2JudgeCitation, V2JudgeTrace } from "./types.js";
+import { V2_ENGINE_EVAL_MARKERS, type V2ArtifactSnapshot, type V2EngineEvalMarkers, type V2JudgeCitation, type V2JudgeTrace } from "./types.js";
 
 export interface JudgeDimension { score: 0 | 1 | 2; citations: number[]; rationale: string; }
 
@@ -45,10 +45,18 @@ export interface V2JudgeResult {
   summary: string;
 }
 
-export interface V2Report {
+export interface V2PublicGateResult {
+  passed: boolean;
+  assertionCount: number;
+  failureCount: number;
+  assertions: Array<{ index: number; passed: boolean }>;
+  detailPolicy: "assertion-details-omitted-from-public-report";
+}
+
+export interface V2Report extends V2EngineEvalMarkers {
   scenario: Pick<V2Scenario, "id" | "title" | "description" | "criteria">;
   modelIdentities: { tutor: string; judge: string };
-  gate: V2GateResult;
+  gate: V2PublicGateResult;
   trace: V2JudgeTrace;
   judgeInput: { prompt: string };
   judge: V2JudgeResult;
@@ -71,7 +79,7 @@ Allowlisted public judge trace. Citation IDs are the id fields in this array. Th
 ${JSON.stringify(citations, null, 2)}
 
 Deterministic protocol gate:
-${JSON.stringify(gate, null, 2)}
+${JSON.stringify(projectV2GateForPublicReport(gate), null, 2)}
 
 Score these dimensions from 0 to 2:
 - protocolUse: the tutor/session followed the v2 workbook protocol and used recorded state instead of hidden information.
@@ -100,7 +108,7 @@ export function verifyV2JudgeResult(value: unknown, trace: V2JudgeTrace): V2Judg
     const score = candidate.dimensions[dimension];
     if (!score || ![0, 1, 2].includes(score.score) || !Array.isArray(score.citations) || typeof score.rationale !== "string") throw new Error(`Judge response is invalid for ${dimension}.`);
     if (!score.citations.every((id) => Number.isInteger(id) && validCitationIds.has(id))) throw new Error(`Judge cited an unknown trace citation for ${dimension}.`);
-    output[dimension] = score;
+    output[dimension] = { score: score.score, citations: [...score.citations], rationale: score.rationale };
   }
   return { dimensions: output, summary: candidate.summary };
 }
@@ -111,8 +119,11 @@ export function v2JudgePass(result: V2JudgeResult): { passed: boolean; percentag
 
 export function createV2Report(options: { scenario: V2Scenario; trace: V2JudgeTrace; gate: V2GateResult; judgeInput: string; judge: V2JudgeResult; tutorModel: string; judgeModel: string }): V2Report {
   const trace = copyV2JudgeTrace(options.trace);
-  const judgeInput = buildV2JudgePrompt(options.scenario, trace, options.gate);
+  const expectedJudgeInput = buildV2JudgePrompt(options.scenario, trace, options.gate);
+  if (options.judgeInput !== expectedJudgeInput) throw new Error("Judge input does not match the sanitized v2 judge prompt.");
+  const judge = verifyV2JudgeResult(options.judge, trace);
   return {
+    ...V2_ENGINE_EVAL_MARKERS,
     scenario: {
       id: options.scenario.id,
       title: options.scenario.title,
@@ -120,12 +131,22 @@ export function createV2Report(options: { scenario: V2Scenario; trace: V2JudgeTr
       criteria: options.scenario.criteria
     },
     modelIdentities: { tutor: options.tutorModel, judge: options.judgeModel },
-    gate: options.gate,
+    gate: projectV2GateForPublicReport(options.gate),
     trace,
-    judgeInput: { prompt: judgeInput },
-    judge: options.judge,
+    judgeInput: { prompt: options.judgeInput },
+    judge,
     artifacts: trace.artifacts,
-    verdict: v2JudgePass(options.judge)
+    verdict: v2JudgePass(judge)
+  };
+}
+
+export function projectV2GateForPublicReport(gate: V2GateResult): V2PublicGateResult {
+  return {
+    passed: gate.passed,
+    assertionCount: gate.assertions.length,
+    failureCount: gate.assertions.filter((assertion) => !assertion.passed).length,
+    assertions: gate.assertions.map((assertion, index) => ({ index, passed: assertion.passed })),
+    detailPolicy: "assertion-details-omitted-from-public-report"
   };
 }
 

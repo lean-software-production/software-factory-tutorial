@@ -174,7 +174,6 @@ describe("v2 workbook driver", () => {
       expect(continued.progress.activeBlockId).toBe(editorPracticeId);
       expect(continued.chapters[0].lesson.blocks.map((block: any) => block.id)).toEqual([orientationId, editorPracticeId]);
       expect(trace.publicStates.map((state) => state.label)).toEqual(["initial", "introduction", "introduction:structural:part--evaluator", "introduction:structural:lesson--001-live-session", "continue:orientation"]);
-      expect(JSON.stringify(trace)).not.toContain('"tutor"');
     } finally {
       await server.close();
     }
@@ -197,7 +196,6 @@ describe("v2 workbook driver", () => {
       ]);
       expect(workbookTutor.reviews).toHaveLength(1);
       expect(workbookTutor.reviews[0]).toMatchObject({ privateGuidance: expect.stringContaining("Private editor criterion"), attempt: { evidence: { kind: "editor", text: "This is a vague draft." } } });
-      expect(JSON.stringify(trace)).not.toContain("Private editor criterion");
       // An editor-practice block reaches the learner through its checkpoint feedback, asserted
       // above; the main tutor's review is no longer appended as a timeline message for editor
       // evidence. That the learner sees it exactly once is covered by workbook-ui.test.tsx.
@@ -346,8 +344,6 @@ describe("v2 workbook driver", () => {
         expect.objectContaining({ type: "reflection_reply_recorded", blockId: "lesson--001-live-session--reflection" })
       ]));
       expect(workbookTutor.reviews.filter((review) => review.attempt.blockId.endsWith("--reflection"))).toHaveLength(1);
-      expect(JSON.stringify(trace)).not.toContain("Follow up until the learner");
-      expect(JSON.stringify(trace)).not.toContain('"tutor":');
     } finally {
       await server.close();
     }
@@ -369,24 +365,25 @@ describe("v2 workbook driver", () => {
       ]));
       expect(trace.publicStates.map((state) => state.label)).toContain("terminal:exact-command:reviewed:1");
       expect(trace.publicStates.map((state) => state.label)).toContain("terminal:lesson--001-live-session--exact-command:complete");
-      expect(JSON.stringify(trace)).not.toContain("This is private tutor guidance");
     } finally {
       await server.close();
     }
   });
 
-  it("rejects API responses that expose private tutor fields", async () => {
-    const trace = createEmptyV2SessionTrace("leaky-api");
+  it("records browser-public API responses without vocabulary or key-name bans", async () => {
+    const trace = createEmptyV2SessionTrace("public-api-prose");
     const driver = new V2WorkbookDriver({
       serverUrl: "http://workbook.invalid",
       trace,
-      fetch: async () => new Response(JSON.stringify({ workbook: { title: "Leaky" }, tutor: "private guidance" }), {
+      fetch: async () => new Response(JSON.stringify({ workbook: { title: "Public prose" }, tutor: "A public field can say This is private tutor guidance, terminal-command-submitted, Coach handoff, and \"tutor\":" }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
       })
     });
 
-    await expect(driver.readState("leaky")).rejects.toThrow(/private tutor/i);
-    expect(trace.publicStates).toEqual([]);
+    const state = await driver.readState("public-prose");
+
+    expect(state).toHaveProperty("tutor");
+    expect(JSON.stringify(trace.publicStates)).toContain("Coach handoff");
   });
 });
