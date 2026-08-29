@@ -5,7 +5,7 @@ export type TerminalCoachingDisplayState =
   | { phase: "idle" }
   | { phase: "running"; text: "Running…" }
   | { phase: "checking"; text: "Checking…" }
-  | { phase: "feedback"; text: string }
+  | { phase: "feedback"; text: string; retryFailureId?: string }
   | { phase: "complete"; text: string };
 
 export type TerminalCoachingDisplayEvent = { type: "server-state"; terminal: PublicTerminal | undefined };
@@ -23,7 +23,7 @@ export function reduceTerminalCoachingDisplay(
   switch (event.terminal?.phase) {
     case "running": return { phase: "running", text: "Running…" };
     case "checking": return { phase: "checking", text: "Checking…" };
-    case "feedback": return { phase: "feedback", text: event.terminal.message };
+    case "feedback": return { phase: "feedback", text: event.terminal.message, retryFailureId: event.terminal.retryFailureId };
     case "complete": return { phase: "complete", text: event.terminal.message };
     default: return { phase: "idle" };
   }

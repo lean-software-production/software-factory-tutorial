@@ -9,7 +9,7 @@ import { createDockerPty, requireOpenCodeApiKey, WorkbookTerminalManager, type T
 import { publicTerminalFrame } from "./public-terminal-contract.js";
 import { NO_RUNTIME_PROVISION, trustRuntimeProvision, type RuntimeProvisionProfile, type TrustedRuntimeProvision } from "./runtime-provision.js";
 import { AttemptStore } from "./attempts.js";
-import { FastPracticeCoach, type PracticeCoach } from "./practice-coach.js";
+import type { PracticeCoach } from "./practice-coach.js";
 import { DefaultMainWorkbookTutor, type MainWorkbookTutor } from "./tutor.js";
 import { WorkbookTimeline } from "./timeline.js";
 import { TerminalEvidenceRepository } from "./terminal-evidence.js";
@@ -165,7 +165,6 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   const attempts = new AttemptStore({ stateRoot: runtime.sessionRoot });
   const terminalEvidence = new TerminalEvidenceRepository({ stateRoot: runtime.sessionRoot });
   const mainTutor = options.mainTutor ?? new DefaultMainWorkbookTutor({ workspace: runtime.contentRoot, log });
-  const practiceCoach = options.practiceCoach ?? new FastPracticeCoach({ workspace: runtime.sessionRoot, log });
   let terminal: WorkbookTerminalManager | undefined;
   const workflow = await createWorkbookWorkflow({
     contentRoot: runtime.contentRoot,
@@ -173,11 +172,10 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     timeline,
     attempts,
     mainTutor,
-    practiceCoach,
+    practiceCoach: options.practiceCoach,
     terminalEvidence,
     terminalAssessmentScheduler: options.terminalAssessmentScheduler,
     activeTerminalContext: () => terminal?.activeTranscriptContext(),
-    activeTerminalSnapshot: () => terminal?.activePublicSnapshot(),
     onTerminalContinued: (block) => terminal?.resetAfterTerminalContinuation(block),
     log
   });

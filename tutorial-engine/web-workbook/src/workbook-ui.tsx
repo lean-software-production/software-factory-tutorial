@@ -318,7 +318,7 @@ export function TerminalHistory({ state }: { state: BlockProgress | undefined })
   </div>;
 }
 
-function TerminalBlock({ block, state, onTerminalInsertionChange }: { block: Block; state: BlockProgress | undefined; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+function TerminalBlock({ block, state, onRetry, onTerminalInsertionChange }: { block: Block; state: BlockProgress | undefined; onRetry(failureId: string): Promise<void>; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const command = shellCommandFrom(block.markdown);
   const [display, dispatch] = useReducer(reduceTerminalCoachingDisplay, state, initialTerminalDisplay);
   const [terminalError, setTerminalError] = useState<string>();
@@ -332,9 +332,10 @@ function TerminalBlock({ block, state, onTerminalInsertionChange }: { block: Blo
   const showLiveTerminal = !state?.completed && !complete;
   const preloading = Boolean(state?.ready && !state.active && !state.completed);
   const text = terminalError ?? (display.phase === "idle" ? undefined : display.text);
+  const retryFailureId = display.phase === "feedback" ? display.retryFailureId : undefined;
   // Exactly one in-place learner-facing node represents status, feedback, completion, or a
   // transport error. It is never moved into the activity/timeline portal.
-  const displayPanel = text ? <aside className={`live-block-feedback terminal-feedback-overlay${display.phase === "running" ? " running" : ""}`} aria-live="polite" role="status">{display.phase === "running" && <span className="terminal-running-spinner" aria-hidden="true" />}<Markdown source="generated">{text}</Markdown></aside> : null;
+  const displayPanel = text ? <aside className={`live-block-feedback terminal-feedback-overlay${display.phase === "running" ? " running" : ""}`} aria-live="polite" role="status">{display.phase === "running" && <span className="terminal-running-spinner" aria-hidden="true" />}<Markdown source="generated">{text}</Markdown>{retryFailureId && <button className="button secondary" onClick={() => void onRetry(retryFailureId)}>Retry review</button>}</aside> : null;
   return <div className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
     {showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
       <EmbeddedTerminal command={command} active={Boolean(state?.active)} onError={setTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} />
@@ -483,10 +484,10 @@ function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { b
   </div>;
 }
 
-export function BlockView({ lessonId, block, progress, refresh, onTerminalInsertionChange, onEditorLocalRevision }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onEditorLocalRevision?: EditorLocalRevisionHandler }) {
+export function BlockView({ lessonId, block, progress, refresh, onRetry = async () => undefined, onTerminalInsertionChange, onEditorLocalRevision }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; onRetry?(failureId: string): Promise<void>; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onEditorLocalRevision?: EditorLocalRevisionHandler }) {
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
-  if (block.type === "terminal-practice") return <TerminalBlock block={block} state={state} onTerminalInsertionChange={onTerminalInsertionChange} />;
+  if (block.type === "terminal-practice") return <TerminalBlock block={block} state={state} onRetry={onRetry} onTerminalInsertionChange={onTerminalInsertionChange} />;
   if (block.type === "editor-practice") return <EditorPracticeBlockView key={block.id} block={block} state={state} refresh={refresh} onLocalRevision={onEditorLocalRevision} />;
   return null;
 }
@@ -818,7 +819,7 @@ export function App() {
     <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
-      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => applyWorkbookState(next))} onDoItForMe={terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} renderTerminalHistory={(record) => <TerminalHistory state={state.progress.blocks.find((block) => block.id === record.blockId)} />} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand key={activitySource.block.id} lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={applyWorkbookState} onTerminalInsertionChange={registerTerminalInsertion} onEditorLocalRevision={rememberEditorLocalRevision} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => applyWorkbookState(next))} />} />
+      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => applyWorkbookState(next))} onDoItForMe={terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} renderTerminalHistory={(record) => <TerminalHistory state={state.progress.blocks.find((block) => block.id === record.blockId)} />} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand key={activitySource.block.id} lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={applyWorkbookState} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => applyWorkbookState(next))} onTerminalInsertionChange={registerTerminalInsertion} onEditorLocalRevision={rememberEditorLocalRevision} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => applyWorkbookState(next))} />} />
     </article></main>
   </div>;
 }

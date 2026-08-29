@@ -3,11 +3,11 @@ export type PublicWorkbookBlockType = "narrative" | "terminal-practice" | "edito
 export type PublicWorkbookBlockKind = PublicWorkbookBlockType | "workbook-introduction" | "part-preamble" | "lesson-preamble";
 export type PublicAttemptKind = "editor" | "terminal" | "reflection";
 export type PublicEditorStatus = "editing" | "waiting" | "reviewing" | "feedback" | "unlocked";
-/** Browser-safe terminal state: command text, evidence, IDs, Coach handoffs, and rubrics are private. */
+/** Browser-safe terminal state: command text, evidence, IDs, legacy Coach handoffs, and rubrics are private. */
 export type PublicTerminal =
   | { phase: "running" }
   | { phase: "checking" }
-  | { phase: "feedback"; message: string }
+  | { phase: "feedback"; message: string; retryFailureId?: string }
   | { phase: "complete"; message: string };
 /** Sanitized, bounded output captured when a terminal attempt is accepted. */
 export type PublicTerminalSnapshot = { transcript: string };
@@ -31,7 +31,10 @@ export type PublicCompleteBlockResult = { outcome: "completed"; state: PublicWor
 function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
 function strings(value: unknown): value is string[] { return Array.isArray(value) && value.every((item) => typeof item === "string"); }
 function terminal(value: unknown): value is PublicTerminal {
-  return record(value) && (value.phase === "running" || value.phase === "checking" || (value.phase === "feedback" || value.phase === "complete") && typeof value.message === "string");
+  if (!record(value)) return false;
+  if (value.phase === "running" || value.phase === "checking") return true;
+  if (value.phase === "feedback") return typeof value.message === "string" && (value.retryFailureId === undefined || typeof value.retryFailureId === "string");
+  return value.phase === "complete" && typeof value.message === "string";
 }
 function terminalSnapshot(value: unknown): value is PublicTerminalSnapshot { return record(value) && typeof value.transcript === "string"; }
 function lesson(value: unknown): value is PublicWorkbookLesson { return record(value) && typeof value.id === "string" && typeof value.title === "string" && typeof value.dek === "string" && typeof value.introduction === "string" && typeof value.durationMinutes === "number" && strings(value.outcomes) && Array.isArray(value.blocks); }

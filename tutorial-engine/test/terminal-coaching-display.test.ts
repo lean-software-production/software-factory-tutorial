@@ -9,6 +9,7 @@ describe("terminal coaching display reducer", () => {
     expect(server({ phase: "running" })).toEqual({ phase: "running", text: "Running…" });
     expect(server({ phase: "checking" })).toEqual({ phase: "checking", text: "Checking…" });
     expect(server({ phase: "feedback", message: "Fix it." })).toEqual({ phase: "feedback", text: "Fix it." });
+    expect(server({ phase: "feedback", message: "Retryable.", retryFailureId: "failure-1" })).toEqual({ phase: "feedback", text: "Retryable.", retryFailureId: "failure-1" });
     expect(server({ phase: "complete", message: "Accepted." })).toEqual({ phase: "complete", text: "Accepted." });
   });
 

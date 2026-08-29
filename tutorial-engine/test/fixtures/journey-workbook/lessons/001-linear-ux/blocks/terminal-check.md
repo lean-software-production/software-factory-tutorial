@@ -1,7 +1,7 @@
 ---
 type: terminal-practice
-outcome: "Run three harmless status commands and read the Practice Coach feedback after each one."
-tutor: "Private terminal rubric for the video factory: return the queued deterministic Practice Coach outcome; do not call a model."
+outcome: "Run three harmless status commands and read the Main Tutor feedback after each one."
+tutor: "Private terminal rubric for the video factory: return the queued deterministic Main Tutor outcome; do not call a model."
 ---
 ## Terminal check
 

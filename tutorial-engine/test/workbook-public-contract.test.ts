@@ -43,6 +43,12 @@ describe("public workbook state contract", () => {
     expect(isPublicWorkbookState({ ...validState(), timeline: [] })).toBe(true);
   });
 
+  it("accepts terminal-local retry review failure IDs only on safe terminal state", () => {
+    const retryable = validState();
+    retryable.progress.blocks = [{ id: "terminal", ready: false, active: true, completed: false, verified: false, emerged: true, terminal: { phase: "feedback", message: "Review is temporarily unavailable.", retryFailureId: "failure-1" } }];
+    expect(isPublicWorkbookState(retryable)).toBe(true);
+  });
+
   it("rejects a state whose timeline is missing", () => {
     const { timeline: _timeline, ...withoutTimeline } = validState();
     expect(isPublicWorkbookState(withoutTimeline)).toBe(false);

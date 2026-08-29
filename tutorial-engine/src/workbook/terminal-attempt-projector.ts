@@ -8,6 +8,8 @@ export type ProjectedTerminalAttempt = {
   state: TerminalAttemptState;
   feedback?: string;
   successMessage?: string;
+  /** Browser-safe entitlement for terminal-local review retry; never an attempt/evidence id. */
+  retryFailureId?: string;
 };
 
 type Attempt = {
@@ -17,15 +19,18 @@ type Attempt = {
   command: string;
   terminalSessionId: string;
   finished: boolean;
+  evidenceRef?: string;
   feedback?: string;
-  coachHandoffRecorded?: boolean;
+  reviewFailure?: { message: string; failureId: string };
+  latestReviewRequestId?: string;
   accepted?: string;
 };
 
 /**
  * Replays private terminal records without I/O. Finished evidence is checked only to establish
- * lifecycle consistency; no evidence, command, attempt identity, or Coach handoff reaches the
- * result. An unfinished command from another terminal session is deliberately idle on reopen.
+ * lifecycle consistency; no evidence, command, attempt identity, request identity, or Coach handoff
+ * reaches the result. An unfinished command from another terminal session is deliberately idle on
+ * reopen.
  */
 export function projectTerminalAttempts(
   records: readonly WorkbookTimelineRecord[],
@@ -54,29 +59,47 @@ export function projectTerminalAttempts(
         const evidence = attempt && !attempt.finished ? readEvidence(record.evidenceRef) : undefined;
         if (!attempt || evidence?.kind !== "finished" || evidence.command !== attempt.command || evidence.exitStatus !== record.exitStatus) break;
         attempt.finished = true;
+        attempt.evidenceRef = record.evidenceRef;
+        break;
+      }
+      case "terminal-review-requested": {
+        const attempt = attempts.get(record.attemptId);
+        if (!attempt?.finished || attempt.evidenceRef !== record.evidenceRef || attempt.lessonId !== record.lessonId || attempt.blockId !== record.blockId) break;
+        attempt.latestReviewRequestId = record.requestId;
+        attempt.reviewFailure = undefined;
+        break;
+      }
+      case "terminal-review-failed": {
+        const attempt = attempts.get(record.attemptId);
+        if (!attempt?.finished || attempt.evidenceRef !== record.evidenceRef || attempt.lessonId !== record.lessonId || attempt.blockId !== record.blockId) break;
+        if (attempt.latestReviewRequestId && attempt.latestReviewRequestId !== record.requestId) break;
+        attempt.reviewFailure = { message: record.publicMessage, failureId: record.failureId };
         break;
       }
       case "terminal-feedback-recorded": {
         const attempt = attempts.get(record.attemptId);
-        if (attempt?.finished && record.text.trim()) attempt.feedback = record.text;
+        if (attempt?.finished && record.text.trim()) {
+          attempt.feedback = record.text;
+          attempt.reviewFailure = undefined;
+        }
         break;
       }
-      case "terminal-coach-handoff-recorded": {
-        const attempt = attempts.get(record.attemptId);
-        if (attempt?.finished && (record.outcome === "ready" || record.outcome === "interesting")) attempt.coachHandoffRecorded = true;
+      case "terminal-coach-handoff-recorded":
+        // Legacy handoff rows remain private replay material only. They do not affect browser state.
         break;
-      }
       case "attempt_accepted": {
         const attempt = attempts.get(record.attemptId);
         if (
           attempt
           && record.kind === "terminal"
           && attempt.finished
-          && attempt.coachHandoffRecorded
           && attempt.feedback === undefined
           && attempt.lessonId === record.lessonId
           && attempt.blockId === record.blockId
-        ) attempt.accepted = record.summary;
+        ) {
+          attempt.accepted = record.summary;
+          attempt.reviewFailure = undefined;
+        }
         break;
       }
       default:
@@ -93,6 +116,7 @@ export function projectTerminalAttempts(
     if (!attempt.finished && activeTerminalSessionId && attempt.terminalSessionId !== activeTerminalSessionId) continue;
     if (attempt.accepted !== undefined) projection.set(blockId, { state: "complete", successMessage: attempt.accepted });
     else if (attempt.feedback !== undefined) projection.set(blockId, { state: "feedback", feedback: attempt.feedback });
+    else if (attempt.reviewFailure !== undefined) projection.set(blockId, { state: "feedback", feedback: attempt.reviewFailure.message, retryFailureId: attempt.reviewFailure.failureId });
     else projection.set(blockId, { state: attempt.finished ? "checking" : "running" });
   }
   return projection;
