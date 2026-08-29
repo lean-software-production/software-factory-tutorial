@@ -4,7 +4,13 @@
 		"dockerfile": "Dockerfile"
 	},
 	"mounts": [
-		"source=software-factory-tutorial-state,target=/home/vscode/.tutorial-state,type=volume"
+		"source=software-factory-tutorial-state,target=/home/vscode/.tutorial-state,type=volume",
+		// The checkout is bind-mounted from the host, so mask host macOS
+		// node_modules with Linux volumes at every npm install location. The
+		// devcontainer id keeps separate worktrees from sharing native packages.
+		"source=${devcontainerId}-node_modules,target=${containerWorkspaceFolder}/node_modules,type=volume",
+		"source=${devcontainerId}-tutorial-engine-node_modules,target=${containerWorkspaceFolder}/tutorial-engine/node_modules,type=volume",
+		"source=${devcontainerId}-tutorial-calculator-node_modules,target=${containerWorkspaceFolder}/tutorial/calculator/node_modules,type=volume"
 	],
 	"containerEnv": {
 		"PI_CODING_AGENT_DIR": "/home/vscode/.tutorial-state/pi-agent",

@@ -26,8 +26,8 @@ and npm compiles it from source.)
 
 Open the repository in VS Code and choose **Dev Containers: Reopen in Container**,
 or `devcontainer up --workspace-folder .` with the CLI. `post-create.sh` runs
-`npm install` and downloads Chromium once the container exists, so neither the first
-lesson nor `npm run check` waits on them.
+`npm ci --include=optional` and downloads Chromium once the container exists, so neither the
+first lesson nor `npm run check` waits on them.
 
 Then authenticate Pi and start the tutor from the repository root:
 
@@ -85,6 +85,23 @@ BLOCK_TUTOR_MODEL=<provider>/<model>` overrides the fast block helper for one sh
 `PI_CODING_AGENT_DIR` points at a named volume mounted on
 `/home/vscode/.tutorial-state`, so `Dev Containers: Rebuild Container` does not
 force a re-login. Nothing in this repository stores those credentials.
+
+## Node dependencies stay in the container
+
+The workspace is still a bind mount of the host checkout, but every npm install
+location is masked by a devcontainer-specific named Linux volume:
+
+- `${containerWorkspaceFolder}/node_modules`
+- `${containerWorkspaceFolder}/tutorial-engine/node_modules`
+- `${containerWorkspaceFolder}/tutorial/calculator/node_modules`
+
+That keeps macOS native packages from being reused in Linux at the root or in
+workspace-local dependency trees, while still working for any checkout or
+worktree path the Dev Containers CLI chooses. The volumes survive container
+reopens and rebuilds; `post-create.sh` makes them writable and repopulates them
+from `package-lock.json` with `npm ci --include=optional` when a container is
+created. Remove the matching Docker volumes if you deliberately want a cold
+reinstall.
 
 ## Bringing a key from the host
 
