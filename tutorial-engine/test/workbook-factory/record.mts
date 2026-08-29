@@ -11,7 +11,7 @@ import { QueuedMainTutor, RecordingPracticeCoach } from "../support/fake-tutors.
 import { analyzeWorkbookVideo, type AnalyzerReport } from "./analyzer.js";
 import { createProtocolAwareFakePty } from "./fake-pty.js";
 import { MARKER_BITS, MARKER_COLOURS, MARKER_CELL_SIZE, MARKER_GAP, MARKER_TOTAL_CELLS, markerCss, rgbCss } from "./marker-protocol.js";
-import { REQUIRED_MOTION_STEP_IDS, REQUIRED_STATE_CHECKPOINT_STEP_IDS, WORKBOOK_FACTORY_STEPS, type WorkbookFactoryGeometryState, type WorkbookFactoryStepDeclaration } from "./steps.js";
+import { REQUIRED_MOTION_STEP_IDS, REQUIRED_STATE_CHECKPOINT_STEP_IDS, SCROLL_CHECKPOINT_STEP_IDS, WORKBOOK_FACTORY_STEPS, type WorkbookFactoryGeometryState, type WorkbookFactoryStepDeclaration } from "./steps.js";
 
 const RUN_ROOT = resolve(ENGINE_ROOT, "test/.tmp/workbook-factory/latest");
 const FIXTURE_ROOT = resolve(ENGINE_ROOT, "test/fixtures/journey-workbook");
@@ -21,7 +21,7 @@ const VIDEO_PATH = "walkthrough.webm";
 const WALKTHROUGH_PATH = "walkthrough.json";
 const INPUT_METADATA_PATH = "input-metadata.json";
 const GEOMETRY_TARGETS: Record<WorkbookFactoryGeometryState, { naturalTop: number; minExpand: number; maxExpand: number }> = {
-  small: { naturalTop: 320, minExpand: 0, maxExpand: 0.08 },
+  small: { naturalTop: 285, minExpand: 0, maxExpand: 0.08 },
   mid: { naturalTop: 130, minExpand: 0.25, maxExpand: 0.75 },
   full: { naturalTop: 0, minExpand: 0.92, maxExpand: 1 },
 };
@@ -47,13 +47,23 @@ export interface GeometryTelemetry {
   readonly workRect: RectTelemetry;
   readonly mainRect: RectTelemetry;
 }
-export interface FeedbackTelemetry { readonly text: string; readonly rect: RectTelemetry; }
+export interface FeedbackSafeRegionTelemetry {
+  readonly viewport: { readonly width: number; readonly height: number };
+  readonly composerRect?: RectTelemetry;
+  readonly safeBottom: number;
+  readonly insideSafeRegion: boolean;
+  readonly occlusionChecks: readonly { readonly x: number; readonly y: number; readonly topElement: string; readonly targetContainsTopElement: boolean }[];
+  readonly unoccluded: boolean;
+}
+export interface FeedbackTelemetry { readonly text: string; readonly rect: RectTelemetry; readonly safeRegion: FeedbackSafeRegionTelemetry; }
 export interface FakeCallCounts { readonly mainTutorReviews: number; readonly practiceCoachAssessments: number; readonly fakePtyCommands: number; }
 export interface SemanticCheckpoint {
   readonly stepId: number;
   readonly name: string;
   readonly surface: string;
   readonly requestedState?: WorkbookFactoryGeometryState;
+  readonly kind: WorkbookFactoryStepDeclaration["kind"];
+  readonly requiredMotion: boolean;
   readonly startedAt: string;
   readonly settledAt: string;
   readonly marker: { readonly transitionAt: string; readonly settledAt: string };
@@ -71,7 +81,7 @@ export interface WorkbookFactoryWalkthrough {
   readonly copiedFixtureRoot: string;
   readonly videoPath: string;
   readonly viewport: typeof VIEWPORT & { readonly deviceScaleFactor: 1; readonly reducedMotion: "no-preference" };
-  readonly markerProtocol: { readonly bits: number; readonly stateCheckpointStepIds: readonly number[]; readonly requiredMotionStepIds: readonly number[] };
+  readonly markerProtocol: { readonly bits: number; readonly stateCheckpointStepIds: readonly number[]; readonly scrollCheckpointStepIds: readonly number[]; readonly requiredMotionStepIds: readonly number[] };
   readonly checkpoints: SemanticCheckpoint[];
   readonly fake: { readonly mainTutorReviews: number; readonly practiceCoachAssessments: number; readonly ptyCommands: readonly unknown[] };
   readonly analyzer?: Pick<AnalyzerReport, "ok" | "requiredMotionStepIds" | "markerSamples" | "findings"> & { readonly segmentStepIds: number[]; readonly evidenceFiles: readonly string[]; readonly contactSheet?: string };
@@ -287,10 +297,37 @@ async function feedbackTelemetry(page: Page, surface: "editor" | "terminal", exp
   await page.waitForFunction(({ selector: targetSelector, expected }) => document.querySelector(targetSelector)?.textContent?.includes(expected), { selector, expected: expectedText }, { timeout: 20_000 });
   await waitForStableViewport(page);
   return page.locator(selector).last().evaluate((element) => {
+    const toRect = (rect: DOMRect): RectTelemetry => ({ x: rect.x, y: rect.y, width: rect.width, height: rect.height, top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left });
     const rect = element.getBoundingClientRect();
+    const composer = document.querySelector<HTMLElement>(".timeline-composer-dock.fixed-composer, .timeline-composer-dock");
+    const composerRect = composer ? composer.getBoundingClientRect() : undefined;
+    const safeBottom = composerRect ? Math.max(0, composerRect.top - 8) : window.innerHeight;
+    const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+    const points = [
+      { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
+      { x: rect.left + rect.width * 0.25, y: rect.top + rect.height / 2 },
+      { x: rect.left + rect.width * 0.75, y: rect.top + rect.height / 2 },
+    ].map((point) => ({ x: clamp(point.x, 0, window.innerWidth - 1), y: clamp(point.y, 0, window.innerHeight - 1) }));
+    const occlusionChecks = points.map((point) => {
+      const topElement = document.elementsFromPoint(point.x, point.y).find((candidate) => !(candidate instanceof HTMLElement) || candidate.style.pointerEvents !== "none");
+      return {
+        x: point.x,
+        y: point.y,
+        topElement: topElement ? `${topElement.tagName.toLowerCase()}${topElement.id ? `#${topElement.id}` : ""}${topElement.className && typeof topElement.className === "string" ? `.${topElement.className.trim().replace(/\s+/g, ".")}` : ""}` : "",
+        targetContainsTopElement: topElement ? element.contains(topElement) || topElement.contains(element) : false,
+      };
+    });
     return {
       text: element.textContent ?? "",
-      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height, top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left },
+      rect: toRect(rect),
+      safeRegion: {
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        composerRect: composerRect ? toRect(composerRect) : undefined,
+        safeBottom,
+        insideSafeRegion: rect.top >= 0 && rect.left >= 0 && rect.right <= window.innerWidth && rect.bottom <= safeBottom,
+        occlusionChecks,
+        unoccluded: occlusionChecks.every((check) => check.targetContainsTopElement),
+      },
     };
   });
 }
@@ -348,6 +385,38 @@ function fakeCounts(mainTutor: QueuedMainTutor, coach: RecordingPracticeCoach, f
   return { mainTutorReviews: mainTutor.reviews.length, practiceCoachAssessments: coach.assessments.length, fakePtyCommands: fakePty.commandCount };
 }
 
+async function runScrollCheckpoint(args: {
+  page: Page;
+  walkthrough: MutableWalkthrough;
+  step: WorkbookFactoryStepDeclaration;
+  mainTutor: QueuedMainTutor;
+  coach: RecordingPracticeCoach;
+  fakePty: ReturnType<typeof createProtocolAwareFakePty>;
+  position: () => Promise<GeometryTelemetry>;
+}): Promise<void> {
+  const before = await measureGeometry(args.page);
+  const startedAt = isoNow();
+  const transitionAt = await setMarker(args.page, "transition", args.step);
+  await args.page.waitForTimeout(180);
+  const after = await args.position();
+  const settledMarkerAt = await setMarker(args.page, "settled", args.step);
+  await args.page.waitForTimeout(450);
+  args.walkthrough.checkpoints.push({
+    stepId: args.step.id,
+    name: args.step.name,
+    surface: args.step.surface,
+    requestedState: args.step.requestedState,
+    kind: args.step.kind,
+    requiredMotion: args.step.requiredMotion,
+    startedAt,
+    settledAt: isoNow(),
+    marker: { transitionAt, settledAt: settledMarkerAt },
+    before,
+    after,
+    fakeCallCounts: fakeCounts(args.mainTutor, args.coach, args.fakePty),
+  });
+}
+
 async function runPreparedCheckpoint(args: {
   page: Page;
   walkthrough: MutableWalkthrough;
@@ -372,6 +441,8 @@ async function runPreparedCheckpoint(args: {
     name: args.step.name,
     surface: args.step.surface,
     requestedState: args.step.requestedState,
+    kind: args.step.kind,
+    requiredMotion: args.step.requiredMotion,
     startedAt,
     settledAt: isoNow(),
     marker: { transitionAt, settledAt: settledMarkerAt },
@@ -391,6 +462,16 @@ function assertCheckpointGeometry(checkpoint: SemanticCheckpoint, failures: stri
     failures.push(`${checkpoint.name}: measured expand ${checkpoint.after.expand}, expected ${range.minExpand}..${range.maxExpand}`);
   }
   if (checkpoint.feedback && checkpoint.feedback.rect.width <= 50) failures.push(`${checkpoint.name}: feedback rect is too narrow to be visible.`);
+  if (checkpoint.feedback && !checkpoint.feedback.safeRegion.insideSafeRegion) failures.push(`${checkpoint.name}: feedback is outside the viewport safe region above the fixed composer.`);
+  if (checkpoint.feedback && !checkpoint.feedback.safeRegion.unoccluded) failures.push(`${checkpoint.name}: feedback is occluded at representative points (${JSON.stringify(checkpoint.feedback.safeRegion.occlusionChecks)}).`);
+}
+
+function assertRequiredScrollTelemetry(checkpoint: SemanticCheckpoint, failures: string[]): void {
+  if (!checkpoint.requiredMotion) return;
+  const scrollDelta = Math.abs(checkpoint.after.scrollY - checkpoint.before.scrollY);
+  const expandDelta = Math.abs(checkpoint.after.expand - checkpoint.before.expand);
+  if (checkpoint.kind !== "scroll") failures.push(`${checkpoint.name}: required-motion checkpoint is not a scroll step.`);
+  if (scrollDelta < 20 && expandDelta < 0.2) failures.push(`${checkpoint.name}: required scroll telemetry did not move enough (scroll delta ${scrollDelta}, expand delta ${expandDelta}).`);
 }
 
 async function copyFixture(runRoot: string): Promise<string> {
@@ -447,7 +528,7 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
     copiedFixtureRoot: inputRoot,
     videoPath: resolve(runRoot, VIDEO_PATH),
     viewport: { ...VIEWPORT, deviceScaleFactor: 1, reducedMotion: "no-preference" },
-    markerProtocol: { bits: MARKER_BITS, stateCheckpointStepIds: REQUIRED_STATE_CHECKPOINT_STEP_IDS, requiredMotionStepIds: REQUIRED_MOTION_STEP_IDS },
+    markerProtocol: { bits: MARKER_BITS, stateCheckpointStepIds: REQUIRED_STATE_CHECKPOINT_STEP_IDS, scrollCheckpointStepIds: SCROLL_CHECKPOINT_STEP_IDS, requiredMotionStepIds: REQUIRED_MOTION_STEP_IDS },
     checkpoints: [],
     fake: { mainTutorReviews: 0, practiceCoachAssessments: 0, ptyCommands: [] },
     semanticFailures: [],
@@ -478,25 +559,23 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
 
     await setMarker(page, "settled", WORKBOOK_FACTORY_STEPS.revealEditor);
     await revealEditor(page);
-    await positionBand(page, "small");
-    await page.waitForTimeout(450);
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorScrollToSmall, position: async () => positionBand(page!, "small") });
 
     await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorSmallFeedback, prepare: async () => {
-      await positionBand(page!, "small");
       const typedText = "Small-state draft: the learner notices compact feedback in the editor.\nThe typed line stays short enough to look like a first revision.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
     }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.small) });
 
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorScrollToMid, position: async () => positionBand(page!, "mid") });
     await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorMidFeedback, prepare: async () => {
-      await positionBand(page!, "mid");
       const typedText = "Mid-scroll draft: the learner revises while the activity band is partially expanded.\nThey add a second visible line before pausing for feedback.\nThe surface should keep its feedback welded during the scroll-linked resize.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
     }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.mid) });
 
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorScrollToFull, position: async () => positionBand(page!, "full") });
     await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorFullFeedback, prepare: async () => {
-      await positionBand(page!, "full");
       const typedText = "Full-width draft: the learner checks that feedback remains welded to the editor surface.\nThis longer note creates real text texture across the editor viewport.\nThe final visible line names the full-width state before feedback arrives.\nA fourth line keeps the cursor moving like an actual revision.\nA fifth line makes the full-width editor less empty in the recording.\nA sixth line gives the deterministic analyzer text edges to track.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
@@ -509,33 +588,38 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
 
     await clickContinue(page);
     await page.locator('.current-activity-band[data-activity-type="terminal-practice"]').waitFor({ state: "attached", timeout: 15_000 });
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalScrollToSmall, position: async () => positionBand(page!, "small") });
     await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalSmallFeedback, prepare: async () => {
-      await positionBand(page!, "small");
       const command = "printf small-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 1");
       return { command };
     }, trigger: async () => feedbackTelemetry(page!, "terminal", COACH_FEEDBACK.small) });
 
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalScrollToMid, position: async () => positionBand(page!, "mid") });
     await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalMidFeedback, prepare: async () => {
-      await positionBand(page!, "mid");
       const command = "printf mid-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 2");
       return { command };
     }, trigger: async () => feedbackTelemetry(page!, "terminal", COACH_FEEDBACK.mid) });
 
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalScrollToFull, position: async () => positionBand(page!, "full") });
     await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalFullFeedback, prepare: async () => {
-      await positionBand(page!, "full");
       const command = "printf full-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 3");
       return { command };
     }, trigger: async () => feedbackTelemetry(page!, "terminal", COACH_FEEDBACK.full) });
 
-    for (const checkpoint of walkthrough.checkpoints) assertCheckpointGeometry(checkpoint, walkthrough.semanticFailures);
+    for (const checkpoint of walkthrough.checkpoints) {
+      assertCheckpointGeometry(checkpoint, walkthrough.semanticFailures);
+      assertRequiredScrollTelemetry(checkpoint, walkthrough.semanticFailures);
+    }
     const seenStateSteps = new Set(walkthrough.checkpoints.map((checkpoint) => checkpoint.stepId));
     for (const stepId of REQUIRED_STATE_CHECKPOINT_STEP_IDS) if (!seenStateSteps.has(stepId)) walkthrough.semanticFailures.push(`Missing semantic checkpoint for marker step ${stepId}.`);
+    for (const stepId of SCROLL_CHECKPOINT_STEP_IDS) if (!seenStateSteps.has(stepId)) walkthrough.semanticFailures.push(`Missing scroll checkpoint for marker step ${stepId}.`);
+    for (const stepId of REQUIRED_MOTION_STEP_IDS) if (!seenStateSteps.has(stepId)) walkthrough.semanticFailures.push(`Missing required-motion checkpoint for marker step ${stepId}.`);
     if (mainTutor.reviews.length < 4) walkthrough.semanticFailures.push(`Expected at least four Main Tutor editor reviews, saw ${mainTutor.reviews.length}.`);
     if (coach.assessments.length < 3) walkthrough.semanticFailures.push(`Expected three Practice Coach assessments, saw ${coach.assessments.length}.`);
     if (fakePty.commandCount < 3) walkthrough.semanticFailures.push(`Expected three fake PTY commands, saw ${fakePty.commandCount}.`);
@@ -571,6 +655,14 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
     const segmentStepIds = analysis.segments.map((segment) => segment.stepId);
     const missingSegmentIds = REQUIRED_STATE_CHECKPOINT_STEP_IDS.filter((stepId) => !segmentStepIds.includes(stepId));
     for (const stepId of missingSegmentIds) walkthrough.semanticFailures.push(`Analyzer did not decode a marker transition segment for state checkpoint ${stepId}.`);
+    for (const stepId of REQUIRED_MOTION_STEP_IDS) {
+      const segment = analysis.segments.find((candidate) => candidate.stepId === stepId);
+      if (!segment) {
+        walkthrough.semanticFailures.push(`Analyzer did not decode a marker transition segment for required-motion step ${stepId}.`);
+      } else if (segment.totalAbsShiftPx < analysis.thresholds.minRequiredMotionPx) {
+        walkthrough.semanticFailures.push(`Analyzer decoded required-motion step ${stepId} with only ${segment.totalAbsShiftPx.toFixed(1)} px of motion.`);
+      }
+    }
     if (!analysis.evidence.contactSheet) walkthrough.semanticFailures.push("Analyzer did not write a contact sheet.");
     if (!(await exists(resolve(runRoot, "analysis/motion.json")))) walkthrough.semanticFailures.push("Analyzer did not write analysis/motion.json.");
     walkthrough.analyzer = {

@@ -28,9 +28,9 @@ The recorder starts the real `startWorkbookServer()` with:
 - `RecordingPracticeCoach` for deterministic terminal feedback;
 - a protocol-aware fake PTY that accepts xterm keystrokes, echoes visible output, emits OSC-633 `workbook-command`/`workbook-finished` markers on Enter, and never runs shell commands.
 
-The Playwright run launches pinned Chromium at 1280×900, DPR 1, normal motion, with `recordVideo`. It injects the shared marker protocol outside React as early as practical. Learner typing happens through the visible editor/xterm controls while the band is already in the requested geometry state; the state-labelled transition then brackets the feedback-producing pause or Enter key and returns to `settled` only after the authoritative DOM/server outcome and stable geometry. Required-motion ids are reserved for marker transitions that intentionally bracket scroll; the current real-workbook station uses the six state-labelled feedback transitions as analyzer evidence and records scroll/geometry in `walkthrough.json` diagnostics.
+The Playwright run launches pinned Chromium at 1280×900, DPR 1, normal motion, with `recordVideo`. It injects the shared marker protocol outside React as early as practical. Dedicated scroll steps bracket each `positionBand()` operation with unique marker ids, and the causally guaranteed small→mid and mid→full scrolls are `requiredMotionStepIds`. Learner typing happens through the visible editor/xterm controls while the band is already in the requested geometry state; separate state-labelled feedback transitions then bracket the feedback-producing pause or Enter key and return to `settled` only after the authoritative DOM/server outcome and stable geometry.
 
-The recorded journey includes learner-like typing in both surfaces while the activity band is in all three geometry states:
+The recorded journey includes learner-like typing in both surfaces while the activity band is in all three geometry states, plus supplementary safe-region/occlusion telemetry for every feedback card:
 
 - editor small, mid-scroll, and full-width feedback;
 - terminal small, mid-scroll, and full-width Practice Coach feedback.
