@@ -72,15 +72,15 @@ function rect(left: number, width: number, top = 300) {
 }
 
 describe("ActivityBand stability", () => {
-  it("keeps terminal practice inline while editor practice remains sticky and scroll-linked", () => {
+  it("keeps terminal and editor practice sticky and scroll-linked while terminal work-block transitions stay disabled", () => {
     expect(existsSync(terminalTransitionStylesPath)).toBe(true);
     const terminalStyles = readFileSync(terminalTransitionStylesPath, "utf8");
     const workbookStyles = readFileSync(workbookStylesPath, "utf8");
     const mainSource = readFileSync(mainSourcePath, "utf8");
 
     expect(mainSource).toContain('import "./activity-band.css"');
-    expect(terminalStyles).toMatch(/\.current-activity-band\[data-activity-type="terminal-practice"\]\s*\{[^}]*position:\s*relative;[^}]*top:\s*auto;[^}]*transition:\s*none;/);
-    expect(terminalStyles).toMatch(/\.current-activity-band\[data-activity-type="terminal-practice"\]\s*>\s*\.work-block\s*\{[^}]*left:\s*0;[^}]*width:\s*var\(--activity-inline-width\);[^}]*transition:\s*none;/);
+    expect(terminalStyles).not.toMatch(/\.current-activity-band\[data-activity-type="terminal-practice"\]\s*\{/);
+    expect(terminalStyles).toMatch(/\.current-activity-band\[data-activity-type="terminal-practice"\]\s*>\s*\.work-block\s*\{[^}]*transition:\s*none;/);
     expect(workbookStyles).toMatch(/\.current-activity-band\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;/);
     expect(workbookStyles).toMatch(/\.current-activity-band\s*\{[^}]*top:\s*var\(--activity-top\);/);
     expect(workbookStyles).toMatch(/\.current-activity-band\s*>\s*\.work-block\s*\{[^}]*left:\s*var\(--activity-left-offset\);[^}]*width:\s*var\(--activity-width\);[^}]*transition:\s*left 80ms linear, width 80ms linear;/);
@@ -115,16 +115,21 @@ describe("ActivityBand stability", () => {
     expect(FakeIntersectionObserver.instances[0]!.observed).toEqual([container.querySelector(".current-activity-band")]);
   });
 
-  it("does not register terminal practice for scroll-linked geometry", async () => {
+  it("registers terminal practice for scroll-linked geometry and expands as the band rises", async () => {
     class FakeResizeObserver {
       static instances: FakeResizeObserver[] = [];
-      constructor() { FakeResizeObserver.instances.push(this); }
-      observe() {}
+      observed: Element[] = [];
+      constructor(private readonly callback: ResizeObserverCallback) { FakeResizeObserver.instances.push(this); }
+      observe(element: Element) { this.observed.push(element); }
       disconnect() {}
+      trigger(target: Element) {
+        this.callback([{ target } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
     }
 
     const listenerTypes: string[] = [];
-    await mount(createElement("main", null,
+    let viewportScrollY = 0;
+    const container = await mount(createElement("main", null,
       createElement("div", { "data-inline-source": "" }),
       createElement(ActivityBand, {
         lessonId: "part/lesson",
@@ -134,6 +139,8 @@ describe("ActivityBand stability", () => {
       })
     ), (window) => {
       Object.defineProperty(window, "ResizeObserver", { value: FakeResizeObserver, configurable: true });
+      Object.defineProperty(window, "requestAnimationFrame", { value: (callback: FrameRequestCallback) => { callback(0); return 1; }, configurable: true });
+      Object.defineProperty(window, "scrollY", { get: () => viewportScrollY, configurable: true });
       const addEventListener = window.addEventListener.bind(window) as (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => void;
       window.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
         listenerTypes.push(type);
@@ -141,9 +148,31 @@ describe("ActivityBand stability", () => {
       }) as typeof window.addEventListener;
     });
 
-    expect(FakeResizeObserver.instances).toHaveLength(0);
-    expect(listenerTypes).not.toContain("scroll");
-    expect(listenerTypes).not.toContain("resize");
+    const main = container.querySelector<HTMLElement>("main")!;
+    const inlineSource = container.querySelector("[data-inline-source]")!;
+    const band = container.querySelector<HTMLElement>(".current-activity-band")!;
+    const observer = FakeResizeObserver.instances[0]!;
+    Object.defineProperty(main, "offsetTop", { value: 80, configurable: true });
+    Object.defineProperty(band, "offsetTop", { value: 240, configurable: true });
+    Object.defineProperty(band, "offsetParent", { value: main, configurable: true });
+    Object.defineProperty(main, "getBoundingClientRect", { value: () => rect(100, 1000), configurable: true });
+    Object.defineProperty(inlineSource, "getBoundingClientRect", { value: () => rect(240, 720), configurable: true });
+
+    expect(FakeResizeObserver.instances).toHaveLength(1);
+    expect(observer.observed).toContain(inlineSource);
+    expect(observer.observed).toContain(main);
+    expect(listenerTypes).toContain("scroll");
+    expect(listenerTypes).toContain("resize");
+    expect(band.getAttribute("data-activity-layout")).toBe("scroll-linked");
+
+    await act(async () => { observer.trigger(inlineSource); });
+    expect(band.style.getPropertyValue("--activity-expand")).toBe("0.000");
+    expect(band.style.getPropertyValue("--activity-width")).toBe("720px");
+
+    viewportScrollY = 320;
+    await act(async () => { dom!.window.dispatchEvent(new dom!.window.Event("scroll")); });
+    expect(band.style.getPropertyValue("--activity-expand")).toBe("1.000");
+    expect(band.style.getPropertyValue("--activity-width")).toBe("952px");
   });
 
   it("observes the inline source and main, but never the band whose feedback can change height", async () => {
