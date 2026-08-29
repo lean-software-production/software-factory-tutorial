@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
+import { TimelineThread, computeTutorReplyRevealScrollDelta } from "../web-workbook/src/timeline-thread.js";
 
 const noopSend = vi.fn(async () => undefined);
 const noopRetry = vi.fn(async () => undefined);
@@ -160,5 +160,27 @@ describe("TimelineThread", () => {
     expect(acceptedMarkup).toContain("Tutor review");
     expect(acceptedMarkup).not.toContain('class="timeline-message tutor thinking"');
     expect(acceptedMarkup).not.toContain("Thinking");
+  });
+
+  describe("computeTutorReplyRevealScrollDelta", () => {
+    it("keeps an already-visible reply stable above the fixed composer", () => {
+      expect(computeTutorReplyRevealScrollDelta({
+        replyTop: 220,
+        replyBottom: 520,
+        viewportHeight: 900,
+        composerTop: 780,
+        gapPx: 14,
+      })).toBe(0);
+    });
+
+    it("moves a reply obscured by the composer by only the distance needed to reveal its bottom", () => {
+      expect(computeTutorReplyRevealScrollDelta({
+        replyTop: 650,
+        replyBottom: 830,
+        viewportHeight: 900,
+        composerTop: 790,
+        gapPx: 14,
+      })).toBe(54);
+    });
   });
 });

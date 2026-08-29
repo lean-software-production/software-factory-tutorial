@@ -7,6 +7,54 @@ type TimelineMessageRecord = PublicTimelineMessage;
 type TimelineThreadRecord = PublicTimelineRecord;
 
 const composerMaxHeightPx = 160;
+const defaultTutorReplyScrollGapPx = 14;
+
+export type TutorReplyRevealGeometry = {
+  replyTop: number;
+  replyBottom: number;
+  viewportHeight: number;
+  composerTop?: number | null;
+  safeTop?: number;
+  gapPx?: number;
+};
+
+export function computeTutorReplyRevealScrollDelta({ replyTop, replyBottom, viewportHeight, composerTop, safeTop = 0, gapPx = defaultTutorReplyScrollGapPx }: TutorReplyRevealGeometry): number {
+  const safeBottom = Math.max(safeTop, Math.min(viewportHeight, composerTop ?? viewportHeight) - gapPx);
+  const replyHeight = Math.max(0, replyBottom - replyTop);
+  const safeHeight = Math.max(0, safeBottom - safeTop);
+  if (replyTop >= safeTop && replyBottom <= safeBottom) return 0;
+  if (replyHeight <= safeHeight && replyTop < safeTop) return replyTop - safeTop;
+  if (replyBottom > safeBottom) return replyBottom - safeBottom;
+  if (replyTop < safeTop) return replyTop - safeTop;
+  return 0;
+}
+
+function parseCssPixelValue(value: string, fallback: number): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+export function revealTutorReplyIfNeeded(replyElement: HTMLElement, composerDock: HTMLElement | null): number {
+  const replyRect = replyElement.getBoundingClientRect();
+  const composerRect = composerDock?.getBoundingClientRect();
+  const style = replyElement.ownerDocument.defaultView?.getComputedStyle?.(replyElement);
+  const gapPx = parseCssPixelValue(style?.getPropertyValue("--timeline-reply-scroll-gap") ?? "", defaultTutorReplyScrollGapPx);
+  const delta = computeTutorReplyRevealScrollDelta({
+    replyTop: replyRect.top,
+    replyBottom: replyRect.bottom,
+    viewportHeight: window.innerHeight,
+    composerTop: composerRect?.top,
+    gapPx,
+  });
+  if (Math.abs(delta) < 0.5) return 0;
+  const scrollRoot = document.scrollingElement ?? document.documentElement;
+  const maxScrollY = Math.max(0, scrollRoot.scrollHeight - window.innerHeight);
+  const nextScrollY = Math.max(0, Math.min(maxScrollY, window.scrollY + delta));
+  const clampedDelta = nextScrollY - window.scrollY;
+  if (Math.abs(clampedDelta) < 0.5) return 0;
+  window.scrollTo({ top: nextScrollY, left: window.scrollX, behavior: "instant" });
+  return clampedDelta;
+}
 
 function isAuthoredCourseRecord(record: TimelineThreadRecord): record is TimelineMessageRecord {
   return record.type === "message" && record.presentation === "course" && record.source === "authored";
@@ -49,6 +97,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   const [pending, setPending] = useState(false);
   const [commandInserted, setCommandInserted] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerDockRef = useRef<HTMLDivElement | null>(null);
   const responseEntryRefs = useRef(new Map<string, HTMLElement>());
   const knownResponseIds = useRef<Set<string> | null>(null);
   const recordMatchesActive = (record: { lessonId: string; blockId: string }) => record.blockId === activeBlockId && (record.lessonId === activeLessonId || activeBlockId.includes("--"));
@@ -70,7 +119,8 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     const shouldScroll = latestResponseId !== undefined && !knownResponseIds.current.has(latestResponseId);
     knownResponseIds.current = responseIdSet;
     if (!shouldScroll) return;
-    responseEntryRefs.current.get(latestResponseId)?.scrollIntoView({ behavior: "auto", block: "end" });
+    const latestResponseElement = responseEntryRefs.current.get(latestResponseId);
+    if (latestResponseElement) revealTutorReplyIfNeeded(latestResponseElement, composerDockRef.current);
   }, [latestResponseId, responseIdSet]);
   useLayoutEffect(() => {
     if (textareaRef.current) resizeComposerTextarea(textareaRef.current);
@@ -165,7 +215,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   return <section className="timeline-thread has-fixed-composer" aria-label="Tutor conversation">
     {renderedRecords}
     {completionPanel}
-    <div className="timeline-composer-dock fixed-composer">
+    <div ref={composerDockRef} className="timeline-composer-dock fixed-composer">
       <form className="timeline-input fixed-composer" onSubmit={send}>
         <textarea ref={textareaRef} className="timeline-composer-textarea" name="message" rows={1} aria-label="Message the tutor" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} disabled={inputDisabled || pending} />
         <button className="round-send" aria-label="Send message" title="Send message" disabled={inputDisabled || pending || !draft.trim()}>{pending ? "…" : "↑"}</button>
