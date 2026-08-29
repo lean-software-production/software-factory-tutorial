@@ -64,6 +64,8 @@ describe("devcontainer dependency isolation", () => {
       ...manifest.workspaces.map((workspace) => `${workspace}/node_modules`).sort()
     ]);
 
+    assert.match(configSource, /"SOFTWARE_FACTORY_TUTORIAL_DEVCONTAINER"\s*:\s*"1"/);
+
     for (const { volume, target } of dependencyVolumeMounts) {
       assert.match(
         configSource,

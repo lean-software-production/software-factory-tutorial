@@ -14,6 +14,7 @@
 	],
 	"containerEnv": {
 		"PI_CODING_AGENT_DIR": "/home/vscode/.tutorial-state/pi-agent",
+		"SOFTWARE_FACTORY_TUTORIAL_DEVCONTAINER": "1",
 		// The main tutor's model. The fast block helper and the `pi -p` doer the
 		// lessons drive are separate roles: the main tutor teaches, the block
 		// helper gives quick read-only hints, and the doer is meant to be cheap,
