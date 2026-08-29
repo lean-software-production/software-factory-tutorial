@@ -4,7 +4,7 @@ Date: 2026-08-29
 
 ## Status
 
-accepted
+superseded by [25. Use one Main Tutor for practice review](0025-use-one-main-tutor-for-practice-review.md)
 
 Supersedes [20. Bound terminal assessment retries with recoverable feedback](0020-bound-terminal-assessment-retries-with-recoverable-feedback.md).
 

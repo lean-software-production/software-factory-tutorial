@@ -4,7 +4,7 @@ Date: 2026-08-29
 
 ## Status
 
-accepted
+superseded by [25. Use one Main Tutor for practice review](0025-use-one-main-tutor-for-practice-review.md)
 
 Complements [11. Use a terminal Practice Coach with Main Tutor authority](0011-use-a-terminal-practice-coach-with-main-tutor-authority.md) and [20. Bound terminal assessment retries with recoverable feedback](0020-bound-terminal-assessment-retries-with-recoverable-feedback.md).
 

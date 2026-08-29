@@ -32,7 +32,7 @@ Update the index below whenever you create a record or change its status.
 | [0008](0008-separate-work-acceptance-from-block-completion.md) | accepted | Separate work acceptance from block completion |
 | [0009](0009-separate-authored-content-from-session-local-learner-state.md) | accepted | Separate authored content from session-local learner state |
 | [0010](0010-use-the-workbook-tutor-as-the-only-tutorial-interface.md) | accepted | Use the workbook tutor as the only tutorial interface |
-| [0011](0011-use-a-terminal-practice-coach-with-main-tutor-authority.md) | accepted | Use a terminal Practice Coach with Main Tutor authority |
+| [0011](0011-use-a-terminal-practice-coach-with-main-tutor-authority.md) | superseded | Use a terminal Practice Coach with Main Tutor authority |
 | [0012](0012-render-the-workbook-from-server-state-alone.md) | accepted | Render the workbook from server state alone |
 | [0013](0013-share-one-browser-safe-contract-for-terminal-socket-frames.md) | accepted | Share one browser-safe contract for terminal socket frames |
 | [0014](0014-address-the-workbook-server-relatively.md) | accepted | Address the workbook server relatively |
@@ -40,9 +40,10 @@ Update the index below whenever you create a record or change its status.
 | [0016](0016-model-terminal-coaching-around-submitted-commands.md) | superseded | Model terminal coaching around submitted commands |
 | [0017](0017-simplify-terminal-learner-feedback.md) | superseded | Simplify terminal learner feedback |
 | [0018](0018-use-bash-authoritative-terminal-display-states.md) | superseded | Use Bash-authoritative terminal display states |
-| [0019](0019-keep-live-terminal-context-private.md) | accepted | Keep Live Terminal Context Private |
+| [0019](0019-keep-live-terminal-context-private.md) | superseded | Keep Live Terminal Context Private |
 | [0020](0020-bound-terminal-assessment-retries-with-recoverable-feedback.md) | superseded | Bound terminal assessment retries with recoverable feedback |
-| [0021](0021-preflight-model-backed-roles-before-workbook-startup.md) | accepted | Preflight model-backed roles before workbook startup |
-| [0022](0022-use-one-shot-terminal-workflow-assessment.md) | accepted | Use one-shot terminal workflow assessment |
+| [0021](0021-preflight-model-backed-roles-before-workbook-startup.md) | superseded | Preflight model-backed roles before workbook startup |
+| [0022](0022-use-one-shot-terminal-workflow-assessment.md) | superseded | Use one-shot terminal workflow assessment |
 | [0023](0023-scope-lesson-work-to-optional-shared-session-folders.md) | superseded | Scope lesson work to optional shared-session folders |
 | [0024](0024-isolate-lesson-workspaces-as-live-repositories.md) | accepted | Isolate lesson workspaces as live repositories |
+| [0025](0025-use-one-main-tutor-for-practice-review.md) | accepted | Use one Main Tutor for practice review |

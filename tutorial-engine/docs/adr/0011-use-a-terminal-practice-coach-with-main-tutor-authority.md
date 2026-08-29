@@ -4,7 +4,7 @@ Date: 2026-08-26
 
 ## Status
 
-accepted
+superseded by [25. Use one Main Tutor for practice review](0025-use-one-main-tutor-for-practice-review.md)
 
 Supersedes [5. Use a main tutor with on-demand block tutors](0005-use-a-main-tutor-with-on-demand-block-tutors.md)
 

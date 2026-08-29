@@ -4,7 +4,7 @@ Date: 2026-08-28
 
 ## Status
 
-accepted
+superseded by [25. Use one Main Tutor for practice review](0025-use-one-main-tutor-for-practice-review.md)
 
 ## Context
 

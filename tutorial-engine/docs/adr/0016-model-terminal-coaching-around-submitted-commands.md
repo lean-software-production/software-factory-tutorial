@@ -4,7 +4,7 @@ Date: 2026-08-28
 
 ## Status
 
-accepted
+superseded by [17. Simplify terminal learner feedback](0017-simplify-terminal-learner-feedback.md)
 
 Builds on [11. Use a terminal Practice Coach with Main Tutor authority](0011-use-a-terminal-practice-coach-with-main-tutor-authority.md).
 
