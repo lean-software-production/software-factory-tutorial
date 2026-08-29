@@ -13,5 +13,6 @@
     "verbatimModuleSyntax": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["test/**/*.test.ts"]
+  "include": ["*.ts", "test/**/*.test.ts"],
+  "exclude": ["reports", "fixtures/**/.tmp"]
 }
