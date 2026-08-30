@@ -1,10 +1,12 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
+import { dockerContainerUser } from "../../../tutorial-engine/src/workbook/terminal.js";
 import { readAuthoredCommandStubEvidence } from "../command-stubs.js";
 import {
   AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL,
@@ -15,8 +17,13 @@ import {
   PRACTICE_COACH_LOG_PROMPT_ENV,
   WORKBOOK_TERMINAL_IMAGE,
   authoredTerminalDockerRunArguments,
+  buildBoundedWorkspaceTar,
   createDefaultJudgeProbe,
   defaultPreflightOperations,
+  dockerPopulateVolumeArguments,
+  dockerVolumeCreateArguments,
+  dockerVolumeRemoveArguments,
+  dockerWorkspaceVolumeMount,
   defaultRemoveDisposablePreflightFixture,
   createAuthoredWorkbookRunnerModelConfiguration,
   dockerClientEnvironment,
@@ -152,6 +159,50 @@ async function waitUntil(assertion: () => boolean, timeoutMs = 500): Promise<voi
     if (Date.now() > deadline) throw new Error("timed out waiting for test condition");
     await new Promise((resolveWait) => setTimeout(resolveWait, 1));
   }
+}
+
+interface TarEntryForTest { name: string; mode: number; uid: number; gid: number; size: number; typeflag: string }
+
+function productionContainerUserForTest(): { user: string; uid: number; gid: number } {
+  const parts = dockerContainerUser().split(":");
+  if (parts.length !== 2) throw new Error("production docker user should be uid:gid");
+  const uid = Number(parts[0]);
+  const gid = Number(parts[1]);
+  if (!Number.isSafeInteger(uid) || uid <= 0 || !Number.isSafeInteger(gid) || gid < 0) throw new Error("production docker user should be numeric");
+  return { user: `${uid}:${gid}`, uid, gid };
+}
+
+function parseTarEntriesForTest(archive: Buffer): TarEntryForTest[] {
+  const entries: TarEntryForTest[] = [];
+  for (let offset = 0; offset + 512 <= archive.length;) {
+    const header = archive.subarray(offset, offset + 512);
+    const rawName = header.subarray(0, 100).toString("utf8").replace(/\0.*$/u, "");
+    if (!rawName) break;
+    const octal = (start: number, length: number) => Number.parseInt(header.subarray(start, start + length).toString("ascii").replace(/\0.*$/u, "").trim() || "0", 8);
+    const size = octal(124, 12);
+    entries.push({ name: rawName, mode: octal(100, 8), uid: octal(108, 8), gid: octal(116, 8), size, typeflag: header.subarray(156, 157).toString("ascii") });
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  return entries;
+}
+
+async function execDockerWithInput(args: string[], input: Buffer, timeout = 20_000): Promise<void> {
+  await new Promise<void>((resolvePromise, reject) => {
+    const child = spawn("docker", args, { stdio: ["pipe", "ignore", "ignore"] });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("docker command timed out"));
+    }, timeout);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      code === 0 ? resolvePromise() : reject(new Error(`docker exited ${code}`));
+    });
+    child.stdin.end(input);
+  });
 }
 
 async function pauseableFixtureTimeoutCase(pauseAfter: "root" | "calculator" | "stub"): Promise<{ error: AuthoredWorkbookEvalPreflightError; events: string[]; root: string; closed: number }> {
@@ -545,14 +596,104 @@ describe("authored workbook eval preflight", () => {
       runtimeProvision: { mounts: [], workspaceMountTargets: [] }
     };
 
+    const expectedUser = productionContainerUserForTest();
     const args = authoredTerminalDockerRunArguments(input);
     expect(args.slice(0, 5)).toEqual(["run", "-d", "--rm", "--name", "workbook-terminal-preflight-test"]);
     expect(args).toContain("--env");
     expect(args).toContain(OPENCODE_API_KEY_ENV);
+    expect(args).toContain(expectedUser.user);
+    expect(args).toContain(`/home/learner/.pi/agent:uid=${expectedUser.uid},gid=${expectedUser.gid},mode=0700`);
     expect(args.join(" ")).not.toContain(secret);
     expect(args).toContain(WORKBOOK_TERMINAL_IMAGE);
     expect(dockerClientEnvironment(request.environment).OPENCODE_API_KEY).toBeUndefined();
   });
+
+  it("builds the private workspace archive with production-user ownership and writable regular files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "authored-preflight-archive-owner-"));
+    try {
+      await mkdir(resolve(root, "bin"), { recursive: true });
+      await writeFile(resolve(root, "README.md"), "readable\n", "utf8");
+      await chmod(resolve(root, "README.md"), 0o444);
+      await writeFile(resolve(root, "bin/pi"), "#!/bin/sh\nprintf ok\n", "utf8");
+      await chmod(resolve(root, "bin/pi"), 0o555);
+
+      const expectedUser = productionContainerUserForTest();
+      const archive = await buildBoundedWorkspaceTar(root);
+      const entries = parseTarEntriesForTest(archive);
+      const readme = entries.find((entry) => entry.name === "README.md");
+      const executable = entries.find((entry) => entry.name === "bin/pi");
+
+      expect(entries[0]?.name).toBe("./");
+      expect(entries.map((entry) => entry.name).sort()).toEqual(["./", "README.md", "bin/", "bin/pi"].sort());
+      for (const entry of entries) expect({ name: entry.name, uid: entry.uid, gid: entry.gid }).toEqual({ name: entry.name, uid: expectedUser.uid, gid: expectedUser.gid });
+      expect(readme?.mode).toBe(0o644);
+      expect(executable?.mode! & 0o111).not.toBe(0);
+      expect(executable?.mode! & 0o600).toBe(0o600);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symlinks and hardlinked regular files from the private workspace archive", async () => {
+    const root = await mkdtemp(join(tmpdir(), "authored-preflight-archive-unsafe-"));
+    try {
+      await writeFile(resolve(root, "target.txt"), "ok", "utf8");
+      await symlink("target.txt", resolve(root, "link.txt"));
+      await expect(buildBoundedWorkspaceTar(root)).rejects.toThrow(/symlink/);
+      await rm(resolve(root, "link.txt"));
+
+      await link(resolve(root, "target.txt"), resolve(root, "hardlink.txt"));
+      await expect(buildBoundedWorkspaceTar(root)).rejects.toThrow(/hardlink/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("populates the Docker volume through fixed argv and private archive stdin", async () => {
+    const request = validateAuthoredWorkbookEvalPreflightRequest(validRequest());
+    const calls: Array<{ args: string[]; stdinBytes: number; serialized: string }> = [];
+    const operations = defaultPreflightOperations({
+      authoredDockerCommandRunner: async (_file, args, options) => {
+        calls.push({ args, stdinBytes: Buffer.isBuffer(options.privateStdin) ? options.privateStdin.length : 0, serialized: JSON.stringify({ args, env: options.env }) });
+      }
+    });
+    const root = await mkdtemp(join(tmpdir(), "authored-preflight-populate-argv-"));
+    try {
+      await writeFile(resolve(root, "file.txt"), "ok", "utf8");
+      const input: AuthoredWorkbookEvalTerminalInput = { request, timeoutMs: 123, name: "workbook-terminal-preflight-test", fixture: stubFixture({ workspaceRoot: root }), runtimeProvision: { mounts: [], workspaceMountTargets: [] } };
+
+      await operations.dockerRunTerminal(input);
+
+      expect(calls[1]?.args).toEqual(dockerPopulateVolumeArguments(input.fixture.workspaceVolumeName, WORKBOOK_TERMINAL_IMAGE));
+      expect(calls[1]?.stdinBytes).toBeGreaterThan(0);
+      expect(calls[1]?.args.join(" ")).not.toContain(root);
+      expect(calls[1]?.args.join(" ")).not.toContain(secret);
+      expect(calls[1]?.serialized).not.toContain(secret);
+      expect(calls[1]?.serialized).not.toContain(privatePath);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.env.AUTHORED_PREFLIGHT_REAL_DOCKER === "1")("populates a real Docker volume writable by the exact production user", async () => {
+    const root = await mkdtemp(join(tmpdir(), "authored-preflight-real-docker-"));
+    const volumeName = `authored-workbook-preflight-${randomUUID()}`;
+    const expectedUser = productionContainerUserForTest();
+    try {
+      await writeFile(resolve(root, "readonly.txt"), "base", "utf8");
+      await chmod(resolve(root, "readonly.txt"), 0o444);
+      await writeFile(resolve(root, "run.sh"), "#!/bin/sh\nprintf ok\n", "utf8");
+      await chmod(resolve(root, "run.sh"), 0o555);
+      const archive = await buildBoundedWorkspaceTar(root);
+
+      await execFileAsync("docker", dockerVolumeCreateArguments(volumeName), { timeout: 10_000 });
+      await execDockerWithInput(dockerPopulateVolumeArguments(volumeName, WORKBOOK_TERMINAL_IMAGE), archive);
+      await execFileAsync("docker", ["run", "--rm", "--user", expectedUser.user, "--read-only", "--cap-drop=ALL", "--network", "none", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--mount", dockerWorkspaceVolumeMount(volumeName), "--workdir", "/workspace", WORKBOOK_TERMINAL_IMAGE, "sh", "-c", "test -w /workspace && test -r readonly.txt && test -w readonly.txt && printf more >> readonly.txt && test \"$(cat readonly.txt)\" = basemore && test -r run.sh && test -x run.sh && ./run.sh > /tmp/out && test \"$(cat /tmp/out)\" = ok"], { timeout: 20_000 });
+    } finally {
+      await execFileAsync("docker", dockerVolumeRemoveArguments(volumeName), { timeout: 10_000 }).catch(() => undefined);
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 40_000);
 
   it("sends terminal readiness and authentication scripts through private Docker stdin, not argv", async () => {
     const request = validateAuthoredWorkbookEvalPreflightRequest(validRequest());

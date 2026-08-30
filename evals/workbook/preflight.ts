@@ -9,9 +9,9 @@ import {
   OPENCODE_API_KEY_ENV,
   WORKBOOK_TERMINAL_IMAGE,
   dockerClientEnvironment,
-  dockerContainerUser,
   dockerDaemonProbeArguments,
   dockerImageProbeArguments,
+  validatedDockerContainerUser,
   dockerRunEnvironment,
   requireOpenCodeApiKey,
   type DockerCommandSyncOptions
@@ -636,8 +636,8 @@ export function defaultPreflightOperations(dependencies: AuthoredWorkbookEvalDef
 const defaultDockerCommandRunner: AuthoredWorkbookEvalAsyncDockerCommandRunner = (file: string, args: string[], options: DockerCommandSyncOptions): Promise<unknown> => runBoundedProcess(file, args, options);
 
 export function authoredTerminalDockerRunArguments(input: AuthoredWorkbookEvalTerminalInput): string[] {
-  const [uid, gid] = dockerContainerUser().split(":");
-  return ["run", "-d", "--rm", "--name", input.name, "--label", "workbook-terminal=true", "--user", dockerContainerUser(), "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--env", OPENCODE_API_KEY_ENV, "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--tmpfs", `/home/learner/.pi/agent:uid=${uid},gid=${gid},mode=0700`, "--mount", dockerWorkspaceVolumeMount(input.fixture.workspaceVolumeName), "--workdir", "/workspace", input.request.workbookTerminalImage, "sleep", "infinity"];
+  const containerUser = validatedDockerContainerUser();
+  return ["run", "-d", "--rm", "--name", input.name, "--label", "workbook-terminal=true", "--user", containerUser.user, "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--env", OPENCODE_API_KEY_ENV, "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--tmpfs", `/home/learner/.pi/agent:uid=${containerUser.uid},gid=${containerUser.gid},mode=0700`, "--mount", dockerWorkspaceVolumeMount(input.fixture.workspaceVolumeName), "--workdir", "/workspace", input.request.workbookTerminalImage, "sleep", "infinity"];
 }
 
 export function createDefaultWorkbookRoleProbe(role: "Main Tutor" | "Practice Coach"): (input: AuthoredWorkbookEvalPaidRoleInput) => Promise<AuthoredWorkbookEvalPaidRoleResult> {
@@ -787,20 +787,20 @@ function assertSafePreflightDockerVolumeName(name: string): string {
   return name;
 }
 
-function dockerWorkspaceVolumeMount(volumeName: string): string {
+export function dockerWorkspaceVolumeMount(volumeName: string): string {
   return `type=volume,src=${assertSafePreflightDockerVolumeName(volumeName)},dst=/workspace`;
 }
 
-function dockerVolumeCreateArguments(volumeName: string): string[] {
+export function dockerVolumeCreateArguments(volumeName: string): string[] {
   return ["volume", "create", assertSafePreflightDockerVolumeName(volumeName)];
 }
 
-function dockerVolumeRemoveArguments(volumeName: string): string[] {
+export function dockerVolumeRemoveArguments(volumeName: string): string[] {
   return ["volume", "rm", "-f", assertSafePreflightDockerVolumeName(volumeName)];
 }
 
-function dockerPopulateVolumeArguments(volumeName: string, image: string): string[] {
-  return ["run", "--rm", "-i", "--network", "none", "--mount", dockerWorkspaceVolumeMount(volumeName), image, "tar", "-x", "-f", "-", "-C", "/workspace"];
+export function dockerPopulateVolumeArguments(volumeName: string, image: string): string[] {
+  return ["run", "--rm", "-i", "--network", "none", "--mount", dockerWorkspaceVolumeMount(volumeName), image, "tar", "--same-owner", "-x", "-f", "-", "-C", "/workspace"];
 }
 
 function dockerExecShStdinArguments(name: string): string[] {
@@ -879,7 +879,8 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-async function buildBoundedWorkspaceTar(root: string): Promise<Buffer> {
+export async function buildBoundedWorkspaceTar(root: string): Promise<Buffer> {
+  const containerUser = validatedDockerContainerUser();
   const realRoot = await realpath(root);
   const chunks: Buffer[] = [];
   let total = 0;
@@ -887,6 +888,9 @@ async function buildBoundedWorkspaceTar(root: string): Promise<Buffer> {
     total += chunk.length;
     if (total > DOCKER_PRIVATE_ARCHIVE_MAX_BYTES) throw new Error("Docker private archive exceeds the authored preflight limit.");
     chunks.push(chunk);
+  };
+  const pushHeader = (name: string, mode: number, size: number, typeflag: "0" | "5"): void => {
+    push(tarHeader(name, mode, containerUser.uid, containerUser.gid, size, typeflag));
   };
   const visit = async (directory: string, relativeDirectory = ""): Promise<void> => {
     const entries = await readdir(directory, { withFileTypes: true });
@@ -898,24 +902,39 @@ async function buildBoundedWorkspaceTar(root: string): Promise<Buffer> {
       if (stat.isSymbolicLink()) {
         throw new Error("Unsafe archive entry symlink.");
       } else if (stat.isDirectory()) {
-        push(tarHeader(`${relativePath}/`, stat.mode, 0, "5"));
+        if (!insideRoot(realRoot, await realpath(path))) throw new Error("Unsafe archive entry outside workspace.");
+        pushHeader(`${relativePath}/`, learnerWritableDirectoryMode(stat.mode), 0, "5");
         await visit(path, relativePath);
       } else if (stat.isFile()) {
+        if (stat.nlink > 1) throw new Error("Unsafe archive entry hardlink.");
         if (!insideRoot(realRoot, await realpath(path))) throw new Error("Unsafe archive entry outside workspace.");
         const content = await readFile(path);
-        push(tarHeader(relativePath, stat.mode, content.length, "0"));
+        pushHeader(relativePath, learnerWritableFileMode(stat.mode), content.length, "0");
         push(content);
         const padding = (512 - (content.length % 512)) % 512;
         if (padding) push(Buffer.alloc(padding));
       }
     }
   };
+  const rootStat = await lstat(realRoot);
+  if (!rootStat.isDirectory()) throw new Error("Workspace archive root must be a directory.");
+  // The leading ./ entry lets tar --same-owner chown the fresh named-volume mount point itself,
+  // not just its children, before the hardened terminal runs as the non-root learner identity.
+  pushHeader("./", learnerWritableDirectoryMode(rootStat.mode), 0, "5");
   await visit(realRoot);
   push(Buffer.alloc(1024));
   return Buffer.concat(chunks, total);
 }
 
-function tarHeader(name: string, mode: number, size: number, typeflag: "0" | "2" | "5", linkname = ""): Buffer {
+function learnerWritableDirectoryMode(mode: number): number {
+  return (mode & 0o777) | 0o700;
+}
+
+function learnerWritableFileMode(mode: number): number {
+  return (mode & 0o777) | 0o600;
+}
+
+function tarHeader(name: string, mode: number, uid: number, gid: number, size: number, typeflag: "0" | "2" | "5", linkname = ""): Buffer {
   if (Buffer.byteLength(name) > 100 || Buffer.byteLength(linkname) > 100) throw new Error("Archive entry path exceeds the authored preflight limit.");
   const header = Buffer.alloc(512, 0);
   const writeString = (value: string, offset: number, length: number) => header.write(value.slice(0, length), offset, length, "utf8");
@@ -925,9 +944,9 @@ function tarHeader(name: string, mode: number, size: number, typeflag: "0" | "2"
     header[offset + length - 1] = 0;
   };
   writeString(name, 0, 100);
-  writeOctal(mode & 0o7777, 100, 8);
-  writeOctal(0, 108, 8);
-  writeOctal(0, 116, 8);
+  writeOctal(mode & 0o777, 100, 8);
+  writeOctal(uid, 108, 8);
+  writeOctal(gid, 116, 8);
   writeOctal(size, 124, 12);
   writeOctal(0, 136, 12);
   header.fill(0x20, 148, 156);

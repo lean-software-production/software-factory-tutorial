@@ -134,6 +134,7 @@ const MAX_PUBLIC_TERMINAL_SNAPSHOT_BYTES = 16_000;
 const MAX_INPUT_BYTES = 16_384;
 const MAX_COLS = 500;
 const MAX_ROWS = 200;
+const TAR_COMPATIBLE_UID_GID_MAX = 0o7777777;
 
 function boundedAppend(previous: string, addition: string, limit: number): string {
   const next = previous + addition;
@@ -161,6 +162,23 @@ export function publicTerminalTranscript(output: string): string {
 /** The tmpfs Pi state must be writable by the shell that runs inside the container. */
 export function dockerContainerUser(): string {
   return `${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`;
+}
+
+/** Shared by production terminal argv and authored preflight archive ownership so identities cannot drift. */
+export function validatedDockerContainerUser(): { user: string; uid: number; gid: number } {
+  const raw = dockerContainerUser();
+  const parts = raw.split(":");
+  if (parts.length !== 2) throw new Error("Invalid Docker container user identity.");
+  const uid = parseDockerContainerUserId(parts[0]!, { allowZero: false, label: "uid" });
+  const gid = parseDockerContainerUserId(parts[1]!, { allowZero: true, label: "gid" });
+  return { user: `${uid}:${gid}`, uid, gid };
+}
+
+function parseDockerContainerUserId(raw: string, options: { allowZero: boolean; label: "uid" | "gid" }): number {
+  if (!/^(0|[1-9][0-9]*)$/.test(raw)) throw new Error(`Invalid Docker container ${options.label}.`);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || (!options.allowZero && parsed === 0) || parsed > TAR_COMPATIBLE_UID_GID_MAX) throw new Error(`Invalid Docker container ${options.label}.`);
+  return parsed;
 }
 
 export const WORKBOOK_TERMINAL_STARTUP_PUBLIC_ERROR = "Could not start isolated terminal container.";
@@ -254,8 +272,8 @@ function removeDockerContainerStrict(name: string, commandRunner: DockerCommandR
 export function dockerRunArguments(options: DockerRunArgumentsOptions): string[] {
   const workspace = resolve(options.workspace);
   const provision = options.runtimeProvision ?? NO_RUNTIME_PROVISION;
-  const [uid, gid] = dockerContainerUser().split(":");
-  const args = ["run", "-d", "--rm", "--name", options.name, "--label", "workbook-terminal=true", "--user", dockerContainerUser(), "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--env", OPENCODE_API_KEY_ENV, "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--tmpfs", `${CONTAINER_AGENT_DIR}:uid=${uid},gid=${gid},mode=0700`, "--mount", bindMount(workspace, "/workspace"), "--workdir", "/workspace"];
+  const containerUser = validatedDockerContainerUser();
+  const args = ["run", "-d", "--rm", "--name", options.name, "--label", "workbook-terminal=true", "--user", containerUser.user, "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--env", OPENCODE_API_KEY_ENV, "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--tmpfs", `${CONTAINER_AGENT_DIR}:uid=${containerUser.uid},gid=${containerUser.gid},mode=0700`, "--mount", bindMount(workspace, "/workspace"), "--workdir", "/workspace"];
   for (const mount of provision.mounts) {
     args.push("--mount", bindMount(mount.hostSource, `/workspace/${mount.workspaceTarget}`, true));
   }
