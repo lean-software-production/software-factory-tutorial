@@ -304,9 +304,13 @@ describe("workbook block progression", () => {
       expect(completed.state.progress.workbookComplete).toBe(true);
       const records = await timelineRecords(dir);
       expect(records.filter((record) => record.type === "block_summarized" && record.blockId === "lesson--001-first--edit-answer")).toHaveLength(1);
+      const blockSummaryIndex = records.findIndex((record) => record.type === "block_summarized" && record.blockId === "lesson--001-first--edit-answer");
       const lessonSummaryIndex = records.findIndex((record) => record.type === "lesson_summarized" && record.lessonId === "001-first");
       const workbookSummaryIndex = records.findIndex((record) => record.type === "workbook_completion_summary");
       const completionIndex = records.findIndex((record) => record.type === "block_completed" && record.blockId === "lesson--001-first--edit-answer");
+      const lessonSummary = records[lessonSummaryIndex] as Extract<WorkbookTimelineRecord, { type: "lesson_summarized" }>;
+      expect(lessonSummary.coveredThroughId).toBe(records[blockSummaryIndex]?.id);
+      expect(blockSummaryIndex).toBeLessThan(lessonSummaryIndex);
       expect(lessonSummaryIndex).toBeLessThan(workbookSummaryIndex);
       expect(workbookSummaryIndex).toBeLessThan(completionIndex);
     } finally { await restarted.close(); }

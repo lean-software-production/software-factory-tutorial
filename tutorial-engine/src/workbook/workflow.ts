@@ -1005,10 +1005,11 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     }
     if (!generationIsCurrent(generation)) return false;
     if (lessonWillComplete && !records.some((record) => record.type === "lesson_summarized" && record.lessonId === leaving.lessonId)) {
+      const lessonCoveredThroughId = records.at(-1)?.id ?? coveredThroughId;
       try {
-        const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: leaving.lessonId, coveredThroughId }), "lesson_summary");
+        const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: leaving.lessonId, coveredThroughId: lessonCoveredThroughId }), "lesson_summary");
         if (!generationIsCurrent(generation)) return false;
-        await append({ type: "lesson_summarized", lessonId: leaving.lessonId, text, coveredThroughId });
+        await append({ type: "lesson_summarized", lessonId: leaving.lessonId, text, coveredThroughId: lessonCoveredThroughId });
       } catch {
         if (!generationIsCurrent(generation)) return false;
         logSummaryFailure("lesson_summary", { lessonId: leaving.lessonId, blockId: leaving.id });
@@ -1022,8 +1023,9 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   const requestCompletionSummary = async (coveredThroughId: string, generation = currentGeneration()): Promise<boolean> => {
     if (!generationIsCurrent(generation)) return false;
     if (records.some((record) => record.type === "workbook_completion_summary")) return true;
+    const completionCoveredThroughId = records.at(-1)?.id ?? coveredThroughId;
     try {
-      const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: "workbook", coveredThroughId }), "completion_summary");
+      const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: "workbook", coveredThroughId: completionCoveredThroughId }), "completion_summary");
       if (!generationIsCurrent(generation)) return false;
       await append({ type: "workbook_completion_summary", text });
       return true;

@@ -60,6 +60,13 @@ The first independent review requested explicit restart/idempotence and coverage
 restart tests now exercise a durable block summary followed by lesson-summary failure and a durable lesson
 summary followed by workbook-summary failure. A new process reuses each successful summary, generates
 only the missing summaries, and appends completion last without duplicates. Ordering tests also prove that
-block and lesson `coveredThroughId` values identify the immediately preceding detailed event. The final
-workbook summary remains intentionally outside ADR 0006 compaction because it is the terminal public
-report and no later Tutor context exists.
+each compaction boundary covers its immediate lower-level memory: a block summary covers the preceding
+detailed event, while a lesson summary covers a just-written block summary when the evaluated block ends
+the lesson. The final workbook summary remains intentionally outside ADR 0006 compaction because it is
+the terminal public report and no later Tutor context exists.
+
+A focused re-review found that the first implementation reused the pre-block-summary boundary when an
+evaluated block also ended its lesson. The workflow now computes the lesson boundary after appending or
+recovering the block summary, and the restart test asserts that exact summary ID. The workbook-summary
+prompt likewise names the latest lesson-summary boundary even though the terminal report event does not
+persist a future compaction boundary.
