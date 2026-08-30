@@ -63,6 +63,16 @@ npm run --workspace=tutorial-engine test:fast:
   browser smoke passed
 ```
 
+## Review fix
+
+The first independent review found that ordinary prompt and compaction attempt logs still included raw
+provider reasons and model identity, and that an unreachable `reviewUnavailable` attempt field preserved
+obsolete failure-as-feedback vocabulary. Commit `89ab43f Keep tutor failure telemetry private` makes all
+prompt and compaction failure logs generic, adds explicit privacy tests for prompt and compaction errors,
+and removes `reviewUnavailable` plus its public projection. Actionable `retainedFeedback` remains only for
+the required editor replacement-review experience. The post-fix engine gate passed 56 files/593 tests,
+build, and browser smoke.
+
 ## Concerns
 
 Task 7 must apply this fatal mechanism to summary-before-completion ordering. Task 9 must finish and test
