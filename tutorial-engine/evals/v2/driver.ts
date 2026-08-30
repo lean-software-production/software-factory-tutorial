@@ -163,7 +163,7 @@ export class V2WorkbookDriver {
     if (!Array.isArray(blocks)) return false;
     const block = blocks.find((candidate: any) => candidate?.id === blockId);
     const status = block?.checkpoint?.status;
-    if (status === "accepted") return this.#reflectionHasTutorReplyAfterLatestLearner(blockId, state);
+    if (status === "accepted") return block?.workAccepted === true && this.#reflectionHasTutorReplyAfterLatestLearner(blockId, state);
     if (status === "feedback") return this.#reflectionHasTutorReplyAfterLatestLearner(blockId, state);
     return false;
   }

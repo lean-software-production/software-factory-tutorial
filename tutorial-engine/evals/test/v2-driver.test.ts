@@ -1,6 +1,6 @@
 import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { publicTerminalFrame, type PublicTerminalFrame } from "../../src/workbook/public-terminal-contract.js";
 import type { TerminalPty } from "../../src/workbook/terminal.js";
 import type { TutorDecision } from "../../src/workbook/tutor.js";
@@ -336,6 +336,22 @@ describe("v2 workbook driver", () => {
     expect(trace.terminalTranscript.filter((entry) => entry.direction === "observer")).toEqual([
       { blockId, direction: "observer", text: "exit:137 signal:9" }
     ]);
+  });
+
+  it("waits for accepted reflection work to become durable before returning", async () => {
+    const blockId = "lesson--001-live-session--reflection";
+    const trace = createEmptyV2SessionTrace("reflection-acceptance-order-test");
+    const reviewing = { progress: { blocks: [{ id: blockId, checkpoint: { status: "reviewing" }, workAccepted: false }], reflectionConversations: { [blockId]: [{ role: "learner", text: "A complete answer." }] } } };
+    const acceptedBeforeCommit = { progress: { blocks: [{ id: blockId, checkpoint: { status: "accepted" }, workAccepted: false }], reflectionConversations: { [blockId]: [{ role: "learner", text: "A complete answer." }, { role: "tutor", text: "Accepted." }] } } };
+    const acceptedAfterCommit = { progress: { blocks: [{ id: blockId, checkpoint: { status: "accepted" }, workAccepted: true }], reflectionConversations: { [blockId]: [{ role: "learner", text: "A complete answer." }, { role: "tutor", text: "Accepted." }] } } };
+    const states = [reviewing, acceptedBeforeCommit, acceptedAfterCommit];
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(states.shift() ?? acceptedAfterCommit), { status: 200 }));
+    const driver = new V2WorkbookDriver({ serverUrl: "http://workbook.invalid", trace, fetch: fetchMock });
+
+    const accepted = await driver.submitReflection(blockId, "A complete answer.");
+
+    expect(accepted.progress.blocks[0]).toMatchObject({ checkpoint: { status: "accepted" }, workAccepted: true });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("submits reflections and records the public learner/tutor conversation", async () => {
