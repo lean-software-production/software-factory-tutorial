@@ -6,7 +6,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { startWorkbookServer, type StartedWorkbookServer } from "../../src/workbook/server.js";
 import type { TutorDecision } from "../../src/workbook/tutor.js";
 import { ENGINE_ROOT, WEB_BUNDLE_DIRECTORY, ensureFreshWebBundle } from "../support/web-bundle.js";
-import { QueuedMainTutor, RecordingPracticeCoach } from "../support/fake-tutors.js";
+import { QueuedMainTutor } from "../support/fake-tutors.js";
 import { analyzeWorkbookVideo, type AnalyzerReport } from "./analyzer.js";
 import { createProtocolAwareFakePty } from "./fake-pty.js";
 import { MARKER_BITS, MARKER_COLOURS, MARKER_CELL_SIZE, MARKER_GAP, MARKER_TOTAL_CELLS, markerCss, rgbCss } from "./marker-protocol.js";
@@ -57,7 +57,7 @@ export interface FeedbackSafeRegionTelemetry {
   readonly unoccluded: boolean;
 }
 export interface FeedbackTelemetry { readonly text: string; readonly rect: RectTelemetry; readonly safeRegion: FeedbackSafeRegionTelemetry; }
-export interface FakeCallCounts { readonly mainTutorReviews: number; readonly practiceCoachAssessments: number; readonly fakePtyCommands: number; }
+export interface FakeCallCounts { readonly mainTutorReviews: number; readonly fakePtyCommands: number; }
 export interface SemanticCheckpoint {
   readonly stepId: number;
   readonly name: string;
@@ -84,7 +84,7 @@ export interface WorkbookFactoryWalkthrough {
   readonly viewport: typeof VIEWPORT & { readonly deviceScaleFactor: 1; readonly reducedMotion: "no-preference" };
   readonly markerProtocol: { readonly bits: number; readonly stateCheckpointStepIds: readonly number[]; readonly scrollCheckpointStepIds: readonly number[]; readonly requiredMotionStepIds: readonly number[] };
   readonly checkpoints: SemanticCheckpoint[];
-  readonly fake: { readonly mainTutorReviews: number; readonly practiceCoachAssessments: number; readonly ptyCommands: readonly unknown[] };
+  readonly fake: { readonly mainTutorReviews: number; readonly ptyCommands: readonly unknown[] };
   readonly analyzer?: Pick<AnalyzerReport, "ok" | "requiredMotionStepIds" | "markerSamples" | "findings"> & { readonly segmentStepIds: number[]; readonly evidenceFiles: readonly string[]; readonly contactSheet?: string };
   readonly semanticFailures: string[];
 }
@@ -381,8 +381,8 @@ async function waitForTerminalText(page: Page, expectedText: string): Promise<vo
   await waitForStableViewport(page);
 }
 
-function fakeCounts(mainTutor: QueuedMainTutor, coach: RecordingPracticeCoach, fakePty: ReturnType<typeof createProtocolAwareFakePty>): FakeCallCounts {
-  return { mainTutorReviews: mainTutor.reviews.length, practiceCoachAssessments: coach.assessments.length, fakePtyCommands: fakePty.commandCount };
+function fakeCounts(mainTutor: QueuedMainTutor, fakePty: ReturnType<typeof createProtocolAwareFakePty>): FakeCallCounts {
+  return { mainTutorReviews: mainTutor.reviews.length, fakePtyCommands: fakePty.commandCount };
 }
 
 async function runScrollCheckpoint(args: {
@@ -390,7 +390,6 @@ async function runScrollCheckpoint(args: {
   walkthrough: MutableWalkthrough;
   step: WorkbookFactoryStepDeclaration;
   mainTutor: QueuedMainTutor;
-  coach: RecordingPracticeCoach;
   fakePty: ReturnType<typeof createProtocolAwareFakePty>;
   position: () => Promise<GeometryTelemetry>;
 }): Promise<void> {
@@ -413,7 +412,7 @@ async function runScrollCheckpoint(args: {
     marker: { transitionAt, settledAt: settledMarkerAt },
     before,
     after,
-    fakeCallCounts: fakeCounts(args.mainTutor, args.coach, args.fakePty),
+    fakeCallCounts: fakeCounts(args.mainTutor, args.fakePty),
   });
 }
 
@@ -422,7 +421,6 @@ async function runPreparedCheckpoint(args: {
   walkthrough: MutableWalkthrough;
   step: WorkbookFactoryStepDeclaration;
   mainTutor: QueuedMainTutor;
-  coach: RecordingPracticeCoach;
   fakePty: ReturnType<typeof createProtocolAwareFakePty>;
   prepare: () => Promise<{ typedText?: string; command?: string }>;
   trigger: () => Promise<FeedbackTelemetry>;
@@ -451,7 +449,7 @@ async function runPreparedCheckpoint(args: {
     feedback,
     typedText: prepared.typedText,
     command: prepared.command,
-    fakeCallCounts: fakeCounts(args.mainTutor, args.coach, args.fakePty),
+    fakeCallCounts: fakeCounts(args.mainTutor, args.fakePty),
   });
 }
 
@@ -521,7 +519,6 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
     { outcome: "feedback", message: TERMINAL_FEEDBACK.mid } satisfies TutorDecision,
     { outcome: "feedback", message: TERMINAL_FEEDBACK.full } satisfies TutorDecision,
   );
-  const coach = new RecordingPracticeCoach();
   const fakePty = createProtocolAwareFakePty({ outputForCommand: (command, index) => `\r\nfake terminal ${index}: observed ${command}\r\nworkspace: refactor-line\r\nstatus: deterministic protocol marker received\r\nnext: read the feedback below\r\n` });
 
   let server: StartedWorkbookServer | undefined;
@@ -538,7 +535,7 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
     viewport: { ...VIEWPORT, deviceScaleFactor: 1, reducedMotion: "no-preference" },
     markerProtocol: { bits: MARKER_BITS, stateCheckpointStepIds: REQUIRED_STATE_CHECKPOINT_STEP_IDS, scrollCheckpointStepIds: SCROLL_CHECKPOINT_STEP_IDS, requiredMotionStepIds: REQUIRED_MOTION_STEP_IDS },
     checkpoints: [],
-    fake: { mainTutorReviews: 0, practiceCoachAssessments: 0, ptyCommands: [] },
+    fake: { mainTutorReviews: 0, ptyCommands: [] },
     semanticFailures: [],
   };
 
@@ -548,7 +545,6 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
       webRoot: WEB_ROOT,
       port: 0,
       mainTutor,
-      practiceCoach: coach,
       terminalPtyFactory: fakePty.factory,
     });
     browser = await chromium.launch({ headless: options.headless ?? true });
@@ -567,23 +563,23 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
 
     await setMarker(page, "settled", WORKBOOK_FACTORY_STEPS.revealEditor);
     await revealEditor(page);
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorScrollToSmall, position: async () => positionBand(page!, "small") });
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, step: WORKBOOK_FACTORY_STEPS.editorScrollToSmall, position: async () => positionBand(page!, "small") });
 
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorSmallFeedback, prepare: async () => {
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, step: WORKBOOK_FACTORY_STEPS.editorSmallFeedback, prepare: async () => {
       const typedText = "Small-state draft: the learner notices compact feedback in the editor.\nThe typed line stays short enough to look like a first revision.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
     }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.small) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorScrollToMid, position: async () => positionBand(page!, "mid") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorMidFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, step: WORKBOOK_FACTORY_STEPS.editorScrollToMid, position: async () => positionBand(page!, "mid") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, step: WORKBOOK_FACTORY_STEPS.editorMidFeedback, prepare: async () => {
       const typedText = "Mid-scroll draft: the learner revises while the activity band is partially expanded.\nThey add a second visible line before pausing for feedback.\nThe surface should keep its feedback welded during the scroll-linked resize.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
     }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.mid) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorScrollToFull, position: async () => positionBand(page!, "full") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.editorFullFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, step: WORKBOOK_FACTORY_STEPS.editorScrollToFull, position: async () => positionBand(page!, "full") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, step: WORKBOOK_FACTORY_STEPS.editorFullFeedback, prepare: async () => {
       const typedText = "Full-width draft: the learner checks that feedback remains welded to the editor surface.\nThis longer note creates real text texture across the editor viewport.\nThe final visible line names the full-width state before feedback arrives.\nA fourth line keeps the cursor moving like an actual revision.\nA fifth line makes the full-width editor less empty in the recording.\nA sixth line gives the deterministic analyzer text edges to track.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
@@ -596,24 +592,24 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
 
     await advanceToTerminal(page);
     await page.locator('.current-activity-band[data-activity-type="terminal-practice"]').waitFor({ state: "attached", timeout: 15_000 });
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalScrollToSmall, position: async () => positionBand(page!, "small") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalSmallFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalScrollToSmall, position: async () => positionBand(page!, "small") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalSmallFeedback, prepare: async () => {
       const command = "printf small-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 1");
       return { command };
     }, trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.small) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalScrollToMid, position: async () => positionBand(page!, "mid") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalMidFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalScrollToMid, position: async () => positionBand(page!, "mid") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalMidFeedback, prepare: async () => {
       const command = "printf mid-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 2");
       return { command };
     }, trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.mid) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalScrollToFull, position: async () => positionBand(page!, "full") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, coach, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalFullFeedback, prepare: async () => {
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalScrollToFull, position: async () => positionBand(page!, "full") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, step: WORKBOOK_FACTORY_STEPS.terminalFullFeedback, prepare: async () => {
       const command = "printf full-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 3");
@@ -629,10 +625,9 @@ export async function recordWorkbookFactory(options: WorkbookFactoryRecorderOpti
     for (const stepId of SCROLL_CHECKPOINT_STEP_IDS) if (!seenStateSteps.has(stepId)) walkthrough.semanticFailures.push(`Missing scroll checkpoint for marker step ${stepId}.`);
     for (const stepId of REQUIRED_MOTION_STEP_IDS) if (!seenStateSteps.has(stepId)) walkthrough.semanticFailures.push(`Missing required-motion checkpoint for marker step ${stepId}.`);
     if (mainTutor.reviews.length < 7) walkthrough.semanticFailures.push(`Expected at least seven Main Tutor reviews (four editor, three terminal), saw ${mainTutor.reviews.length}.`);
-    if (coach.assessments.length !== 0) walkthrough.semanticFailures.push(`Expected no Practice Coach assessments for terminal review, saw ${coach.assessments.length}.`);
     if (fakePty.commandCount < 3) walkthrough.semanticFailures.push(`Expected three fake PTY commands, saw ${fakePty.commandCount}.`);
 
-    walkthrough.fake = { mainTutorReviews: mainTutor.reviews.length, practiceCoachAssessments: coach.assessments.length, ptyCommands: fakePty.commands };
+    walkthrough.fake = { mainTutorReviews: mainTutor.reviews.length, ptyCommands: fakePty.commands };
     await writeFile(resolve(runRoot, WALKTHROUGH_PATH), JSON.stringify(walkthrough, null, 2));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

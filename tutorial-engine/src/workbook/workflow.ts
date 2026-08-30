@@ -11,8 +11,7 @@ import { projectTerminalAttempts, type ProjectedTerminalAttempt } from "./termin
 import { canStartAutomaticTerminalReview, canStartManualTerminalReview, terminalReviewCallCounts, terminalReviewNextCallNumber, type TerminalReviewRequestLike } from "./terminal-review-policy.js";
 import { promoteCurrentEditorAttempt, resolveEditorTarget } from "./editor.js";
 import { AttemptStore, type Attempt, type AttemptEvidence } from "./attempts.js";
-import type { PracticeCoach } from "./practice-coach.js";
-import type { MainTutorContext, MainWorkbookTutor, PracticeCoachHandoff, TutorDecision } from "./tutor.js";
+import type { MainTutorContext, MainWorkbookTutor, TutorDecision } from "./tutor.js";
 import { WorkbookTimeline, type TimelineMessage, type TutorFailure, type WorkbookTimelineRecord } from "./timeline.js";
 import { submitReflectionAttempt } from "./reflection.js";
 import type { EditorPracticeBlock, WorkbookBlock, WorkbookLesson } from "./contract.js";
@@ -109,9 +108,8 @@ function projectedTimelineRecords(loaded: LoadedWorkbook, source: readonly Workb
     return projected ? [projected] : [];
   });
 }
-/** Terminal commands, evidence references, review requests, failures, and legacy Coach handoffs are internal lifecycle material.
- * The Main Tutor receives only the labelled transient attempt (plus a legacy handoff when replaying
- * old pending sessions), never the raw lifecycle log. */
+/** Terminal commands, evidence references, review requests, failures, and legacy terminal-coach handoffs are internal lifecycle material.
+ * The Main Tutor receives only the labelled transient attempt, never the raw lifecycle log. */
 function mainTutorTimelineRecords(loaded: LoadedWorkbook, source: readonly WorkbookTimelineRecord[]): WorkbookTimelineRecord[] {
   return projectedTimelineRecords(loaded, source).filter((record) => !(
     record.type === "terminal-command-submitted"
@@ -410,7 +408,6 @@ export interface WorkbookWorkflowDependencies {
   timeline: WorkbookTimeline;
   attempts: AttemptStore;
   mainTutor: MainWorkbookTutor;
-  practiceCoach?: PracticeCoach;
   terminalEvidence: TerminalEvidenceRepository;
   terminalAssessmentScheduler?: TerminalAssessmentScheduler;
   activeTerminalContext?: () => ActiveTerminalTranscriptContext | undefined;
@@ -777,7 +774,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
 
   // One workflow owns one embedded terminal session. Bash submission starts an attempt; only its
   // immutable finished evidence can begin direct Main Tutor review work.
-  type TerminalReviewRequestMode = "automatic" | "manual" | "legacy-handoff";
+  type TerminalReviewRequestMode = "automatic" | "manual";
   type TerminalReviewRequest = {
     attemptId: string;
     lessonId: string;
@@ -923,10 +920,10 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       return await appendTerminalReviewRequest({ attemptId: request.attemptId, lessonId: request.lessonId, blockId: request.blockId, command: request.command, exitStatus: request.exitStatus, rubric: request.rubric, evidenceRef: request.evidenceRef, mode: "automatic", callNumber: terminalReviewNextCallNumber(counts) });
     });
   };
-  const handleTerminalReviewInfrastructureFailure = async (request: TerminalReviewRequest, handoff?: PracticeCoachHandoff): Promise<void> => {
+  const handleTerminalReviewInfrastructureFailure = async (request: TerminalReviewRequest): Promise<void> => {
     const retry = await retryTerminalReviewAutomatically(request);
     if (retry) {
-      launchTerminalMainReview(retry, handoff);
+      launchTerminalMainReview(retry);
       return;
     }
     await recordTerminalReviewFailure(request);
@@ -947,7 +944,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
         : "";
       // This is intentionally written for every terminal acceptance, even when the command
       // produced no output or a process restart lost the live manager. It never includes the
-      // command, evidence reference, Coach handoff, rubric, private transcript, or later shell output.
+      // command, evidence reference, legacy terminal-coach handoff, rubric, private transcript, or later shell output.
       await append({ type: "terminal-transcript-snapshotted", attemptId: request.attemptId, lessonId: request.lessonId, blockId: request.blockId, transcript });
       await appendTerminalAcceptedCheckpoint(request, result.message);
       await recordWorkAccepted(active);
@@ -955,39 +952,34 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       notifyStateChanged({ lessonId: request.lessonId, blockId: request.blockId, status: "accepted", terminalPhase: "complete" });
     });
   };
-  const launchTerminalMainReview = (request: TerminalReviewRequest, handoff?: PracticeCoachHandoff): void => {
+  const launchTerminalMainReview = (request: TerminalReviewRequest): void => {
     const task = (async () => {
       const review = await transact(async () => {
         const active = terminalRequestIsCurrent(request);
         if (!active) return undefined;
-        if (handoff) {
-          const recordedHandoff = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-coach-handoff-recorded" }> =>
-            record.type === "terminal-coach-handoff-recorded" && record.attemptId === request.attemptId);
-          if (!recordedHandoff || recordedHandoff.outcome !== handoff.outcome || recordedHandoff.text !== handoff.text) return undefined;
-        }
         return { context: await mainContext({ includeTerminalContext: false }), active };
       });
       if (!review) return;
       const attempt = await terminalAttemptForAssessment(request);
       if (!attempt) {
-        await handleTerminalReviewInfrastructureFailure(request, handoff);
+        await handleTerminalReviewInfrastructureFailure(request);
         return;
       }
 
       let decision: TutorDecision;
       const startedAtMs = Date.now();
       try {
-        decision = await withTerminalAssessmentTimeout(mainTutor.review({ ...review.context, attempt, privateGuidance: request.rubric, ...(handoff ? { practiceCoachHandoff: handoff } : {}) }));
+        decision = await withTerminalAssessmentTimeout(mainTutor.review({ ...review.context, attempt, privateGuidance: request.rubric }));
       } catch {
         logTerminalReviewCall(request, startedAtMs, "infrastructure_failure");
-        await handleTerminalReviewInfrastructureFailure(request, handoff);
+        await handleTerminalReviewInfrastructureFailure(request);
         return;
       }
 
       const result = classifyTerminalReviewDecision(decision);
       if (!result) {
         logTerminalReviewCall(request, startedAtMs, "infrastructure_failure");
-        await handleTerminalReviewInfrastructureFailure(request, handoff);
+        await handleTerminalReviewInfrastructureFailure(request);
         return;
       }
       logTerminalReviewCall(request, startedAtMs, result.outcome);
@@ -1058,7 +1050,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   });
   /** Rebuild a completed command's pending final lifecycle after server restart/reload. */
   const requeueTerminalLifecycle = async (): Promise<void> => {
-    const resume = await transact(async (): Promise<{ request: TerminalReviewRequest; handoff?: PracticeCoachHandoff } | undefined> => {
+    const resume = await transact(async (): Promise<TerminalReviewRequest | undefined> => {
       const active = activeDeclaredBlock();
       if (!active || active.block.type !== "terminal-practice") return undefined;
       const submission = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
@@ -1073,24 +1065,20 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       const latestFailure = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-review-failed" }> =>
         record.type === "terminal-review-failed" && record.attemptId === submission.attemptId);
       if (latestFailure && (!latestRequest || latestFailure.sequence > latestRequest.sequence)) return undefined;
-      const handoff = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-coach-handoff-recorded" }> =>
-        record.type === "terminal-coach-handoff-recorded" && record.attemptId === submission.attemptId);
       if (latestRequest) {
         const pending = terminalReviewRequestFromRecord(latestRequest, { command: submission.command, exitStatus: finished.exitStatus, rubric: active.block.tutor });
         const counts = terminalReviewCountsFor(pending);
         if (pending.mode !== "manual" && canStartAutomaticTerminalReview(counts)) {
-          const request = await appendTerminalReviewRequest({ attemptId: submission.attemptId, lessonId: submission.lessonId, blockId: submission.blockId, command: submission.command, exitStatus: finished.exitStatus, rubric: active.block.tutor, evidenceRef: finished.evidenceRef, mode: "automatic", callNumber: terminalReviewNextCallNumber(counts) });
-          return handoff ? { request, handoff: { outcome: handoff.outcome, text: handoff.text } } : { request };
+          return await appendTerminalReviewRequest({ attemptId: submission.attemptId, lessonId: submission.lessonId, blockId: submission.blockId, command: submission.command, exitStatus: finished.exitStatus, rubric: active.block.tutor, evidenceRef: finished.evidenceRef, mode: "automatic", callNumber: terminalReviewNextCallNumber(counts) });
         }
         await appendTerminalReviewFailureWithinRun(pending);
         return undefined;
       }
       const counts = terminalReviewCountsFor({ evidenceRef: finished.evidenceRef });
-      const request = await appendTerminalReviewRequest({ attemptId: submission.attemptId, lessonId: submission.lessonId, blockId: submission.blockId, command: submission.command, exitStatus: finished.exitStatus, rubric: active.block.tutor, evidenceRef: finished.evidenceRef, mode: handoff ? "legacy-handoff" : "automatic", callNumber: terminalReviewNextCallNumber(counts) });
-      return handoff ? { request, handoff: { outcome: handoff.outcome, text: handoff.text } } : { request };
+      return await appendTerminalReviewRequest({ attemptId: submission.attemptId, lessonId: submission.lessonId, blockId: submission.blockId, command: submission.command, exitStatus: finished.exitStatus, rubric: active.block.tutor, evidenceRef: finished.evidenceRef, mode: "automatic", callNumber: terminalReviewNextCallNumber(counts) });
     });
     if (!resume) return;
-    launchTerminalMainReview(resume.request, resume.handoff);
+    launchTerminalMainReview(resume);
   };
 
   const createTerminalReviewRetry = async (failureId: string): Promise<TerminalReviewRequest | undefined> => {

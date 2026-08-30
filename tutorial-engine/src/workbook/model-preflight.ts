@@ -6,11 +6,11 @@ import {
   createAgentSession,
   getAgentDir
 } from "@earendil-works/pi-coding-agent";
-import { PRACTICE_COACH_MODEL_ENV, TUTOR_MODEL_ENV, resolvePracticeCoachModel, resolveTutorModel, type TutorModelChoice } from "./model.js";
+import { TUTOR_MODEL_ENV, resolveTutorModel } from "./model.js";
 import { createResilientTutorSession, type PiTutorSession, type ResilientTutorSession } from "./pi-tutor-session.js";
 import type { TutorialLogger } from "./runtime-log.js";
 
-export type WorkbookModelBackedRole = "Main Tutor" | "Practice Coach";
+export type WorkbookModelBackedRole = "Main Tutor";
 
 export interface WorkbookModelIdentity {
   provider: string;
@@ -19,7 +19,7 @@ export interface WorkbookModelIdentity {
 
 export interface WorkbookModelPreflightResult {
   role: WorkbookModelBackedRole;
-  envVar: typeof TUTOR_MODEL_ENV | typeof PRACTICE_COACH_MODEL_ENV;
+  envVar: typeof TUTOR_MODEL_ENV;
   requested?: string;
   requestedModel?: WorkbookModelIdentity;
   selectedModel?: WorkbookModelIdentity;
@@ -53,7 +53,7 @@ function formatPreflightMessage(details: WorkbookModelPreflightErrorDetails): st
 
 export class WorkbookModelPreflightError extends Error implements WorkbookModelPreflightResult {
   readonly role: WorkbookModelBackedRole;
-  readonly envVar: typeof TUTOR_MODEL_ENV | typeof PRACTICE_COACH_MODEL_ENV;
+  readonly envVar: typeof TUTOR_MODEL_ENV;
   readonly requested?: string;
   readonly requestedModel?: WorkbookModelIdentity;
   readonly selectedModel?: WorkbookModelIdentity;
@@ -73,7 +73,7 @@ export class WorkbookModelPreflightError extends Error implements WorkbookModelP
 
 export interface WorkbookRolePreflightRequest {
   role: WorkbookModelBackedRole;
-  envVar: typeof TUTOR_MODEL_ENV | typeof PRACTICE_COACH_MODEL_ENV;
+  envVar: typeof TUTOR_MODEL_ENV;
   contentRoot: string;
   workspaceRoot: string;
   logger: TutorialLogger;
@@ -96,10 +96,6 @@ interface PiModelLike { provider: string; id: string }
 
 function identity(model: PiModelLike | undefined): WorkbookModelIdentity | undefined {
   return model ? { provider: model.provider, id: model.id } : undefined;
-}
-
-function resolverForRole(role: WorkbookModelBackedRole): (runtime: ModelRuntime, requested: string | undefined) => TutorModelChoice {
-  return role === "Main Tutor" ? resolveTutorModel : resolvePracticeCoachModel;
 }
 
 export async function probePiWorkbookRoleModel(request: WorkbookRolePreflightRequest): Promise<WorkbookModelPreflightResult> {
@@ -138,7 +134,7 @@ export async function probePiWorkbookRoleModel(request: WorkbookRolePreflightReq
     });
     await loader.reload();
     const modelRuntime = await ModelRuntime.create();
-    const choice = resolverForRole(request.role)(modelRuntime, requested);
+    const choice = resolveTutorModel(modelRuntime, requested);
     requestedModel = identity(choice.requestedModel ?? choice.model);
     if (choice.warning) request.logger.info(choice.warning);
     const created = await createAgentSession({
@@ -168,8 +164,7 @@ export async function probePiWorkbookRoleModel(request: WorkbookRolePreflightReq
 
 function roleRequests(options: Required<Pick<WorkbookModelPreflightOptions, "contentRoot" | "workspaceRoot" | "logger">> & { environment: NodeJS.ProcessEnv }): WorkbookRolePreflightRequest[] {
   return [
-    { role: "Main Tutor", envVar: TUTOR_MODEL_ENV, contentRoot: options.contentRoot, workspaceRoot: options.workspaceRoot, logger: options.logger, environment: options.environment },
-    { role: "Practice Coach", envVar: PRACTICE_COACH_MODEL_ENV, contentRoot: options.contentRoot, workspaceRoot: options.workspaceRoot, logger: options.logger, environment: options.environment }
+    { role: "Main Tutor", envVar: TUTOR_MODEL_ENV, contentRoot: options.contentRoot, workspaceRoot: options.workspaceRoot, logger: options.logger, environment: options.environment }
   ];
 }
 
@@ -185,10 +180,5 @@ export async function preflightWorkbookModels(options: WorkbookModelPreflightOpt
         throw new WorkbookModelPreflightError({ role: request.role, envVar: request.envVar, requested: environment[request.envVar], cause });
       }
     });
-  // Promise.all intentionally gives the workbook a success barrier and first-known-error semantics.
-  // The underlying Pi provider calls are not cancellable, so a sibling probe may keep running after
-  // this promise rejects; Promise.all still observes its eventual settlement instead of leaving an
-  // unhandled rejection. Identical configured model identities are not deduplicated because each
-  // role has its own startup contract.
   return Promise.all(probes);
 }

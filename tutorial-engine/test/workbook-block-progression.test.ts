@@ -50,7 +50,7 @@ describe("workbook block progression", () => {
 
   it("completes exact current blocks idempotently and rejects skipping unrevealed blocks", async () => {
     const dir = await fixture();
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor(), practiceCoach: fakePracticeCoach() });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
     try {
       const initial = await fetch(`${server.url}/api/workbook/state`).then((response) => response.json() as any);
       expect(initial.progress.activeBlockId).toBe("workbook--introduction");
@@ -84,7 +84,7 @@ describe("workbook block progression", () => {
   it("accepts evaluated evidence once, renders exactly one ready successor, and reconstructs it after restart", async () => {
     const dir = await fixture();
     const tutor = fakeTutor({ outcome: "accepted", message: "Accepted editor answer." });
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor, practiceCoach: fakePracticeCoach() });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor });
     try {
       await complete(server.url, "workbook--introduction");
       await complete(server.url, "part--validation-loop");
@@ -118,7 +118,7 @@ describe("workbook block progression", () => {
       expect(await workAcceptedEvents(dir, "lesson--001-first--edit-answer")).toHaveLength(1);
       expect(authoredCourseBlocks(accepted).filter((id: string) => id === "lesson--001-first--finish")).toHaveLength(1);
 
-      const restarted = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor(), practiceCoach: fakePracticeCoach() });
+      const restarted = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
       try {
         const restored = await fetch(`${restarted.url}/api/workbook/state`).then((response) => response.json() as any);
         expect(restored.progress.activeBlockId).toBe("lesson--001-first--edit-answer");
@@ -133,7 +133,7 @@ describe("workbook block progression", () => {
     const dir = await fixture();
     const loaded = await loadWorkbook(dir);
     await initializeLessonJump(tutorialStatePath(dir), loaded, resolveLessonJump(loaded, "001"));
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor(undefined, { outcome: "complete-block", blockId: "lesson--001-first--edit-answer" }), practiceCoach: fakePracticeCoach() });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor(undefined, { outcome: "complete-block", blockId: "lesson--001-first--edit-answer" }) });
     try {
       const opened = await fetch(`${server.url}/api/workbook/state`).then((response) => response.json() as any);
       expect(opened.progress.activeBlockId).toBe("lesson--001-first");
@@ -171,7 +171,7 @@ describe("workbook block progression", () => {
       },
       dispose() {}
     }) });
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor, practiceCoach: fakePracticeCoach() });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor });
     try {
       await complete(server.url, "workbook--introduction");
       await complete(server.url, "part--validation-loop");
@@ -209,7 +209,7 @@ describe("workbook block progression", () => {
 
   it("promotes the same ready successor by button or tutor and duplicate crossings cannot skip", async () => {
     const dir = await fixture();
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor(), practiceCoach: fakePracticeCoach() });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
     try {
       const initial = await fetch(`${server.url}/api/workbook/state`).then((response) => response.json() as any);
       expect(initial.progress.readyBlocks).toEqual(["part--validation-loop"]);
@@ -229,7 +229,7 @@ describe("workbook block progression", () => {
     } finally { await server.close(); }
 
     const tutorDir = await fixture();
-    const tutorServer = await startWorkbookServer({ target: tutorDir, webRoot: resolve(tutorDir, "web"), embeddedTerminal: false, mainTutor: fakeTutor(undefined, { outcome: "complete-block", blockId: "workbook--introduction" }), practiceCoach: fakePracticeCoach() });
+    const tutorServer = await startWorkbookServer({ target: tutorDir, webRoot: resolve(tutorDir, "web"), embeddedTerminal: false, mainTutor: fakeTutor(undefined, { outcome: "complete-block", blockId: "workbook--introduction" }) });
     try {
       const response = await postMessage(tutorServer.url, { blockId: "workbook--introduction", text: "I'm ready to continue." });
       expect(response.status).toBe(202);
@@ -283,8 +283,4 @@ async function waitForState(serverUrl: string, predicate: (state: any) => boolea
 
 function fakeTutor(decision: any = { outcome: "working" }, reply: any = "Tutor reply."): any {
   return { restore: async () => undefined, reply: async () => reply, review: async () => decision, summarizeBlock: async () => "Block summary.", summarizeLesson: async () => "Lesson summary.", dispose() {} };
-}
-
-function fakePracticeCoach(): any {
-  return { assess: async () => ({ outcome: "ready", text: "Ready for main review." }) };
 }

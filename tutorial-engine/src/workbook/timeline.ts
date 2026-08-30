@@ -6,16 +6,16 @@ import type { AttemptKind } from "./attempts.js";
 
 export type TimelineMetadata = { id: string; sequence: number; at: string };
 
-/** Positive Practice Coach outcomes that are handed privately to the Main Tutor. */
-export type TerminalCoachHandoffOutcome = "ready" | "interesting";
+/** Historical terminal-coach handoff outcomes still parsed for old private session logs. */
+export type LegacyTerminalHandoffOutcome = "ready" | "interesting";
 
 /**
  * The durable terminal lifecycle. Commands, evidence references, review requests/failures, and
- * legacy Coach handoffs stay private. A bounded, sanitized terminal transcript is the sole
+ * legacy terminal-coach handoffs stay private. A bounded, sanitized terminal transcript is the sole
  * browser-safe terminal payload: it is written only when an attempt is accepted and is projected as
  * historical output for that authored block.
  */
-export type TerminalReviewRequestMode = "automatic" | "manual" | "legacy-handoff";
+export type TerminalReviewRequestMode = "automatic" | "manual";
 
 export type TerminalLifecycleInput =
   | { type: "terminal-command-submitted"; attemptId: string; lessonId: string; blockId: string; command: string; terminalSessionId: string }
@@ -23,10 +23,10 @@ export type TerminalLifecycleInput =
   | { type: "terminal-review-requested"; attemptId: string; lessonId: string; blockId: string; evidenceRef: string; requestId: string; mode: TerminalReviewRequestMode; callNumber: number }
   | { type: "terminal-review-failed"; attemptId: string; lessonId: string; blockId: string; evidenceRef: string; requestId: string; failureId: string; publicMessage: string }
   | { type: "terminal-transcript-snapshotted"; attemptId: string; lessonId: string; blockId: string; transcript: string }
-  | { type: "terminal-feedback-recorded"; attemptId: string; text: string }
-  | { type: "terminal-coach-handoff-recorded"; attemptId: string; outcome: TerminalCoachHandoffOutcome; text: string };
+  | { type: "terminal-feedback-recorded"; attemptId: string; text: string };
 
-export type TerminalLifecycleEvent = TerminalLifecycleInput & TimelineMetadata;
+export type LegacyTerminalHandoffEvent = { type: "terminal-coach-handoff-recorded"; attemptId: string; outcome: LegacyTerminalHandoffOutcome; text: string } & TimelineMetadata;
+export type TerminalLifecycleEvent = (TerminalLifecycleInput & TimelineMetadata) | LegacyTerminalHandoffEvent;
 
 export type WorkbookWorkflowInput =
   | { type: "session_started" }

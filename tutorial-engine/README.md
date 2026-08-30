@@ -26,7 +26,7 @@ the active live workspace read-write at `/workspace`; sibling workspaces are not
 launch creates a fresh session and prints its ID and workspace paths. Reopen a specific session with
 `npm run tutorial:workbook -- --session <id>`; browser-tutor `.tutorial/.tmp` state is not resumed.
 
-Before printing launch lines, listening, or opening the browser, the CLI makes two small model preflight calls in parallel: one as the Main Tutor (`TUTOR_MODEL`) and one as the Practice Coach (`PRACTICE_COACH_MODEL`). Both must return a non-empty assistant reply. This catches missing auth, quota, and usage-limit failures up front; successful startup costs one minimal prompt per role and takes roughly the slower of the two calls. Authored content and session validation still happen before these paid calls. Low-level `startWorkbookServer` users, tests, and eval fixtures that bypass the CLI are not preflighted.
+Before printing launch lines, listening, or opening the browser, the CLI makes one small Main Tutor (`TUTOR_MODEL`) model preflight call. It must return a non-empty assistant reply. This catches missing auth, quota, and usage-limit failures up front; successful startup costs one minimal prompt. Authored content and session validation still happen before this paid call. Low-level `startWorkbookServer` users, tests, and eval fixtures that bypass the CLI are not preflighted.
 
 Add `--no-open` to suppress browser launch, or `--port 4310` to choose a port. Add `--watch` when authoring Markdown content:
 

@@ -21,7 +21,7 @@ function reviewFailed(requestId = "request-1", failureId = "failure-1", sequence
 }
 
 describe("projectTerminalAttempts", () => {
-  it("projects direct terminal review states without private fields or Coach handoff requirements", () => {
+  it("projects direct terminal review states without private fields or legacy handoff requirements", () => {
     const events: WorkbookTimelineRecord[] = [submitted()];
     expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running" });
 
@@ -81,7 +81,7 @@ describe("projectTerminalAttempts", () => {
     expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running" });
   });
 
-  it("continues to read legacy Coach handoffs for old accepted sessions", () => {
+  it("continues to read legacy terminal-coach handoffs for old accepted sessions", () => {
     const completed = [
       submitted("old", "before-restart"),
       finished("old"),

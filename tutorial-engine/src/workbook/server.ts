@@ -9,7 +9,6 @@ import { createDockerPty, requireOpenCodeApiKey, WorkbookTerminalManager, type T
 import { publicTerminalFrame } from "./public-terminal-contract.js";
 import { NO_RUNTIME_PROVISION, trustRuntimeProvision, type RuntimeProvisionProfile, type TrustedRuntimeProvision } from "./runtime-provision.js";
 import { AttemptStore } from "./attempts.js";
-import type { PracticeCoach } from "./practice-coach.js";
 import { DefaultMainWorkbookTutor, type MainWorkbookTutor } from "./tutor.js";
 import { WorkbookTimeline } from "./timeline.js";
 import { TerminalEvidenceRepository } from "./terminal-evidence.js";
@@ -24,7 +23,7 @@ const MAX_BODY_BYTES = 16_384;
 const MAX_MESSAGE_BYTES = 4_000;
 
 export interface WorkbookRuntimeDescriptor { contentRoot: string; sessionRoot: string; workspacesRoot?: string; workspaceRoots: Record<string, string>; runtimeProvision?: TrustedRuntimeProvision; }
-export interface WorkbookServerOptions { target: string; webRoot: string; session?: WorkbookRuntimeDescriptor; runtimeProvision?: RuntimeProvisionProfile; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; terminalAssessmentScheduler?: TerminalAssessmentScheduler; mainTutor?: MainWorkbookTutor; practiceCoach?: PracticeCoach; watchContent?: boolean; contentWatchFactory?: ContentWatchFactory; contentWatchDebounceMs?: number; }
+export interface WorkbookServerOptions { target: string; webRoot: string; session?: WorkbookRuntimeDescriptor; runtimeProvision?: RuntimeProvisionProfile; port?: number; host?: string; logger?: TutorialLogger; embeddedTerminal?: boolean; terminalPtyFactory?: TerminalPtyFactory; terminalDebounceMs?: number; terminalAssessmentScheduler?: TerminalAssessmentScheduler; mainTutor?: MainWorkbookTutor; watchContent?: boolean; contentWatchFactory?: ContentWatchFactory; contentWatchDebounceMs?: number; }
 export interface StartedWorkbookServer { url: string; port: number; host: string; close(): Promise<void>; }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
@@ -172,7 +171,6 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     timeline,
     attempts,
     mainTutor,
-    practiceCoach: options.practiceCoach,
     terminalEvidence,
     terminalAssessmentScheduler: options.terminalAssessmentScheduler,
     activeTerminalContext: () => terminal?.activeTranscriptContext(),

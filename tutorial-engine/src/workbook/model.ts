@@ -1,7 +1,6 @@
 import { resolveCliModel, type ModelRuntime, type ScopedModel } from "@earendil-works/pi-coding-agent";
 
 export const TUTOR_MODEL_ENV = "TUTOR_MODEL";
-export const PRACTICE_COACH_MODEL_ENV = "PRACTICE_COACH_MODEL";
 
 /** Pi chooses its configured default when no usable tutor model is requested. */
 export interface TutorModelChoice extends Partial<ScopedModel> {
@@ -23,8 +22,4 @@ function resolveConfiguredTutorModel(modelRuntime: ModelRuntime, requested: stri
 
 export function resolveTutorModel(modelRuntime: ModelRuntime, requested: string | undefined): TutorModelChoice {
   return resolveConfiguredTutorModel(modelRuntime, requested, TUTOR_MODEL_ENV);
-}
-
-export function resolvePracticeCoachModel(modelRuntime: ModelRuntime, requested: string | undefined): TutorModelChoice {
-  return resolveConfiguredTutorModel(modelRuntime, requested, PRACTICE_COACH_MODEL_ENV);
 }

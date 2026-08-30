@@ -5,14 +5,11 @@
  * without a model. What differs is only how the review decision is reached — a queue the test
  * primes, or logic keyed to the evidence — so that is the one method subclasses override.
  */
-import type { Attempt } from "../../src/workbook/attempts.js";
-import type { PracticeCoach, PracticeCoachOutcome } from "../../src/workbook/practice-coach.js";
 import type { TimelineMessage } from "../../src/workbook/timeline.js";
-import type { MainTutorContext, MainWorkbookTutor, PracticeCoachHandoff, TutorDecision, TutorReview } from "../../src/workbook/tutor.js";
+import type { MainTutorContext, MainWorkbookTutor, TutorDecision, TutorReview } from "../../src/workbook/tutor.js";
 
-export type ReviewInput = MainTutorContext & TutorReview & { practiceCoachHandoff?: PracticeCoachHandoff };
+export type ReviewInput = MainTutorContext & TutorReview;
 export type QueuedDecision = TutorDecision | Error | Promise<TutorDecision> | ((review: ReviewInput) => TutorDecision | Promise<TutorDecision>);
-export type QueuedCoachOutcome = PracticeCoachOutcome | Error | Promise<PracticeCoachOutcome>;
 
 function unwrap<T>(next: T | Error): T {
   if (next instanceof Error) throw next;
@@ -39,7 +36,6 @@ export class RecordingMainTutor implements MainWorkbookTutor {
     this.replies.push(input);
     return unwrap(await (this.replyQueue.shift() ?? this.defaultReply));
   }
-
 
   async review(input: ReviewInput): Promise<TutorDecision> {
     this.reviews.push(input);
@@ -72,15 +68,5 @@ export class QueuedMainTutor extends RecordingMainTutor {
     const next = this.queue.shift() ?? { outcome: "feedback" as const, message: "Keep going." };
     if (next instanceof Error) throw next;
     return typeof next === "function" ? next(input) : next;
-  }
-}
-
-export class RecordingPracticeCoach implements PracticeCoach {
-  readonly assessments: Array<{ attempt: Attempt; rubric: string }> = [];
-  queue: QueuedCoachOutcome[] = [];
-
-  async assess(input: { attempt: Attempt; rubric: string }): Promise<PracticeCoachOutcome> {
-    this.assessments.push(input);
-    return unwrap(await (this.queue.shift() ?? { outcome: "ready", text: "Ordinary terminal handoff." }));
   }
 }

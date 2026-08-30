@@ -276,9 +276,9 @@ function walkthroughFixture(runRoot: string, semanticFailures: string[]): Workbo
       marker: { transitionAt: now, settledAt: now },
       before: geometry(0, 0),
       after: geometry(300, 0.5),
-      fakeCallCounts: { mainTutorReviews: 1, practiceCoachAssessments: 0, fakePtyCommands: 0 },
+      fakeCallCounts: { mainTutorReviews: 1, fakePtyCommands: 0 },
     }],
-    fake: { mainTutorReviews: 1, practiceCoachAssessments: 0, ptyCommands: [] },
+    fake: { mainTutorReviews: 1, ptyCommands: [] },
     semanticFailures,
   };
 }

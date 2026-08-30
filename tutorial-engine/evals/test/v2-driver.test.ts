@@ -8,7 +8,7 @@ import { createV2WorkbookDriver, V2WorkbookDriver } from "../v2/driver.js";
 import { clueCommand, exactCommand, satisfactoryEditorDraft } from "../v2/scenarios.js";
 import { createEmptyV2SessionTrace, readWorkbookTimeline } from "../v2/session.js";
 import { createEvaluationWorkspace, type CreateEvaluationWorkspaceOptions } from "../v2/workspace.js";
-import { RecordingPracticeCoach, RecordingMainTutor, type ReviewInput } from "../../test/support/fake-tutors.js";
+import { RecordingMainTutor, type ReviewInput } from "../../test/support/fake-tutors.js";
 
 class DriverFakeMainTutor extends RecordingMainTutor {
   protected override defaultReply = "Tutor reply that asks one public follow-up.";
@@ -125,12 +125,10 @@ async function startDriver(options: CreateEvaluationWorkspaceOptions = {}) {
   tempRoots.push(workspace.repositoryRoot);
   const pty = new DriverFakePty();
   const workbookTutor = new DriverFakeMainTutor();
-  const practiceCoach = new RecordingPracticeCoach();
   const server = await workspace.startServer({
     terminalPtyFactory: () => pty,
     terminalDebounceMs: 1,
-    mainTutor: workbookTutor,
-    practiceCoach
+    mainTutor: workbookTutor
   });
   const trace = createEmptyV2SessionTrace("driver-test");
   const driver = createV2WorkbookDriver({ serverUrl: server.url, trace });

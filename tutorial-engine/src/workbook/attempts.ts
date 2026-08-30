@@ -24,7 +24,7 @@ export interface Attempt {
   retainedFeedback?: string;
   /** The visible feedback is a retryable transport/provider notice, not actionable tutor feedback. */
   reviewUnavailable?: boolean;
-  /** Terminal-only coaching state; excluded from Main Tutor context and timeline. */
+  /** Historical terminal-only quick-feedback state; excluded from Main Tutor context and timeline. */
   privateQuickFeedback?: boolean;
   successMessage?: string;
 }

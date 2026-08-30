@@ -3,7 +3,7 @@ export type PublicWorkbookBlockType = "narrative" | "terminal-practice" | "edito
 export type PublicWorkbookBlockKind = PublicWorkbookBlockType | "workbook-introduction" | "part-preamble" | "lesson-preamble";
 export type PublicAttemptKind = "editor" | "terminal" | "reflection";
 export type PublicEditorStatus = "editing" | "waiting" | "reviewing" | "feedback" | "unlocked";
-/** Browser-safe terminal state: command text, evidence, IDs, legacy Coach handoffs, and rubrics are private. */
+/** Browser-safe terminal state: command text, evidence, IDs, legacy terminal-coach handoffs, and rubrics are private. */
 export type PublicTerminal =
   | { phase: "running" }
   | { phase: "checking" }

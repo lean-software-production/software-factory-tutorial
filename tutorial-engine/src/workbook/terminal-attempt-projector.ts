@@ -30,7 +30,7 @@ type Attempt = {
 
 /**
  * Replays private terminal records without I/O. Finished evidence is checked only to establish
- * lifecycle consistency; no evidence, command, attempt identity, request identity, or Coach handoff
+ * lifecycle consistency; no evidence, command, attempt identity, request identity, or legacy terminal-coach handoff
  * reaches the result. An unfinished command from another terminal session is deliberately idle on
  * reopen.
  */
@@ -90,7 +90,7 @@ export function projectTerminalAttempts(
         break;
       }
       case "terminal-coach-handoff-recorded":
-        // Legacy handoff rows remain private replay material only. They do not affect browser state.
+        // Legacy terminal-coach handoff rows remain private replay material only. They do not affect browser state.
         break;
       case "attempt_accepted": {
         const attempt = attempts.get(record.attemptId);

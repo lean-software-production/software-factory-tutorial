@@ -62,8 +62,7 @@ describe("v2 public session trace", () => {
     tempRoots.push(workspace.repositoryRoot);
     const server = await workspace.startServer({
       embeddedTerminal: false,
-      mainTutor: new SessionFakeMainTutor(),
-      practiceCoach: { assess: async () => ({ outcome: "ready" as const, text: "Ready for Main Tutor review." }) }
+      mainTutor: new SessionFakeMainTutor()
     });
     try {
       let state = await fetch(`${server.url}/api/workbook/state`).then((response) => response.json() as any);

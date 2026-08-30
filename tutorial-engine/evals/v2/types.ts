@@ -63,7 +63,7 @@ export interface V2ArtifactSnapshot {
  * Internal, in-memory trace used only by deterministic evaluator gates.
  *
  * `events` intentionally contains raw `workbook/events.jsonl` timeline records, including private
- * terminal lifecycle rows, evidence IDs, private Coach handoffs, and future fields. Never serialize
+ * terminal lifecycle rows, evidence IDs, private legacy terminal-coach handoffs, and future fields. Never serialize
  * a `V2SessionTrace` into reports, prompts, or public artifacts; project it to `V2JudgeTrace` first.
  */
 export interface V2SessionTrace {

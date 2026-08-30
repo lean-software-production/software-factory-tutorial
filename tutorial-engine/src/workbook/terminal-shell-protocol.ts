@@ -36,7 +36,7 @@ function markerEvent(marker: string): TerminalShellProtocolEvent | undefined {
 
 /**
  * Parses private OSC markers emitted by the controlled Bash shell. Markers are removed from
- * ordinary terminal output so neither the learner nor Coach evidence sees transport protocol.
+ * ordinary terminal output so neither the learner nor review evidence sees transport protocol.
  */
 export class TerminalShellProtocol {
   #pending = "";

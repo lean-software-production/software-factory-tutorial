@@ -64,12 +64,11 @@ It also names the model choices the tutorial runs on.
 
 ## Models, on purpose
 
-The tutorial runs three agent roles, and they want different things.
+The tutorial runs two agent roles, and they want different things.
 
 | Agent | Wants | Chosen with |
 | --- | --- | --- |
-| The main web tutor | To teach well, at whatever a good explanation costs you | `TUTOR_MODEL` |
-| The internal Practice Coach | Fast terminal feedback | `PRACTICE_COACH_MODEL` |
+| The main web tutor | To teach and review practice well | `TUTOR_MODEL` |
 | The doer you drive with `pi -p` | To be cheap and fast | `pi`, then `/model` |
 
 The doer's mistakes are not a problem to design away — catching them with independent
@@ -83,35 +82,6 @@ export TUTOR_MODEL=<provider>/<model>   # `pi --list-models` shows your options
 Leave `TUTOR_MODEL` unset and Pi picks the main tutor's model for you. Name a model
 that does not exist or is not authenticated and the tutor falls back to Pi's pick
 rather than failing; `npm run setup` reports whichever happened.
-
-The internal Practice Coach is a short-lived, terminal-only model that classifies the
-current attempt as working, feedback, ready, or interesting. It cannot accept work or
-advance the tutorial; the main tutor makes those decisions. It normally follows Pi's
-ordinary model selection too. If you want it to use a smaller or faster authenticated
-model, set it separately:
-
-```sh
-export PRACTICE_COACH_MODEL=<provider>/<model>
-```
-
-Leave `PRACTICE_COACH_MODEL` unset and Pi chooses normally. Invalid or unauthenticated
-values fall back to that same Pi choice.
-
-### Practice Coach diagnostics
-
-To inspect the exact prompt sent to the internal Practice Coach for one launch, set this switch only
-for that launch:
-
-```sh
-PRACTICE_COACH_LOG_PROMPT=1 npm run tutorial:workbook
-```
-
-This writes the raw, exact prompt to the launcher output and the local diagnostic file at
-`~/Library/Logs/SoftwareFactoryTutorial/tutorial-*.log` before it is sent. It can include terminal
-output and the private rubric, including credentials, authorization headers, tokens, and
-environment-variable values. Do not enable it unless you accept that risk, and do not share the output
-or log. When you are finished, unset it with `unset PRACTICE_COACH_LOG_PROMPT`; leaving the switch
-unset keeps that content out of diagnostics.
 
 ## Start the tutorial
 

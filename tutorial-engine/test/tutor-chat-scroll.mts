@@ -14,7 +14,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { startWorkbookServer } from "../src/workbook/server.js";
-import { QueuedMainTutor, RecordingPracticeCoach } from "./support/fake-tutors.js";
+import { QueuedMainTutor } from "./support/fake-tutors.js";
 
 const webRoot = resolve(import.meta.dirname, "../dist/web-workbook");
 const fixtureRoot = resolve(import.meta.dirname, "fixtures/visual-workbook");
@@ -80,8 +80,7 @@ async function main(): Promise<void> {
     port: 0,
     embeddedTerminal: false,
     mainTutor,
-    practiceCoach: new RecordingPracticeCoach(),
-    logger: silentLogger,
+        logger: silentLogger,
   });
   const browser = await playwright.chromium.launch();
   const trace: any[] = [];

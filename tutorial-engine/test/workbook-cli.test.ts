@@ -253,7 +253,7 @@ describe("workbook CLI", () => {
     const contentRoot = await contentFixture();
     await write(join(contentRoot, "web/index.html"), "<!doctype html><div id=\"root\"></div>");
     const mainTutor = { restore: async () => {}, reply: async () => "Continue with the active block.", review: async () => ({ outcome: "feedback" as const, message: "Try again." }), summarizeBlock: async () => "", summarizeLesson: async () => "", dispose: () => {} };
-    const startServer = vi.fn(async (options: WorkbookServerOptions) => await startWorkbookServer({ ...options, webRoot: resolve(contentRoot, "web"), embeddedTerminal: false, mainTutor, practiceCoach: { assess: async () => ({ outcome: "ready" as const, text: "" }) } }));
+    const startServer = vi.fn(async (options: WorkbookServerOptions) => await startWorkbookServer({ ...options, webRoot: resolve(contentRoot, "web"), embeddedTerminal: false, mainTutor }));
 
     const server = await runCli([contentRoot, "--lesson", lesson, "--no-open"], {
       startServer, installSignalHandlers: false, packageDirectory: "/pkg", logger: { info: vi.fn(), error: vi.fn() }, writeLine: () => undefined,

@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { startWorkbookServer } from "../src/workbook/server.js";
 import type { TerminalPty } from "../src/workbook/terminal.js";
-import { QueuedMainTutor, RecordingPracticeCoach } from "./support/fake-tutors.js";
+import { QueuedMainTutor } from "./support/fake-tutors.js";
 
 const webRoot = resolve(import.meta.dirname, "../dist/web-workbook");
 const fixtureRoot = resolve(import.meta.dirname, "fixtures/visual-workbook");
@@ -139,8 +139,7 @@ async function main(): Promise<void> {
     webRoot,
     port: 0,
     mainTutor,
-    practiceCoach: new RecordingPracticeCoach(),
-    terminalPtyFactory: () => new EchoPty(),
+        terminalPtyFactory: () => new EchoPty(),
     terminalDebounceMs: 1,
   });
   const browser = await playwright.chromium.launch();

@@ -14,7 +14,6 @@ export type TerminalReviewRequestLike = {
 export type TerminalReviewCallCounts = {
   automatic: number;
   manual: number;
-  legacyHandoff: number;
   total: number;
 };
 
@@ -22,8 +21,7 @@ export function terminalReviewCallCounts(records: readonly TerminalReviewRequest
   const requests = records.filter((record) => record.evidenceRef === input.evidenceRef);
   const automatic = requests.filter((record) => record.mode === "automatic").length;
   const manual = requests.filter((record) => record.mode === "manual").length;
-  const legacyHandoff = requests.filter((record) => record.mode === "legacy-handoff").length;
-  return { automatic, manual, legacyHandoff, total: requests.length };
+  return { automatic, manual, total: requests.length };
 }
 
 export function terminalReviewNextCallNumber(counts: TerminalReviewCallCounts): number {
