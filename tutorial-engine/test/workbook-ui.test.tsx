@@ -2806,26 +2806,38 @@ describe("workbook lesson UI", () => {
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
   });
 
-  it("renders one fatal alert and keeps the active editor visible, read-only, and feedback-preserving", async () => {
+  it("applies fatal state over an unsent editor revision without losing the local draft or feedback", async () => {
     const editorProgress = activeEditorProgress({
-      draftText: "current draft remains visible",
-      checkpoint: { status: "reviewing", feedback: "Keep the acceptance marker.", reviewNotice: "Updating feedback…", evidence: { kind: "editor", text: "current draft remains visible" } }
+      draftText: "server draft before local typing",
+      checkpoint: { status: "reviewing", feedback: "Keep the acceptance marker.", reviewNotice: "Updating feedback…", evidence: { kind: "editor", text: "server draft before local typing" } }
     } as any);
-    const state = {
+    const healthyState = {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
       introductionComplete: true,
       chapters: [chapter({ lesson: { ...lesson, blocks: [editorBlock] } as any })],
       progress: editorProgress,
       adapter: {},
-      fatal: { kind: "tutor-infrastructure", message: "The AI tutor provider is unavailable. Fix or reconnect the provider, then restart this workbook to continue." },
       timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Edit the answer\n\nUpdate the file." }]
     } as any;
-    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
+    const fatalState = { ...healthyState, fatal: { kind: "tutor-infrastructure", message: "The AI tutor provider is unavailable. Fix or reconnect the provider, then restart this workbook to continue." } } as any;
+    let currentState = healthyState;
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => currentState }));
     vi.stubGlobal("fetch", fetchMock);
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource as any);
 
     const container = await mount(createElement(App), stubAppShellGlobals);
     await act(async () => { await Promise.resolve(); });
+    const editable = container.querySelector<HTMLElement>(".cm-content")!;
+    editable.textContent = "unsent local draft remains visible";
+    await act(async () => { editable.dispatchEvent(new window.Event("input", { bubbles: true })); });
+
+    currentState = fatalState;
+    await act(async () => {
+      FakeEventSource.instances[0]!.emit("state");
+      await Promise.resolve().then(() => Promise.resolve());
+    });
 
     const alerts = container.querySelectorAll('[role="alert"].workbook-fatal-notice');
     expect(alerts).toHaveLength(1);
@@ -2835,7 +2847,7 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector('.current-activity-band[aria-disabled="true"]')).toBeTruthy();
     expect(container.querySelector(".editor-live-surface")).toBeTruthy();
     expect(container.querySelector('.cm-content[contenteditable="false"][aria-disabled="true"]')).toBeTruthy();
-    expect(container.textContent).toContain("current draft remains visible");
+    expect(container.textContent).toContain("unsent local draft remains visible");
     expect(container.textContent).toContain("Keep the acceptance marker.");
     expect(container.textContent).not.toContain("Updating feedback…");
     expect(container.querySelector(".practice-feedback-spinner")).toBeNull();
@@ -2854,10 +2866,16 @@ describe("workbook lesson UI", () => {
   });
 
   it("keeps a fatal terminal visible while disabling input, insertion, and stale busy status", async () => {
+    let socket: FakeWebSocket | undefined;
     class FakeWebSocket {
       static CONNECTING = 0; static OPEN = 1; static CLOSED = 3;
       readyState = FakeWebSocket.OPEN;
-      addEventListener() {} send = vi.fn(); close() { this.readyState = FakeWebSocket.CLOSED; }
+      listeners = new Map<string, Array<() => void>>();
+      constructor() { socket = this; }
+      addEventListener(type: string, listener: () => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      emit(type: string) { for (const listener of this.listeners.get(type) ?? []) listener(); }
+      send = vi.fn();
+      close() { this.readyState = FakeWebSocket.CLOSED; }
     }
     vi.stubGlobal("WebSocket", FakeWebSocket);
     const insertion = vi.fn();
@@ -2881,6 +2899,8 @@ describe("workbook lesson UI", () => {
     expect(insertion).not.toHaveBeenCalledWith(expect.any(Function));
     expect(container.textContent).not.toContain("Checking…");
     expect(container.querySelector(".practice-feedback-spinner")).toBeNull();
+    await act(async () => { socket!.emit("error"); });
+    expect(container.textContent).not.toMatch(/connection failed|refresh the page|try again/i);
   });
 
   it("renders fatal continuation as disabled and never calls completion", async () => {

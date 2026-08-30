@@ -326,6 +326,9 @@ function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChan
   const command = shellCommandFrom(block.markdown);
   const [display, dispatch] = useReducer(reduceTerminalCoachingDisplay, state, initialTerminalDisplay);
   const [terminalError, setTerminalError] = useState<string>();
+  const terminalDisabled = useRef(disabled);
+  useEffect(() => { terminalDisabled.current = disabled; if (disabled) setTerminalError(undefined); }, [disabled]);
+  const handleTerminalError = useCallback((message: string) => { if (!terminalDisabled.current) setTerminalError(message); }, []);
 
   useEffect(() => {
     dispatch({ type: "server-state", terminal: state?.terminal });
@@ -344,7 +347,7 @@ function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChan
   const displayPanel = text ? <PracticeFeedbackBar tone={terminalTone} busy={terminalBusy} status={terminalBusy ? text : undefined} markdown={terminalBusy ? undefined : text} className="live-block-feedback terminal-feedback-overlay" /> : null;
   return <div className={`work-block terminal ${state?.active ? "is-active" : ""}`} aria-disabled={disabled ? "true" : undefined}>
     {showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
-      <EmbeddedTerminal command={command} active={Boolean(state?.active && !disabled)} onError={setTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} />
+      <EmbeddedTerminal command={command} active={Boolean(state?.active && !disabled)} onError={handleTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} />
       {displayPanel}
     </div>}
     {!showLiveTerminal && !complete && displayPanel}
@@ -437,13 +440,10 @@ function EditorPracticeBlockView({ block, state, refresh, disabled = false, onLo
     if (state?.checkpoint?.status === "accepted" || completed) setRetainedFeedback(undefined);
   }, [block.id, completed, state?.checkpoint?.feedback, state?.checkpoint?.status]);
   useEffect(() => { activeRef.current = canEdit; }, [canEdit]);
-  // The editor is seeded once, when it opens. draftText changes on every server review, so making
-  // the creation effect below depend on it would destroy and rebuild the view mid-typing and take
-  // the learner's cursor with it. Syncing through a ref lets that effect depend on stable values
-  // and still read the current draft. The sync is an effect, not a render-phase write, and is
-  // declared above the creation effect so it has run before the view is built.
-  const initialTextRef = useRef(initialText);
-  useEffect(() => { initialTextRef.current = initialText; }, [initialText]);
+  // Keep every local document change independently of server draftText. Fatal state deliberately
+  // recreates CodeMirror as read-only; this ref preserves unsent text while the pending debounce is
+  // cancelled, instead of reseeding the disabled editor from stale server state.
+  const latestDraftText = useRef(initialText);
 
   useEffect(() => {
     if (!lifecycleCanEdit || !editorElement.current) return;
@@ -481,17 +481,22 @@ function EditorPracticeBlockView({ block, state, refresh, disabled = false, onLo
     };
     const view = new EditorView({
       state: EditorState.create({
-        doc: initialTextRef.current,
+        doc: latestDraftText.current,
         extensions: [
           keymap.of(defaultKeymap),
           EditorView.editable.of(canEdit),
-          EditorView.updateListener.of((update) => { if (update.docChanged && activeRef.current) scheduleReview(update.state.doc.toString()); })
+          EditorView.updateListener.of((update) => {
+            if (!update.docChanged) return;
+            const text = update.state.doc.toString();
+            latestDraftText.current = text;
+            if (activeRef.current) scheduleReview(text);
+          })
         ]
       }),
       parent
     });
     editor.current = view;
-    const seededDraft = initialTextRef.current;
+    const seededDraft = latestDraftText.current;
     setEditorInteractivity(view, editorElement.current, canEdit);
     if (canEdit && baseRevision.current === 0 && seededDraft.trim()) scheduleReview(seededDraft);
     return () => {
@@ -732,7 +737,7 @@ export function App() {
   }, []);
   const applyWorkbookState = useCallback((next: State) => {
     setState((current) => {
-      if (stateLagsLocalEditorRevision(next, localEditorRevisions.current)) return current ?? next;
+      if (!next.fatal && stateLagsLocalEditorRevision(next, localEditorRevisions.current)) return current ?? next;
       clearSatisfiedLocalEditorRevisions(next, localEditorRevisions.current);
       return next;
     });

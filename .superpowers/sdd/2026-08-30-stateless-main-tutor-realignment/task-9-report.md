@@ -51,3 +51,14 @@ npm run --workspace=tutorial-engine test:fast:
   web build passed
   browser smoke passed
 ```
+
+## Review fix
+
+The first independent review found two asynchronous fatal-state gaps. An editor that became fatal before
+its debounce could recreate from stale server text, and a disabled terminal could still surface local
+WebSocket recovery instructions beside the server banner. The editor now records every local document
+change in a ref, applies fatal state even when its server revision lags that local revision, cancels the
+debounce, and reseeds the read-only view from the unsent local text. Terminal transport errors are ignored
+while disabled and any earlier local transport error is cleared. Focused tests transition a live editor to
+fatal after unsent typing and inject a terminal socket error; both preserve the one-banner contract. The
+post-fix engine gate passed 55 files/596 tests, build, and browser smoke.
