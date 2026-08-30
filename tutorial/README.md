@@ -18,7 +18,7 @@ You begin with a single headless `pi -p` command that reads the calculator and a
 
 Fifteen lessons in three parts:
 
-- Part 1, `what-is-a-factory` and `your-first-factory`, establishes the factory model.
+- Part 1, `what-is-a-factory` and `tetris`, establishes the factory model.
 - Part 2, lessons 001–004, builds the validation loop by hand.
 - Part 3, lessons 005–013, automates and operates the factory.
 

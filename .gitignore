@@ -21,7 +21,12 @@ tutorial-engine/test/.tmp/
 .pi/git/
 .pi/settings.json
 .local/
+# Historical root eval reports from older runner locations; no active runner writes here.
+# Keep this ignore so old checkout artifacts do not churn while tracked plans stay untouched.
 evals/reports/
+# Authored-workbook live eval reports (owner: root).
+evals/workbook/reports/
+# Current live synthetic engine-mechanics eval reports (owner: tutorial-engine).
 tutorial-engine/evals/reports/
 .yaks
 

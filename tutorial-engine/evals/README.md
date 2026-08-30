@@ -1,6 +1,6 @@
 # Synthetic tutorial-engine mechanics evals
 
-These evaluations drive the dedicated synthetic evaluation workbook through the real tutorial-engine HTTP and terminal WebSocket protocol. They make paid, real-model calls and are deliberately separate from deterministic tests. They exercise tutorial-engine mechanics, not the future authored-workbook eval suite for the learner curriculum.
+These evaluations drive the dedicated synthetic evaluation workbook through the real tutorial-engine HTTP and terminal WebSocket protocol. They make paid, real-model calls and are deliberately separate from deterministic tests. They exercise tutorial-engine mechanics, not the root-owned authored-workbook eval suite for the learner curriculum. See [`../../evals/README.md`](../../evals/README.md) for the cross-repository ownership map.
 
 ## Prerequisites
 
@@ -8,18 +8,18 @@ Before running a live eval:
 
 1. Install dependencies from the repository root: `npm install`.
 2. Build the embedded terminal image: `npm run --workspace=tutorial-engine build:workbook-terminal`.
-3. Start Docker. The workbook terminal preflight requires `docker info` to succeed and the `lean-software-production/workbook-terminal:latest` image to exist.
-4. Export `OPENCODE_API_KEY`. The embedded terminal passes this key into its isolated container so Pi can authenticate there.
-5. Ensure Pi is authenticated on the host for the tutor and judge providers.
-6. Export `EVAL_JUDGE_MODEL` as the judge model, for example `provider/model-name`.
-7. Optionally export `TUTOR_MODEL` as the tutor model. If it is unset, the workbook tutor lets Pi choose its configured default.
+3. Start Docker. The workbook terminal preflight requires bounded `docker info`, image inspect, container start, in-container Pi authentication, and cleanup commands to succeed for the `lean-software-production/workbook-terminal:latest` image.
+4. Export `OPENCODE_API_KEY`. The embedded terminal passes this key into `docker run` through a minimal Docker-client child environment and uses `--env OPENCODE_API_KEY`; it must not appear in Docker argv or error text. The Docker child environment is limited to `PATH`, `HOME`, documented Docker client configuration variables, XDG config/runtime variables, and this key; arbitrary parent secrets and proxy variables are not forwarded.
+5. Ensure Pi is authenticated on the host for the Main Tutor and Judge providers.
+6. Export `EVAL_JUDGE_MODEL` as the Judge model, for example `provider/model-name`.
+7. Optionally export `TUTOR_MODEL` as the Main Tutor model. If it is unset, the workbook lets Pi choose its configured default.
 8. Optionally export `EVAL_JUDGE_COMMAND` for a Pi-compatible judge wrapper. The default is `pi --no-session`.
 
 ## Cost warning
 
-`npm run --workspace=tutorial-engine eval` is the live workspace command. It spends tutor-model and judge-model tokens. A single selected scenario starts a fresh workbook server, drives one learner session, runs deterministic gates, and then calls the judge once if the gates pass. `--repeat 3` can make three tutor sessions and three judge calls. `--all --yes` runs every v2 scenario and can spend several times more.
+`npm run --workspace=tutorial-engine eval` is the live workspace command. It spends model tokens for the Main Tutor and Judge. A single selected scenario preflights the Main Tutor and Judge, starts a fresh workbook server, drives one learner session, runs deterministic gates, and then calls the Judge once if the gates pass. `--repeat 3` can make three tutor sessions and three Judge calls. `--all --yes` runs every v2 scenario and can spend several times more. `--release` is the bounded release profile: it runs the six current engine scenarios exactly once each and rejects `--all`, `--scenario`, and `--repeat` combinations.
 
-Do not put `npm run --workspace=tutorial-engine eval` in deterministic checks. Root `npm run check` remains model-free: it typechecks and unit-tests the evaluator through the tutorial-engine workspace but does not call the tutor or judge.
+Do not put `npm run --workspace=tutorial-engine eval` in deterministic checks. `npm run --workspace=tutorial-engine check:eval` and `npm run --workspace=tutorial-engine test:eval` are deterministic and model-free. Root authored-workbook equivalents are `npm run check:eval:workbook` and `npm run test:eval:workbook`; they inspect root `evals/workbook/` foundations and do not call the Main Tutor or Judge. Root `npm run check` remains model-free: it typechecks and unit-tests the evaluator through the tutorial-engine workspace but does not call the Main Tutor or Judge.
 
 ## Usage
 
@@ -34,11 +34,28 @@ export EVAL_JUDGE_MODEL='provider/model-name'
 npm run --workspace=tutorial-engine eval -- --scenario v2-exact-command-success
 npm run --workspace=tutorial-engine eval -- --scenario v2-exact-command-success --repeat 3
 npm run --workspace=tutorial-engine eval -- --all --yes
+npm run --workspace=tutorial-engine eval -- --release
+npm run --workspace=tutorial-engine eval:release
 ```
 
-From the repository root, `npm run eval:engine -- ...` forwards to the same workspace command. `npm run eval -- ...` is a temporary compatibility alias for that forwarding command.
+From the repository root, `npm run eval:engine -- ...` forwards to the same workspace command. `npm run eval:release` delegates to the tutorial-engine release profile with `--workspace=tutorial-engine`. `npm run eval -- ...` is a temporary compatibility alias for that forwarding command, not an authored-workbook eval. The root `eval:workbook` name remains reserved and unwired until the authored-curriculum live runner lands.
 
 The v2 live evaluator does not support the legacy `--lesson` or `--calibrate` scopes.
+
+## Fail-fast live preflight
+
+The runner performs setup checks before it creates `evals/reports/`, creates a live evaluation workspace, starts a workbook server, or drives any tutor/judge model session. Help output, malformed arguments, scope conflicts, and missing `--all --yes` confirmation remain entirely model-free and return before probes.
+
+The live preflight order is fixed:
+
+1. Parse scope and confirmation.
+2. Require explicit `EVAL_JUDGE_MODEL`.
+3. Copy and load the disposable evaluator fixture to prove it is readable and valid.
+4. Check Docker CLI/daemon access, the canonical `lean-software-production/workbook-terminal:latest` image, a disposable container start, the same in-container Pi authentication probe used by the production workbook terminal, and bounded container cleanup.
+5. Preflight the Main Tutor model identity/auth/connectivity with the same no-tools disposable Pi-session convention used by workbook startup. The provider prompt is wrapped in a local timeout and the disposable session is disposed in all cases.
+6. Preflight the judge command/model with a minimal JSON connectivity check. Judge prompts and stdout are byte-bounded; judge child processes have a bounded lifetime and are killed on timeout or noisy output.
+
+The live CLI, paid run, preflight, and metadata all read the actual `process.env`; there is no alternate run-level environment injection that could let tests pass with configuration different from the real run. Only pure config helpers and low-level preflight/probe APIs accept explicit environments. The preflight records only model identities, fixed structural judge command labels (`default-pi` or `configured-command`), and coarse capabilities such as JSON-response support or terminal container readiness. It never records credentials, prompt bodies, response bodies, raw Docker/model/judge command causes, command paths/arguments, or disposable absolute paths.
 
 ## Scenario selection
 
@@ -51,7 +68,7 @@ Use `--scenario <id>` to run exactly one scenario. Current scenario IDs are:
 - `v2-reflection-follow-up`: submits a reflection answer and a follow-up answer.
 - `v2-transition-completion`: completes terminal practice, reflection, and the lesson transition.
 
-Use `--all --yes` only when you intend to run every scenario. Use `--repeat 2` or `--repeat 3` to re-run the selected scope in fresh workspaces; repeat must be between 1 and 3.
+Use `--all --yes` only when you intend to run every scenario. Use `--repeat 2` or `--repeat 3` to re-run exploratory `--scenario` or `--all` scopes in fresh workspaces; repeat must be between 1 and 3. Use `--release` for the bounded release gate; it selects the six listed scenarios once each, never repeats them, and cannot be combined with `--all`, `--scenario`, or `--repeat`.
 
 ## What it exercises
 
@@ -76,7 +93,7 @@ The marker fields appear at the top level of per-run `report.json`, per-run `met
 
 ## Results
 
-Each run writes an ignored report directory under `evals/reports/<run-id>/` relative to the `tutorial-engine` workspace.
+Each run writes an ignored report directory under `tutorial-engine/evals/reports/<run-id>/` from the repository root (`evals/reports/<run-id>/` relative to the `tutorial-engine` workspace). The historical root `evals/reports/` path is ignored for compatibility only; no active runner writes there. Future authored-workbook live reports belong under root `evals/workbook/reports/`.
 
 Public/curated files are safe to use as the evaluation record:
 

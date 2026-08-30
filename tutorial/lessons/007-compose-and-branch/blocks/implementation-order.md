@@ -7,8 +7,8 @@ tutor: |-
   repair receives findings, PASS writes a clean commit message to .tmp/commit-message.txt and
   commits only calculator files, FAIL produces no commit, and the provided grep experiments
   demonstrate why the ^ anchor matters. Accept a simulated verdict file to exercise branches if the
-  model does not naturally produce both outcomes. Clue toward message="$PWD/commit-message.txt" if
-  the commit cannot find the message file. The point is that the orchestrator recognises output
+  model does not naturally produce both outcomes. Clue toward message="$PWD/.tmp/commit-message.txt"
+  if the commit cannot find the message file. The point is that the orchestrator recognises output
   shapes and gives verdicts consequences.
 ---
 
@@ -73,7 +73,7 @@ Work in this order. Complete each small step before moving to the next one:
      cat commit.md success.md .tmp/validate-findings.txt .tmp/evidence.txt \
        | (cd ../../calculator && pi --no-session --tools read,grep,find,ls -p) \
        > .tmp/commit-message.txt
-     message="$PWD/commit-message.txt"
+     message="$PWD/.tmp/commit-message.txt"
      (cd ../../calculator && git add -- . && git commit -q -F "$message")
    fi
    ```
@@ -83,16 +83,14 @@ Work in this order. Complete each small step before moving to the next one:
    whatever it is working from. Leave the findings out of repair and it has nothing to repair.
 
    That `message=` line is not ceremony, and it is worth being precise about why. `run.sh` has
-   already
-   done `cd "$(dirname "$0")"`, so `$PWD` is the line's folder — but only until the subshell runs
-   `cd ../../calculator`. A shell expands each command's arguments when that command is about to
-   run,
-   not when it reads the line, so a `"$PWD/commit-message.txt"` written inside the subshell would be
-   expanded *after* the `cd` and resolve to `calculator/commit-message.txt`, which does not exist.
-   The
-   commit would fail, `set -e` would end the run, and the staging done by `git add` would be left
-   behind. Capturing the path into `message` first pins it while `$PWD` still means the line's
-   folder.
+   already done `cd "$(dirname "$0")"`, so `$PWD` is the line's folder — but only until the
+   subshell runs `cd ../../calculator`. A shell expands each command's arguments when that command
+   is about to run, not when it reads the line, so a `"$PWD/.tmp/commit-message.txt"` written
+   inside the subshell would be expanded *after* the `cd` and resolve to
+   `calculator/.tmp/commit-message.txt`, which does not exist. The commit would fail, `set -e`
+   would end the run, and the staging done by `git add` would be left behind. Capturing the path
+   into `message` first pins it while `$PWD` still means the line's folder, and the regenerated
+   state still lives under `.tmp`.
 
    `git add -- .` from inside `calculator/` stages that directory and nothing else. That pathspec is
    what keeps your own work out of a station's commit: `factory/` is tracked too, and a

@@ -207,6 +207,60 @@ describe("workbook block progression", () => {
     } finally { await server.close(); }
   });
 
+  it("does not write late summaries or failures after closing during completion compaction", async () => {
+    for (const [stall, outcome] of [
+      ["block", "resolve"],
+      ["block", "reject"],
+      ["lesson", "resolve"],
+      ["lesson", "reject"],
+      ["workbook", "resolve"],
+      ["workbook", "reject"],
+    ] as const) {
+      const dir = await fixture();
+      const deferredSummary = deferred<string>();
+      const tutor = new SummaryStallTutor(stall, deferredSummary.promise);
+      const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor });
+      try {
+        await complete(server.url, "workbook--introduction");
+        await complete(server.url, "part--validation-loop");
+        await complete(server.url, "lesson--001-first");
+        await complete(server.url, "lesson--001-first--orientation");
+        const draft = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", text: `answer for ${stall} ${outcome}` }) });
+        expect(draft.status).toBe(202);
+        await waitForState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted");
+
+        const pending = stall === "block"
+          ? complete(server.url, "lesson--001-first--edit-answer")
+          : (async () => {
+            await complete(server.url, "lesson--001-first--edit-answer");
+            return complete(server.url, "lesson--001-first--finish");
+          })();
+        const observedPending = pending.catch(() => undefined);
+        await waitUntil(() => tutor.stalledCalls > 0);
+        const beforeClose = await timelineRecords(dir);
+        const startedClose = Date.now();
+        await server.close();
+        expect(Date.now() - startedClose).toBeLessThan(2_000);
+        const afterClose = await timelineRecords(dir);
+        expect(afterClose).toEqual(beforeClose);
+
+        if (outcome === "resolve") deferredSummary.resolve("Late summary after close.");
+        else deferredSummary.reject(new Error("disposed after close"));
+        await observedPending;
+        await sleep(50);
+        expect(await timelineRecords(dir)).toEqual(beforeClose);
+        expect(await timelineRecords(dir)).toEqual(expect.not.arrayContaining([
+          expect.objectContaining({ type: "block_summarized", text: "Late summary after close." }),
+          expect.objectContaining({ type: "lesson_summarized", text: "Late summary after close." }),
+          expect.objectContaining({ type: "workbook_completion_summary" }),
+          expect.objectContaining({ type: "tutor_failed" })
+        ]));
+      } finally {
+        await server.close().catch(() => undefined);
+      }
+    }
+  });
+
   it("promotes the same ready successor by button or tutor and duplicate crossings cannot skip", async () => {
     const dir = await fixture();
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
@@ -276,9 +330,46 @@ async function waitForState(serverUrl: string, predicate: (state: any) => boolea
   for (let index = 0; index < 50; index += 1) {
     const next = await fetch(`${serverUrl}/api/workbook/state`).then((response) => response.json() as any);
     if (predicate(next)) return next;
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+    await sleep(20);
   }
   throw new Error("Timed out waiting for workbook state.");
+}
+
+async function waitUntil(predicate: () => boolean) {
+  for (let index = 0; index < 50; index += 1) {
+    if (predicate()) return;
+    await sleep(20);
+  }
+  throw new Error("Timed out waiting for condition.");
+}
+
+function sleep(ms: number) { return new Promise((resolvePromise) => setTimeout(resolvePromise, ms)); }
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(error: Error): void } {
+  let resolveDeferred!: (value: T) => void;
+  let rejectDeferred!: (error: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolveDeferred = resolvePromise; rejectDeferred = rejectPromise; });
+  return { promise, resolve: resolveDeferred, reject: rejectDeferred };
+}
+
+class SummaryStallTutor {
+  stalledCalls = 0;
+  constructor(readonly stall: "block" | "lesson" | "workbook", readonly stalled: Promise<string>) {}
+  async restore() {}
+  async reply() { return "Tutor reply."; }
+  async review() { return { outcome: "accepted" as const, message: "Accepted editor answer." }; }
+  async summarizeBlock() {
+    if (this.stall === "block") { this.stalledCalls += 1; return this.stalled; }
+    return "Block summary.";
+  }
+  async summarizeLesson(input: { lessonId: string }) {
+    if ((this.stall === "lesson" && input.lessonId === "001-first") || (this.stall === "workbook" && input.lessonId === "workbook")) {
+      this.stalledCalls += 1;
+      return this.stalled;
+    }
+    return "Lesson summary.";
+  }
+  dispose() {}
 }
 
 function fakeTutor(decision: any = { outcome: "working" }, reply: any = "Tutor reply."): any {

@@ -1,0 +1,18 @@
+{
+  "//": "Root-owned authored-workbook evaluator checks live outside tutorial-engine so synthetic engine eval discovery stays isolated.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node", "vitest"],
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": ["*.ts", "test/**/*.ts"],
+  "exclude": ["reports", "fixtures/**/.tmp"]
+}

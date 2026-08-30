@@ -9,7 +9,7 @@ import {
   type ToolDefinition
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { TUTOR_MODEL_ENV, resolveTutorModel, type TutorModelChoice } from "./model.js";
+import { TUTOR_MODEL_ENV, resolveTutorModel, snapshotWorkbookModelEnvironment, type TutorModelChoice, type WorkbookModelEnvironment } from "./model.js";
 import { createTutorialLogger, type TutorialLogger } from "./runtime-log.js";
 import type { Attempt } from "./attempts.js";
 import { projectMainTutorHistory, type ActiveBlockContext, type MainTutorHistoryProjection } from "./pi-history.js";
@@ -238,7 +238,7 @@ function piMessageForTurn(turn: MainTutorHistoryProjection["turns"][number], mod
   };
 }
 
-async function createPiWorkbookTutorSession(workspace: string, request: WorkbookTutorSessionFactoryRequest, log: TutorialLogger): Promise<WorkbookTutorSession> {
+async function createPiWorkbookTutorSession(workspace: string, request: WorkbookTutorSessionFactoryRequest, log: TutorialLogger, environment: WorkbookModelEnvironment): Promise<WorkbookTutorSession> {
   const loader = new DefaultResourceLoader({
     cwd: workspace,
     agentDir: getAgentDir(),
@@ -256,7 +256,7 @@ async function createPiWorkbookTutorSession(workspace: string, request: Workbook
   });
   await loader.reload();
   const modelRuntime = await ModelRuntime.create();
-  const choice = resolveTutorModel(modelRuntime, process.env[TUTOR_MODEL_ENV]);
+  const choice = resolveTutorModel(modelRuntime, environment[TUTOR_MODEL_ENV]);
   if (choice.warning) log.info(choice.warning);
   const sessionManager = SessionManager.inMemory(workspace);
   const { session } = await createAgentSession({
@@ -304,6 +304,8 @@ async function createPiWorkbookTutorSession(workspace: string, request: Workbook
 export interface MainWorkbookTutorOptions {
   workspace: string;
   log?: TutorialLogger;
+  /** Immutable environment snapshot used for model selection. Defaults to the ambient process environment. */
+  environment?: WorkbookModelEnvironment;
   sessionFactory?: WorkbookTutorSessionFactory;
 }
 
@@ -316,6 +318,7 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
   readonly workspace: string;
   readonly #log: TutorialLogger;
   readonly #sessionFactory: WorkbookTutorSessionFactory;
+  readonly #environment: WorkbookModelEnvironment;
   #session?: WorkbookTutorSession;
   #history: MainTutorHistoryProjection = { summaries: [], turns: [] };
   #historySignature = historySignature(this.#history);
@@ -324,11 +327,14 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
   #workingAttemptId: string | undefined;
   #completionBlockId: string | undefined;
   #tail: Promise<unknown> = Promise.resolve();
+  #disposed = false;
+  #sessionGeneration = 0;
 
   constructor(options: MainWorkbookTutorOptions) {
     this.workspace = options.workspace;
     this.#log = options.log ?? createTutorialLogger();
-    this.#sessionFactory = options.sessionFactory ?? ((request) => createPiWorkbookTutorSession(options.workspace, request, this.#log));
+    this.#environment = options.environment === undefined ? process.env : snapshotWorkbookModelEnvironment(options.environment);
+    this.#sessionFactory = options.sessionFactory ?? ((request) => createPiWorkbookTutorSession(options.workspace, request, this.#log, this.#environment));
   }
 
   restore(input: MainTutorContext): Promise<void> {
@@ -408,13 +414,17 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
   }
 
   dispose(): void {
+    this.#disposed = true;
+    this.#sessionGeneration += 1;
     this.#session?.dispose();
     this.#session = undefined;
   }
 
   async #ensureSession(input?: MainTutorContext): Promise<WorkbookTutorSession> {
+    if (this.#disposed) throw new Error("Workbook tutor is disposed.");
     if (input) this.#setHistory(input);
     if (this.#session) return this.#session;
+    const generation = this.#sessionGeneration;
     const owner = this;
     const accept = defineTool({
       name: ACCEPT_TOOL_NAME,
@@ -459,7 +469,12 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
     const blockTools = completeBlock ? [completeBlock] : [];
     const customTools = [...reviewTools, ...blockTools, ...workspaceTools];
     const tools = customTools.map((tool) => tool.name);
-    this.#session = await this.#sessionFactory({ systemPrompt: systemPrompt(), customTools, tools, history: this.#history });
+    const session = await this.#sessionFactory({ systemPrompt: systemPrompt(), customTools, tools, history: this.#history });
+    if (this.#disposed || generation !== this.#sessionGeneration) {
+      session.dispose();
+      throw new Error("Workbook tutor is disposed.");
+    }
+    this.#session = session;
     return this.#session;
   }
 
@@ -469,13 +484,18 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
     this.#history = next;
     if (nextSignature !== this.#historySignature) {
       this.#historySignature = nextSignature;
+      this.#sessionGeneration += 1;
       this.#session?.dispose();
       this.#session = undefined;
     }
   }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const run = this.#tail.catch(() => undefined).then(operation);
+    if (this.#disposed) return Promise.reject(new Error("Workbook tutor is disposed."));
+    const run = this.#tail.catch(() => undefined).then(() => {
+      if (this.#disposed) throw new Error("Workbook tutor is disposed.");
+      return operation();
+    });
     this.#tail = run.catch(() => undefined);
     return run;
   }

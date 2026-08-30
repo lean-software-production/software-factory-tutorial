@@ -2,7 +2,7 @@
 
 This fixture is shaped for the recorded workbook UX journey, not for learner curriculum.
 
-It is a sibling of `visual-workbook` so screenshot-sensitive visual approvals keep their own stable content. The recorder copies this directory into `test/.tmp/workbook-factory/latest/input/` before every run and starts the real workbook server against that copy. Authored fixture files are never mutated by the recorder.
+It is a sibling of `visual-workbook` so screenshot-sensitive visual approvals keep their own stable content. The recorder copies this directory into `test/.tmp/workbook-ux/latest/input/` before every run and starts the real workbook server against that copy. Authored fixture files are never mutated by the recorder.
 
 The content is intentionally linear:
 

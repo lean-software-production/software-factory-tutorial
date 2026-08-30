@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { WorkbookTerminalManager, dockerContainerUser, dockerExecArguments, dockerRunArguments, publicTerminalTranscript, type ActiveObservedTerminalBlock, type TerminalClient, type TerminalPty, type TerminalPtyFactory, type TerminalPtyOptions } from "../src/workbook/terminal.js";
+import { DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS, OPENCODE_API_KEY_ENV, WORKBOOK_TERMINAL_AUTH_CLEANUP_PUBLIC_ERROR, WORKBOOK_TERMINAL_AUTH_PUBLIC_ERROR, WORKBOOK_TERMINAL_STARTUP_CLEANUP_PUBLIC_ERROR, WORKBOOK_TERMINAL_STARTUP_PUBLIC_ERROR, WorkbookTerminalManager, createDockerPty, dockerClientEnvironment, dockerContainerUser, dockerExecArguments, dockerRunArguments, dockerRunEnvironment, publicTerminalTranscript, type ActiveObservedTerminalBlock, type DockerCommandRunner, type TerminalClient, type TerminalPty, type TerminalPtyFactory, type TerminalPtyOptions } from "../src/workbook/terminal.js";
 import type { TerminalObservationFact } from "../src/workbook/terminal-observation.js";
 
 class FakePty implements TerminalPty {
@@ -63,6 +63,18 @@ function setup(options: { initialActiveBlock?: ActiveObservedTerminalBlock } = {
   return { manager, ptys, facts, active };
 }
 
+describe("workbook terminal image", () => {
+  it("installs Git without recommendations and isolates its ambient configuration", async () => {
+    const dockerfile = await readFile(resolve("docker/workbook-terminal.Dockerfile"), "utf8");
+
+    expect(dockerfile).toMatch(/apt-get install\s+--yes\s+--no-install-recommends\s+git/);
+    expect(dockerfile).toContain("rm -rf /var/lib/apt/lists/*");
+    expect(dockerfile).toMatch(/ENV GIT_CONFIG_NOSYSTEM=1/);
+    expect(dockerfile).toMatch(/ENV GIT_CONFIG_GLOBAL=\/dev\/null/);
+    expect(dockerfile).toMatch(/ENV GIT_TERMINAL_PROMPT=0/);
+  });
+});
+
 describe("WorkbookTerminalManager", () => {
   it("sanitizes control sequences and common secrets before durable terminal output", () => {
     expect(publicTerminalTranscript("\u001b[31mvisible\u001b[0m\r\nAPI_KEY=top-secret\nBearer abc.def")).toBe("visible\nAPI_KEY= [redacted]\nBearer [redacted]");
@@ -81,11 +93,103 @@ describe("WorkbookTerminalManager", () => {
     tempDirs.push(workspace);
     await mkdir(resolve(workspace, "sibling"), { recursive: true });
 
-    const args = dockerRunArguments({ workspace, name: "terminal", apiKey: "test-key" });
+    const args = dockerRunArguments({ workspace, name: "terminal" });
 
     expect(args.join("\n")).toContain(`src=${workspace},dst=/workspace`);
+    expect(args.join("\n")).toContain("--env\nOPENCODE_API_KEY");
+    expect(args.join("\n")).not.toContain("test-key");
+    expect(args.join("\n")).not.toContain("OPENCODE_API_KEY=");
     expect(args.join("\n")).not.toContain(`dst=/workspace,readonly`);
     expect(args.join("\n")).not.toContain(`dst=/workspace/sibling`);
+    expect(dockerRunEnvironment("test-key", { PATH: "/bin" })).toEqual({ PATH: "/bin", OPENCODE_API_KEY: "test-key" });
+  });
+
+  it("uses a minimal Docker client environment without forwarding arbitrary secrets or proxy credentials", () => {
+    const parent = {
+      PATH: "/bin",
+      HOME: "/home/learner",
+      DOCKER_HOST: "unix:///var/run/docker.sock",
+      DOCKER_CONTEXT: "desktop-linux",
+      DOCKER_CONFIG: "/home/learner/.docker",
+      XDG_RUNTIME_DIR: "/run/user/1000",
+      OPENCODE_API_KEY: "parent-key",
+      HTTPS_PROXY: "http://proxy-user:proxy-secret@example.test",
+      AWS_SECRET_ACCESS_KEY: "aws-secret",
+      NPM_TOKEN: "npm-secret"
+    };
+
+    expect(dockerClientEnvironment(parent)).toEqual({
+      PATH: "/bin",
+      HOME: "/home/learner",
+      DOCKER_CONFIG: "/home/learner/.docker",
+      DOCKER_CONTEXT: "desktop-linux",
+      DOCKER_HOST: "unix:///var/run/docker.sock",
+      XDG_RUNTIME_DIR: "/run/user/1000"
+    });
+    expect(dockerRunEnvironment("child-key", parent)).toEqual({
+      PATH: "/bin",
+      HOME: "/home/learner",
+      DOCKER_CONFIG: "/home/learner/.docker",
+      DOCKER_CONTEXT: "desktop-linux",
+      DOCKER_HOST: "unix:///var/run/docker.sock",
+      XDG_RUNTIME_DIR: "/run/user/1000",
+      OPENCODE_API_KEY: "child-key"
+    });
+    expect(JSON.stringify(dockerRunEnvironment("child-key", parent))).not.toContain("proxy-secret");
+    expect(JSON.stringify(dockerRunEnvironment("child-key", parent))).not.toContain("aws-secret");
+    expect(JSON.stringify(dockerRunEnvironment("child-key", parent))).not.toContain("npm-secret");
+    expect(JSON.stringify(dockerRunEnvironment("child-key", parent))).not.toContain("parent-key");
+  });
+
+  it("rejects asynchronous production Docker command runners during terminal startup", async () => {
+    const workspace = await mkdtemp(resolve(tmpdir(), "workbook-terminal-async-runner-"));
+    tempDirs.push(workspace);
+    await expect(() => createDockerPty({
+      cwd: workspace,
+      cols: 80,
+      rows: 24,
+      environment: { [OPENCODE_API_KEY_ENV]: "not-recorded", PATH: "/bin" },
+      dockerCommandRunner: (() => Promise.resolve()) as any
+    })).toThrow("Docker command runner must complete synchronously.");
+    await Promise.resolve();
+  });
+
+  it("strictly cleans up attempted production docker startup failures with sanitized precedence", async () => {
+    for (const [failAt, cleanupFails, expected, expectedStages] of [
+      ["run", false, WORKBOOK_TERMINAL_STARTUP_PUBLIC_ERROR, ["info", "image", "run", "cleanup"]],
+      ["run", true, WORKBOOK_TERMINAL_STARTUP_CLEANUP_PUBLIC_ERROR, ["info", "image", "run", "cleanup"]],
+      ["pi-auth", false, WORKBOOK_TERMINAL_AUTH_PUBLIC_ERROR, ["info", "image", "run", "pi-auth", "cleanup"]],
+      ["pi-auth", true, WORKBOOK_TERMINAL_AUTH_CLEANUP_PUBLIC_ERROR, ["info", "image", "run", "pi-auth", "cleanup"]]
+    ] as const) {
+      const workspace = await mkdtemp(resolve(tmpdir(), "workbook-terminal-startup-"));
+      tempDirs.push(workspace);
+      const calls: Array<{ stage: string; args: string[]; timeout: number }> = [];
+      const runner: DockerCommandRunner = (_file, args, options) => {
+        const stage = args[0] === "image" ? "image" : args[0] === "exec" ? "pi-auth" : args[0] === "rm" ? "cleanup" : args[0] ?? "unknown";
+        calls.push({ stage, args, timeout: options.timeout });
+        if (stage === failAt || (stage === "cleanup" && cleanupFails)) throw new Error(`${stage} raw cause not-recorded ${workspace}`);
+      };
+
+      let message = "";
+      try {
+        createDockerPty({ cwd: workspace, cols: 80, rows: 24, environment: { [OPENCODE_API_KEY_ENV]: "not-recorded", PATH: "/bin" }, dockerCommandRunner: runner });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      expect(message).toBe(expected);
+      expect(calls.map((call) => call.stage)).toEqual(expectedStages);
+      expect(calls.at(-1)).toMatchObject({ stage: "cleanup", timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.cleanup });
+      expect(calls.at(-1)?.args).toEqual(["rm", "-f", expect.stringMatching(/^workbook-terminal-/)]);
+      expect(calls.at(-1)?.args.join(" ")).not.toContain(workspace);
+      for (const call of calls) {
+        expect(call.args.join(" ")).not.toContain("not-recorded");
+        expect(call.args.join(" ")).not.toContain("raw cause");
+      }
+      expect(message).not.toContain("not-recorded");
+      expect(message).not.toContain(workspace);
+      expect(message).not.toContain("raw cause");
+    }
   });
 
   it("opens one transport shell before attach, then forwards input and bounds resize", () => {

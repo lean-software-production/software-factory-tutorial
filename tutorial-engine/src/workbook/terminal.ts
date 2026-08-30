@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import * as pty from "node-pty";
@@ -25,10 +25,23 @@ export interface TerminalPty {
   open?(): void;
 }
 
-export interface TerminalPtyOptions { cwd: string; cols: number; rows: number; runtimeProvision?: TrustedRuntimeProvision; containerWorkdir?: string; }
+export interface DockerCommandSyncOptions { stdio: "ignore"; env?: NodeJS.ProcessEnv; timeout: number; privateStdin?: string | Buffer; signal?: AbortSignal; }
+export type DockerCommandRunner = (file: string, args: string[], options: DockerCommandSyncOptions) => unknown;
+
+export interface TerminalPtyOptions {
+  cwd: string;
+  cols: number;
+  rows: number;
+  runtimeProvision?: TrustedRuntimeProvision;
+  containerWorkdir?: string;
+  /** Test seam for startup hardening; production uses the real docker CLI. */
+  dockerCommandRunner?: DockerCommandRunner;
+  /** Test seam for startup hardening; production uses process.env. */
+  environment?: NodeJS.ProcessEnv;
+}
 interface DockerPty extends TerminalPty { stopContainer?(): void; }
-const WORKBOOK_TERMINAL_IMAGE = "lean-software-production/workbook-terminal:latest";
-const OPENCODE_API_KEY_ENV = "OPENCODE_API_KEY";
+export const WORKBOOK_TERMINAL_IMAGE = "lean-software-production/workbook-terminal:latest";
+export const OPENCODE_API_KEY_ENV = "OPENCODE_API_KEY";
 const CONTAINER_AGENT_DIR = "/home/learner/.pi/agent";
 const PI_PREFLIGHT = [
   "const { execFileSync } = await import('node:child_process');",
@@ -36,9 +49,53 @@ const PI_PREFLIGHT = [
   "const { ModelRuntime } = await import(`${globalRoot}/@earendil-works/pi-coding-agent/dist/index.js`);",
   "if ((await ModelRuntime.create().then((runtime) => runtime.getAvailable())).length === 0) process.exit(1);"
 ].join(" ");
+const DOCKER_CLIENT_ENV_ALLOWLIST = [
+  "PATH",
+  "HOME",
+  "DOCKER_API_VERSION",
+  "DOCKER_CERT_PATH",
+  "DOCKER_CONFIG",
+  "DOCKER_CONTEXT",
+  "DOCKER_DEFAULT_PLATFORM",
+  "DOCKER_HOST",
+  "DOCKER_TLS_VERIFY",
+  "XDG_CONFIG_HOME",
+  "XDG_RUNTIME_DIR"
+] as const;
+export const DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS = {
+  info: 10_000,
+  imageInspect: 10_000,
+  containerStart: 30_000,
+  piAuthentication: 20_000,
+  cleanup: 10_000
+} as const;
+const ASYNC_DOCKER_COMMAND_RUNNER_ERROR = "Docker command runner must complete synchronously.";
+function rejectAsyncDockerCommandRunnerResult(result: unknown): void {
+  if (!result || typeof (result as { then?: unknown }).then !== "function") return;
+  void Promise.resolve(result).catch(() => undefined);
+  throw new Error(ASYNC_DOCKER_COMMAND_RUNNER_ERROR);
+}
+function isAsyncDockerCommandRunnerError(error: unknown): boolean {
+  return error instanceof Error && error.message === ASYNC_DOCKER_COMMAND_RUNNER_ERROR;
+}
+
+function runDockerCommandSynchronously(commandRunner: DockerCommandRunner, file: string, args: string[], options: DockerCommandSyncOptions): void {
+  rejectAsyncDockerCommandRunnerResult(commandRunner(file, args, options));
+}
+
+const defaultDockerCommandRunner: DockerCommandRunner = (file, args, options) => {
+  const { privateStdin, stdio: _stdio, ...execOptions } = options;
+  if (privateStdin === undefined) {
+    execFileSync(file, args, { ...execOptions, stdio: "ignore" });
+    return;
+  }
+  const result = spawnSync(file, args, { ...execOptions, input: privateStdin, stdio: ["pipe", "ignore", "ignore"] });
+  if (result.error) throw result.error;
+  if (result.signal || result.status !== 0) throw new Error("Docker command failed.");
+};
 const DEFAULT_WRITABLE_SCRATCH_DIRECTORIES = [".tmp"] as const;
 export type TerminalPtyFactory = (options: TerminalPtyOptions) => TerminalPty;
-export interface DockerRunArgumentsOptions { workspace: string; name: string; apiKey: string; runtimeProvision?: TrustedRuntimeProvision; }
+export interface DockerRunArgumentsOptions { workspace: string; name: string; runtimeProvision?: TrustedRuntimeProvision; }
 
 export interface ActiveObservedTerminalBlock {
   lessonId: string;
@@ -77,6 +134,7 @@ const MAX_PUBLIC_TERMINAL_SNAPSHOT_BYTES = 16_000;
 const MAX_INPUT_BYTES = 16_384;
 const MAX_COLS = 500;
 const MAX_ROWS = 200;
+const TAR_COMPATIBLE_UID_GID_MAX = 0o7777777;
 
 function boundedAppend(previous: string, addition: string, limit: number): string {
   const next = previous + addition;
@@ -106,8 +164,30 @@ export function dockerContainerUser(): string {
   return `${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`;
 }
 
-export function requireOpenCodeApiKey(): string {
-  const key = process.env[OPENCODE_API_KEY_ENV]?.trim();
+/** Shared by production terminal argv and authored preflight archive ownership so identities cannot drift. */
+export function validatedDockerContainerUser(): { user: string; uid: number; gid: number } {
+  const raw = dockerContainerUser();
+  const parts = raw.split(":");
+  if (parts.length !== 2) throw new Error("Invalid Docker container user identity.");
+  const uid = parseDockerContainerUserId(parts[0]!, { allowZero: false, label: "uid" });
+  const gid = parseDockerContainerUserId(parts[1]!, { allowZero: true, label: "gid" });
+  return { user: `${uid}:${gid}`, uid, gid };
+}
+
+function parseDockerContainerUserId(raw: string, options: { allowZero: boolean; label: "uid" | "gid" }): number {
+  if (!/^(0|[1-9][0-9]*)$/.test(raw)) throw new Error(`Invalid Docker container ${options.label}.`);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || (!options.allowZero && parsed === 0) || parsed > TAR_COMPATIBLE_UID_GID_MAX) throw new Error(`Invalid Docker container ${options.label}.`);
+  return parsed;
+}
+
+export const WORKBOOK_TERMINAL_STARTUP_PUBLIC_ERROR = "Could not start isolated terminal container.";
+export const WORKBOOK_TERMINAL_STARTUP_CLEANUP_PUBLIC_ERROR = "Could not start isolated terminal container, and cleanup could not be confirmed.";
+export const WORKBOOK_TERMINAL_AUTH_PUBLIC_ERROR = `Could not authenticate Pi with ${OPENCODE_API_KEY_ENV} inside the workbook terminal.`;
+export const WORKBOOK_TERMINAL_AUTH_CLEANUP_PUBLIC_ERROR = `Could not authenticate Pi with ${OPENCODE_API_KEY_ENV} inside the workbook terminal, and cleanup could not be confirmed.`;
+
+export function requireOpenCodeApiKey(environment: NodeJS.ProcessEnv = process.env): string {
+  const key = environment[OPENCODE_API_KEY_ENV]?.trim();
   if (!key) throw new Error(`Embedded terminal requires ${OPENCODE_API_KEY_ENV}.`);
   return key;
 }
@@ -159,27 +239,63 @@ function workspaceChildForMount(workspace: string, child: string): string | unde
   return safeExistingChildForMount(workspace, child, "workbook workspace");
 }
 
-function assertDockerDaemonAndImage(): void {
-  try { execFileSync("docker", ["info"], { stdio: "ignore" }); }
-  catch { throw new Error("Docker must be running before starting the workbook terminal."); }
-  try { execFileSync("docker", ["image", "inspect", WORKBOOK_TERMINAL_IMAGE], { stdio: "ignore" }); }
-  catch { throw new Error(`Docker image ${WORKBOOK_TERMINAL_IMAGE} is missing. Run npm run --workspace=tutorial-engine build:workbook-terminal.`); }
+export function dockerDaemonProbeArguments(): string[] { return ["info"]; }
+
+export function dockerImageProbeArguments(image = WORKBOOK_TERMINAL_IMAGE): string[] { return ["image", "inspect", image]; }
+
+export function assertDockerDaemonAndImage(commandRunner: DockerCommandRunner = defaultDockerCommandRunner, environment: NodeJS.ProcessEnv = process.env): void {
+  const dockerEnvironment = dockerClientEnvironment(environment);
+  try { runDockerCommandSynchronously(commandRunner, "docker", dockerDaemonProbeArguments(), { stdio: "ignore", env: dockerEnvironment, timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.info }); }
+  catch (error) { if (isAsyncDockerCommandRunnerError(error)) throw error; throw new Error("Docker must be running before starting the workbook terminal."); }
+  try { runDockerCommandSynchronously(commandRunner, "docker", dockerImageProbeArguments(WORKBOOK_TERMINAL_IMAGE), { stdio: "ignore", env: dockerEnvironment, timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.imageInspect }); }
+  catch (error) { if (isAsyncDockerCommandRunnerError(error)) throw error; throw new Error(`Docker image ${WORKBOOK_TERMINAL_IMAGE} is missing. Run npm run --workspace=tutorial-engine build:workbook-terminal.`); }
 }
 
-function preflightPiAuthentication(name: string): void {
-  try { execFileSync("docker", ["exec", name, "node", "--input-type=module", "-e", PI_PREFLIGHT], { stdio: "ignore", timeout: 20_000 }); }
-  catch { throw new Error(`Could not authenticate Pi with ${OPENCODE_API_KEY_ENV} inside the workbook terminal.`); }
+export function dockerPiAuthenticationProbeArguments(name: string): string[] {
+  return ["exec", name, "node", "--input-type=module", "-e", PI_PREFLIGHT];
+}
+
+export function assertDockerPiAuthentication(name: string, commandRunner: DockerCommandRunner = defaultDockerCommandRunner, environment: NodeJS.ProcessEnv = process.env): void {
+  try { runDockerCommandSynchronously(commandRunner, "docker", dockerPiAuthenticationProbeArguments(name), { stdio: "ignore", env: dockerClientEnvironment(environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.piAuthentication }); }
+  catch (error) { if (isAsyncDockerCommandRunnerError(error)) throw error; throw new Error(WORKBOOK_TERMINAL_AUTH_PUBLIC_ERROR); }
+}
+
+function removeDockerContainerStrict(name: string, commandRunner: DockerCommandRunner, environment: NodeJS.ProcessEnv): boolean {
+  try {
+    runDockerCommandSynchronously(commandRunner, "docker", ["rm", "-f", name], { stdio: "ignore", env: dockerClientEnvironment(environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.cleanup });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function dockerRunArguments(options: DockerRunArgumentsOptions): string[] {
   const workspace = resolve(options.workspace);
   const provision = options.runtimeProvision ?? NO_RUNTIME_PROVISION;
-  const [uid, gid] = dockerContainerUser().split(":");
-  const args = ["run", "-d", "--rm", "--name", options.name, "--label", "workbook-terminal=true", "--user", dockerContainerUser(), "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--env", `${OPENCODE_API_KEY_ENV}=${options.apiKey}`, "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--tmpfs", `${CONTAINER_AGENT_DIR}:uid=${uid},gid=${gid},mode=0700`, "--mount", bindMount(workspace, "/workspace"), "--workdir", "/workspace"];
+  const containerUser = validatedDockerContainerUser();
+  const args = ["run", "-d", "--rm", "--name", options.name, "--label", "workbook-terminal=true", "--user", containerUser.user, "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--env", OPENCODE_API_KEY_ENV, "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--tmpfs", `${CONTAINER_AGENT_DIR}:uid=${containerUser.uid},gid=${containerUser.gid},mode=0700`, "--mount", bindMount(workspace, "/workspace"), "--workdir", "/workspace"];
   for (const mount of provision.mounts) {
     args.push("--mount", bindMount(mount.hostSource, `/workspace/${mount.workspaceTarget}`, true));
   }
   return args;
+}
+
+/**
+ * Docker only needs the client location and Docker/XDG configuration to reach the local daemon.
+ * Do not inherit the full parent process environment here: it can contain unrelated secrets or
+ * proxy credentials, and the OpenCode key is intentionally passed by name via Docker argv.
+ */
+export function dockerClientEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const childEnvironment: NodeJS.ProcessEnv = {};
+  for (const name of DOCKER_CLIENT_ENV_ALLOWLIST) {
+    const value = environment[name];
+    if (value !== undefined) childEnvironment[name] = value;
+  }
+  return childEnvironment;
+}
+
+export function dockerRunEnvironment(apiKey: string, environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...dockerClientEnvironment(environment), [OPENCODE_API_KEY_ENV]: apiKey };
 }
 
 export const WORKBOOK_TERMINAL_PROMPT_COMMAND = "status=$?; printf '\\033]633;workbook-finished;%s\\007' \"$status\"; trap 'trap - DEBUG; __workbook_command_file=$(mktemp /tmp/workbook-command.XXXXXX 2>/dev/null || true); command=; if [ -n \"$__workbook_command_file\" ] && fc -ln -1 > \"$__workbook_command_file\" 2>/dev/null; then command=$(<\"$__workbook_command_file\"); fi; if [ -n \"$__workbook_command_file\" ]; then rm -f \"$__workbook_command_file\"; fi; command=${command#	}; command=${command# }; if [ -z \"$command\" ]; then command=$BASH_COMMAND; fi; printf \"\\033]633;workbook-command;\"; printf '%s' \"$command\" | base64 -w 0; printf \"\\007\"' DEBUG";
@@ -202,6 +318,8 @@ class PreparedDockerPty implements DockerPty {
   readonly #workspace: string;
   readonly #runtimeProvision: TrustedRuntimeProvision | undefined;
   readonly #containerWorkdir: string;
+  readonly #dockerCommandRunner: DockerCommandRunner;
+  readonly #environment: NodeJS.ProcessEnv;
   readonly #name = `workbook-terminal-${randomUUID()}`;
   #cols: number;
   #rows: number;
@@ -213,23 +331,33 @@ class PreparedDockerPty implements DockerPty {
     this.#workspace = resolve(options.cwd);
     this.#runtimeProvision = options.runtimeProvision;
     this.#containerWorkdir = assertContainerWorkdir(options.containerWorkdir ?? "/workspace");
+    this.#dockerCommandRunner = options.dockerCommandRunner ?? defaultDockerCommandRunner;
+    this.#environment = options.environment ?? process.env;
     this.#cols = options.cols;
     this.#rows = options.rows;
-    const apiKey = requireOpenCodeApiKey();
-    assertDockerDaemonAndImage();
+    const apiKey = requireOpenCodeApiKey(this.#environment);
+    assertDockerDaemonAndImage(this.#dockerCommandRunner, this.#environment);
     prepareDefaultWritableWorkspaceDirectories(this.#workspace);
-    const args = dockerRunArguments({ workspace: this.#workspace, runtimeProvision: this.#runtimeProvision, name: this.#name, apiKey });
+    const args = dockerRunArguments({ workspace: this.#workspace, runtimeProvision: this.#runtimeProvision, name: this.#name });
     args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
-    try { execFileSync("docker", args, { stdio: "ignore" }); }
-    catch (error) { throw new Error(`Could not start isolated terminal container: ${error instanceof Error ? error.message : String(error)}`); }
-    try { preflightPiAuthentication(this.#name); }
-    catch (error) { this.stopContainer(); throw error; }
+    try { runDockerCommandSynchronously(this.#dockerCommandRunner, "docker", args, { stdio: "ignore", env: dockerRunEnvironment(apiKey, this.#environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.containerStart }); }
+    catch (error) {
+      if (isAsyncDockerCommandRunnerError(error)) throw error;
+      if (!removeDockerContainerStrict(this.#name, this.#dockerCommandRunner, this.#environment)) throw new Error(WORKBOOK_TERMINAL_STARTUP_CLEANUP_PUBLIC_ERROR);
+      throw new Error(WORKBOOK_TERMINAL_STARTUP_PUBLIC_ERROR);
+    }
+    try { assertDockerPiAuthentication(this.#name, this.#dockerCommandRunner, this.#environment); }
+    catch (error) {
+      if (isAsyncDockerCommandRunnerError(error)) throw error;
+      if (!removeDockerContainerStrict(this.#name, this.#dockerCommandRunner, this.#environment)) throw new Error(WORKBOOK_TERMINAL_AUTH_CLEANUP_PUBLIC_ERROR);
+      throw error;
+    }
   }
 
   open(): void {
     if (this.#shell) return;
     const shell = pty.spawn("docker", dockerExecArguments(this.#name, this.#containerWorkdir), {
-      name: "xterm-256color", cols: this.#cols, rows: this.#rows, cwd: this.#workspace, env: { ...process.env, TERM: "xterm-256color" }
+      name: "xterm-256color", cols: this.#cols, rows: this.#rows, cwd: this.#workspace, env: { ...dockerClientEnvironment(this.#environment), TERM: "xterm-256color" }
     }) as TerminalPty;
     this.#shell = shell;
     shell.onData((data) => { for (const callback of this.#dataCallbacks) callback(data); });
@@ -246,7 +374,7 @@ class PreparedDockerPty implements DockerPty {
     this.#shell?.resize(cols, rows);
   }
   kill(): void { this.#shell?.kill(); this.#shell = undefined; }
-  stopContainer(): void { this.kill(); try { execFileSync("docker", ["rm", "-f", this.#name], { stdio: "ignore" }); } catch { /* removal is best effort; --rm cleans a stopped container. */ } }
+  stopContainer(): void { this.kill(); try { runDockerCommandSynchronously(this.#dockerCommandRunner, "docker", ["rm", "-f", this.#name], { stdio: "ignore", env: dockerClientEnvironment(this.#environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.cleanup }); } catch { /* normal disposal is best effort; --rm cleans a stopped container. */ } }
   onData(callback: (data: string) => void): void { this.#dataCallbacks.push(callback); }
   onExit(callback: (event: { exitCode: number; signal?: number }) => void): void { this.#exitCallbacks.push(callback); }
 }

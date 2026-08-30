@@ -69,7 +69,9 @@ launcher never resets or recopies it on progression, reload, revisit, or resume.
 
 Editor-practice paths remain learner-visible as authored, such as `spec.md`, but reads and accepted
 promotions resolve them under the active live workspace. Terminal-practice shells start in
-`/workspace`, where Docker has mounted only that active live workspace. Authored templates must be
+`/workspace`, where Docker has mounted only that active live workspace. Docker child processes receive
+only the minimal client environment needed to reach local Docker plus `OPENCODE_API_KEY` by name;
+arbitrary parent secrets and proxy variables are not forwarded. Authored templates must be
 real in-root directories, contain no `.git`, and contain no symlinks; `node_modules/` and generated
 `.tmp/` evidence are not copied.
 
@@ -89,15 +91,15 @@ and transitions.
 ```sh
 npm run build       # compile server and browser client
 npm test            # unit tests, including deterministic eval tests
-npm run check:eval  # type-check the synthetic engine eval runner and deterministic tests
-npm run test:eval   # focused deterministic eval tests
-npm run eval -- --help
-npm run factory:workbook:deterministic # provider-free workbook UX recording + decoded-WebM analysis + report
-npm run factory:workbook               # same factory plus advisory pi review when deterministic checks pass
+npm run check:eval  # deterministic/model-free type-check for synthetic engine eval code
+npm run test:eval   # deterministic/model-free synthetic engine eval tests
+npm run eval -- --help # paid Docker-backed live engine eval CLI
+npm run test:workbook-ux:deterministic # provider-free workbook UX recording + decoded-WebM analysis + report
+npm run test:workbook-ux               # same workbook UX test plus advisory pi review when deterministic checks pass
 npm run check       # TypeScript, eval type-check, unit tests, browser build, and browser smoke
 ```
 
-The workbook UX factory lives in [`test/workbook-factory/`](test/workbook-factory/). It writes a durable `report.md` and `factory-result.json`; deterministic findings gate exit, while the optional AI review is advisory and marked `@needs-human`.
+The workbook UX test family lives in [`test/workbook-ux/`](test/workbook-ux/). It writes a durable `report.md` and `ux-test-result.json`; deterministic findings gate exit, while the optional AI review is advisory and marked `@needs-human`.
 
 `npm run browser:smoke` is safe to run on its own. It serves the built bundle in
 `dist/web-workbook/`, so before it starts Chromium it compares that bundle against everything vite
@@ -131,8 +133,17 @@ cannot omit the browser smoke. CI provisions Chromium with its Linux dependencie
 `npm run browser:install:ci`. Docker terminal-image builds and live provider-backed evaluations are
 intentionally separate from this mandatory gate.
 
-The synthetic tutorial-engine mechanics eval lives in [`evals/`](evals/). Its live command is
-`npm run eval -- --scenario <v2-id>` from this workspace. From the repository root,
-`npm run eval:engine -- --scenario <v2-id>` forwards here, and root `npm run eval -- ...` remains only
-as a temporary compatibility alias. These evals are distinct from any future authored-workbook eval
-suite for the learner curriculum.
+The synthetic tutorial-engine mechanics eval lives in [`evals/`](evals/). `npm run check:eval`
+and `npm run test:eval` are deterministic and model-free. The live command is
+`npm run eval -- --scenario <v2-id>` from this workspace; it is paid, requires Docker, and writes
+active reports under `tutorial-engine/evals/reports/` from the repository root. `npm run eval:release`
+runs the bounded six-scenario release profile once per scenario. Exploratory scopes use `--scenario`,
+`--all --yes`, and optional repeats.
+
+From the repository root, `npm run eval:engine -- --scenario <v2-id>` forwards here,
+`npm run eval:release` delegates through `--workspace=tutorial-engine`, and root `npm run eval -- ...`
+remains only as a temporary compatibility alias to `eval:engine`. It is not an authored-workbook eval.
+These evals are distinct from the root-owned authored-workbook evaluator foundations in
+[`../evals/workbook/`](../evals/workbook/), whose current deterministic commands are
+`npm run check:eval:workbook` and `npm run test:eval:workbook`. The root `eval:workbook` command is
+reserved until that live runner lands.

@@ -1,16 +1,118 @@
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { WorkbookTimelineRecord } from "../../src/workbook/timeline.js";
-import { buildV2JudgePrompt, createV2Report, enumerateTraceCitations, verifyV2JudgeResult } from "../v2/judge.js";
+import { buildV2JudgePrompt, createV2Report, enumerateTraceCitations, invokeJudgeCommand, probeV2JudgeCommandModel, verifyV2JudgeResult, V2_JUDGE_PROMPT_MAX_BYTES, V2_JUDGE_STDOUT_MAX_BYTES } from "../v2/judge.js";
 import { findV2Scenario } from "../v2/scenarios.js";
 import { createEmptyV2SessionTrace, projectV2JudgeTrace } from "../v2/session.js";
 
 const lessonId = "001-live-session";
+
+async function pathExists(path: string): Promise<boolean> {
+  try { await stat(path); return true; }
+  catch { return false; }
+}
 
 function record(event: Record<string, unknown>): WorkbookTimelineRecord {
   return { id: "raw-id", sequence: 1, at: "2026-08-20T00:00:00.000Z", ...event } as WorkbookTimelineRecord;
 }
 
 describe("v2 public judge trace projection", () => {
+  it("bounds judge command lifetime and rejects with a fixed sanitized error", async () => {
+    const root = await mkdtemp(join(tmpdir(), "v2-judge-timeout-"));
+    const command = join(root, "hang.sh");
+    await writeFile(command, "#!/bin/sh\nsleep 10\n", { mode: 0o700 });
+    try {
+      await expect(invokeJudgeCommand({
+        prompt: "not recorded",
+        model: "provider/model",
+        environment: { EVAL_JUDGE_MODEL: "provider/model", EVAL_JUDGE_COMMAND: command, PATH: process.env.PATH, HOME: process.env.HOME },
+        timeoutMs: 10
+      })).rejects.toThrow("Judge command timed out before returning a bounded JSON result.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects oversized judge prompts before spawning and keeps the error fixed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "v2-judge-oversized-prompt-"));
+    const command = join(root, "should-not-run.sh");
+    await writeFile(command, "#!/bin/sh\necho spawned > \"$HOME/ran\"\n", { mode: 0o700 });
+    try {
+      await expect(invokeJudgeCommand({
+        prompt: "x".repeat(V2_JUDGE_PROMPT_MAX_BYTES + 1),
+        model: "provider/model",
+        environment: { EVAL_JUDGE_MODEL: "provider/model", EVAL_JUDGE_COMMAND: command, PATH: process.env.PATH, HOME: root }
+      })).rejects.toThrow("Judge prompt exceeded the bounded input size limit.");
+      await expect(pathExists(join(root, "ran"))).resolves.toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("kills noisy judge stdout after the byte bound without retaining raw output", async () => {
+    const root = await mkdtemp(join(tmpdir(), "v2-judge-noisy-stdout-"));
+    const command = join(root, "noisy.js");
+    await writeFile(command, `#!/usr/bin/env node\nprocess.stdout.write("A".repeat(${V2_JUDGE_STDOUT_MAX_BYTES + 1}));\nsetTimeout(() => {}, 10000);\n`, { mode: 0o700 });
+    try {
+      await expect(invokeJudgeCommand({
+        prompt: "not recorded",
+        model: "provider/model",
+        environment: { EVAL_JUDGE_MODEL: "provider/model", EVAL_JUDGE_COMMAND: command, PATH: process.env.PATH, HOME: process.env.HOME },
+        timeoutMs: 5_000
+      })).rejects.toThrow("Judge command exceeded the bounded output size limit.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("wraps malformed judge JSON in a fixed response-free error", async () => {
+    const root = await mkdtemp(join(tmpdir(), "v2-judge-malformed-json-"));
+    const command = join(root, "malformed.sh");
+    await writeFile(command, "#!/bin/sh\necho 'raw malformed secret {not-json'\n", { mode: 0o700 });
+    try {
+      await expect(invokeJudgeCommand({
+        prompt: "not recorded",
+        model: "provider/model",
+        environment: { EVAL_JUDGE_MODEL: "provider/model", EVAL_JUDGE_COMMAND: command, PATH: process.env.PATH, HOME: process.env.HOME }
+      })).rejects.toThrow("Judge command returned invalid bounded JSON.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("handles early-exit stdin errors through sanitized one-shot settlement", async () => {
+    const root = await mkdtemp(join(tmpdir(), "v2-judge-early-exit-"));
+    const command = join(root, "early-exit.sh");
+    await writeFile(command, "#!/bin/sh\nexit 7\n", { mode: 0o700 });
+    try {
+      await expect(invokeJudgeCommand({
+        prompt: "x".repeat(Math.floor(V2_JUDGE_PROMPT_MAX_BYTES / 2)),
+        model: "provider/model",
+        environment: { EVAL_JUDGE_MODEL: "provider/model", EVAL_JUDGE_COMMAND: command, PATH: process.env.PATH, HOME: process.env.HOME }
+      })).rejects.toThrow("Judge command failed before returning a bounded JSON result.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports only structural judge command labels in successful preflight", async () => {
+    const root = await mkdtemp(join(tmpdir(), "v2-judge-label-"));
+    const command = join(root, "judge.sh");
+    await writeFile(command, "#!/bin/sh\nprintf '{\"ok\":true}'\n", { mode: 0o700 });
+    try {
+      await expect(probeV2JudgeCommandModel({ EVAL_JUDGE_MODEL: "provider/model", EVAL_JUDGE_COMMAND: `${command} --private-arg`, PATH: process.env.PATH, HOME: process.env.HOME })).resolves.toEqual({
+        commandLabel: "configured-command",
+        model: "provider/model",
+        capabilities: { jsonObject: true }
+      });
+      await expect(probeV2JudgeCommandModel({ EVAL_JUDGE_MODEL: "provider/model", PATH: root, HOME: process.env.HOME }, { timeoutMs: 10 })).rejects.toThrow("Judge command/model preflight failed for default-pi/provider/model.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("drops every private terminal lifecycle variant from trace, prompt, and report", () => {
     const trace = createEmptyV2SessionTrace("v2-exact-command-success");
     trace.publicStates.push({ label: "public", state: { progress: { activeBlockId: "exact-command" } } });

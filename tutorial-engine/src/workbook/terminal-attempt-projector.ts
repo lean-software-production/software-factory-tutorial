@@ -7,6 +7,8 @@ export type TerminalAttemptState = "running" | "checking" | "feedback" | "comple
 
 export type ProjectedTerminalAttempt = {
   state: TerminalAttemptState;
+  /** Monotonic browser-public revision for submitted attempts on this block; never a private attempt ID. */
+  revision: number;
   feedback?: string;
   successMessage?: string;
   /** Browser-safe entitlement for terminal-local review retry; never an attempt/evidence id. */
@@ -19,6 +21,7 @@ type Attempt = {
   blockId: string;
   command: string;
   terminalSessionId: string;
+  revision: number;
   finished: boolean;
   evidenceRef?: string;
   feedback?: string;
@@ -41,16 +44,20 @@ export function projectTerminalAttempts(
 ): ReadonlyMap<string, ProjectedTerminalAttempt> {
   const attempts = new Map<string, Attempt>();
   const currentAttemptByBlock = new Map<string, string>();
+  const revisionByBlock = new Map<string, number>();
 
   for (const record of records) {
     switch (record.type) {
       case "terminal-command-submitted": {
+        const revision = (revisionByBlock.get(record.blockId) ?? 0) + 1;
+        revisionByBlock.set(record.blockId, revision);
         attempts.set(record.attemptId, {
           attemptId: record.attemptId,
           lessonId: record.lessonId,
           blockId: record.blockId,
           command: record.command,
           terminalSessionId: record.terminalSessionId,
+          revision,
           finished: false,
           reviewRequests: [],
         });
@@ -119,10 +126,10 @@ export function projectTerminalAttempts(
     // A running shell cannot survive workflow restart. Keep completed evidence available for
     // review recovery, but do not resurrect an old in-flight command as a perpetual status.
     if (!attempt.finished && activeTerminalSessionId && attempt.terminalSessionId !== activeTerminalSessionId) continue;
-    if (attempt.accepted !== undefined) projection.set(blockId, { state: "complete", successMessage: attempt.accepted });
-    else if (attempt.feedback !== undefined) projection.set(blockId, { state: "feedback", feedback: attempt.feedback });
-    else if (attempt.reviewFailure !== undefined) projection.set(blockId, { state: "feedback", feedback: attempt.reviewFailure.message, ...(attempt.reviewFailure.failureId ? { retryFailureId: attempt.reviewFailure.failureId } : {}) });
-    else projection.set(blockId, { state: attempt.finished ? "checking" : "running" });
+    if (attempt.accepted !== undefined) projection.set(blockId, { state: "complete", revision: attempt.revision, successMessage: attempt.accepted });
+    else if (attempt.feedback !== undefined) projection.set(blockId, { state: "feedback", revision: attempt.revision, feedback: attempt.feedback });
+    else if (attempt.reviewFailure !== undefined) projection.set(blockId, { state: "feedback", revision: attempt.revision, feedback: attempt.reviewFailure.message, ...(attempt.reviewFailure.failureId ? { retryFailureId: attempt.reviewFailure.failureId } : {}) });
+    else projection.set(blockId, { state: attempt.finished ? "checking" : "running", revision: attempt.revision });
   }
   return projection;
 }

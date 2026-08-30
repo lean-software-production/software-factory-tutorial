@@ -46,6 +46,10 @@ async function contentFixture(): Promise<string> {
   await write(join(root, "workspaces/refactor-line/calculator/package.json"), "{\"type\":\"module\"}\n");
   await write(join(root, "workspaces/refactor-line/calculator/src/index.ts"), "export const value = 1;\n");
   await write(join(root, "workspaces/refactor-line/calculator/node_modules/cache.txt"), "must not copy\n");
+  await write(join(root, "workspaces/refactor-line/calculator/.tmp/cache.txt"), "must not copy\n");
+  await write(join(root, "workspaces/refactor-line/calculator/.tutorial/state.json"), "must not copy\n");
+  await write(join(root, "workspaces/refactor-line/calculator/.git/config"), "must not copy\n");
+  await write(join(root, "workspaces/refactor-line/calculator/.DS_Store"), "must not copy\n");
   await write(join(root, "workspaces/refactor-line/factory/refactor.md"), "factory seed\n");
   return root;
 }
@@ -70,6 +74,15 @@ async function snapshotAuthoredFiles(root: string): Promise<Record<string, strin
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await run("git", ["-C", cwd, ...args])).stdout.trim();
+}
+
+async function initializeProductRepository(root: string): Promise<void> {
+  await write(join(root, ".gitignore"), ".tutorial/\n");
+  await git(root, "init", "-q", "-b", "main");
+  await git(root, "config", "user.name", "Product Maintainer");
+  await git(root, "config", "user.email", "maintainer@example.invalid");
+  await git(root, "add", "-A");
+  await git(root, "commit", "-qm", "Authored product baseline");
 }
 
 describe("session IDs", () => {
@@ -104,36 +117,39 @@ describe("SessionWorkspaceManager", () => {
     await expect(manager.reopenSession("lesson-007")).resolves.toEqual(created);
   });
 
-  it("materializes every declared workspace and never copies node_modules or authored workbook content", async () => {
+  it("materializes every declared workspace and skips generated/session/dependency/VCS state without copying authored workbook content", async () => {
     const contentRoot = await contentFixture();
-    await declareWorkspaceLesson(contentRoot, "002", "your-first-factory");
-    await write(join(contentRoot, "workspaces/your-first-factory/spec.md"), "starter spec\n");
+    await declareWorkspaceLesson(contentRoot, "002", "tetris");
+    await write(join(contentRoot, "workspaces/tetris/spec.md"), "starter spec\n");
     await write(join(contentRoot, "workspaces/unreferenced/file.txt"), "not copied\n");
     const manager = await SessionWorkspaceManager.create(contentRoot);
 
     const session = await manager.createSession({ id: "minimal" });
 
     expect((await readdir(session.sessionRoot)).sort()).toEqual([SESSION_WORKSPACES_DIRECTORY].sort());
-    expect(Object.keys(session.workspaceRoots).sort()).toEqual(["refactor-line", "your-first-factory"]);
+    expect(Object.keys(session.workspaceRoots).sort()).toEqual(["refactor-line", "tetris"]);
     const refactor = workspaceRootFor(session, "refactor-line");
-    await expect(readdir(join(refactor, "calculator"))).resolves.not.toContain("node_modules");
+    await expect(readdir(join(refactor, "calculator"))).resolves.not.toEqual(expect.arrayContaining(["node_modules", ".tmp", ".tutorial", ".git", ".DS_Store"]));
     await expect(readFile(join(refactor, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
     await expect(readFile(join(refactor, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
-    await expect(readFile(join(workspaceRootFor(session, "your-first-factory"), "spec.md"), "utf8")).resolves.toBe("starter spec\n");
+    await expect(readFile(join(workspaceRootFor(session, "tetris"), "spec.md"), "utf8")).resolves.toBe("starter spec\n");
     await expect(lstat(join(session.workspacesRoot, "unreferenced"))).rejects.toThrow();
     for (const missing of ["README.md", "workbook.md", "docs", "lessons"]) {
       await expect(lstat(join(refactor, missing))).rejects.toThrow();
     }
   });
 
-  it("preserves executable modes in copied workspace templates", async () => {
+  it("preserves directory and executable modes in copied workspace templates", async () => {
     const contentRoot = await contentFixture();
     await write(join(contentRoot, "workspaces/refactor-line/factory/run.sh"), "#!/usr/bin/env bash\n");
+    await mkdir(join(contentRoot, "workspaces/refactor-line/factory/empty-mode-dir"));
     await chmod(join(contentRoot, "workspaces/refactor-line/factory/run.sh"), 0o755);
+    await chmod(join(contentRoot, "workspaces/refactor-line/factory/empty-mode-dir"), 0o750);
 
     const session = await (await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "modes" });
 
     expect((await stat(join(refactorRoot(session), "factory/run.sh"))).mode & 0o111).not.toBe(0);
+    expect((await stat(join(refactorRoot(session), "factory/empty-mode-dir"))).mode.toString(8).slice(-4)).toBe("0750");
   });
 
   it("keeps authored content immutable when a live workspace changes", async () => {
@@ -175,20 +191,107 @@ describe("SessionWorkspaceManager", () => {
 
   it("materializes declared workspace templates as independent clean Git repositories", async () => {
     const contentRoot = await contentFixture();
-    await declareWorkspaceLesson(contentRoot, "002", "your-first-factory");
-    await write(join(contentRoot, "workspaces/your-first-factory/spec.md"), "template spec\n");
+    await declareWorkspaceLesson(contentRoot, "002", "tetris");
+    await write(join(contentRoot, "workspaces/tetris/spec.md"), "template spec\n");
 
     const session = await (await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "git-ready" });
     const refactor = workspaceRootFor(session, "refactor-line");
-    const firstFactory = workspaceRootFor(session, "your-first-factory");
+    const tetrisWorkspace = workspaceRootFor(session, "tetris");
 
-    for (const [id, root] of [["refactor-line", refactor], ["your-first-factory", firstFactory]] as const) {
+    for (const [id, root] of [["refactor-line", refactor], ["tetris", tetrisWorkspace]] as const) {
       expect(await git(root, "rev-parse", "--show-toplevel")).toBe(root);
       expect(await git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
       expect(await git(root, "log", "--oneline", "-1")).toMatch(new RegExp(`Materialize tutorial workspace ${id}`));
       expect(await git(root, "ls-files", ".gitignore")).toBe(".gitignore");
       expect(await git(root, "status", "--porcelain")).toBe("");
     }
+  });
+
+  it("ignores inherited Git identity, paths, signing, hooks, and config while materializing a repository", async () => {
+    const contentRoot = await contentFixture();
+    await initializeProductRepository(contentRoot);
+    const productHead = await git(contentRoot, "rev-parse", "HEAD");
+    const hostileConfig = join(contentRoot, ".git/host-gitconfig");
+    await write(hostileConfig, [
+      "[user]",
+      "  name = Host User",
+      "  email = host@example.invalid",
+      "[commit]",
+      "  gpgSign = true",
+      "[core]",
+      `  hooksPath = ${join(contentRoot, ".git/host-hooks")}`,
+    ].join("\n"));
+    const overrides: Record<string, string> = {
+      GIT_DIR: join(contentRoot, ".git"),
+      GIT_WORK_TREE: contentRoot,
+      GIT_AUTHOR_NAME: "Injected Author",
+      GIT_AUTHOR_EMAIL: "injected-author@example.invalid",
+      GIT_COMMITTER_NAME: "Injected Committer",
+      GIT_COMMITTER_EMAIL: "injected-committer@example.invalid",
+      GIT_CONFIG_GLOBAL: hostileConfig,
+      GIT_CONFIG_SYSTEM: hostileConfig,
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "commit.gpgSign",
+      GIT_CONFIG_VALUE_0: "true",
+    };
+    const previous = Object.fromEntries(Object.keys(overrides).map((key) => [key, process.env[key]]));
+
+    let session;
+    try {
+      Object.assign(process.env, overrides);
+      session = await (await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "isolated-git" });
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+
+    const workspaceRoot = refactorRoot(session);
+    expect(await git(workspaceRoot, "rev-parse", "--show-toplevel")).toBe(workspaceRoot);
+    expect(await git(workspaceRoot, "config", "--local", "--get", "user.name")).toBe("Tutorial Factory Worker");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "user.email")).toBe("factory-worker@example.invalid");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "user.useConfigOnly")).toBe("true");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "commit.gpgSign")).toBe("false");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "tag.gpgSign")).toBe("false");
+    expect(await git(workspaceRoot, "config", "--local", "--get-all", "credential.helper")).toBe("");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "credential.interactive")).toBe("false");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "core.hooksPath")).toBe("/dev/null");
+    expect(await git(workspaceRoot, "config", "--local", "--get", "protocol.allow")).toBe("never");
+    expect(await git(workspaceRoot, "log", "-1", "--format=%an <%ae>")).toBe("Tutorial Factory Worker <factory-worker@example.invalid>");
+    expect(await git(contentRoot, "rev-parse", "HEAD")).toBe(productHead);
+    expect(await git(contentRoot, "status", "--porcelain")).toBe("");
+  });
+
+  it("keeps useful worker commits in the live repository across reopen without running hooks or changing authored product history", async () => {
+    const contentRoot = await contentFixture();
+    await initializeProductRepository(contentRoot);
+    const authoredBefore = await snapshotAuthoredFiles(contentRoot);
+    const productHead = await git(contentRoot, "rev-parse", "HEAD");
+    const manager = await SessionWorkspaceManager.create(contentRoot);
+    const session = await manager.createSession({ id: "worker-commits" });
+    const workspaceRoot = refactorRoot(session);
+    const hookMarker = join(contentRoot, "worker-hook-ran");
+    const hook = join(workspaceRoot, ".git/hooks/pre-commit");
+    await write(hook, `#!/bin/sh\nprintf hook-ran > ${JSON.stringify(hookMarker)}\nexit 1\n`);
+    await chmod(hook, 0o755);
+
+    await write(join(workspaceRoot, "calculator/src/worker-change.ts"), "export const workerChange = true;\n");
+    await git(workspaceRoot, "add", "calculator/src/worker-change.ts");
+    await git(workspaceRoot, "commit", "-m", "Apply useful worker change");
+
+    await expect(lstat(hookMarker)).rejects.toThrow();
+    expect(await git(workspaceRoot, "log", "-1", "--format=%s|%an <%ae>")).toBe("Apply useful worker change|Tutorial Factory Worker <factory-worker@example.invalid>");
+    await expect(run("git", ["-C", workspaceRoot, "ls-remote", `file://${workspaceRoot}`])).rejects.toThrow(/transport 'file' not allowed/);
+    const commitCount = await git(workspaceRoot, "rev-list", "--count", "HEAD");
+    await expect(run("git", ["-C", workspaceRoot, "commit", "-m", "No empty pass"])).rejects.toMatchObject({ code: 1 });
+    expect(await git(workspaceRoot, "rev-list", "--count", "HEAD")).toBe(commitCount);
+
+    const reopened = await manager.reopenSession("worker-commits");
+    expect(await git(refactorRoot(reopened), "log", "-1", "--format=%s")).toBe("Apply useful worker change");
+    expect(await snapshotAuthoredFiles(contentRoot)).toEqual(authoredBefore);
+    expect(await git(contentRoot, "rev-parse", "HEAD")).toBe(productHead);
+    expect(await git(contentRoot, "status", "--porcelain")).toBe("");
   });
 
   it("rejects declared workspaces with no authored template", async () => {
@@ -215,11 +318,14 @@ describe("SessionWorkspaceManager", () => {
     await expect((await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "bad-scoped" })).rejects.toThrow(/workspace/);
   });
 
-  it("rejects authored workspace .git directories and symlinked templates", async () => {
+  it("skips authored workspace .git directories and rejects symlinked templates", async () => {
     const contentRoot = await contentFixture();
     await declareWorkspaceLesson(contentRoot, "git-template", "git-template");
-    await mkdir(join(contentRoot, "workspaces/git-template/.git"), { recursive: true });
-    await expect((await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "git-template" })).rejects.toThrow(/\.git/);
+    await write(join(contentRoot, "workspaces/git-template/.git/config"), "generated git metadata\n");
+    await write(join(contentRoot, "workspaces/git-template/spec.md"), "real template\n");
+    const session = await (await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "git-template" });
+    await expect(readFile(join(workspaceRootFor(session, "git-template"), "spec.md"), "utf8")).resolves.toBe("real template\n");
+    await expect(readFile(join(workspaceRootFor(session, "git-template"), ".git/config"), "utf8")).resolves.not.toContain("generated git metadata");
 
     const symlinked = await contentFixture();
     await declareWorkspaceLesson(symlinked, "symlinked-template", "symlinked-template");
@@ -252,8 +358,8 @@ describe("SessionWorkspaceManager", () => {
 
   it("materializes trusted runtime provision mount targets as empty ignored directories in each live workspace", async () => {
     const contentRoot = await contentFixture();
-    await declareWorkspaceLesson(contentRoot, "002", "your-first-factory");
-    await mkdir(join(contentRoot, "workspaces/your-first-factory"), { recursive: true });
+    await declareWorkspaceLesson(contentRoot, "002", "tetris");
+    await mkdir(join(contentRoot, "workspaces/tetris"), { recursive: true });
     const runtimeSource = await mkdtemp(join(tmpdir(), "session-runtime-source-")); roots.push(runtimeSource);
     await write(join(runtimeSource, "tool.txt"), "host runtime source\n");
 

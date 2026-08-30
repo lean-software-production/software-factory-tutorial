@@ -98,6 +98,29 @@ describe("MainWorkbookTutor model selection", () => {
     }));
   });
 
+  it("uses per-instance environment snapshots for concurrent tutors without leaking through process.env", async () => {
+    process.env.TUTOR_MODEL = "provider/global:low";
+    pi.resolveCliModel.mockImplementation(({ cliModel }: { cliModel: string }) => {
+      const [provider, rest = "model"] = cliModel.split("/");
+      const [id = "model", thinkingLevel] = rest.split(":");
+      return { model: { api: "test-api", provider, id }, thinkingLevel };
+    });
+    const { DefaultMainWorkbookTutor: MainWorkbookTutor } = await import("../src/workbook/tutor.js");
+    const tutorA = new MainWorkbookTutor({ workspace: "/tmp/workbook-a", log: { info() {}, error() {} }, environment: { TUTOR_MODEL: "provider/main-a:high" } });
+    const tutorB = new MainWorkbookTutor({ workspace: "/tmp/workbook-b", log: { info() {}, error() {} }, environment: { TUTOR_MODEL: "provider/main-b:low" } });
+
+    await expect(Promise.all([
+      tutorA.reply({ records: [], learnerMessage: record("learner-a", 1, { type: "message", lessonId: "lesson", blockId: "a", role: "user", source: "learner", presentation: "chat", text: "A" }) }),
+      tutorB.reply({ records: [], learnerMessage: record("learner-b", 2, { type: "message", lessonId: "lesson", blockId: "b", role: "user", source: "learner", presentation: "chat", text: "B" }) })
+    ])).resolves.toEqual(["Model-backed reply.", "Model-backed reply."]);
+
+    expect(pi.resolveCliModel).toHaveBeenCalledWith({ cliModel: "provider/main-a:high", modelRuntime: expect.anything() });
+    expect(pi.resolveCliModel).toHaveBeenCalledWith({ cliModel: "provider/main-b:low", modelRuntime: expect.anything() });
+    expect(pi.resolveCliModel).not.toHaveBeenCalledWith({ cliModel: "provider/global:low", modelRuntime: expect.anything() });
+    expect(pi.createAgentSession.mock.calls.map(([options]) => options.model?.id).sort()).toEqual(["main-a", "main-b"]);
+    expect(process.env.TUTOR_MODEL).toBe("provider/global:low");
+  });
+
   it("reconstructs assistant history with Pi's selected default model when TUTOR_MODEL is unset", async () => {
     delete process.env.TUTOR_MODEL;
     const { DefaultMainWorkbookTutor: MainWorkbookTutor } = await import("../src/workbook/tutor.js");

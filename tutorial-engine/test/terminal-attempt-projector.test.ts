@@ -21,36 +21,37 @@ function reviewFailed(requestId = "request-1", failureId = "failure-1", sequence
 }
 
 describe("projectTerminalAttempts", () => {
-  it("projects direct terminal review states without private fields or legacy handoff requirements", () => {
+  it("projects direct terminal review states with revisions and without private fields or legacy handoff requirements", () => {
     const events: WorkbookTimelineRecord[] = [submitted()];
-    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running" });
+    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running", revision: 1 });
 
     events.push(finished());
-    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "checking" });
+    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "checking", revision: 1 });
 
     const feedbackEvents = [...events, reviewRequested(), record({ type: "terminal-feedback-recorded", attemptId: "attempt-1", text: "Fix the path." }, 4)];
     const feedback = projectTerminalAttempts(feedbackEvents, reader(finalEvidence), "terminal-1").get("block");
-    expect(feedback).toEqual({ state: "feedback", feedback: "Fix the path." });
-    expect(JSON.stringify(feedback)).not.toMatch(/attempt|command|evidence|rubric|handoff|request/i);
+    expect(feedback).toEqual({ state: "feedback", revision: 1, feedback: "Fix the path." });
+    expect(JSON.stringify(feedback)).not.toMatch(/attempt-1|npm test|evidence|rubric|handoff|request/i);
 
     events.push(reviewRequested());
     events.push(record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Accepted directly." }, 4));
-    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "complete", successMessage: "Accepted directly." });
+    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "complete", revision: 1, successMessage: "Accepted directly." });
   });
 
   it("projects retryable review infrastructure failure and returns to checking when the same evidence is retried", () => {
     const failedEvents: WorkbookTimelineRecord[] = [submitted(), finished(), reviewRequested("request-1", 3), reviewFailed("request-1", "failure-1", 4)];
     expect(projectTerminalAttempts(failedEvents, reader(finalEvidence), "terminal-1").get("block")).toEqual({
       state: "feedback",
+      revision: 1,
       feedback: "Review is temporarily unavailable. You can retry the review without rerunning the command.",
       retryFailureId: "failure-1",
     });
 
     const retrying = [...failedEvents, reviewRequested("request-2", 5, "attempt-1", "manual")];
-    expect(projectTerminalAttempts(retrying, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "checking" });
+    expect(projectTerminalAttempts(retrying, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "checking", revision: 1 });
 
     retrying.push(record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Accepted after retry." }, 6));
-    expect(projectTerminalAttempts(retrying, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "complete", successMessage: "Accepted after retry." });
+    expect(projectTerminalAttempts(retrying, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "complete", revision: 1, successMessage: "Accepted after retry." });
   });
 
   it("does not expose another retry entitlement after the one manual review-only call fails", () => {
@@ -66,6 +67,7 @@ describe("projectTerminalAttempts", () => {
 
     expect(projectTerminalAttempts(exhaustedEvents, reader(finalEvidence), "terminal-1").get("block")).toEqual({
       state: "feedback",
+      revision: 1,
       feedback: "Review is temporarily unavailable. Please try another attempt in a moment.",
     });
   });
@@ -78,7 +80,7 @@ describe("projectTerminalAttempts", () => {
       reviewFailed("too-early", "failure-too-early", 4),
       record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Too early." }, 5),
     ];
-    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running" });
+    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running", revision: 1 });
   });
 
   it("continues to read legacy terminal-coach handoffs for old accepted sessions", () => {
@@ -88,7 +90,7 @@ describe("projectTerminalAttempts", () => {
       record({ type: "terminal-coach-handoff-recorded", attemptId: "old", outcome: "ready", text: "Ready for Main Tutor review." }, 3),
       record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "old", version: 1, kind: "terminal", summary: "Already accepted." }, 4),
     ];
-    expect(projectTerminalAttempts(completed, reader(finalEvidence), "after-restart").get("block")).toEqual({ state: "complete", successMessage: "Already accepted." });
+    expect(projectTerminalAttempts(completed, reader(finalEvidence), "after-restart").get("block")).toEqual({ state: "complete", revision: 1, successMessage: "Already accepted." });
   });
 
   it("drops stale model output when a newer Bash command is current", () => {
@@ -101,7 +103,28 @@ describe("projectTerminalAttempts", () => {
       reviewRequested("new-too-early", 6, "new"),
       record({ type: "terminal-feedback-recorded", attemptId: "new", text: "Too early." }, 7),
     ];
-    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running" });
+    expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running", revision: 2 });
+  });
+
+  it("increments a public revision for repeated attempts on the same block", () => {
+    const firstAccepted: WorkbookTimelineRecord[] = [
+      submitted("attempt-private-1"),
+      finished("attempt-private-1"),
+      reviewRequested("request-private-1", 3, "attempt-private-1"),
+      record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-private-1", version: 1, kind: "terminal", summary: "Same public result." }, 4),
+    ];
+    expect(projectTerminalAttempts(firstAccepted, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "complete", revision: 1, successMessage: "Same public result." });
+
+    const repeated: WorkbookTimelineRecord[] = [
+      ...firstAccepted,
+      record({ type: "terminal-command-submitted", attemptId: "attempt-private-2", lessonId: "lesson", blockId: "block", command: "npm test", terminalSessionId: "terminal-1" }, 5),
+      record({ type: "terminal-command-finished", attemptId: "attempt-private-2", exitStatus: 0, evidenceRef: "finished" }, 6),
+      record({ type: "terminal-review-requested", attemptId: "attempt-private-2", lessonId: "lesson", blockId: "block", evidenceRef: "finished", requestId: "request-private-2", mode: "automatic", callNumber: 1 }, 7),
+      record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-private-2", version: 2, kind: "terminal", summary: "Same public result." }, 8),
+    ];
+    const projection = projectTerminalAttempts(repeated, reader(finalEvidence), "terminal-1").get("block");
+    expect(projection).toEqual({ state: "complete", revision: 2, successMessage: "Same public result." });
+    expect(JSON.stringify(projection)).not.toMatch(/attempt-private|request-private|npm test|terminal-1/);
   });
 
   it("reopens an unfinished prior terminal session idle while preserving completed direct work", () => {
@@ -113,6 +136,6 @@ describe("projectTerminalAttempts", () => {
       reviewRequested("old-request", 3, "old"),
       record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "old", version: 1, kind: "terminal", summary: "Already accepted." }, 4),
     ];
-    expect(projectTerminalAttempts(completed, reader(finalEvidence), "after-restart").get("block")).toEqual({ state: "complete", successMessage: "Already accepted." });
+    expect(projectTerminalAttempts(completed, reader(finalEvidence), "after-restart").get("block")).toEqual({ state: "complete", revision: 1, successMessage: "Already accepted." });
   });
 });

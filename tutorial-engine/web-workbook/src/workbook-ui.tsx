@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import confetti from "canvas-confetti";
 import { defaultKeymap } from "@codemirror/commands";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
@@ -386,9 +387,11 @@ function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { b
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const activeRef = useRef(false);
   const baseRevision = useRef(state?.revision ?? 0);
+  const currentBlockId = useRef(block.id);
   const latestSubmittedRevision = useRef(state?.revision ?? 0);
   const pendingDraftRevision = useRef(state?.revision ?? 0);
   const latestDraftGeneration = useRef(0);
+  const refreshRef = useRef(refresh);
   const [localError, setLocalError] = useState<string>();
   const [retainedFeedback, setRetainedFeedback] = useState<string | undefined>(state?.checkpoint?.feedback);
   const accepted = state?.checkpoint?.status === "accepted";
@@ -396,9 +399,24 @@ function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { b
   const canEdit = Boolean(state?.active && !completed && !accepted);
   const initialText = state?.draftText ?? "";
 
-  useEffect(() => {
-    const revision = state?.revision;
-    if (revision !== undefined) {
+  useLayoutEffect(() => { refreshRef.current = refresh; }, [refresh]);
+  useLayoutEffect(() => () => {
+    activeRef.current = false;
+    latestDraftGeneration.current += 1;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = undefined;
+  }, [block.id]);
+  useLayoutEffect(() => {
+    const revision = state?.revision ?? 0;
+    if (currentBlockId.current !== block.id) {
+      currentBlockId.current = block.id;
+      baseRevision.current = revision;
+      latestSubmittedRevision.current = revision;
+      pendingDraftRevision.current = revision;
+      latestDraftGeneration.current += 1;
+      return;
+    }
+    if (state?.revision !== undefined) {
       baseRevision.current = Math.max(baseRevision.current, revision);
       latestSubmittedRevision.current = Math.max(latestSubmittedRevision.current, revision);
     }
@@ -430,17 +448,21 @@ function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { b
       onLocalRevision?.(block.id, revision);
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => {
-        if (!activeRef.current || pendingDraftRevision.current !== revision || latestDraftGeneration.current !== generation) return;
+        if (!activeRef.current || currentBlockId.current !== block.id || pendingDraftRevision.current !== revision || latestDraftGeneration.current !== generation) return;
         baseRevision.current = revision;
         latestSubmittedRevision.current = revision;
+        const submittedBlockId = block.id;
         setLocalError(undefined);
-        postEditorDraft(block.id, revision, text).then((next) => {
-          if (latestSubmittedRevision.current !== revision || pendingDraftRevision.current !== revision || latestDraftGeneration.current !== generation) return;
-          const returnedRevision = editorProgressIn(next, block.id)?.revision;
-          if (returnedRevision !== undefined && returnedRevision < revision) return;
-          refresh(next);
+        postEditorDraft(submittedBlockId, revision, text).then((next) => {
+          if (currentBlockId.current !== submittedBlockId || latestSubmittedRevision.current !== revision || pendingDraftRevision.current !== revision || latestDraftGeneration.current !== generation) return;
+          const returnedRevision = editorProgressIn(next, submittedBlockId)?.revision;
+          if (returnedRevision !== undefined) {
+            if (returnedRevision < revision) return;
+            baseRevision.current = Math.max(baseRevision.current, returnedRevision);
+          }
+          refreshRef.current(next);
         }).catch((error) => {
-          if (latestSubmittedRevision.current !== revision || pendingDraftRevision.current !== revision || latestDraftGeneration.current !== generation) return;
+          if (currentBlockId.current !== submittedBlockId || latestSubmittedRevision.current !== revision || pendingDraftRevision.current !== revision || latestDraftGeneration.current !== generation) return;
           console.error(error);
           const message = error instanceof Error ? error.message : "Editor review failed.";
           setLocalError(`${message} Please retry after your connection recovers.`);
@@ -458,6 +480,8 @@ function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { b
       parent
     });
     editor.current = view;
+    const seededDraft = initialTextRef.current;
+    if (baseRevision.current === 0 && seededDraft.trim()) scheduleReview(seededDraft);
     return () => {
       activeRef.current = false;
       if (timer.current) clearTimeout(timer.current);
@@ -465,7 +489,7 @@ function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { b
       view.destroy();
       if (editor.current === view) editor.current = null;
     };
-  }, [block.id, canEdit, onLocalRevision, refresh]);
+  }, [block.id, canEdit, onLocalRevision]);
 
   // One channel, as the terminal has: whatever the learner most needs to read sits welded to the
   // bottom of the work surface. Prior actionable feedback stays in place during replacement review;
@@ -539,37 +563,60 @@ function reducedMotionPreferred(): boolean {
   return false;
 }
 
-export function AcceptanceConfetti({ acceptedKey }: { acceptedKey: string | undefined }) {
-  const initialized = useRef(false);
-  const seen = useRef(new Set<string>());
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const [visibleKey, setVisibleKey] = useState<string>();
+const LESSON_COMPLETION_CONFETTI_BURSTS = [
+  { angle: 58, origin: { x: 0, y: 1 } },
+  { angle: 122, origin: { x: 1, y: 1 } },
+] as const;
 
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-  useEffect(() => {
-    if (!initialized.current) {
-      initialized.current = true;
-      if (acceptedKey) seen.current.add(acceptedKey);
-      return;
-    }
-    if (!acceptedKey || seen.current.has(acceptedKey)) return;
-    seen.current.add(acceptedKey);
-    if (reducedMotionPreferred()) return;
-    if (timer.current) clearTimeout(timer.current);
-    setVisibleKey(acceptedKey);
-    timer.current = setTimeout(() => setVisibleKey(undefined), 1_000);
-  }, [acceptedKey]);
+type ConfettiCannon = ReturnType<typeof confetti.create>;
 
-  if (!visibleKey) return null;
-  return <div className="acceptance-confetti" aria-hidden="true" style={{ pointerEvents: "none" }}>{Array.from({ length: 24 }, (_, index) => <span key={`${visibleKey}-${index}`} className="confetti-particle" style={{ "--x": `${(index % 8) * 13 - 46}vw`, "--delay": `${(index % 6) * 35}ms`, "--hue": `${(index * 47) % 360}` } as React.CSSProperties} />)}</div>;
+function fireLessonCompletionConfetti(cannon: ConfettiCannon) {
+  for (const burst of LESSON_COMPLETION_CONFETTI_BURSTS) {
+    void cannon({
+      ...burst,
+      particleCount: 68,
+      spread: 62,
+      startVelocity: 48,
+      decay: 0.91,
+      scalar: 0.98,
+      ticks: 190,
+      disableForReducedMotion: true,
+    });
+  }
 }
 
-function activeAcceptedKey(progress: Progress): string | undefined {
-  const accepted = progress.blocks.find((block) => block.active && !block.completed && (block.checkpoint?.status === "accepted" || block.terminal?.phase === "complete"));
-  if (!accepted) return undefined;
-  const evidence = accepted.checkpoint?.evidence;
-  const message = accepted.terminal?.phase === "complete" ? accepted.terminal.message : accepted.checkpoint?.successMessage ?? accepted.checkpoint?.summary ?? "accepted";
-  return `${progress.activeLessonId}/${accepted.id}/${evidence?.kind ?? "terminal"}/${message}`;
+export function LessonCompletionConfetti({ completedLessonIds }: { completedLessonIds: readonly string[] }) {
+  const canvas = useRef<HTMLCanvasElement | null>(null);
+  const cannon = useRef<ConfettiCannon | undefined>(undefined);
+  const initialized = useRef(false);
+  const seen = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!canvas.current) return;
+    const nextCannon = confetti.create(canvas.current, { resize: true, disableForReducedMotion: true });
+    cannon.current = nextCannon;
+    return () => {
+      nextCannon.reset();
+      if (cannon.current === nextCannon) cannon.current = undefined;
+    };
+  }, []);
+
+  useEffect(() => {
+    const completed = [...new Set(completedLessonIds)];
+    if (!initialized.current) {
+      completed.forEach((lessonId) => seen.current.add(lessonId));
+      initialized.current = true;
+      return;
+    }
+
+    const newlyCompleted = completed.filter((lessonId) => !seen.current.has(lessonId));
+    completed.forEach((lessonId) => seen.current.add(lessonId));
+    const activeCannon = cannon.current;
+    if (newlyCompleted.length === 0 || !activeCannon) return;
+    newlyCompleted.forEach(() => fireLessonCompletionConfetti(activeCannon));
+  }, [completedLessonIds]);
+
+  return <canvas ref={canvas} className="lesson-completion-confetti-canvas" aria-hidden="true" style={{ pointerEvents: "none" }} />;
 }
 
 function readySuccessorId(progress: Progress): string | undefined {
@@ -819,7 +866,7 @@ export function App() {
   };
   return <div className="shell">
     {contentReloadError && <aside className="author-reload-notice" aria-live="polite"><b>Author reload failed.</b> {contentReloadError}</aside>}
-    <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
+    <LessonCompletionConfetti completedLessonIds={state.progress.completedLessons} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
       <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => applyWorkbookState(next))} onDoItForMe={terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} renderTerminalHistory={(record) => <TerminalHistory state={state.progress.blocks.find((block) => block.id === record.blockId)} />} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand key={activitySource.block.id} lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={applyWorkbookState} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => applyWorkbookState(next))} onTerminalInsertionChange={registerTerminalInsertion} onEditorLocalRevision={rememberEditorLocalRevision} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => applyWorkbookState(next))} />} />

@@ -5,12 +5,25 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkPiAuthentication, describeDoerModel, describeTutorModel, modelReport } from "../scripts/setup.mjs";
 import { trustedNodeRuntimeProvision, tutorialWorkbookArguments } from "../scripts/tutorial-workbook.mjs";
+import {
+  LOCAL_TEST_COMMAND_CONTRACT,
+  packageScriptWiringReport,
+  rootCommandContract,
+  rootCommandNames,
+  rootTestReleaseReports,
+  validatePackageScriptWiring,
+  workspaceDelegationCommand
+} from "../scripts/local-test-command-contract.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const tutorialRoot = resolve(repositoryRoot, "tutorial");
 
 async function readPackageManifest() {
   return JSON.parse(await readFile(resolve(repositoryRoot, "package.json"), "utf8"));
+}
+
+async function readEnginePackageManifest() {
+  return JSON.parse(await readFile(resolve(repositoryRoot, "tutorial-engine/package.json"), "utf8"));
 }
 
 async function readDevcontainerConfigSource() {
@@ -33,9 +46,10 @@ const dependencyVolumeMounts = [
 ];
 
 describe("tutorial launcher", () => {
-  it("starts the workbook from npm start", async () => {
+  it("starts the workbook from npm start and keeps onboarding tests broad enough for root orchestration", async () => {
     const manifest = await readPackageManifest();
     assert.equal(manifest.scripts.start, "npm run tutorial:workbook");
+    assert.equal(manifest.scripts["test:onboarding"], "node --test test/*.test.mjs");
   });
 
   it("keeps the calculator workspace under the tutorial workspace", async () => {
@@ -85,6 +99,238 @@ describe("devcontainer dependency isolation", () => {
     assert.ok(postCreate.indexOf("sudo chown") < postCreate.indexOf("npm ci --include=optional"));
     assert.match(postCreate, /npm ci --include=optional/);
     assert.doesNotMatch(postCreate, /^npm install(?:\s|$)/m);
+  });
+});
+
+describe("local test command contract", () => {
+  it("defines the exact root command matrix consumed by package-script wiring and the orchestrator", () => {
+    const expected = [
+      "test",
+      "test:fast",
+      "test:engine",
+      "test:engine:fast",
+      "test:workbook",
+      "test:workbook:fast",
+      "eval:engine",
+      "eval:workbook"
+    ];
+
+    assert.deepEqual(rootCommandNames(), expected);
+    assert.deepEqual(Object.keys(LOCAL_TEST_COMMAND_CONTRACT.rootCommands), expected);
+  });
+
+  it("keeps the fast loop deterministic, model-free, Docker-free, and complete", () => {
+    const command = rootCommandContract("test:fast");
+
+    assert.equal(command.deterministic, true);
+    assert.equal(command.modelFree, true);
+    assert.equal(command.spendsTokens, false);
+    assert.equal(command.requiresDocker, false);
+    assert.equal(command.requiresCanonicalDevcontainer, false);
+    assert.deepEqual(command.steps.map((step) => step.command), ["test:engine:fast", "test:workbook:fast"]);
+
+    for (const fastCommandName of ["test:fast", "test:engine:fast", "test:workbook:fast"]) {
+      assert.equal(rootCommandContract(fastCommandName).requiresDocker, false, `${fastCommandName} should stay Docker-free`);
+      assert.equal(rootCommandContract(fastCommandName).requiresCanonicalDevcontainer, false, `${fastCommandName} should stay devcontainer-free`);
+    }
+  });
+
+  it("spells out all deterministic authored-workbook and evaluator foundations", () => {
+    const command = rootCommandContract("test:workbook:fast");
+
+    assert.equal(command.deterministic, true);
+    assert.equal(command.modelFree, true);
+    assert.equal(command.spendsTokens, false);
+    assert.equal(command.requiresDocker, false);
+    assert.deepEqual(
+      command.steps.map((step) => ({ command: step.command, workspace: step.workspace, shell: step.shell })),
+      [
+        { command: "test:onboarding", workspace: undefined, shell: "npm run test:onboarding" },
+        { command: "check:eval:workbook", workspace: undefined, shell: "npm run check:eval:workbook" },
+        { command: "test:eval:workbook", workspace: undefined, shell: "npm run test:eval:workbook" },
+        { command: "check:workbook", workspace: "tutorial-engine", shell: "npm run --workspace=tutorial-engine check:workbook" },
+        {
+          command: "calculator:test",
+          workspace: "tutorial/workspaces/refactor-line/calculator",
+          shell: "npm run --workspace=tutorial/workspaces/refactor-line/calculator test"
+        }
+      ]
+    );
+    assert.ok(command.steps.find((step) => step.command === "check:eval:workbook"));
+    assert.ok(command.steps.findIndex((step) => step.command === "check:eval:workbook") < command.steps.findIndex((step) => step.command === "test:eval:workbook"));
+  });
+
+  it("delegates every root engine command through the tutorial-engine workspace", () => {
+    assert.equal(workspaceDelegationCommand("test:engine:fast"), "npm run --workspace=tutorial-engine test:fast --");
+    assert.equal(workspaceDelegationCommand("eval:engine"), "npm run --workspace=tutorial-engine eval --");
+
+    for (const commandName of ["test:engine", "test:engine:fast", "eval:engine"]) {
+      const command = rootCommandContract(commandName);
+      assert.ok(command.steps.length > 0, `${commandName} should have engine workspace steps`);
+      for (const step of command.steps) {
+        assert.equal(step.workspace, "tutorial-engine");
+        assert.match(step.shell, /npm run --workspace=tutorial-engine /);
+      }
+    }
+  });
+
+  it("makes full npm test an aggregate release gate with independent visual and live eval reports", () => {
+    const command = rootCommandContract("test");
+
+    assert.equal(command.deterministic, false);
+    assert.equal(command.modelFree, false);
+    assert.equal(command.spendsTokens, true);
+    assert.equal(command.requiresDocker, true);
+    assert.equal(command.requiresCanonicalDevcontainer, true);
+    assert.deepEqual(command.execution, {
+      mode: "continue-and-aggregate-independent-lanes",
+      plainAndChainSafe: false,
+      reports: ["deterministic-fast", "canonical-visual", "live-engine-eval", "authored-workbook-eval"]
+    });
+    assert.deepEqual(rootTestReleaseReports(), ["deterministic-fast", "canonical-visual", "live-engine-eval", "authored-workbook-eval"]);
+    assert.deepEqual(
+      command.steps.map((step) => ({ command: step.command, shell: step.shell, report: step.report, reportTarget: step.reportTarget })),
+      [
+        { command: "test:fast", shell: "npm run test:fast", report: "deterministic-fast", reportTarget: undefined },
+        {
+          command: "test:visual",
+          shell: "npm run --workspace=tutorial-engine test:visual",
+          report: "canonical-visual",
+          reportTarget: "tutorial-engine/test/visual/*.received.png"
+        },
+        { command: "eval:engine", shell: "npm run eval:engine -- --release", report: "live-engine-eval", reportTarget: "tutorial-engine/evals/reports/latest.json" },
+        { command: "eval:workbook", shell: "npm run eval:workbook -- --release", report: "authored-workbook-eval", reportTarget: "evals/workbook/reports/latest.json" }
+      ]
+    );
+  });
+
+  it("keeps canonical devcontainer requirements separate from generic Docker", () => {
+    assert.equal(rootCommandContract("test").requiresCanonicalDevcontainer, true);
+    assert.equal(rootCommandContract("test:engine").requiresCanonicalDevcontainer, true);
+
+    for (const commandName of ["test:workbook", "eval:engine", "eval:workbook"]) {
+      const command = rootCommandContract(commandName);
+      assert.equal(command.requiresDocker, true, `${commandName} needs Docker`);
+      assert.equal(command.requiresCanonicalDevcontainer, false, `${commandName} must not require the visual devcontainer`);
+    }
+
+    for (const commandName of ["test", "test:engine"]) {
+      const visualSteps = rootCommandContract(commandName).steps.filter((step) => step.visual);
+      assert.equal(visualSteps.length, 1);
+      assert.equal(visualSteps[0].requiresDocker, true);
+      assert.equal(visualSteps[0].requiresCanonicalDevcontainer, true);
+      assert.equal(visualSteps[0].report, "canonical-visual");
+    }
+  });
+
+  it("identifies token-spending and Docker-requiring root commands explicitly", () => {
+    const tokenSpenders = Object.values(LOCAL_TEST_COMMAND_CONTRACT.rootCommands)
+      .filter((command) => command.spendsTokens)
+      .map((command) => command.name);
+    const dockerUsers = Object.values(LOCAL_TEST_COMMAND_CONTRACT.rootCommands)
+      .filter((command) => command.requiresDocker)
+      .map((command) => command.name);
+
+    assert.deepEqual(tokenSpenders, ["test", "test:engine", "test:workbook", "eval:engine", "eval:workbook"]);
+    assert.deepEqual(dockerUsers, tokenSpenders);
+
+    for (const commandName of tokenSpenders) {
+      const notes = rootCommandContract(commandName).notes.join("\n");
+      assert.match(notes, /Main Tutor/);
+      assert.match(notes, /Judge/);
+    }
+  });
+
+  it("models eval:workbook as a wired direct module command, not a recursive package alias", () => {
+    const command = rootCommandContract("eval:workbook");
+
+    assert.equal(command.packageScript.status, "wired");
+    assert.equal(command.packageScript.command, "tsx evals/workbook/run.ts");
+    assert.deepEqual(
+      command.steps.map((step) => ({ implementation: step.implementation, module: step.module, shell: step.shell, forwardsArguments: step.forwardsArguments })),
+      [{ implementation: "root-module-command", module: "evals/workbook/run.ts", shell: "tsx evals/workbook/run.ts", forwardsArguments: true }]
+    );
+    assert.doesNotMatch(command.steps[0].shell, /npm run eval:workbook/);
+  });
+
+  it("records all planned package-script entries as wired to the exact local commands", async () => {
+    const root = await readPackageManifest();
+    const engine = await readEnginePackageManifest();
+    const validation = validatePackageScriptWiring({ root, engine });
+
+    assert.equal(validation.ok, true);
+    assert.deepEqual(validation.failures, []);
+
+    const report = packageScriptWiringReport({ root, engine });
+    assert.deepEqual(report.filter((entry) => entry.status !== "wired"), []);
+    const evalEngine = report.find((entry) => entry.packageName === "root" && entry.script === "eval:engine");
+    assert.deepEqual(evalEngine, {
+      packageName: "root",
+      workspace: undefined,
+      script: "eval:engine",
+      status: "wired",
+      expectedCommand: "npm run --workspace=tutorial-engine eval --",
+      actual: "npm run --workspace=tutorial-engine eval --",
+      present: true,
+      matchesExpectedCommand: true,
+      aligned: true
+    });
+
+    for (const [script, command] of [
+      ["check:eval:workbook", "tsc -p evals/workbook/tsconfig.json"],
+      ["test:eval:workbook", "vitest run evals/workbook/test/*.test.ts"]
+    ]) {
+      const entry = report.find((candidate) => candidate.packageName === "root" && candidate.script === script);
+      assert.equal(entry.status, "wired");
+      assert.equal(entry.expectedCommand, command);
+      assert.equal(entry.actual, command);
+      assert.equal(entry.aligned, true);
+    }
+
+    for (const [script, command] of [
+      ["test", "node scripts/run-local-tests.mjs test"],
+      ["test:fast", "node scripts/run-local-tests.mjs test:fast"],
+      ["test:engine", "node scripts/run-local-tests.mjs test:engine"],
+      ["test:engine:fast", "npm run --workspace=tutorial-engine test:fast --"],
+      ["test:workbook", "node scripts/run-local-tests.mjs test:workbook"],
+      ["test:workbook:fast", "node scripts/run-local-tests.mjs test:workbook:fast"]
+    ]) {
+      const entry = report.find((candidate) => candidate.packageName === "root" && candidate.script === script);
+      assert.equal(entry.status, "wired", `${script} should be wired`);
+      assert.equal(entry.expectedCommand, command);
+      assert.equal(entry.actual, command);
+      assert.equal(entry.aligned, true);
+    }
+
+    const evalWorkbook = report.find((entry) => entry.packageName === "root" && entry.script === "eval:workbook");
+    assert.equal(evalWorkbook.status, "wired");
+    assert.equal(evalWorkbook.expectedCommand, "tsx evals/workbook/run.ts");
+    assert.equal(evalWorkbook.actual, "tsx evals/workbook/run.ts");
+    assert.equal(evalWorkbook.aligned, true);
+
+    const engineFast = report.find((entry) => entry.packageName === "tutorial-engine" && entry.script === "test:fast");
+    assert.equal(engineFast.status, "wired");
+    assert.equal(engineFast.expectedCommand, "npm run lint && tsc --noEmit && tsc -p tsconfig.check.json && npm run check:eval && npm run test && npm run build:web:workbook && npm run browser:smoke");
+    assert.equal(engineFast.actual, engineFast.expectedCommand);
+    assert.equal(engineFast.aligned, true);
+  });
+
+  it("preserves npm run check as a compatibility command for the deterministic fast loop", () => {
+    assert.deepEqual(LOCAL_TEST_COMMAND_CONTRACT.compatibility.check, {
+      command: "check",
+      delegatesTo: "test:fast",
+      policy: "compatibility-alias",
+      deterministic: true,
+      modelFree: true,
+      spendsTokens: false,
+      requiresDocker: false,
+      requiresCanonicalDevcontainer: false,
+      notes: [
+        "Keep npm run check supported for existing docs and developer muscle memory.",
+        "Do not add eval:engine, eval:workbook, tutor, or judge calls to npm run check.",
+        "package.json makes check a direct alias of test:fast."
+      ]
+    });
   });
 });
 

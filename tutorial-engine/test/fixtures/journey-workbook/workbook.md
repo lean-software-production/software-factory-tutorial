@@ -1,9 +1,9 @@
 ---
 parts:
-  - id: linear-factory
+  - id: linear-ux
     lessons:
       - 001-linear-ux
 ---
-# Linear workbook UX factory
+# Linear workbook UX recorder
 
-This fixture exists so the workbook video factory can record a deterministic learner journey across narrative, editor, and terminal surfaces.
+This fixture exists so the workbook video recorder can record a deterministic learner journey across narrative, editor, and terminal surfaces.
