@@ -360,13 +360,25 @@ function EditorPracticeBlockView({ block, state, refresh }: { block: EditorPract
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const activeRef = useRef(false);
   const baseRevision = useRef(state?.revision ?? 0);
+  const currentBlockId = useRef(block.id);
+  const latestSubmittedRevision = useRef(0);
+  const refreshRef = useRef(refresh);
   const [localError, setLocalError] = useState<string>();
   const accepted = state?.checkpoint?.status === "accepted";
   const completed = Boolean(state?.completed || state?.editorStatus === "unlocked");
   const canEdit = Boolean(state?.active && !completed && !accepted);
   const initialText = state?.draftText ?? "";
 
-  useEffect(() => { baseRevision.current = state?.revision ?? baseRevision.current; }, [block.id, state?.revision]);
+  useEffect(() => { refreshRef.current = refresh; }, [refresh]);
+  useEffect(() => {
+    if (currentBlockId.current !== block.id) {
+      currentBlockId.current = block.id;
+      baseRevision.current = state?.revision ?? 0;
+      latestSubmittedRevision.current = 0;
+      return;
+    }
+    if (state?.revision !== undefined) baseRevision.current = Math.max(baseRevision.current, state.revision);
+  }, [block.id, state?.revision]);
   useEffect(() => { activeRef.current = canEdit; }, [canEdit]);
   // The editor is seeded once, when it opens. draftText changes on every server review, so making
   // the creation effect below depend on it would destroy and rebuild the view mid-typing and take
@@ -387,8 +399,16 @@ function EditorPracticeBlockView({ block, state, refresh }: { block: EditorPract
         if (!activeRef.current) return;
         const revision = baseRevision.current + 1;
         baseRevision.current = revision;
+        latestSubmittedRevision.current = revision;
+        const submittedBlockId = block.id;
         setLocalError(undefined);
-        postEditorDraft(block.id, revision, text).then(refresh).catch((error) => {
+        postEditorDraft(submittedBlockId, revision, text).then((next) => {
+          if (currentBlockId.current !== submittedBlockId || latestSubmittedRevision.current !== revision || baseRevision.current !== revision) return;
+          const nextBlockState = progressFor(next.progress, submittedBlockId);
+          if (nextBlockState?.revision !== undefined) baseRevision.current = Math.max(baseRevision.current, nextBlockState.revision);
+          refreshRef.current(next);
+        }).catch((error) => {
+          if (currentBlockId.current !== submittedBlockId || latestSubmittedRevision.current !== revision || baseRevision.current !== revision) return;
           console.error(error);
           setLocalError(error instanceof Error ? error.message : "Editor review failed. Keep editing and try again.");
         });
@@ -414,7 +434,7 @@ function EditorPracticeBlockView({ block, state, refresh }: { block: EditorPract
       view.destroy();
       if (editor.current === view) editor.current = null;
     };
-  }, [block.id, canEdit, refresh]);
+  }, [block.id, canEdit]);
 
   // One channel, as the terminal has: whatever the learner most needs to read sits welded to the
   // bottom of the work surface. Feedback outranks the running status, which outranks nothing.
