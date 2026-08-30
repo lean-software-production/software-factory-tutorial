@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { copyAuthoredWorkbookEvalTrace, enumerateAuthoredWorkbookEvalCitations, type AuthoredWorkbookEvalCitation, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
+import { copyAuthoredWorkbookEvalTrace, enumerateAuthoredWorkbookEvalJudgeCitations, projectAuthoredWorkbookEvalTraceForJudge, type AuthoredWorkbookEvalCitation, type AuthoredWorkbookEvalJudgeTrace, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
 
 export const AUTHORED_WORKBOOK_JUDGE_COMMAND_TIMEOUT_MS = 120_000;
 export const AUTHORED_WORKBOOK_JUDGE_PROMPT_MAX_BYTES = 1_048_576;
@@ -142,7 +142,7 @@ export function projectAuthoredWorkbookGateForPublicReport(gate: AuthoredWorkboo
   };
 }
 
-function valueForCitation(trace: AuthoredWorkbookEvalTrace, citation: AuthoredWorkbookEvalCitation): unknown {
+function valueForCitation(trace: AuthoredWorkbookEvalJudgeTrace, citation: AuthoredWorkbookEvalCitation): unknown {
   switch (citation.kind) {
     case "publicState": return trace.publicStates[citation.ref.index];
     case "terminalTranscript": return trace.terminalTranscript[citation.ref.index];
@@ -153,8 +153,8 @@ function valueForCitation(trace: AuthoredWorkbookEvalTrace, citation: AuthoredWo
   }
 }
 
-function citationsForPrompt(trace: AuthoredWorkbookEvalTrace): PromptCitation[] {
-  return enumerateAuthoredWorkbookEvalCitations(trace).map((citation) => ({ ...citation, value: valueForCitation(trace, citation) }));
+function citationsForPrompt(trace: AuthoredWorkbookEvalJudgeTrace): PromptCitation[] {
+  return enumerateAuthoredWorkbookEvalJudgeCitations(trace).map((citation) => ({ ...citation, value: valueForCitation(trace, citation) }));
 }
 
 function resultShapeForScenario(scenario: AuthoredWorkbookEvalScenarioPublicDescriptor): Record<string, AuthoredWorkbookEvalJudgeCriterionScore> {
@@ -165,14 +165,14 @@ function resultShapeForScenario(scenario: AuthoredWorkbookEvalScenarioPublicDesc
 
 export function buildAuthoredWorkbookJudgePrompt(scenarioInput: AuthoredWorkbookEvalScenarioPublicDescriptor, traceInput: AuthoredWorkbookEvalTrace, gateInput: AuthoredWorkbookEvalGateResult): string {
   const scenario = copyAuthoredWorkbookEvalScenarioPublicDescriptor(scenarioInput);
-  const trace = copyAuthoredWorkbookEvalTrace(traceInput);
+  const trace = projectAuthoredWorkbookEvalTraceForJudge(traceInput);
   const gate = projectAuthoredWorkbookGateForPublicReport(gateInput);
   const prompt = `You are a strict, stateless evaluator of one authored workbook tutoring session. Return JSON only. Use only the data in this prompt.
 
 Scenario-public descriptor. This descriptor was rebuilt by scenario code and intentionally contains only id, title, description, and scenario-authored public criteria. It does not contain lesson specs, tutor frontmatter, private rubrics, prerequisite internals, private steering, credentials, config, or disposable paths:
 ${JSON.stringify(scenario, null, 2)}
 
-Allowlisted public workbook trace:
+Allowlisted Judge-specific structural public workbook trace. Complete browser-public workbook states are compacted here for Judge/report use only; deterministic gates retain their complete state snapshots outside this prompt:
 ${JSON.stringify(trace, null, 2)}
 
 Trace citations. Each citation references one trace channel and includes the public value to inspect. Use citation ids in your result; do not invent ids:
@@ -335,13 +335,13 @@ export async function judgeAuthoredWorkbookTrace(options: {
 
 export function verifyAuthoredWorkbookJudgeResult(value: unknown, scenarioInput: AuthoredWorkbookEvalScenarioPublicDescriptor, traceInput: AuthoredWorkbookEvalTrace, options: { allowUncitedCriteria?: "deterministic-test" } = {}): AuthoredWorkbookEvalJudgeResult {
   const scenario = copyAuthoredWorkbookEvalScenarioPublicDescriptor(scenarioInput);
-  const trace = copyAuthoredWorkbookEvalTrace(traceInput);
+  const trace = projectAuthoredWorkbookEvalTraceForJudge(traceInput);
   if (!isPlainRecord(value)) throw new Error("Judge response is not an object.");
   assertExactKeys(value, ["criteria", "summary"], "judge response");
   if (!isPlainRecord(value.criteria)) throw new Error("Judge response has invalid criteria.");
   const expectedCriterionIds = scenario.criteria.map((criterion) => criterion.id);
   assertExactKeys(value.criteria, expectedCriterionIds, "judge criteria");
-  const validCitationIds = new Set(enumerateAuthoredWorkbookEvalCitations(trace).map((citation) => citation.id));
+  const validCitationIds = new Set(enumerateAuthoredWorkbookEvalJudgeCitations(trace).map((citation) => citation.id));
   const criteria: Record<string, AuthoredWorkbookEvalJudgeCriterionScore> = {};
   for (const id of expectedCriterionIds) {
     const rawScore = value.criteria[id];

@@ -1,4 +1,4 @@
-import type { PublicAttemptKind, PublicWorkbookState } from "../../tutorial-engine/src/workbook/public-contract.js";
+import type { PublicAttemptKind, PublicEditorStatus, PublicTerminal, PublicWorkbookState } from "../../tutorial-engine/src/workbook/public-contract.js";
 import type { WorkbookTimelineRecord } from "../../tutorial-engine/src/workbook/timeline.js";
 
 export const AUTHORED_WORKBOOK_EVAL_NAMESPACE = "root/workbook" as const;
@@ -20,6 +20,108 @@ export type { PublicWorkbookState } from "../../tutorial-engine/src/workbook/pub
 export interface AuthoredWorkbookEvalRecordedPublicState {
   label: string;
   state: PublicWorkbookState;
+}
+
+export interface AuthoredWorkbookEvalJudgeTextMetadata {
+  bytes: number;
+}
+
+export interface AuthoredWorkbookEvalJudgeTimelineMessage {
+  type: "message";
+  id: string;
+  sequence: number;
+  lessonId: string;
+  blockId: string;
+  role: "assistant" | "user";
+  source: "authored" | "learner" | "main_tutor";
+  presentation: "course" | "chat" | "review";
+  blockInView?: string;
+  text: AuthoredWorkbookEvalJudgeTextMetadata;
+}
+
+export interface AuthoredWorkbookEvalJudgeTutorFailure {
+  type: "tutor_failed";
+  id: string;
+  sequence: number;
+  lessonId: string;
+  blockId: string;
+  operation: string;
+  publicMessage: AuthoredWorkbookEvalJudgeTextMetadata;
+}
+
+export type AuthoredWorkbookEvalJudgeTimelineRecord = AuthoredWorkbookEvalJudgeTimelineMessage | AuthoredWorkbookEvalJudgeTutorFailure;
+
+export interface AuthoredWorkbookEvalJudgeBlockReference {
+  id: string;
+  anchorId?: string;
+  origin?: string;
+  kind?: string;
+  type?: string;
+  title?: string;
+  lessonId?: string;
+  declaredId?: string;
+  order?: number;
+  path?: string;
+  workAccepted?: boolean;
+}
+
+export interface AuthoredWorkbookEvalJudgeCheckpoint {
+  status: "working" | "reviewing" | "feedback" | "accepted";
+  feedback?: AuthoredWorkbookEvalJudgeTextMetadata;
+  successMessage?: AuthoredWorkbookEvalJudgeTextMetadata;
+  summary?: AuthoredWorkbookEvalJudgeTextMetadata;
+  evidence?: { kind: PublicAttemptKind; text?: AuthoredWorkbookEvalJudgeTextMetadata; conversationTurns?: number };
+}
+
+export interface AuthoredWorkbookEvalJudgeBlockProgress {
+  id: string;
+  type?: string;
+  anchorId?: string;
+  origin?: string;
+  kind?: string;
+  title?: string;
+  ready: boolean;
+  active: boolean;
+  completed: boolean;
+  completedAt?: string;
+  verified: boolean;
+  emerged: boolean;
+  workAccepted?: boolean;
+  checkpoint?: AuthoredWorkbookEvalJudgeCheckpoint;
+  terminal?: PublicTerminal;
+  terminalRevision?: number;
+  terminalSnapshot?: AuthoredWorkbookEvalJudgeTextMetadata;
+  revision?: number;
+  editorStatus?: PublicEditorStatus;
+}
+
+export interface AuthoredWorkbookEvalJudgePublicState {
+  workbook: { title: string };
+  introductionComplete: boolean;
+  active: { lessonId: string; blockId: string; anchorId?: string };
+  completedLessons: string[];
+  completedBlocks?: string[];
+  workAcceptedBlocks?: string[];
+  readyBlocks?: string[];
+  revealedBlockIds?: string[];
+  renderedBlockIds?: string[];
+  readyBlockIds?: string[];
+  currentBlock?: AuthoredWorkbookEvalJudgeBlockReference;
+  completion?: { complete: true; anchorId: string; summary?: AuthoredWorkbookEvalJudgeTextMetadata };
+  chapters: Array<{ id: string; title: string; partId?: string; part?: string; partNumber?: number; lessonNumber: number; lesson?: { id: string; title: string; durationMinutes: number; outcomes: string[]; blockCount: number; blocks: AuthoredWorkbookEvalJudgeBlockReference[] } }>;
+  orderedBlocks?: AuthoredWorkbookEvalJudgeBlockReference[];
+  progressBlocks: AuthoredWorkbookEvalJudgeBlockProgress[];
+  reflectionBlocks: string[];
+  reflectionConversations: Array<{ blockId: string; turns: number; roles: Array<"learner" | "tutor"> }>;
+  canComplete?: { blockId: string; eligible: boolean; reason?: string };
+  workbookComplete?: boolean;
+  adapter: { modelBackedHelp?: boolean; note?: AuthoredWorkbookEvalJudgeTextMetadata };
+  timelineNewRecords: AuthoredWorkbookEvalJudgeTimelineRecord[];
+}
+
+export interface AuthoredWorkbookEvalJudgeRecordedPublicState {
+  label: string;
+  state: AuthoredWorkbookEvalJudgePublicState;
 }
 
 export interface AuthoredWorkbookEvalTerminalTranscriptEntry {
@@ -89,7 +191,7 @@ export type AuthoredWorkbookEvalProgressionEvent =
   | { type: "editor_practice_unlocked"; lessonId: string; blockId: string; kind: "editor" }
   | { type: "lesson_transitioned"; lessonId: string; blockId: string };
 
-/** Serializable, browser-public trace allowed in judge prompts and eval reports. */
+/** Serializable, browser-public trace retained for deterministic gates before Judge/report compaction. */
 export interface AuthoredWorkbookEvalTrace {
   scenarioId: string;
   publicStates: AuthoredWorkbookEvalRecordedPublicState[];
@@ -98,6 +200,11 @@ export interface AuthoredWorkbookEvalTrace {
   editors: AuthoredWorkbookEvalPublicEditorEntry[];
   progressionEvents: AuthoredWorkbookEvalProgressionEvent[];
   artifacts: AuthoredWorkbookEvalArtifactSnapshot[];
+}
+
+/** Serializable structural trace shown to Judge and written to curated success reports. */
+export interface AuthoredWorkbookEvalJudgeTrace extends Omit<AuthoredWorkbookEvalTrace, "publicStates"> {
+  publicStates: AuthoredWorkbookEvalJudgeRecordedPublicState[];
 }
 
 export type AuthoredWorkbookEvalCitation =
