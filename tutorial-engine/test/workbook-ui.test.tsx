@@ -9,6 +9,15 @@ const terminalInstances: any[] = [];
 const terminalFitCalls: string[] = [];
 let terminalProposedDimensions: { cols: number; rows: number } | undefined = { cols: 80, rows: 24 };
 
+const confettiMock = vi.hoisted(() => {
+  const reset = vi.fn();
+  const cannon = Object.assign(vi.fn((_options?: any) => undefined), { reset });
+  const create = vi.fn((_canvas?: HTMLCanvasElement, _options?: any) => cannon);
+  return { cannon, create, reset };
+});
+
+vi.mock("canvas-confetti", () => ({ default: Object.assign(vi.fn(), { create: confettiMock.create }) }));
+
 vi.mock("@codemirror/state", () => ({
   EditorState: { create: (config: any) => config }
 }));
@@ -78,7 +87,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
-import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, TerminalHistory, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
+import { App, BlockView, ContinuationPageBreak, LessonCompletionConfetti, LessonRail, TerminalHistory, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
 
 const progress: Progress = {
   activeLessonId: "part/lesson-one",
@@ -182,6 +191,9 @@ afterEach(async () => {
   dom = undefined;
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  confettiMock.cannon.mockClear();
+  confettiMock.create.mockClear();
+  confettiMock.reset.mockClear();
   terminalDataListeners.splice(0);
   terminalInstances.splice(0);
   terminalFitCalls.splice(0);
@@ -1249,30 +1261,70 @@ describe("workbook lesson UI", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ blockId: "edit-answer", revision: 1, text: seed });
   });
 
-  it("shows one-second pointer-inert confetti only for new accepted keys and respects reduced motion", async () => {
-    vi.useFakeTimers();
-    const matchMedia = vi.fn((query: string) => ({ matches: false, media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() }));
-    vi.stubGlobal("matchMedia", matchMedia);
-    const container = await mount(createElement(AcceptanceConfetti, { acceptedKey: undefined }));
-    expect(container.querySelector(".acceptance-confetti")).toBeNull();
+  it("keeps the lesson-completion confetti canvas decorative and quiet for completed lessons present on mount", async () => {
+    const container = await mount(createElement(StrictMode, null, createElement(LessonCompletionConfetti, { completedLessonIds: ["part/lesson-one"] })));
 
-    await act(async () => { mountedRoot!.render(createElement(AcceptanceConfetti, { acceptedKey: "lesson/block/editor/1" })); });
-    const layer = container.querySelector<HTMLElement>(".acceptance-confetti");
-    expect(layer).not.toBeNull();
-    expect(layer!.getAttribute("aria-hidden")).toBe("true");
-    expect(layer!.style.pointerEvents).toBe("none");
+    const canvas = container.querySelector<HTMLCanvasElement>(".lesson-completion-confetti-canvas");
+    expect(canvas).not.toBeNull();
+    expect(canvas!.tagName).toBe("CANVAS");
+    expect(canvas!.getAttribute("aria-hidden")).toBe("true");
+    expect(canvas!.style.pointerEvents).toBe("none");
+    expect(confettiMock.create).toHaveBeenCalled();
+    expect(confettiMock.create.mock.calls.at(-1)![0]).toBe(canvas);
+    expect(confettiMock.create.mock.calls.at(-1)![1]).toMatchObject({ resize: true, disableForReducedMotion: true });
+    expect(confettiMock.cannon).not.toHaveBeenCalled();
+  });
 
-    await act(async () => { vi.advanceTimersByTime(999); });
-    expect(container.querySelector(".acceptance-confetti")).not.toBeNull();
-    await act(async () => { vi.advanceTimersByTime(1); });
-    expect(container.querySelector(".acceptance-confetti")).toBeNull();
+  it("fires one symmetric lower-corner burst for each newly completed lesson only once", async () => {
+    await mount(createElement(LessonCompletionConfetti, { completedLessonIds: [] }));
+    expect(confettiMock.cannon).not.toHaveBeenCalled();
 
-    await act(async () => { mountedRoot!.render(createElement(AcceptanceConfetti, { acceptedKey: "lesson/block/editor/1" })); });
-    expect(container.querySelector(".acceptance-confetti")).toBeNull();
+    await act(async () => { mountedRoot!.render(createElement(LessonCompletionConfetti, { completedLessonIds: ["part/lesson-one"] })); });
+    expect(confettiMock.cannon).toHaveBeenCalledTimes(2);
+    const firstLessonBurst = confettiMock.cannon.mock.calls.map(([options]) => options);
+    expect(firstLessonBurst).toEqual([
+      expect.objectContaining({ angle: 58, origin: { x: 0, y: 1 }, disableForReducedMotion: true }),
+      expect.objectContaining({ angle: 122, origin: { x: 1, y: 1 }, disableForReducedMotion: true }),
+    ]);
+    expect(firstLessonBurst.every((options) => !("colors" in options!))).toBe(true);
 
-    matchMedia.mockReturnValue({ matches: true, media: "(prefers-reduced-motion: reduce)", onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() });
-    await act(async () => { mountedRoot!.render(createElement(AcceptanceConfetti, { acceptedKey: "lesson/block/editor/2" })); });
-    expect(container.querySelector(".acceptance-confetti")).toBeNull();
+    await act(async () => { mountedRoot!.render(createElement(LessonCompletionConfetti, { completedLessonIds: ["part/lesson-one"] })); });
+    expect(confettiMock.cannon).toHaveBeenCalledTimes(2);
+
+    await act(async () => { mountedRoot!.render(createElement(LessonCompletionConfetti, { completedLessonIds: ["part/lesson-one", "part/lesson-two"] })); });
+    expect(confettiMock.cannon).toHaveBeenCalledTimes(4);
+    expect(confettiMock.cannon.mock.calls.slice(2).map(([options]) => options)).toEqual([
+      expect.objectContaining({ angle: 58, origin: { x: 0, y: 1 }, disableForReducedMotion: true }),
+      expect.objectContaining({ angle: 122, origin: { x: 1, y: 1 }, disableForReducedMotion: true }),
+    ]);
+
+    await act(async () => { mountedRoot!.render(createElement(LessonCompletionConfetti, { completedLessonIds: ["part/lesson-one", "part/lesson-two"] })); });
+    expect(confettiMock.cannon).toHaveBeenCalledTimes(4);
+
+    expect(confettiMock.reset).not.toHaveBeenCalled();
+    await act(async () => { mountedRoot!.unmount(); });
+    mountedRoot = undefined;
+    expect(confettiMock.reset).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire confetti for ordinary accepted block state", async () => {
+    const acceptedProgress: Progress = {
+      ...progress,
+      activeBlockId: "practice",
+      blocks: progress.blocks.map((block) => ({
+        ...block,
+        active: block.id === "practice",
+        ready: block.id === "practice",
+        emerged: block.id === "practice" ? true : block.emerged,
+        terminal: block.id === "practice" ? { phase: "complete", message: "Accepted." } : block.terminal,
+      })),
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => workbookState(acceptedProgress) })));
+
+    await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(confettiMock.cannon).not.toHaveBeenCalled();
   });
 
   it("debounces editor-practice edits and posts only the latest text at the next revision", async () => {
