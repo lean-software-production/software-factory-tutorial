@@ -28,6 +28,7 @@ vi.mock("@codemirror/view", () => {
   const flatten = (value: any): any[] => Array.isArray(value) ? value.flatMap(flatten) : [value];
   class EditorView {
     static updateListener = { of: (listener: (update: any) => void) => ({ [listenerMarker]: listener }) };
+    static editable = { of: (editable: boolean) => ({ editable }) };
     dom: HTMLElement;
     contentDOM: HTMLElement;
     #listeners: Array<(update: any) => void>;
@@ -2803,6 +2804,102 @@ describe("workbook lesson UI", () => {
     expect(container.textContent).toContain("Checking…");
     expect(container.querySelector(".practice-feedback-spinner")).not.toBeNull();
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
+  });
+
+  it("renders one fatal alert and keeps the active editor visible, read-only, and feedback-preserving", async () => {
+    const editorProgress = activeEditorProgress({
+      draftText: "current draft remains visible",
+      checkpoint: { status: "reviewing", feedback: "Keep the acceptance marker.", reviewNotice: "Updating feedback…", evidence: { kind: "editor", text: "current draft remains visible" } }
+    } as any);
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [editorBlock] } as any })],
+      progress: editorProgress,
+      adapter: {},
+      fatal: { kind: "tutor-infrastructure", message: "The AI tutor provider is unavailable. Fix or reconnect the provider, then restart this workbook to continue." },
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Edit the answer\n\nUpdate the file." }]
+    } as any;
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    const alerts = container.querySelectorAll('[role="alert"].workbook-fatal-notice');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.getAttribute("aria-label")).toBe("Workbook paused");
+    expect(alerts[0]?.textContent).toMatch(/workbook paused.*tutor unavailable.*reconnect.*restart/is);
+    expect(container.textContent).not.toMatch(/Retry review|>Retry</);
+    expect(container.querySelector('.current-activity-band[aria-disabled="true"]')).toBeTruthy();
+    expect(container.querySelector(".editor-live-surface")).toBeTruthy();
+    expect(container.querySelector('.cm-content[contenteditable="false"][aria-disabled="true"]')).toBeTruthy();
+    expect(container.textContent).toContain("current draft remains visible");
+    expect(container.textContent).toContain("Keep the acceptance marker.");
+    expect(container.textContent).not.toContain("Updating feedback…");
+    expect(container.querySelector(".practice-feedback-spinner")).toBeNull();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>(".timeline-input textarea")!;
+    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!;
+    expect(textarea.disabled).toBe(true);
+    expect(send.disabled).toBe(true);
+    textarea.value = "must not send";
+    await act(async () => {
+      textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+      send.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "POST")).toHaveLength(0);
+  });
+
+  it("keeps a fatal terminal visible while disabling input, insertion, and stale busy status", async () => {
+    class FakeWebSocket {
+      static CONNECTING = 0; static OPEN = 1; static CLOSED = 3;
+      readyState = FakeWebSocket.OPEN;
+      addEventListener() {} send = vi.fn(); close() { this.readyState = FakeWebSocket.CLOSED; }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const insertion = vi.fn();
+    const terminalBlock = lesson.blocks[1]!;
+    const container = await mount(createElement(BlockView, {
+      block: terminalBlock,
+      progress: activeBlockProgress(terminalBlock, { terminal: { phase: "checking" } } as any),
+      refresh: vi.fn(),
+      disabled: true,
+      onTerminalInsertionChange: insertion,
+    }), (win) => {
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.querySelector(".embedded-terminal-panel")).toBeTruthy();
+    expect(container.querySelector('.embedded-terminal[aria-disabled="true"][inert]')).toBeTruthy();
+    expect(terminalInstances.at(-1)?.options.disableStdin).toBe(true);
+    expect(insertion).not.toHaveBeenCalledWith(expect.any(Function));
+    expect(container.textContent).not.toContain("Checking…");
+    expect(container.querySelector(".practice-feedback-spinner")).toBeNull();
+  });
+
+  it("renders fatal continuation as disabled and never calls completion", async () => {
+    const state = {
+      workbook: { title: "Workbook" }, introduction: "Intro.", introductionComplete: true,
+      chapters: [chapter()], progress, adapter: {},
+      fatal: { kind: "tutor-infrastructure", message: "The AI tutor provider is unavailable. Fix or reconnect the provider, then restart this workbook to continue." },
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nRead carefully." }]
+    } as any;
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    const continueButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.startsWith("Continue"))!;
+    expect(continueButton).toBeTruthy();
+    expect(continueButton.disabled).toBe(true);
+    await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); await Promise.resolve(); });
+    expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "POST")).toHaveLength(0);
   });
 
   it.each([

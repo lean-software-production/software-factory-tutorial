@@ -322,7 +322,7 @@ export function TerminalHistory({ state }: { state: BlockProgress | undefined })
   </div>;
 }
 
-function TerminalBlock({ block, state, onTerminalInsertionChange }: { block: Block; state: BlockProgress | undefined; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChange }: { block: Block; state: BlockProgress | undefined; disabled?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
   const command = shellCommandFrom(block.markdown);
   const [display, dispatch] = useReducer(reduceTerminalCoachingDisplay, state, initialTerminalDisplay);
   const [terminalError, setTerminalError] = useState<string>();
@@ -335,15 +335,16 @@ function TerminalBlock({ block, state, onTerminalInsertionChange }: { block: Blo
   const complete = state?.terminal?.phase === "complete" || display.phase === "complete";
   const showLiveTerminal = !state?.completed && !complete;
   const preloading = Boolean(state?.ready && !state.active && !state.completed);
-  const text = terminalError ?? (display.phase === "idle" ? undefined : display.text);
-  const terminalBusy = display.phase === "running" || display.phase === "checking";
+  const lifecycleText = display.phase === "idle" || disabled && (display.phase === "running" || display.phase === "checking") ? undefined : display.text;
+  const text = terminalError ?? lifecycleText;
+  const terminalBusy = !disabled && (display.phase === "running" || display.phase === "checking");
   const terminalTone: PracticeFeedbackTone = terminalError ? "failure" : display.phase === "feedback" ? "feedback" : "status";
   // Exactly one in-place learner-facing node represents status, feedback, completion, or a
   // transport error. It is never moved into the activity/timeline portal.
   const displayPanel = text ? <PracticeFeedbackBar tone={terminalTone} busy={terminalBusy} status={terminalBusy ? text : undefined} markdown={terminalBusy ? undefined : text} className="live-block-feedback terminal-feedback-overlay" /> : null;
-  return <div className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
+  return <div className={`work-block terminal ${state?.active ? "is-active" : ""}`} aria-disabled={disabled ? "true" : undefined}>
     {showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
-      <EmbeddedTerminal command={command} active={Boolean(state?.active)} onError={setTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} />
+      <EmbeddedTerminal command={command} active={Boolean(state?.active && !disabled)} onError={setTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} />
       {displayPanel}
     </div>}
     {!showLiveTerminal && !complete && displayPanel}
@@ -362,6 +363,16 @@ function editorStatusText(state: BlockProgress | undefined, completed: boolean):
 
 function editorProgressIn(next: State, blockId: string): BlockProgress | undefined { return next.progress.blocks.find((block) => block.id === blockId); }
 
+function setEditorInteractivity(view: EditorView | null, element: HTMLDivElement | null, interactive: boolean) {
+  element?.toggleAttribute("aria-disabled", !interactive);
+  const content = view?.contentDOM;
+  if (!content) return;
+  content.setAttribute("contenteditable", interactive ? "true" : "false");
+  content.setAttribute("aria-disabled", interactive ? "false" : "true");
+  if (interactive) content.removeAttribute("tabindex");
+  else content.setAttribute("tabindex", "-1");
+}
+
 type EditorLocalRevisionHandler = (blockId: string, revision: number) => void;
 
 function stateLagsLocalEditorRevision(next: State, localRevisions: ReadonlyMap<string, number>): boolean {
@@ -379,7 +390,7 @@ function clearSatisfiedLocalEditorRevisions(next: State, localRevisions: Map<str
   }
 }
 
-function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void; onLocalRevision?: EditorLocalRevisionHandler }) {
+function EditorPracticeBlockView({ block, state, refresh, disabled = false, onLocalRevision }: { block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void; disabled?: boolean; onLocalRevision?: EditorLocalRevisionHandler }) {
   const editorElement = useRef<HTMLDivElement | null>(null);
   const editor = useRef<EditorView | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -394,7 +405,8 @@ function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { b
   const [retainedFeedback, setRetainedFeedback] = useState<string | undefined>(state?.checkpoint?.feedback);
   const accepted = state?.checkpoint?.status === "accepted";
   const completed = Boolean(state?.completed || state?.editorStatus === "unlocked");
-  const canEdit = Boolean(state?.active && !completed && !accepted);
+  const lifecycleCanEdit = Boolean(state?.active && !completed && !accepted);
+  const canEdit = lifecycleCanEdit && !disabled;
   const initialText = state?.draftText ?? "";
 
   useLayoutEffect(() => { refreshRef.current = refresh; }, [refresh]);
@@ -434,8 +446,8 @@ function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { b
   useEffect(() => { initialTextRef.current = initialText; }, [initialText]);
 
   useEffect(() => {
-    if (!canEdit || !editorElement.current) return;
-    activeRef.current = true;
+    if (!lifecycleCanEdit || !editorElement.current) return;
+    activeRef.current = canEdit;
     const parent = editorElement.current;
     const scheduleReview = (text: string) => {
       if (!activeRef.current) return;
@@ -472,14 +484,16 @@ function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { b
         doc: initialTextRef.current,
         extensions: [
           keymap.of(defaultKeymap),
-          EditorView.updateListener.of((update) => { if (update.docChanged) scheduleReview(update.state.doc.toString()); })
+          EditorView.editable.of(canEdit),
+          EditorView.updateListener.of((update) => { if (update.docChanged && activeRef.current) scheduleReview(update.state.doc.toString()); })
         ]
       }),
       parent
     });
     editor.current = view;
     const seededDraft = initialTextRef.current;
-    if (baseRevision.current === 0 && seededDraft.trim()) scheduleReview(seededDraft);
+    setEditorInteractivity(view, editorElement.current, canEdit);
+    if (canEdit && baseRevision.current === 0 && seededDraft.trim()) scheduleReview(seededDraft);
     return () => {
       activeRef.current = false;
       if (timer.current) clearTimeout(timer.current);
@@ -487,7 +501,7 @@ function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { b
       view.destroy();
       if (editor.current === view) editor.current = null;
     };
-  }, [block.id, canEdit, onLocalRevision]);
+  }, [block.id, canEdit, lifecycleCanEdit, onLocalRevision]);
 
   // One channel, as the terminal has: whatever the learner most needs to read sits welded to the
   // bottom of the work surface. Prior actionable feedback stays in place during replacement review;
@@ -495,25 +509,25 @@ function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { b
   const checkpointFeedback = state?.checkpoint?.feedback;
   const showingRetainedFeedback = Boolean(checkpointFeedback || retainedFeedback && (state?.checkpoint?.status === "reviewing" || localError));
   const liveFeedback = showingRetainedFeedback ? checkpointFeedback ?? retainedFeedback : undefined;
-  const reviewNotice = localError ?? state?.checkpoint?.reviewNotice ?? (liveFeedback && state?.checkpoint?.status === "reviewing" ? "Updating feedback…" : undefined);
-  const liveStatus = liveFeedback ? reviewNotice : editorStatusText(state, completed);
-  const editorBusy = state?.checkpoint?.status === "reviewing";
+  const reviewNotice = disabled ? localError : localError ?? state?.checkpoint?.reviewNotice ?? (liveFeedback && state?.checkpoint?.status === "reviewing" ? "Updating feedback…" : undefined);
+  const liveStatus = liveFeedback ? reviewNotice : disabled ? undefined : editorStatusText(state, completed);
+  const editorBusy = !disabled && state?.checkpoint?.status === "reviewing";
   const editorTone: PracticeFeedbackTone = localError ? "failure" : editorBusy && liveFeedback ? "updating" : liveFeedback ? "feedback" : "status";
-  return <div className={`work-block editor-practice ${state?.active ? "is-active" : ""}`}>
+  return <div className={`work-block editor-practice ${state?.active ? "is-active" : ""}`} aria-disabled={disabled ? "true" : undefined}>
     <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
-    {canEdit && <div className={`editor-live-surface${liveFeedback || liveStatus ? " has-feedback" : ""}`}>
-      <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />
+    {lifecycleCanEdit && <div className={`editor-live-surface${liveFeedback || liveStatus ? " has-feedback" : ""}`}>
+      <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} aria-disabled={disabled ? "true" : undefined} />
       {(liveFeedback || liveStatus) && <PracticeFeedbackBar tone={editorTone} busy={editorBusy} markdown={liveFeedback} status={liveStatus} className="live-block-feedback editor-feedback-overlay" />}
     </div>}
-    {completed ? <PracticeFeedbackBar tone="success" label="Unlocked" title="Accepted revision unlocked the next step." markdown={state?.checkpoint?.successMessage || "The latest accepted editor draft was written to the target file."} className="success-checkpoint editor-unlocked" /> : !canEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
+    {completed ? <PracticeFeedbackBar tone="success" label="Unlocked" title="Accepted revision unlocked the next step." markdown={state?.checkpoint?.successMessage || "The latest accepted editor draft was written to the target file."} className="success-checkpoint editor-unlocked" /> : !lifecycleCanEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
   </div>;
 }
 
-export function BlockView({ lessonId, block, progress, refresh, onTerminalInsertionChange, onEditorLocalRevision }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onEditorLocalRevision?: EditorLocalRevisionHandler }) {
+export function BlockView({ lessonId, block, progress, refresh, disabled = false, onTerminalInsertionChange, onEditorLocalRevision }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; disabled?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onEditorLocalRevision?: EditorLocalRevisionHandler }) {
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
-  if (block.type === "terminal-practice") return <TerminalBlock block={block} state={state} onTerminalInsertionChange={onTerminalInsertionChange} />;
-  if (block.type === "editor-practice") return <EditorPracticeBlockView key={block.id} block={block} state={state} refresh={refresh} onLocalRevision={onEditorLocalRevision} />;
+  if (block.type === "terminal-practice") return <TerminalBlock block={block} state={state} disabled={disabled} onTerminalInsertionChange={onTerminalInsertionChange} />;
+  if (block.type === "editor-practice") return <EditorPracticeBlockView key={block.id} block={block} state={state} refresh={refresh} disabled={disabled} onLocalRevision={onEditorLocalRevision} />;
   return null;
 }
 
@@ -698,9 +712,9 @@ function CompletionPanel({ state }: { state: State }) {
 }
 
 function FatalTutorNotice({ state }: { state: NonNullable<State["fatal"]> }) {
-  return <aside className="workbook-fatal-notice" role="alert" aria-live="assertive" aria-atomic="true">
-    <b>Tutor unavailable</b>
-    <p>{state.message}</p>
+  return <aside className="workbook-fatal-notice" role="alert" aria-live="assertive" aria-atomic="true" aria-label="Workbook paused">
+    <span className="workbook-fatal-icon" aria-hidden="true">!</span>
+    <div><p className="workbook-fatal-eyebrow">Workbook paused</p><h2>Tutor unavailable</h2><p>{state.message}</p></div>
   </aside>;
 }
 
@@ -837,7 +851,7 @@ export function App() {
   const viewedLesson = viewed ?? state.progress.activeLessonId;
   const activeChapter = state.chapters.find((chapter): chapter is Chapter & { lesson: Lesson } => chapter.id === state.progress.activeLessonId && Boolean(chapter.lesson));
   const activeBlock = activeChapter?.lesson.blocks.find((block) => block.id === state.progress.activeBlockId);
-  const activitySource = mutationsDisabled ? undefined : practiceSurfaceSource(state);
+  const activitySource = practiceSurfaceSource(state);
   const activeBlockProgress = state.progress.blocks.find((block) => block.id === state.progress.activeBlockId);
   const effectiveActiveLessonId = state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeLessonId : INTRODUCTION_LESSON_ID;
   const effectiveActiveBlockId = state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID;
@@ -870,13 +884,13 @@ export function App() {
     if (!recordIsActive && blockProgress?.completed) return <ContinuationPageBreak completedAt={blockProgress.completedAt} />;
     return null;
   };
-  return <div className="shell">
+  return <div className={`shell${mutationsDisabled ? " has-fatal-tutor-state" : ""}`}>
     {contentReloadError && <aside className="author-reload-notice" aria-live="polite"><b>Author reload failed.</b> {contentReloadError}</aside>}
     {fatal && <FatalTutorNotice state={fatal} />}
     <LessonCompletionConfetti completedLessonIds={state.progress.completedLessons} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
-      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onDoItForMe={!mutationsDisabled && terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} renderTerminalHistory={(record) => <TerminalHistory state={state.progress.blocks.find((block) => block.id === record.blockId)} />} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand key={activitySource.block.id} lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={applyWorkbookState} onTerminalInsertionChange={registerTerminalInsertion} onEditorLocalRevision={rememberEditorLocalRevision} /> : undefined} completionPanel={<CompletionPanel state={state} />} />
+      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onDoItForMe={!mutationsDisabled && terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} renderTerminalHistory={(record) => <TerminalHistory state={state.progress.blocks.find((block) => block.id === record.blockId)} />} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand key={activitySource.block.id} lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={applyWorkbookState} disabled={mutationsDisabled} onTerminalInsertionChange={registerTerminalInsertion} onEditorLocalRevision={rememberEditorLocalRevision} /> : undefined} completionPanel={<CompletionPanel state={state} />} />
     </article></main>
   </div>;
 }

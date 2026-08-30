@@ -1588,12 +1588,49 @@ p {
 .workbook-fatal-notice {
   top: 24px;
   bottom: auto;
-  border-color: #bf6b5a;
+  z-index: 50;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  width: min(560px, calc(100vw - 48px));
+  max-width: none;
+  padding: 18px 20px;
+  border-width: 2px;
+  border-color: #a94b39;
   background: #fff2ee;
   color: #5e271b;
+  box-shadow: 0 16px 44px rgb(94 39 27 / 0.24);
 }
-.workbook-fatal-notice p {
-  margin: 4px 0 0;
+.workbook-fatal-icon {
+  display: grid;
+  flex: 0 0 30px;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: #a94b39;
+  color: #fff;
+  font-weight: 800;
+}
+.workbook-fatal-eyebrow {
+  margin: 0 0 2px;
+  color: #873a2b;
+  font: 700 0.72rem/1 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.workbook-fatal-notice h2 {
+  margin: 0;
+  font: 700 1.15rem/1.25 var(--font-display);
+}
+.workbook-fatal-notice p:not(.workbook-fatal-eyebrow) {
+  margin: 5px 0 0;
+  font-size: 0.96rem;
+}
+.has-fatal-tutor-state .current-activity-band[aria-disabled="true"] .editor-surface,
+.has-fatal-tutor-state .current-activity-band[aria-disabled="true"] .embedded-terminal {
+  cursor: not-allowed;
+  filter: saturate(0.65);
 }
 .current-activity-band {
   --activity-expand: 0;
