@@ -30,7 +30,7 @@ function editorFeedbackTrace(): V2SessionTrace {
         activeLessonId: lessonId,
         activeBlockId: "editor-practice",
         completedLessons: [],
-        blocks: [{ id: "editor-practice", type: "editor-practice", active: true, completed: false, editorStatus: "feedback", revision: 1, feedback: "Name editor-artifacts/evaluator-editor.txt and explain the promotion intent." }]
+        blocks: [{ id: "editor-practice", type: "editor-practice", active: true, completed: false, editorStatus: "feedback", revision: 1, checkpoint: { status: "feedback", feedback: "Name editor-artifacts/evaluator-editor.txt and explain the promotion intent.", evidence: { kind: "editor", text: "This is a vague draft." } } }]
       },
       chapters: [{ lesson: { blocks: [{ id: "editor-practice", type: "editor-practice", markdown: "Write a short draft for `editor-artifacts/evaluator-editor.txt`." }] } }]
     }
@@ -161,6 +161,14 @@ describe("v2 live evaluator scenarios", () => {
     const trace = editorFeedbackTrace();
     allGateAssertionsPass(trace);
 
+    const topLevelOnlyFeedback = editorFeedbackTrace();
+    const topLevelOnlyBlock = (topLevelOnlyFeedback.publicStates[1]!.state as any).progress.blocks[0];
+    const feedback = topLevelOnlyBlock.checkpoint.feedback;
+    delete topLevelOnlyBlock.checkpoint;
+    topLevelOnlyBlock.feedback = feedback;
+    const topLevelOnlyFailed = deterministicV2Gate(findV2Scenario(topLevelOnlyFeedback.scenarioId), topLevelOnlyFeedback);
+    expect(topLevelOnlyFailed.assertions.find((assertion) => assertion.name === "editor feedback visible")?.passed).toBe(false);
+
     const missingFeedback = baseTrace("v2-editor-feedback-locked");
     const failed = deterministicV2Gate(findV2Scenario(missingFeedback.scenarioId), missingFeedback);
     expect(failed.assertions.find((assertion) => assertion.name === "editor feedback visible")?.passed).toBe(false);
@@ -181,7 +189,7 @@ describe("v2 live evaluator scenarios", () => {
     expect(statusOnlyFailed.assertions.find((assertion) => assertion.name === "editor feedback visible")?.passed).toBe(false);
 
     const publicVocabulary = editorFeedbackTrace();
-    (publicVocabulary.publicStates[1]!.state as any).progress.blocks[0].feedback = "Private editor criterion can appear as public learner-visible prose; terminal-command-submitted and Coach handoff can too.";
+    (publicVocabulary.publicStates[1]!.state as any).progress.blocks[0].checkpoint.feedback = "Private editor criterion can appear as public learner-visible prose; terminal-command-submitted and Coach handoff can too.";
     const vocabularyGate = deterministicV2Gate(findV2Scenario(publicVocabulary.scenarioId), publicVocabulary);
     expect(vocabularyGate.assertions.find((assertion) => assertion.name === "checked trace uses projected judge structure")?.passed).toBe(true);
   });
