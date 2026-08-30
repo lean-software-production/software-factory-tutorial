@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseFrontMatter } from "../../tutorial-engine/src/workbook/load.js";
 import { SessionWorkspaceManager, type CreateTutorialSessionOptions, type TutorialSessionPaths } from "../../tutorial-engine/src/session-workspace.js";
 import { startWorkbookServer, type StartedWorkbookServer, type WorkbookServerOptions } from "../../tutorial-engine/src/workbook/server.js";
@@ -23,6 +23,16 @@ export interface AuthoredCurriculumPartSelection {
 
 export interface AuthoredCurriculumSliceSelection {
   parts: readonly AuthoredCurriculumPartSelection[];
+}
+
+export interface AuthoredCurriculumPrerequisiteOverlay {
+  id: string;
+  /** Absolute or repository-relative root under evals/workbook/prerequisites/<id>. */
+  sourceRoot: string;
+  /** Authored workspace id whose fresh disposable template receives the overlay. */
+  workspaceId: string;
+  /** Exact workspace-relative files copied from sourceRoot. Directories are derived and never recursed beyond this manifest. */
+  files: readonly string[];
 }
 
 export interface AuthoredSliceProvenanceRoot {
@@ -68,11 +78,25 @@ export interface AuthoredSliceProvenance {
   files: AuthoredSliceProvenanceFile[];
 }
 
+export interface AuthoredCurriculumSliceSessionCapability {
+  kind: "authored-curriculum-slice-session-capability";
+  /** Absolute disposable evaluator repository root. */
+  repositoryRoot: string;
+  /** Absolute disposable materialized curriculum root. */
+  contentRoot: string;
+  /** Absolute immutable authored source tutorial root. */
+  sourceTutorialRoot: string;
+  /** Absolute learner workspace roots created for this single normal session. */
+  learnerWorkspaceRoots: readonly string[];
+}
+
 export interface AuthoredEvaluatorPrerequisiteContext {
   /** Disposable content root that the workbook server will load. Do not write curriculum here. */
   contentRoot: string;
   /** Fresh normal tutorial session created for this server start. */
   session: TutorialSessionPaths;
+  /** Verified disposable authored-slice/session capability required by prerequisite materializers. */
+  capability: AuthoredCurriculumSliceSessionCapability;
 }
 
 export interface AuthoredEvaluatorPrerequisite {
@@ -104,6 +128,8 @@ export interface CreateAuthoredCurriculumSliceWorkspaceOptions {
   prerequisites?: readonly AuthoredEvaluatorPrerequisite[];
   /** Test seam only: production authored slices use the repository root node_modules runtime provision. */
   runtimeProvision?: RuntimeProvisionInput;
+  /** Evaluator-owned prerequisite files copied into fresh disposable workspace templates during slice materialization. */
+  prerequisiteOverlays?: readonly AuthoredCurriculumPrerequisiteOverlay[];
   dependencies?: AuthoredCurriculumSliceWorkspaceDependencies;
 }
 
@@ -160,6 +186,9 @@ const derivedWorkbookNote = "front matter narrowed to selected authored parts an
 const derivedPartOrdinalNote = "part heading ordinal adjusted so the isolated slice satisfies the workbook loader invariant";
 const derivedLessonBlocksNote = "lesson front matter narrowed to selected authored blocks";
 const generatedOrSessionEntryNames = new Set([".tmp", ".tutorial", "node_modules", ".git", ".DS_Store"]);
+const defaultPrerequisiteRoot = resolve(import.meta.dirname, "prerequisites");
+const maxPrerequisiteOverlayFiles = 64;
+const maxPrerequisiteOverlayBytes = 1024 * 1024;
 
 export function trustedAuthoredSliceRuntimeProvision(repositoryRoot = defaultRepositoryRoot): TrustedRuntimeProvision {
   return trustRuntimeProvision({ mounts: [{ source: resolve(repositoryRoot, "node_modules"), target: "node_modules", readonly: true }] });
@@ -592,7 +621,7 @@ function skipGeneratedOrSessionEntry(name: string): boolean {
   return generatedOrSessionEntryNames.has(name);
 }
 
-async function copyDirectoryTree(sourceTutorialRoot: string, materializedRoot: string, sourceRelativeRoot: string, recorder: ProvenanceRecorder, manifest: SourceValidationManifest, dependencies?: AuthoredCurriculumSliceWorkspaceDependencies): Promise<void> {
+async function copyDirectoryTree(sourceTutorialRoot: string, materializedRoot: string, sourceRelativeRoot: string, recorder: ProvenanceRecorder, manifest: SourceValidationManifest, dependencies?: AuthoredCurriculumSliceWorkspaceDependencies, skipFiles: ReadonlySet<string> = new Set()): Promise<void> {
   requireManifestDirectory(manifest, sourceRelativeRoot);
   async function visit(relativeRoot: string): Promise<void> {
     const sourceRoot = (await requireSourceEntry(sourceTutorialRoot, relativeRoot, "directory")).path;
@@ -605,11 +634,128 @@ async function copyDirectoryTree(sourceTutorialRoot: string, materializedRoot: s
       const info = await lstat(source);
       if (info.isSymbolicLink()) throw new Error(`Refusing symlinked authored workspace entry: ${relativePath}`);
       if (info.isDirectory()) await visit(relativePath);
-      else if (info.isFile()) await copySourceFile(sourceTutorialRoot, materializedRoot, relativePath, recorder, manifest, dependencies);
-      else throw new Error(`Refusing to copy unsupported authored workspace entry: ${relativePath}`);
+      else if (info.isFile()) {
+        if (skipFiles.has(relativePath)) continue;
+        await copySourceFile(sourceTutorialRoot, materializedRoot, relativePath, recorder, manifest, dependencies);
+      } else throw new Error(`Refusing to copy unsupported authored workspace entry: ${relativePath}`);
     }
   }
   await visit(sourceRelativeRoot);
+}
+
+function overlayDestinationKey(workspaceId: string, file: string): string {
+  return `workspaces/${workspaceId}/${file}`;
+}
+
+function safeOverlayRelativeFile(value: string, context: string): string {
+  if (typeof value !== "string" || value.length === 0 || value.includes("\0") || value.includes("\\") || isAbsolute(value)) throw new Error(`${context} must be a safe relative file path.`);
+  const normalized = value.split("/").filter(Boolean).join("/");
+  if (normalized !== value || normalized === "." || normalized.split("/").some((part) => part === ".." || generatedOrSessionEntryNames.has(part))) throw new Error(`${context} must be a safe relative file path.`);
+  return normalized;
+}
+
+function overlayDirectoriesFor(files: readonly string[]): string[] {
+  const directories = new Set<string>();
+  for (const file of files) {
+    let current = dirname(file).split(sep).join("/");
+    while (current && current !== ".") {
+      directories.add(current);
+      current = dirname(current).split(sep).join("/");
+    }
+  }
+  return [...directories].sort((left, right) => left.length - right.length || left.localeCompare(right));
+}
+
+async function assertOverlaySourceTreeExact(root: string, files: ReadonlySet<string>, directories: ReadonlySet<string>): Promise<void> {
+  async function visit(directory: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const absolute = resolve(directory, entry.name);
+      const relativePath = unixRelative(root, absolute);
+      if (relativePath.split("/").some((part) => generatedOrSessionEntryNames.has(part))) throw new Error(`Prerequisite overlay contains generated state: ${relativePath}`);
+      const info = await lstat(absolute);
+      if (info.isSymbolicLink()) throw new Error(`Prerequisite overlay contains a symlink: ${relativePath}`);
+      if (info.isDirectory()) {
+        if (!directories.has(relativePath)) throw new Error(`Prerequisite overlay contains an unmanifested directory: ${relativePath}`);
+        await visit(absolute);
+      } else if (info.isFile()) {
+        if (!files.has(relativePath)) throw new Error(`Prerequisite overlay contains an unmanifested file: ${relativePath}`);
+        if (info.nlink !== 1) throw new Error(`Prerequisite overlay contains a hardlinked file: ${relativePath}`);
+      } else {
+        throw new Error(`Prerequisite overlay contains an unsupported entry: ${relativePath}`);
+      }
+    }
+  }
+  await visit(root);
+}
+
+async function capturePrerequisiteOverlayManifest(root: string, files: readonly string[], directories: readonly string[]): Promise<SourceValidationManifest> {
+  const manifest: SourceValidationManifest = new Map();
+  await captureSourceDirectory(root, ".", manifest);
+  for (const directory of directories) {
+    const identity = await captureSourceDirectory(root, directory, manifest);
+    if (identity.mode !== "0755") throw new Error(`Prerequisite overlay directory mode must be normalized to 0755: ${directory}`);
+  }
+  for (const file of files) {
+    const identity = await captureSourceFile(root, file, manifest);
+    if (identity.size > maxPrerequisiteOverlayBytes) throw new Error(`Prerequisite overlay file is too large: ${file}`);
+    if (identity.mode !== "0644" && identity.mode !== "0755") throw new Error(`Prerequisite overlay file mode must be normalized to 0644 or 0755: ${file}`);
+  }
+  return manifest;
+}
+
+async function materializePrerequisiteOverlays(input: { overlays: readonly AuthoredCurriculumPrerequisiteOverlay[] | undefined; selectedWorkspaces: ReadonlySet<string>; sourceTutorialRoot: string; materializedRoot: string; recorder: ProvenanceRecorder; dependencies?: AuthoredCurriculumSliceWorkspaceDependencies }): Promise<Set<string>> {
+  const skipSourceFiles = new Set<string>();
+  if (!input.overlays?.length) return skipSourceFiles;
+  const canonicalPrerequisiteRoot = await assertDirectory(defaultPrerequisiteRoot, "Canonical authored prerequisite root");
+  const seenDestinations = new Set<string>();
+  for (const overlay of input.overlays) {
+    if (!overlay || typeof overlay.id !== "string" || !workbookIdPattern.test(overlay.id)) throw new Error("Prerequisite overlay id is malformed.");
+    if (!input.selectedWorkspaces.has(overlay.workspaceId)) throw new Error(`Prerequisite overlay '${overlay.id}' targets an unselected authored workspace.`);
+    if (!Array.isArray(overlay.files) || overlay.files.length === 0 || overlay.files.length > maxPrerequisiteOverlayFiles) throw new Error(`Prerequisite overlay '${overlay.id}' has an invalid file manifest.`);
+    const sourceRoot = resolve(overlay.sourceRoot);
+    const sourceRootReal = await assertDirectory(sourceRoot, `Prerequisite overlay '${overlay.id}' source root`);
+    if (sourceRootReal !== sourceRoot) throw new Error(`Prerequisite overlay '${overlay.id}' source root must not be a symlink or alias.`);
+    if (!inside(canonicalPrerequisiteRoot, sourceRootReal)) throw new Error(`Prerequisite overlay '${overlay.id}' source must be under evals/workbook/prerequisites.`);
+    if (inside(input.sourceTutorialRoot, sourceRootReal) || inside(sourceRootReal, input.sourceTutorialRoot) || inside(input.materializedRoot, sourceRootReal) || inside(sourceRootReal, input.materializedRoot)) throw new Error(`Prerequisite overlay '${overlay.id}' source overlaps authored or disposable curriculum roots.`);
+
+    const files = overlay.files.map((file) => safeOverlayRelativeFile(file, `Prerequisite overlay '${overlay.id}' file`));
+    if (new Set(files).size !== files.length) throw new Error(`Prerequisite overlay '${overlay.id}' has duplicate file destinations.`);
+    const directories = overlayDirectoriesFor(files);
+    await assertOverlaySourceTreeExact(sourceRootReal, new Set(files), new Set(directories));
+    const manifest = await capturePrerequisiteOverlayManifest(sourceRootReal, files, directories);
+
+    for (const file of files) {
+      const destinationKey = overlayDestinationKey(overlay.workspaceId, file);
+      if (seenDestinations.has(destinationKey)) throw new Error(`Prerequisite overlay destination is declared more than once: ${destinationKey}`);
+      seenDestinations.add(destinationKey);
+      skipSourceFiles.add(destinationKey);
+    }
+
+    for (const directory of directories) {
+      const destinationRelative = overlayDestinationKey(overlay.workspaceId, directory);
+      const destination = resolve(input.materializedRoot, destinationRelative);
+      if (!inside(input.materializedRoot, destination)) throw new Error(`Prerequisite overlay directory escaped the disposable curriculum: ${destinationRelative}`);
+      const sourceIdentity = requireManifestDirectory(manifest, directory);
+      await mkdir(destination, { recursive: true });
+      await chmod(destination, 0o755);
+      const destinationInfo = await lstat(destination);
+      if (destinationInfo.isSymbolicLink() || !destinationInfo.isDirectory()) throw new Error(`Prerequisite overlay destination directory is unsafe: ${destinationRelative}`);
+      await recordDirectoryProvenance({ sourceRelativePath: `${overlay.id}/${directory}`, materializedRoot: input.materializedRoot, destination, sourceIdentity, exact: true, recorder: input.recorder, note: `evaluator prerequisite overlay '${overlay.id}'` });
+    }
+    for (const file of files) {
+      const source = await readStableRegularFile({ root: sourceRootReal, relativePath: file, expected: requireManifestFile(manifest, file), beforeOpen: input.dependencies?.beforeSourceFileOpen, labelPrefix: `Prerequisite overlay '${overlay.id}'` });
+      const destinationRelative = overlayDestinationKey(overlay.workspaceId, file);
+      const destination = resolve(input.materializedRoot, destinationRelative);
+      if (!inside(input.materializedRoot, destination)) throw new Error(`Prerequisite overlay destination escaped the disposable curriculum: ${destinationRelative}`);
+      await mkdir(dirname(destination), { recursive: true });
+      const materializedIdentity = await writeFreshRegularFile(destination, source.data, source.identity.mode);
+      await recordFileProvenance({ sourceRelativePath: `${overlay.id}/${file}`, materializedRoot: input.materializedRoot, destination, sourceIdentity: source.identity, materializedIdentity, exact: true, recorder: input.recorder, note: `evaluator prerequisite overlay '${overlay.id}'` });
+    }
+
+    const after = await capturePrerequisiteOverlayManifest(sourceRootReal, files, directories);
+    if (JSON.stringify([...manifest.entries()]) !== JSON.stringify([...after.entries()])) throw new Error(`Prerequisite overlay '${overlay.id}' source changed during materialization.`);
+  }
+  return skipSourceFiles;
 }
 
 function manifestEntries(manifest: StructuralManifest): [string, string][] {
@@ -733,7 +879,8 @@ async function materializeSlice(options: CreateAuthoredCurriculumSliceWorkspaceO
     }
   }
 
-  for (const workspaceId of [...selectedWorkspaces].sort()) await copyDirectoryTree(sourceTutorialRoot, root, `workspaces/${workspaceId}`, recorder, sourceManifest, options.dependencies);
+  const overlaySourceSkips = await materializePrerequisiteOverlays({ overlays: options.prerequisiteOverlays, selectedWorkspaces, sourceTutorialRoot, materializedRoot: root, recorder, dependencies: options.dependencies });
+  for (const workspaceId of [...selectedWorkspaces].sort()) await copyDirectoryTree(sourceTutorialRoot, root, `workspaces/${workspaceId}`, recorder, sourceManifest, options.dependencies, overlaySourceSkips);
 
   const entries = recorder.entries.sort((left, right) => left.materializedRelativePath.localeCompare(right.materializedRelativePath) || left.kind.localeCompare(right.kind));
   return {
@@ -829,10 +976,17 @@ export async function createAuthoredCurriculumSliceWorkspace(options: CreateAuth
           throw error;
         }
         sessions.push(session);
+        const capability: AuthoredCurriculumSliceSessionCapability = Object.freeze({
+          kind: "authored-curriculum-slice-session-capability",
+          repositoryRoot: realRepositoryRoot,
+          contentRoot: await realpath(root),
+          sourceTutorialRoot,
+          learnerWorkspaceRoots: Object.freeze(Object.values(session.workspaceRoots).map((workspaceRoot) => resolve(workspaceRoot)).sort())
+        });
         const prerequisites = [...(options.prerequisites ?? []), ...(startOptions.prerequisites ?? [])];
         const failures: unknown[] = [];
         try {
-          for (const prerequisite of prerequisites) await prerequisite.apply({ contentRoot: root, session });
+          for (const prerequisite of prerequisites) await prerequisite.apply({ contentRoot: root, session, capability });
         } catch (error) {
           failures.push(error);
         }

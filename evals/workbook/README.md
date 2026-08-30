@@ -4,7 +4,9 @@ Root-owned evaluator code for the authored learner workbook lives here. It is se
 
 `command-stubs.ts` provides deterministic Pi/npm command stubs for post-Lesson-001 authored scenarios. The stubs are designed for later authored scenario-runner integration. They materialize generated bin/state/evidence under the disposable session workspace's ignored `factory/.tmp/authored-eval-command-stubs/`, which will be visible as `/workspace/factory/.tmp/authored-eval-command-stubs/` through the canonical Docker bind mount.
 
-The later Docker runner must prepend the mounted bin path and separately enforce terminal network policy. Evidence and config inside the learner mount are untrusted corroborating gate inputs: later gates must cross-check them against the workspace and public JSON/RPC traces, never treat them as sole authority.
+`scenarios.ts` declares the four authored release journeys, their honest curriculum slices, exact artifact allowlists, prerequisite seeds, deterministic gates, and conservative `expectedModelCalls` budgets. The later runner owns stub creation and must pass each stub handle's `containerShellActivation` into post-Lesson-001 drives before submitting terminal commands.
+
+The later Docker runner must prepend the mounted bin path and separately enforce terminal network policy. Evidence and config inside the learner mount are untrusted corroborating gate inputs: later gates must cross-check them against the workspace, internal raw timeline, source/Git facts, public JSON/RPC traces, and allowlisted projections, never treat them as sole authority.
 
 `public-trace.ts` rebuilds the judge-visible trace from learner-visible state, terminal transcript, reflection turns, editor status, projected progression events, and explicitly allowlisted artifacts. Keep raw timeline rows, command/evidence IDs, Tutor or Coach prompt text, credentials, and disposable paths out of public prompts and reports.
 

@@ -79,6 +79,33 @@ function broadEnv(handle: Awaited<ReturnType<typeof createAuthoredCommandStubs>>
   };
 }
 
+function completeLabelledEvidence(testOutput: string): string {
+  return `=== QUALITY BEFORE (recorded before the doer ran) ===
+Findings reported by: eslint.
+- calculator/src/index.ts duplicated operator branch parser
+
+=== QUALITY NOW ===
+All quality checks passed.
+
+=== TESTS ===
+${testOutput}
+=== WORKING DIFF ===
++    const readFirstOperand = (separator: "and" | "from" | "by"): number => {
++      const first = readFirstOperand("and");
++      const first = readFirstOperand("from");
++      const first = readFirstOperand("by");
++      const first = readFirstOperand("by");
+-      const first = read();
+-      const first = read();
+-      const first = read();
+-      const first = read();
+-      if (pieces[place++] !== "and") fail();
+-      if (pieces[place++] !== "from") fail();
+-      if (pieces[place++] !== "by") fail();
+-      if (pieces[place++] !== "by") fail();
+`;
+}
+
 describe("authored command stubs", () => {
   it("refuses Lesson 001 and materializes under the disposable workspace .tmp mount", async () => {
     const workspace = await tempWorkspace();
@@ -110,6 +137,7 @@ describe("authored command stubs", () => {
     expect(JSON.stringify(containerConfig)).not.toContain(realWorkspace);
     expect(JSON.stringify(containerConfig)).not.toContain("/private/var");
     expect(handle.hostEnv.AUTHORED_EVAL_COMMAND_STUB_CONFIG).toBe(handle.hostConfigPath);
+    expect(handle.runId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
   it("returns a minimal host env with no credentials and no broad host tools", async () => {
@@ -164,7 +192,7 @@ describe("authored command stubs", () => {
     expect(validator.stdout).toMatch(/^VERDICT: FAIL/);
     const repair = await run("pi", ["--no-session", "--tools", "read,edit,write,grep,find,ls", "-p"], { cwd: calculator, env: handle.hostEnv, input: validator.stdout });
     expect(repair.code).toBe(0);
-    const passingValidator = await run("pi", ["--no-session", "--tools", "read,grep,find,ls,bash", "-p"], { cwd: calculator, env: handle.hostEnv, input: "Findings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n" });
+    const passingValidator = await run("pi", ["--no-session", "--tools", "read,grep,find,ls,bash", "-p"], { cwd: calculator, env: handle.hostEnv, input: completeLabelledEvidence("authored-eval npm test stub: calculator tests passed without network.\n") });
     expect(passingValidator.stdout).toMatch(/^VERDICT: PASS/);
 
     const evidenceText = await readFile(handle.hostEvidencePath, "utf8");
@@ -205,8 +233,13 @@ describe("authored command stubs", () => {
 
     await expect(readAuthoredCommandStubEvidence(tampered)).rejects.toThrow(/UNKNOWN_KEY/);
     await expect(readAuthoredCommandStubEvidence(tampered)).rejects.not.toThrow(/SECRET_SHOULD_NOT_REACH_PUBLIC_EVIDENCE|rawSecretText/);
-    await writeFile(tampered, `${JSON.stringify({ namespace: "evals/workbook/authored-workbook/command-stubs", owner: "authored-eval", schemaVersion: 1, kind: "pi", accepted: true, cwd: "/absolute", output: { bytes: 1, sha256: "b".repeat(64), eventClasses: ["text"] } })}\n`);
+    await writeFile(tampered, `${JSON.stringify({ namespace: "evals/workbook/authored-workbook/command-stubs", owner: "authored-eval", schemaVersion: 1, runId: handle.runId, kind: "pi", accepted: true, cwd: "/absolute", output: { bytes: 1, sha256: "b".repeat(64), eventClasses: ["text"] } })}\n`);
     await expect(readAuthoredCommandStubEvidence(tampered)).rejects.toThrow(/CWD_INVALID/);
+
+    for (const runId of ["123e4567e89b42d3a456426614174000", "00000000-0000-0000-0000-000000000000", "123e4567-e89b-12d3-a456-426614174000", "123e4567-e89b-42d3-7456-426614174000", "123E4567-E89B-42D3-A456-426614174000"]) {
+      await writeFile(tampered, `${JSON.stringify({ namespace: "evals/workbook/authored-workbook/command-stubs", owner: "authored-eval", schemaVersion: 1, runId, kind: "pi", accepted: true, cwd: "calculator", mode: "text", tools: "read,grep,find,ls", station: "validator", verdict: "FAIL", mutation: "none", prompt: { bytes: 1, sha256: "a".repeat(64), signals: [] }, output: { bytes: 1, sha256: "b".repeat(64), eventClasses: ["text"] } })}\n`);
+      await expect(readAuthoredCommandStubEvidence(tampered), runId).rejects.toThrow(/RUN_ID_INVALID/);
+    }
   });
 
   it("enforces bounds before success-shaped output or successful evidence", async () => {
@@ -571,6 +604,7 @@ exit 0
       namespace: "evals/workbook/authored-workbook/command-stubs",
       owner: "authored-eval",
       schemaVersion: 1,
+      runId: handle.runId,
       kind: "pi",
       accepted: true,
       cwd: "calculator",
@@ -605,7 +639,7 @@ exit 0
     expect(stillPartial.stdout).toMatch(/^VERDICT: FAIL/);
     const repair = await run("pi", ["--no-session", "--tools", "read,edit,write,grep,find,ls", "-p"], { cwd: calculator, env: handle.hostEnv, input: stillPartial.stdout });
     expect(repair).toMatchObject({ code: 0 });
-    const repaired = await run("pi", ["--no-session", "--tools", "read,grep,find,ls,bash", "-p"], { cwd: calculator, env: handle.hostEnv, input: baseline });
+    const repaired = await run("pi", ["--no-session", "--tools", "read,grep,find,ls,bash", "-p"], { cwd: calculator, env: handle.hostEnv, input: completeLabelledEvidence("authored-eval npm test stub: calculator tests passed without network.\n") });
     expect(repaired.stdout).toMatch(/^VERDICT: PASS/);
   });
 

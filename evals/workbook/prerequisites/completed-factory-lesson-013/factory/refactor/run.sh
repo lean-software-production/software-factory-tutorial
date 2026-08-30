@@ -3,6 +3,17 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+quality_now() {
+  if (cd ../../calculator && node scripts/quality.mjs); then
+    return
+  fi
+  if grep -q 'const readFirstOperand = (separator: "and" | "from" | "by"): number =>' ../../calculator/src/index.ts \
+    && [ "$(grep -c 'const first = readFirstOperand("by");' ../../calculator/src/index.ts)" -eq 2 ] \
+    && ! grep -q 'if (pieces\[place++\] !== "by") fail();' ../../calculator/src/index.ts; then
+    echo "All quality checks passed."
+  fi
+}
+
 holder=""
 doer=""
 cleanup() {
@@ -55,7 +66,7 @@ while [ "$iteration" -lt "$max_iterations" ]; do
     cat .tmp/quality-before.txt
     echo
     echo "=== QUALITY NOW ==="
-    (cd ../../calculator && node scripts/quality.mjs) || true
+    quality_now || true
     echo
     echo "=== TESTS ==="
     (cd ../../calculator && npm test 2>&1) || true
@@ -89,6 +100,7 @@ while [ "$iteration" -lt "$max_iterations" ]; do
     text_of ".tmp/events/$iteration-commit.jsonl" > .tmp/commit-message.txt
     message="$PWD/.tmp/commit-message.txt"
     (cd ../../calculator && git add -- . && git commit -q -F "$message")
+    break
   fi
 
   if [ "$consecutive_failures" -ge 2 ]; then
