@@ -13,9 +13,12 @@ boundary requires:
 2. a lesson summary because the block is the lesson's last incomplete declared block; and
 3. a workbook completion summary because the block is the stream's last incomplete block.
 
-It generates and appends each required summary in that order, then appends `block_completed`. Each summary
-covers the final existing event before the summary sequence, so ADR 0006 can replace the detailed history
-through the accepted attempt while later progression facts remain ordered after the summary.
+It generates and appends each required summary in that order, then appends `block_completed`. Block and
+lesson summaries persist the final existing event as `coveredThroughId`, so ADR 0006 can replace detailed
+history through the accepted attempt while later progression facts remain ordered after the summary. The
+final workbook summary is the terminal learner-facing report, not a future Tutor compaction boundary; no
+Tutor operation follows workbook completion, so its existing event intentionally has no
+`coveredThroughId`.
 
 Existing successful summaries are reused after a process restart rather than duplicated. This matters when
 a later summary at the same boundary failed after an earlier one had already been appended.
@@ -46,7 +49,17 @@ Focused summary/progression tests: 4 passed, 57 skipped
 Production/test TypeScript: passed
 npm run --workspace=tutorial-engine test:fast:
   lint/typechecks/check:eval passed
-  56 files, 594 tests passed
+  56 files, 596 tests passed
   web build passed
   browser smoke passed
 ```
+
+## Review fix
+
+The first independent review requested explicit restart/idempotence and coverage-boundary proof. Two
+restart tests now exercise a durable block summary followed by lesson-summary failure and a durable lesson
+summary followed by workbook-summary failure. A new process reuses each successful summary, generates
+only the missing summaries, and appends completion last without duplicates. Ordering tests also prove that
+block and lesson `coveredThroughId` values identify the immediately preceding detailed event. The final
+workbook summary remains intentionally outside ADR 0006 compaction because it is the terminal public
+report and no later Tutor context exists.

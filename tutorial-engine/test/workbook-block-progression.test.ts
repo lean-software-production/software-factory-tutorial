@@ -213,6 +213,10 @@ describe("workbook block progression", () => {
       expect(blockSummaryIndex).toBeLessThan(editorCompletionIndex);
       expect(lessonSummaryIndex).toBeLessThan(finalCompletionIndex);
       expect(workbookSummaryIndex).toBeLessThan(finalCompletionIndex);
+      const blockSummary = records[blockSummaryIndex] as Extract<WorkbookTimelineRecord, { type: "block_summarized" }>;
+      const lessonSummary = records[lessonSummaryIndex] as Extract<WorkbookTimelineRecord, { type: "lesson_summarized" }>;
+      expect(blockSummary.coveredThroughId).toBe(records[blockSummaryIndex - 1]?.id);
+      expect(lessonSummary.coveredThroughId).toBe(records[lessonSummaryIndex - 1]?.id);
     } finally { await server.close(); }
   });
 
@@ -262,6 +266,91 @@ describe("workbook block progression", () => {
         }
       } finally { await server.close(); }
     }
+  });
+
+  it("reuses a block summary after restart when the following lesson summary had failed", async () => {
+    const dir = await fixture();
+    const lessonPath = resolve(dir, "lessons/001-first/lesson.md");
+    await writeFile(lessonPath, (await readFile(lessonPath, "utf8")).replace("  - finish\n", ""));
+    await rm(resolve(dir, "lessons/001-first/blocks/finish.md"));
+    const failingTutor = {
+      ...fakeTutor({ outcome: "accepted", message: "Accepted editor answer." }),
+      summarizeBlock: async () => "Durable block summary.",
+      summarizeLesson: async (input: { lessonId: string }) => {
+        if (input.lessonId === "001-first") throw new Error("private lesson summary failure");
+        return "Workbook summary.";
+      }
+    };
+    const first = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: failingTutor });
+    try {
+      await complete(first.url, "workbook--introduction");
+      await complete(first.url, "part--validation-loop");
+      await complete(first.url, "lesson--001-first");
+      await complete(first.url, "lesson--001-first--orientation");
+      const draft = await fetch(`${first.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", text: "answer before restart" }) });
+      expect(draft.status).toBe(202);
+      await waitForState(first.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted");
+      const failed = await fetch(`${first.url}/api/workbook/complete-block`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer" }) });
+      expect(failed.status).toBe(409);
+      const partial = await timelineRecords(dir);
+      expect(partial.filter((record) => record.type === "block_summarized" && record.blockId === "lesson--001-first--edit-answer")).toHaveLength(1);
+      expect(partial).not.toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
+      expect(partial).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId: "lesson--001-first--edit-answer" }));
+    } finally { await first.close(); }
+
+    const restarted = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor({ outcome: "accepted", message: "Accepted editor answer." }) });
+    try {
+      const completed = await complete(restarted.url, "lesson--001-first--edit-answer");
+      expect(completed.state.progress.workbookComplete).toBe(true);
+      const records = await timelineRecords(dir);
+      expect(records.filter((record) => record.type === "block_summarized" && record.blockId === "lesson--001-first--edit-answer")).toHaveLength(1);
+      const lessonSummaryIndex = records.findIndex((record) => record.type === "lesson_summarized" && record.lessonId === "001-first");
+      const workbookSummaryIndex = records.findIndex((record) => record.type === "workbook_completion_summary");
+      const completionIndex = records.findIndex((record) => record.type === "block_completed" && record.blockId === "lesson--001-first--edit-answer");
+      expect(lessonSummaryIndex).toBeLessThan(workbookSummaryIndex);
+      expect(workbookSummaryIndex).toBeLessThan(completionIndex);
+    } finally { await restarted.close(); }
+  });
+
+  it("reuses a lesson summary after restart when the following workbook summary had failed", async () => {
+    const dir = await fixture();
+    const failingTutor = {
+      ...fakeTutor({ outcome: "accepted", message: "Accepted editor answer." }),
+      summarizeLesson: async (input: { lessonId: string }) => {
+        if (input.lessonId === "workbook") throw new Error("private workbook summary failure");
+        return "Durable lesson summary.";
+      }
+    };
+    const first = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: failingTutor });
+    try {
+      await complete(first.url, "workbook--introduction");
+      await complete(first.url, "part--validation-loop");
+      await complete(first.url, "lesson--001-first");
+      await complete(first.url, "lesson--001-first--orientation");
+      const draft = await fetch(`${first.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", text: "answer before final restart" }) });
+      expect(draft.status).toBe(202);
+      await waitForState(first.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted");
+      await complete(first.url, "lesson--001-first--edit-answer");
+      const failed = await fetch(`${first.url}/api/workbook/complete-block`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--finish" }) });
+      expect(failed.status).toBe(409);
+      const partial = await timelineRecords(dir);
+      expect(partial.filter((record) => record.type === "lesson_summarized" && record.lessonId === "001-first")).toHaveLength(1);
+      expect(partial).not.toContainEqual(expect.objectContaining({ type: "workbook_completion_summary" }));
+      expect(partial).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId: "lesson--001-first--finish" }));
+    } finally { await first.close(); }
+
+    const restarted = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const completed = await complete(restarted.url, "lesson--001-first--finish");
+      expect(completed.state.progress.workbookComplete).toBe(true);
+      const records = await timelineRecords(dir);
+      expect(records.filter((record) => record.type === "lesson_summarized" && record.lessonId === "001-first")).toHaveLength(1);
+      const lessonSummaryIndex = records.findIndex((record) => record.type === "lesson_summarized" && record.lessonId === "001-first");
+      const workbookSummaryIndex = records.findIndex((record) => record.type === "workbook_completion_summary");
+      const completionIndex = records.findIndex((record) => record.type === "block_completed" && record.blockId === "lesson--001-first--finish");
+      expect(lessonSummaryIndex).toBeLessThan(workbookSummaryIndex);
+      expect(workbookSummaryIndex).toBeLessThan(completionIndex);
+    } finally { await restarted.close(); }
   });
 
   it("does not write late summaries after closing during completion compaction", async () => {
