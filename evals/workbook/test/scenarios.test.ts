@@ -399,9 +399,10 @@ describe("authored workbook scenario descriptors", () => {
     const stubbed = new RecordingDriver();
     await authoredWorkbookScenarioById("lessons-003-004-evidence-feedback").drive({ driver: stubbed });
     const commands = stubbed.calls.filter((call) => call.method === "submitTerminalCommand").map((call) => call.command ?? "");
-    expect(commands[1]).toContain("sed -n '1,120p' factory/refactor-validate.sh");
-    expect(commands[1]).toContain("Mechanic: missing-baseline guard");
-    expect(commands[1]).toContain("Mechanic: findings captured through tee");
+    expect(commands[1]).not.toContain("sed -n '1,120p' factory/refactor-validate.sh");
+    expect(commands[1]).toContain("./factory/refactor-validate.sh\nprintf");
+    expect(commands[1]).toContain("grep -nF 'if [ ! -f .tmp/refactor-quality-before.txt ]; then' factory/refactor-validate.sh");
+    expect(commands[1]).toContain("grep -oF -- '--tools read,grep,find,ls,bash -p' factory/refactor-validate.sh");
     expect(commands.some((command) => command.endsWith(lesson004WrongCommand))).toBe(true);
     expect(commands.some((command) => command.endsWith(lesson004MultiplyCommand))).toBe(true);
     expect(commands.some((command) => command.endsWith(lesson004DivideCommand))).toBe(true);
@@ -570,9 +571,14 @@ describe("authored workbook scenario gates", () => {
       const publicTrace = projectAuthoredWorkbookEvalTrace({ ...trace, internalEvents: rawEvents });
       const inputs = publicTrace.terminalTranscript.filter((entry) => entry.direction === "input").map((entry) => entry.text.replace(/[\r\n]+$/, ""));
       expect(inputs).toHaveLength(5);
-      expect(inputs[1]).toContain("sed -n '1,120p' factory/refactor-validate.sh");
+      expect(inputs[1]).not.toContain("sed -n '1,120p' factory/refactor-validate.sh");
+      expect(inputs[1]).toContain("./factory/refactor-validate.sh\nprintf");
       const visibleOutput = publicTrace.terminalTranscript.filter((entry) => entry.direction === "output").map((entry) => entry.text).join("\n");
-      for (const marker of ["Mechanic: missing-baseline guard", "Mechanic: baseline concatenated into validation", "Mechanic: tools read,grep,find,ls,bash (no edit/write)", "Mechanic: findings captured through tee"]) expect(visibleOutput).toContain(marker);
+      const verdictIndex = visibleOutput.indexOf("VERDICT: FAIL");
+      const mechanicsIndex = visibleOutput.indexOf("=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ===");
+      expect(verdictIndex).toBeGreaterThanOrEqual(0);
+      expect(mechanicsIndex).toBeGreaterThan(verdictIndex);
+      for (const marker of ["Mechanic: missing-baseline guard", "if [ ! -f .tmp/refactor-quality-before.txt ]; then", "Mechanic: baseline concatenated into validation", "cat refactor-validate.md .tmp/refactor-quality-before.txt", "Mechanic: exact read-only tools", "--tools read,grep,find,ls,bash -p", "Mechanic: findings captured through tee", "| tee .tmp/refactor-validate-findings.txt"]) expect(visibleOutput).toContain(marker);
       expect(checkpoints.labels).toEqual(["lessons003004:after-multiply-only"]);
       const feedbackMessages = publicTrace.publicStates.flatMap((entry) => entry.state.progress.blocks.flatMap((block) => block.terminal?.phase === "feedback" ? [block.terminal.message] : []));
       expect(feedbackMessages).toEqual(expect.arrayContaining([
@@ -686,6 +692,7 @@ describe("authored workbook scenario gates", () => {
       ["remove tee", (input) => { mutateSnapshot(input, "factory/refactor-validate.sh", (text) => text.replace("| tee .tmp/refactor-validate-findings.txt", "")); }],
       ["change prompt", (input) => { mutateSnapshot(input, "factory/refactor-validate.md", (text) => text.replace("single refactoring", "large rewrite")); }],
       ["remove visible corrected mechanics", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => entry.direction !== "output" || !entry.text.includes("refactor-quality-before.txt")); }],
+      ["show mechanics before validator verdict", (input) => { const output = input.trace.terminalTranscript.find((entry) => entry.direction === "output" && entry.text.includes("=== VALIDATOR MECHANICS")); if (output) output.text = output.text.replace("Starting validation...\nVERDICT: FAIL\n\n", "=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ===\nMechanic: premature display\nStarting validation...\nVERDICT: FAIL\n\n"); }],
       ["remove broken command", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => !entry.text.includes("cat refactor-validate.md \\\n  |")); }],
       ["remove wrong rerun", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => !entry.text.endsWith(lesson004WrongCommand)); }],
       ["remove multiply command", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => !entry.text.endsWith(lesson004MultiplyCommand)); }],
@@ -781,10 +788,17 @@ describe("authored scenario shell commands", () => {
           expect(sourceAfterWrongRerun).toContain('if (pieces[place++] !== "by") fail();');
         }
       }
-      for (const marker of ["if [ ! -f .tmp/refactor-quality-before.txt ]; then", "cat refactor-validate.md .tmp/refactor-quality-before.txt", "| tee .tmp/refactor-validate-findings.txt", "--tools read,grep,find,ls,bash -p"]) expect(outputs[1]).toContain(marker);
-      expect(outputs[1]).toMatch(/^Starting validation\.\.\.\nVERDICT: FAIL/m);
-      expect(outputs[1]).toContain("Current quality still reports: calculator/src/index.ts duplicated operator branch parser.");
-      expect(outputs[1]).not.toMatch(/exact labelled TESTS|complete QUALITY\/TESTS\/DIFF|current PASS/i);
+      const correctedOutput = outputs[1]!;
+      expect(correctedOutput).not.toContain("#!/usr/bin/env bash");
+      expect(correctedOutput).not.toContain("sed -n '1,120p'");
+      for (const marker of ["if [ ! -f .tmp/refactor-quality-before.txt ]; then", "cat refactor-validate.md .tmp/refactor-quality-before.txt", "| tee .tmp/refactor-validate-findings.txt", "--tools read,grep,find,ls,bash -p"]) expect(correctedOutput).toContain(marker);
+      const correctedVerdictIndex = correctedOutput.indexOf("VERDICT: FAIL");
+      const correctedMechanicsIndex = correctedOutput.indexOf("=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ===");
+      expect(correctedVerdictIndex).toBeGreaterThanOrEqual(0);
+      expect(correctedMechanicsIndex).toBeGreaterThan(correctedVerdictIndex);
+      expect(correctedOutput).toMatch(/^Starting validation\.\.\.\nVERDICT: FAIL/m);
+      expect(correctedOutput).toContain("Current quality still reports: calculator/src/index.ts duplicated operator branch parser.");
+      expect(correctedOutput).not.toMatch(/exact labelled TESTS|complete QUALITY\/TESTS\/DIFF|current PASS/i);
       expect(outputs[2]).toMatch(/^Starting validation\.\.\.\nVERDICT: FAIL/m);
       expect(outputs[2]).toContain("Criterion not yet met: the refactor is partial");
       expect(outputs[2]).not.toMatch(/exact labelled TESTS|complete QUALITY\/TESTS\/DIFF|current PASS/i);
@@ -1126,7 +1140,7 @@ async function lessons003004Fixture(input: AuthoredWorkbookScenarioGateInput): P
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\ncat refactor-validate.md \\\n  | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p)" },
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "observer", text: "Feedback: carry the baseline with a guard and tee findings." },
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\ncat refactor-validate.md .tmp/refactor-quality-before.txt \\\n  | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p)" },
-    { blockId: "lesson--003-build-a-validator--implementation-order", direction: "output", text: "#!/usr/bin/env bash\nset -euo pipefail\nif [ ! -f .tmp/refactor-quality-before.txt ]; then\ncat refactor-validate.md .tmp/refactor-quality-before.txt \\\n  | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \\\n  | tee .tmp/refactor-validate-findings.txt\nMechanic: missing-baseline guard\nMechanic: baseline concatenated into validation\nMechanic: tools read,grep,find,ls,bash (no edit/write)\nMechanic: findings captured through tee\nStarting validation...\nVERDICT: FAIL\n" },
+    { blockId: "lesson--003-build-a-validator--implementation-order", direction: "output", text: "Starting validation...\nVERDICT: FAIL\n\n=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ===\nMechanic: missing-baseline guard\n6:if [ ! -f .tmp/refactor-quality-before.txt ]; then\nMechanic: baseline concatenated into validation\n11:cat refactor-validate.md .tmp/refactor-quality-before.txt \\\nMechanic: exact read-only tools\n--tools read,grep,find,ls,bash -p\nMechanic: findings captured through tee\n13:  | tee .tmp/refactor-validate-findings.txt\n" },
     { blockId: "lesson--004-feed-the-findings-back--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\n" + lesson004WrongCommand },
     { blockId: "lesson--004-feed-the-findings-back--implementation-order", direction: "observer", text: "Feedback: rerunning the validator only preserves the baseline but does not append findings to the doer context." },
     { blockId: "lesson--004-feed-the-findings-back--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\n" + lesson004MultiplyCommand },

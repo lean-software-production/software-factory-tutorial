@@ -251,12 +251,16 @@ ${authoredValidatorPrompt}EOF
 cat > factory/refactor-validate.sh <<'EOF'
 ${authoredValidatorScript}EOF
 chmod +x factory/refactor-validate.sh
-sed -n '1,120p' factory/refactor-validate.sh
+./factory/refactor-validate.sh
+printf '\n%s\n' '=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ==='
 echo 'Mechanic: missing-baseline guard'
+grep -nF 'if [ ! -f .tmp/refactor-quality-before.txt ]; then' factory/refactor-validate.sh
 echo 'Mechanic: baseline concatenated into validation'
-echo 'Mechanic: tools read,grep,find,ls,bash (no edit/write)'
+grep -nF 'cat refactor-validate.md .tmp/refactor-quality-before.txt' factory/refactor-validate.sh
+echo 'Mechanic: exact read-only tools'
+grep -oF -- '--tools read,grep,find,ls,bash -p' factory/refactor-validate.sh
 echo 'Mechanic: findings captured through tee'
-./factory/refactor-validate.sh`;
+grep -nF '| tee .tmp/refactor-validate-findings.txt' factory/refactor-validate.sh`;
 
 const lesson004WrongCommand = `./factory/refactor-validate.sh`;
 const lesson004CurrentEvidenceAndValidationCommand = String.raw`{
@@ -771,6 +775,8 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
   const source = files.get("calculator/src/index.ts") ?? "";
   const findings = files.get("factory/.tmp/refactor-validate-findings.txt") ?? "";
   const terminalOutput = terminalOutputTexts(input.trace).join("\n");
+  const correctedVerdictIndex = terminalOutput.indexOf("VERDICT: FAIL");
+  const mechanicDisplayIndex = terminalOutput.indexOf("=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ===");
   return evaluateGate([
     assertion("lessons003004-source-order", hasLessonProgressionOrder(input.trace, ["003-build-a-validator", "004-feed-the-findings-back"]), "Lessons 003 and 004 progress in authored order."),
     assertion("lessons003004-no-jump", noLessonJumpEverywhere(input), "No lesson jump entered internal raw events or the public trace."),
@@ -780,7 +786,8 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
     assertion("lessons003004-concat-tee", validatorScript.includes("cat refactor-validate.md .tmp/refactor-quality-before.txt") && validatorScript.includes("| tee .tmp/refactor-validate-findings.txt") && validatorScript.includes("--tools read,grep,find,ls,bash -p") && !/--tools [^\n]*(edit|write)/.test(validatorScript), "Validator concatenates baseline, tees findings, and stays read-only except bash checks."),
     assertion("lessons003004-prompt-exact", validatorPrompt === authoredValidatorPrompt, "Validator prompt matches the authored evaluator seed."),
     assertion("lessons003004-script-exact", validatorScript === authoredValidatorScript, "Validator script matches the authored mechanism exactly."),
-    assertion("lessons003004-visible-corrected-mechanics", ["Mechanic: missing-baseline guard", "Mechanic: baseline concatenated into validation", "Mechanic: tools read,grep,find,ls,bash (no edit/write)", "Mechanic: findings captured through tee"].every((marker) => terminalOutput.includes(marker)), "Corrected validator output visibly displays the guard, baseline concatenation, read-only tool list, and tee."),
+    assertion("lessons003004-visible-corrected-mechanics", ["Mechanic: missing-baseline guard", "if [ ! -f .tmp/refactor-quality-before.txt ]; then", "Mechanic: baseline concatenated into validation", "cat refactor-validate.md .tmp/refactor-quality-before.txt", "Mechanic: exact read-only tools", "--tools read,grep,find,ls,bash -p", "Mechanic: findings captured through tee", "| tee .tmp/refactor-validate-findings.txt"].every((marker) => terminalOutput.includes(marker)), "Corrected validator output visibly displays concise grep-backed guard, baseline concatenation, read-only tool list, and tee mechanics."),
+    assertion("lessons003004-verdict-before-mechanics", correctedVerdictIndex >= 0 && mechanicDisplayIndex > correctedVerdictIndex, "The corrected terminal output runs the validator and shows its VERDICT before displaying mechanism evidence."),
     assertion("lessons003004-broken-before-feedback", /cat refactor-validate\.md\s*\\\s*\|/.test(terminalInputs) && tutorFeedbackAfterInput(input.trace, /cat refactor-validate\.md\s*\\\s*\|/, /baseline|guard|findings|tee|evidence/i), "Broken validator lacking evidence carriage occurs before feedback."),
     assertion("lessons003004-wrong-rerun-before-feedback", terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004WrongCommand)) && tutorFeedbackAfterInput(input.trace, /\.\/factory\/refactor-validate\.sh\s*$/, /rerun|validator|baseline|findings|append|doer context/i), "The wrong validator-only rerun occurs before feedback and does not re-record the baseline."),
     assertion("lessons003004-multiply-then-divide", terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004MultiplyCommand)) && terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004DivideCommand)) && suffixInputIndex(terminalInputTexts(input.trace), lesson004DivideCommand) > suffixInputIndex(terminalInputTexts(input.trace), lesson004MultiplyCommand), "The repair is split into multiply-only and divide/final turns after feedback."),
