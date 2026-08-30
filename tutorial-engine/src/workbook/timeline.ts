@@ -19,6 +19,7 @@ export type TerminalLifecycleInput =
   | { type: "terminal-command-finished"; attemptId: string; exitStatus: number; evidenceRef: string }
   | { type: "terminal-transcript-snapshotted"; attemptId: string; lessonId: string; blockId: string; transcript: string }
   | { type: "terminal-feedback-recorded"; attemptId: string; text: string }
+  | { type: "terminal-review-retried"; attemptId: string; failureId: string }
   | { type: "terminal-coach-handoff-recorded"; attemptId: string; outcome: TerminalCoachHandoffOutcome; text: string };
 
 export type TerminalLifecycleEvent = TerminalLifecycleInput & TimelineMetadata;

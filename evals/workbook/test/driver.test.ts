@@ -378,6 +378,129 @@ describe("authored workbook public driver", () => {
     expect(trace.publicStates.map((entry) => entry.label)).toEqual(["terminal:bad:baseline", "terminal:bad:reviewed:1", "terminal:bad:reviewed:2", "terminal:retry:reviewed:1", "terminal:retry:reviewed:2"]);
   });
 
+  it("retries only the canonical transient terminal tutor failure through the public retry endpoint", async () => {
+    const transient = "Review is temporarily unavailable. Please run the command again in a moment.";
+    class CapturingWebSocket extends ReplayWebSocket {
+      static instances: CapturingWebSocket[] = [];
+      constructor() { super(); CapturingWebSocket.instances.push(this); }
+    }
+    const withFailure = stateWithTerminal("feedback", transient, 1);
+    withFailure.timeline = [{ type: "tutor_failed", id: "failure-row", failureId: "failure-row", sequence: 7, at: "public-at", lessonId: "001-public-contract", blockId, operation: "review", publicMessage: transient }];
+    const states = [stateWithTerminal("checking", undefined, 0), withFailure, stateWithTerminal("complete", "Accepted after retry.", 1)];
+    const posted: Array<{ path: string; body: unknown }> = [];
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-transient-retry");
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      WebSocket: CapturingWebSocket as any,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (init?.method === "POST") {
+          posted.push({ path, body: JSON.parse(String(init.body)) });
+          expect(path).toBe("/api/workbook/retry");
+          return new Response(JSON.stringify(stateWithTerminal("checking", undefined, 1)), { status: 202 });
+        }
+        return new Response(JSON.stringify(states.shift() ?? stateWithTerminal("complete", "Accepted after retry.", 1)), { status: 200 });
+      }
+    });
+
+    const reviewed = await driver.submitTerminalCommand(blockId, "good command", { complete: false });
+
+    expect(reviewed.progress.blocks[0]?.terminal).toEqual({ phase: "complete", message: "Accepted after retry." });
+    expect(posted).toEqual([{ path: "/api/workbook/retry", body: { failureId: "failure-row" } }]);
+    expect(CapturingWebSocket.instances).toHaveLength(1);
+    expect(CapturingWebSocket.instances[0]!.sent).toEqual([{ type: "input", data: "good command\r" }]);
+    expect(trace.terminalTranscript.filter((entry) => entry.direction === "input")).toEqual([{ blockId, direction: "input", text: "good command\r" }]);
+  });
+
+  it("does not treat a canonical-looking terminal feedback message without a failure row as retryable", async () => {
+    const transient = "Review is temporarily unavailable. Please run the command again in a moment.";
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-transient-no-failure-row");
+    const states = [stateWithTerminal("checking", undefined, 0), stateWithTerminal("feedback", transient, 1)];
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      WebSocket: ReplayWebSocket as any,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async (_input, init) => {
+        if (init?.method === "POST") throw new Error("retry should not be called");
+        return new Response(JSON.stringify(states.shift() ?? stateWithTerminal("feedback", transient, 1)), { status: 200 });
+      }
+    });
+
+    await expect(driver.submitTerminalCommand(blockId, "bad command", { complete: false })).rejects.toThrow(`Terminal attempt for ${blockId} received tutor feedback: ${transient}`);
+  });
+
+  it("bounds transient terminal tutor retries and does not accept the transient text as expected feedback", async () => {
+    const transient = "Review is temporarily unavailable. Please run the command again in a moment.";
+    let sequence = 0;
+    let posts = 0;
+    const failedState = () => {
+      const state = stateWithTerminal("feedback", transient, 1);
+      sequence += 1;
+      state.timeline = [{ type: "tutor_failed", id: `failure-${sequence}`, failureId: `failure-${sequence}`, sequence, at: "public-at", lessonId: "001-public-contract", blockId, operation: "review", publicMessage: transient }];
+      return state;
+    };
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace: createEmptyAuthoredWorkbookEvalSessionTrace("terminal-transient-bounded"),
+      WebSocket: ReplayWebSocket as any,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async (_input, init) => {
+        if (init?.method === "POST") {
+          posts += 1;
+          return new Response(JSON.stringify(stateWithTerminal("checking", undefined, 1)), { status: 202 });
+        }
+        return new Response(JSON.stringify(failedState()), { status: 200 });
+      }
+    });
+
+    await expect(driver.submitTerminalCommand(blockId, "good command", { complete: false, expectedFeedback: /temporarily unavailable/ })).rejects.toThrow(/repeatedly returned transient tutor failure/);
+    expect(posts).toBe(2);
+  });
+
+  it("aborts a transient terminal retry without recording late retry state", async () => {
+    const transient = "Review is temporarily unavailable. Please run the command again in a moment.";
+    const abort = trackedAbortController();
+    let retrySignal: AbortSignal | undefined;
+    let resolveRetry!: (response: Response) => void;
+    const withFailure = stateWithTerminal("feedback", transient, 1);
+    withFailure.timeline = [{ type: "tutor_failed", id: "failure-row", failureId: "failure-row", sequence: 7, at: "public-at", lessonId: "001-public-contract", blockId, operation: "review", publicMessage: transient }];
+    const states = [stateWithTerminal("checking", undefined, 0), withFailure];
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-transient-abort");
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      signal: abort.signal,
+      WebSocket: ReplayWebSocket as any,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async (_input, init) => {
+        if (init?.method === "POST") {
+          retrySignal = init.signal as AbortSignal;
+          return new Promise<Response>((resolve) => { resolveRetry = resolve; });
+        }
+        return new Response(JSON.stringify(states.shift() ?? withFailure), { status: 200 });
+      }
+    });
+
+    const pending = driver.submitTerminalCommand(blockId, "good command", { complete: false });
+    while (!retrySignal) await new Promise((resolve) => setTimeout(resolve, 1));
+    abort.abort(new Error("private abort diagnostic"));
+    resolveRetry(new Response(JSON.stringify(stateWithTerminal("complete", "Late accepted.", 1)), { status: 202 }));
+    await expect(pending).rejects.toThrow("Authored workbook driver operation was cancelled.");
+    await allowLateCallbacks();
+
+    expect(retrySignal.aborted).toBe(true);
+    expect(trace.publicStates.map((entry) => entry.label)).not.toContain("terminal:lesson--001-public-contract--terminal:transient-review-retry:1");
+    expect(JSON.stringify(trace.publicStates)).not.toContain("Late accepted.");
+    expect(abort.listenerBalance()).toBe(0);
+  });
+
   it("applies private terminal activation only to socket bytes and redacts it from trace/state", async () => {
     const activation = "export AUTHORED_EVAL_COMMAND_STUB_CONFIG=/workspace/private/config.json; export PATH=/workspace/private/bin:$PATH";
     class CapturingWebSocket extends ReplayWebSocket {

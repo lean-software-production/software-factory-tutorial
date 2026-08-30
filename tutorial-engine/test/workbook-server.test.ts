@@ -1737,6 +1737,86 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("retries a transient Main Tutor terminal failure without rerunning the learner command", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty(false);
+    const scheduler = new FakeTerminalAssessmentScheduler();
+    const tutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      new Error("temporary provider outage"),
+      { outcome: "accepted", message: "Accepted after terminal review retry." },
+    );
+    const coach = new FakePracticeCoach();
+    coach.queue.push({ outcome: "ready", text: "private handoff" });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalAssessmentScheduler: scheduler, mainTutor: tutor, practiceCoach: coach });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      const ws = await connect(server.url, server.url);
+      ws.send(JSON.stringify({ type: "input", data: "run\r" }));
+      pty.data?.(bashCommandMarker("run"));
+      pty.data?.(`done\r\n${bashFinishedMarker()}`);
+      const failed = await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.terminal?.phase === "feedback", "retryable Main Tutor terminal failure");
+      const failure = failed.timeline.find((record: any) => record.type === "tutor_failed" && record.operation === "review" && record.blockId === "lesson--001-first--run-supplied-command");
+      expect(failure?.publicMessage).toBe("Review is temporarily unavailable. Please run the command again in a moment.");
+
+      const retry = await fetch(`${server.url}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId: failure.failureId }) });
+      expect(retry.status).toBe(202);
+      const completed = await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.terminal?.phase === "complete", "retried terminal review acceptance");
+
+      expect(block(completed, "run-supplied-command")?.terminal).toEqual({ phase: "complete", message: "Accepted after terminal review retry." });
+      expect(JSON.stringify(block(completed, "run-supplied-command")?.terminal)).not.toContain("temporarily unavailable");
+      expect(pty.writes).toEqual(["run\r"]);
+      expect(coach.assessments).toHaveLength(1);
+      expect(tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(2);
+      const records = await privateTimeline(dir);
+      expect(records.filter((record) => record.type === "terminal-command-submitted")).toHaveLength(1);
+      expect(records).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "terminal-feedback-recorded", text: "Review is temporarily unavailable. Please run the command again in a moment." }),
+        expect.objectContaining({ type: "terminal-review-retried", attemptId: expect.any(String), failureId: failure.failureId }),
+        expect.objectContaining({ type: "attempt_accepted", kind: "terminal", summary: "Accepted after terminal review retry." }),
+      ]));
+      ws.close();
+    } finally { await server.close(); }
+  });
+
+  it("does not let a retried terminal review write after workbook close", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty(false);
+    const retryDecision = deferred<TutorDecision>();
+    const tutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      new Error("temporary provider outage"),
+      retryDecision.promise,
+    );
+    const coach = new FakePracticeCoach();
+    coach.queue.push({ outcome: "ready", text: "private handoff" });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: tutor, practiceCoach: coach });
+    await introduceAndOpenEditor(server.url);
+    await acceptEditor(server.url, tutor);
+    const ws = await connect(server.url, server.url);
+    ws.send(JSON.stringify({ type: "input", data: "run\r" }));
+    pty.data?.(bashCommandMarker("run"));
+    pty.data?.(`done\r\n${bashFinishedMarker()}`);
+    const failed = await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.terminal?.phase === "feedback", "retryable Main Tutor terminal failure before close");
+    const failure = failed.timeline.find((record: any) => record.type === "tutor_failed" && record.operation === "review" && record.blockId === "lesson--001-first--run-supplied-command");
+    expect(failure?.failureId).toEqual(expect.any(String));
+
+    const retry = await fetch(`${server.url}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId: failure.failureId }) });
+    expect(retry.status).toBe(202);
+    await waitForWorkbookState(server.url, () => tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal").length === 2, "retried terminal review started");
+    await server.close();
+    retryDecision.resolve({ outcome: "accepted", message: "Late acceptance must not write." });
+    await waitMs(30);
+    ws.close();
+
+    const records = await privateTimeline(dir);
+    expect(pty.writes).toEqual(["run\r"]);
+    expect(records.filter((record) => record.type === "terminal-command-submitted")).toHaveLength(1);
+    expect(records).not.toContainEqual(expect.objectContaining({ type: "attempt_accepted", kind: "terminal", summary: "Late acceptance must not write." }));
+    expect(records).not.toContainEqual(expect.objectContaining({ type: "work_accepted", blockId: "lesson--001-first--run-supplied-command" }));
+  });
+
   it("records non-final Main Tutor terminal review as durable terminal feedback", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty(false);

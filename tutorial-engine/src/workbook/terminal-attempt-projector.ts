@@ -68,6 +68,11 @@ export function projectTerminalAttempts(
         if (attempt?.finished && record.text.trim()) attempt.feedback = record.text;
         break;
       }
+      case "terminal-review-retried": {
+        const attempt = attempts.get(record.attemptId);
+        if (attempt?.finished) attempt.feedback = undefined;
+        break;
+      }
       case "terminal-coach-handoff-recorded": {
         const attempt = attempts.get(record.attemptId);
         if (attempt?.finished && (record.outcome === "ready" || record.outcome === "interesting")) attempt.coachHandoffRecorded = true;

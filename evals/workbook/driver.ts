@@ -13,6 +13,9 @@ import {
 
 export type WorkbookApiState = PublicWorkbookState;
 
+const TERMINAL_REVIEW_TRANSIENT_FEEDBACK = "Review is temporarily unavailable. Please run the command again in a moment.";
+const MAX_TRANSIENT_TERMINAL_REVIEW_RETRIES = 2;
+
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 type WebSocketConstructor = typeof WebSocket;
 export type TerminalFeedbackExpectation = string | RegExp | ((message: string, state: WorkbookApiState) => boolean);
@@ -320,6 +323,8 @@ export class AuthoredWorkbookDriver {
   async #waitForTerminalReview(blockId: string, label: string, timeoutMs: number, expectedFeedback: TerminalFeedbackExpectation | undefined, baseline: TerminalReviewBaseline, signal: AbortSignal): Promise<WorkbookApiState> {
     const deadline = Date.now() + timeoutMs;
     let attempt = 0;
+    let retryCount = 0;
+    let reviewBaseline = baseline;
     let observedReviewTransition = false;
     while (Date.now() <= deadline) {
       await delay(25, signal);
@@ -327,9 +332,9 @@ export class AuthoredWorkbookDriver {
       const state = await this.#requestState("GET", "/api/workbook/state", undefined, `${label}:reviewed:${++attempt}`, signal);
       throwIfAborted(signal);
       const terminal = terminalStateFor(state, blockId);
-      const changedTerminal = terminalSignature(terminal) !== baseline.terminalSignature;
-      const revisionAdvanced = terminalRevisionAdvanced(state, blockId, baseline.terminalRevision);
-      const relevantTimeline = terminal?.phase === "feedback" || terminal?.phase === "complete" ? hasRelevantTimelineAfter(state, blockId, baseline.timelineSequence, terminal.message) : false;
+      const changedTerminal = terminalSignature(terminal) !== reviewBaseline.terminalSignature;
+      const revisionAdvanced = terminalRevisionAdvanced(state, blockId, reviewBaseline.terminalRevision);
+      const relevantTimeline = terminal?.phase === "feedback" || terminal?.phase === "complete" ? hasRelevantTimelineAfter(state, blockId, reviewBaseline.timelineSequence, terminal.message) : false;
       if ((terminal?.phase === "running" || terminal?.phase === "checking") && (revisionAdvanced || changedTerminal)) observedReviewTransition = true;
       const correlated = revisionAdvanced || relevantTimeline || changedTerminal || observedReviewTransition;
       if (!correlated) continue;
@@ -338,12 +343,26 @@ export class AuthoredWorkbookDriver {
         return state;
       }
       if (terminal?.phase === "feedback") {
+        if (isCanonicalTransientTerminalReviewFailure(state, blockId, terminal.message, reviewBaseline.timelineSequence)) {
+          if (retryCount >= MAX_TRANSIENT_TERMINAL_REVIEW_RETRIES) throw new Error(`Terminal review for ${blockId} repeatedly returned transient tutor failure.`);
+          retryCount += 1;
+          const retried = await this.#retryTerminalReviewTransient(state, blockId, label, retryCount, signal);
+          reviewBaseline = terminalReviewBaseline(retried, blockId);
+          observedReviewTransition = terminalStateFor(retried, blockId)?.phase === "checking";
+          continue;
+        }
         if (expectedFeedback === undefined) throw new Error(`Terminal attempt for ${blockId} received tutor feedback: ${terminal.message}`);
         if (!feedbackMatches(expectedFeedback, terminal.message, state)) throw new Error(`Terminal attempt for ${blockId} received unexpected tutor feedback: ${terminal.message}`);
         return state;
       }
     }
     throw new Error(`Timed out waiting for terminal review for ${blockId}.`);
+  }
+
+  async #retryTerminalReviewTransient(state: WorkbookApiState, blockId: string, label: string, retryCount: number, signal: AbortSignal): Promise<WorkbookApiState> {
+    const failureId = transientTerminalReviewFailureId(state, blockId);
+    if (!failureId) throw new Error(`Terminal review for ${blockId} returned transient tutor failure without a retry handle.`);
+    return this.#requestState("POST", "/api/workbook/retry", { failureId }, `${label}:transient-review-retry:${retryCount}`, signal);
   }
 
   async #submitTerminalInput(blockId: string, socketInput: string, logicalInput: string, label: string, reviewTimeoutMs: number, expectedFeedback: TerminalFeedbackExpectation | undefined): Promise<WorkbookApiState> {
@@ -538,6 +557,21 @@ function hasRelevantTimelineAfter(state: WorkbookApiState, blockId: string, base
     if (record.type === "message") return record.text === terminalMessage;
     return record.type === "tutor_failed" && record.publicMessage === terminalMessage;
   });
+}
+
+function isCanonicalTransientTerminalReviewFailure(state: WorkbookApiState, blockId: string, message: string, baselineSequence: number): boolean {
+  return message === TERMINAL_REVIEW_TRANSIENT_FEEDBACK && transientTerminalReviewFailureId(state, blockId, baselineSequence) !== undefined;
+}
+
+function transientTerminalReviewFailureId(state: WorkbookApiState, blockId: string, afterSequence = -1): string | undefined {
+  const failure = [...state.timeline].reverse().find((record) =>
+    record.sequence > afterSequence &&
+    record.type === "tutor_failed" &&
+    record.operation === "review" &&
+    record.blockId === blockId &&
+    record.publicMessage === TERMINAL_REVIEW_TRANSIENT_FEEDBACK
+  );
+  return failure?.type === "tutor_failed" ? failure.failureId : undefined;
 }
 
 function feedbackMatches(expectation: TerminalFeedbackExpectation, message: string, state: WorkbookApiState): boolean {
