@@ -252,7 +252,7 @@ cat > factory/refactor-validate.sh <<'EOF'
 ${authoredValidatorScript}EOF
 chmod +x factory/refactor-validate.sh
 ./factory/refactor-validate.sh
-printf '\n%s\n' '=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ==='; echo 'Mechanic: missing-baseline guard'; grep -nF 'if [ ! -f .tmp/refactor-quality-before.txt ]; then' factory/refactor-validate.sh; echo 'Mechanic: baseline concatenated into validation'; grep -nF 'cat refactor-validate.md .tmp/refactor-quality-before.txt' factory/refactor-validate.sh; echo 'Mechanic: exact read-only tools'; grep -oF -- '--tools read,grep,find,ls,bash -p' factory/refactor-validate.sh; echo 'Mechanic: findings captured through tee'; grep -nF '| tee .tmp/refactor-validate-findings.txt' factory/refactor-validate.sh; printf '\n%s\n' '=== VALIDATOR FINDINGS (from .tmp/refactor-validate-findings.txt) ==='; cat factory/.tmp/refactor-validate-findings.txt`;
+cat factory/.tmp/refactor-validate-findings.txt; printf '\n%s\n' '=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ==='; echo 'Mechanic: missing-baseline guard'; grep -nF 'if [ ! -f .tmp/refactor-quality-before.txt ]; then' factory/refactor-validate.sh; echo 'Mechanic: baseline concatenated into validation'; grep -nF 'cat refactor-validate.md .tmp/refactor-quality-before.txt' factory/refactor-validate.sh; echo 'Mechanic: exact read-only tools'; grep -oF -- '--tools read,grep,find,ls,bash -p' factory/refactor-validate.sh; echo 'Mechanic: findings captured through tee'; grep -nF '| tee .tmp/refactor-validate-findings.txt' factory/refactor-validate.sh`;
 
 const lesson004WrongCommand = `./factory/refactor-validate.sh`;
 const lesson004CurrentEvidenceAndValidationCommand = String.raw`{
