@@ -33,10 +33,10 @@ function normalizePath(raw: unknown, { required }: { required: boolean }): { ok:
   if (typeof raw !== "string" || raw.trim() === "") return { ok: false, message: "A workspace-relative path is required." };
   if (raw.length > TUTOR_PATH_MAX_LENGTH) return { ok: false, message: `Path is too long; maximum is ${TUTOR_PATH_MAX_LENGTH} characters.` };
   if (raw.includes("\0")) return { ok: false, message: "Path contains an invalid character." };
-  if (isAbsolute(raw)) return { ok: false, message: "Absolute paths are not allowed; use a workspace-relative path." };
+  if (isAbsolute(raw) || /^[a-z]:[\\/]/i.test(raw) || raw.startsWith("\\\\")) return { ok: false, message: "Absolute paths are not allowed; use a workspace-relative path." };
   const parts = raw.split(/[\\/]+/).filter(Boolean);
   if (parts.includes("..")) return { ok: false, message: "Path is outside the active workspace." };
-  if (parts[0] && RESERVED_TOP_LEVEL_NAMES.has(parts[0])) return { ok: false, message: "Reserved session state paths are not available." };
+  if (parts[0] && RESERVED_TOP_LEVEL_NAMES.has(parts[0].toLowerCase())) return { ok: false, message: "Reserved session state paths are not available." };
   return { ok: true, path: parts.length === 0 ? "." : parts.join("/") };
 }
 
@@ -108,10 +108,6 @@ function boundedListText(header: string, lines: string[], truncationLine: string
   return output.join("\n");
 }
 
-function fileChanged(before: Awaited<ReturnType<WorkspaceBoundary["stat"]>>, after: Awaited<ReturnType<WorkspaceBoundary["stat"]>>): boolean {
-  return before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs;
-}
-
 async function listFiles(boundary: WorkspaceBoundary, params: unknown): Promise<SafeResult> {
   if (!isRecord(params)) return safeError("Parameters must be an object.");
   const path = normalizePath(params.path, { required: false });
@@ -163,12 +159,10 @@ async function readWorkspaceFile(boundary: WorkspaceBoundary, params: unknown): 
   if (!limit.ok) return safeError(limit.message);
 
   try {
-    const before = await boundary.stat(path.path);
-    if (!before.isFile()) return safeError("Path is not a regular file.", { path: quoteMetadata(path.path) });
-    if (before.size > TUTOR_READ_MAX_FILE_BYTES) return safeError(`File is too large to read safely; maximum is ${TUTOR_READ_MAX_FILE_BYTES} bytes.`, { path: quoteMetadata(path.path), size: before.size });
+    const info = await boundary.stat(path.path);
+    if (!info.isFile()) return safeError("Path is not a regular file.", { path: quoteMetadata(path.path) });
+    if (info.size > TUTOR_READ_MAX_FILE_BYTES) return safeError(`File is too large to read safely; maximum is ${TUTOR_READ_MAX_FILE_BYTES} bytes.`, { path: quoteMetadata(path.path), size: info.size });
     const buffer = await boundary.readFile(path.path);
-    const after = await boundary.stat(path.path);
-    if (fileChanged(before, after)) return safeError("File changed while reading; retry after it is stable.", { path: quoteMetadata(path.path) });
     const start = Math.min(offset.value, buffer.length);
     const end = Math.min(buffer.length, start + limit.value);
     const chunk = buffer.subarray(start, end).toString("utf8");

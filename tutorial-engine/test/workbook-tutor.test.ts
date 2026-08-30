@@ -347,6 +347,34 @@ describe("MainWorkbookTutor", () => {
     }
   });
 
+  it("binds exactly the read-only workspace tools for editor and terminal review operations", async () => {
+    const live = await mkdtemp(resolve(tmpdir(), "main-tutor-live-review-"));
+    try {
+      await writeFile(resolve(live, "sentinel.txt"), "review workspace\n", "utf8");
+      const requests: WorkbookTutorSessionFactoryRequest[] = [];
+      const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", sessionFactory: async (request) => {
+        requests.push(request);
+        const session = new FakeSession(request);
+        session.promptResponses.push("Use the workspace evidence.");
+        return session;
+      } });
+
+      await tutor.review({ records: [], activeContext: activeContext(), activeWorkspaceRoot: live, attempt: attempt("editor-review", "editor"), privateGuidance: "Review the editor attempt." });
+      await tutor.review({ records: [], activeContext: activeContext(), activeWorkspaceRoot: live, attempt: attempt("terminal-review", "terminal"), privateGuidance: "Review the terminal attempt." });
+      await tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("no-workspace", "reflection"), privateGuidance: "Review the reflection." });
+
+      expect(requests[0]!.tools).toEqual(["accept_current_attempt", "list_files", "read_file"]);
+      expect(requests[1]!.tools).toEqual(["accept_current_attempt", "list_files", "read_file"]);
+      expect(requests[2]!.tools).toEqual(["accept_current_attempt"]);
+      for (const request of requests.slice(0, 2)) {
+        expect(request.customTools.map((tool: any) => tool.name)).toEqual(["accept_current_attempt", "list_files", "read_file"]);
+        expect(request.customTools.map((tool: any) => tool.name)).not.toEqual(expect.arrayContaining(["read", "ls", "grep", "find", "write", "edit", "move", "bash"]));
+      }
+    } finally {
+      await rm(live, { recursive: true, force: true });
+    }
+  });
+
   it("keeps completeBlock constrained while adding workspace tools", async () => {
     const live = await mkdtemp(resolve(tmpdir(), "main-tutor-live-complete-"));
     try {

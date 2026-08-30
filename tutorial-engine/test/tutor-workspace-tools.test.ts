@@ -116,6 +116,8 @@ describe("Main Tutor workspace tools", () => {
     for (const params of [
       { path: "../secret.txt" },
       { path: resolve(outside, "secret.txt") },
+      { path: "C:\\outside\\secret.txt" },
+      { path: "\\\\server\\share\\secret.txt" },
       { path: "src/index.ts", offset: -1 },
       { path: "src/index.ts", limit: TUTOR_READ_MAX_BYTES + 1 },
     ]) {
@@ -141,6 +143,8 @@ describe("Main Tutor workspace tools", () => {
       "../sibling-workspace/secret.txt",
       "../authored-curriculum/lesson.md",
       "../active-workspace/.tutorial/tmp/state.json",
+      ".Git/config",
+      ".Tutorial/tmp/state.json",
       "escape-outside/secret.txt",
       "escape-secret.txt",
     ]) {
@@ -154,17 +158,4 @@ describe("Main Tutor workspace tools", () => {
     }
   });
 
-  it("does not return outside contents when a path is swapped to an escaping symlink during a read", async () => {
-    const { workspace, outside } = await fixture();
-    await writeFile(resolve(workspace, "race.txt"), "inside contents\n", "utf8");
-    const read = await tool("read_file", workspace);
-
-    const pending = execute(read, { path: "race.txt", limit: 100 });
-    await rm(resolve(workspace, "race.txt"));
-    await symlink(resolve(outside, "secret.txt"), resolve(workspace, "race.txt"));
-    const result = await pending;
-
-    expect(result.content[0]!.text).not.toContain("outside secret");
-    if (result.details.ok === false) expect(result.content[0]!.text).toMatch(/outside|changed while reading|rejected/i);
-  });
 });

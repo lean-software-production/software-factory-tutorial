@@ -1484,6 +1484,25 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("scopes ordinary conversation workspace access to active editor and terminal practice", async () => {
+    const dir = await fixture();
+    const mainTutor = new FakeMainTutor();
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor });
+    try {
+      expect((await postMessage(server.url, { blockId: "workbook--introduction", text: "What is this workbook?" })).status).toBe(202);
+      expect(mainTutor.replies.at(-1)?.activeWorkspaceRoot).toBeUndefined();
+
+      await introduceAndOpenEditor(server.url);
+      expect((await postMessage(server.url, { blockId: "lesson--001-first--edit-answer", text: "Which file may I inspect?" })).status).toBe(202);
+      const canonicalWorkspace = await realpath(resolve(dir, "workspaces/refactor-line"));
+      expect(mainTutor.replies.at(-1)?.activeWorkspaceRoot).toBe(canonicalWorkspace);
+
+      await acceptEditor(server.url, mainTutor);
+      expect((await postMessage(server.url, { blockId: "lesson--001-first--run-supplied-command", text: "What should I inspect now?" })).status).toBe(202);
+      expect(mainTutor.replies.at(-1)?.activeWorkspaceRoot).toBe(canonicalWorkspace);
+    } finally { await server.close(); }
+  });
+
   it("keeps editor automatic review on the main tutor without timeline duplication", async () => {
     const dir = await fixture();
     const mainTutor = new FakeMainTutor({ outcome: "feedback", message: "Add the exact marker before this can continue." });
