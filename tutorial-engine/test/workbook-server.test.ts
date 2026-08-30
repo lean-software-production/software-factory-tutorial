@@ -1855,7 +1855,7 @@ ${bashFinishedMarker()}`);
     } finally { await server.close(); }
   });
 
-  it("does not resume a finished checking terminal attempt after restart", async () => {
+  it("reconstructs a current-format finished checking attempt without resuming its pending effect", async () => {
     const dir = await fixture();
     const firstPty = new ServerFakePty(false);
     const waitingReview = deferred<TutorDecision>();
@@ -1872,6 +1872,10 @@ ${bashFinishedMarker()}`);
 ${bashFinishedMarker()}`);
       await waitForWorkbookState(first.url, () => firstTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal").length === 1, "first terminal review to start");
     } finally { await first.close(); }
+
+    const persistedLines = (await readFile(tutorialStatePath(dir, "workbook", "events.jsonl"), "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    expect(persistedLines[0]).toEqual(workbookSessionFormatRecord());
+    expect(persistedLines).toContainEqual(expect.objectContaining({ type: "terminal-command-finished" }));
 
     const secondTutor = new FakeMainTutor({ outcome: "feedback", message: "Should not resume." });
     const second = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => new ServerFakePty(false), mainTutor: secondTutor });

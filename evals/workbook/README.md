@@ -6,6 +6,12 @@ Root-owned evaluator code for the authored learner workbook lives here. It is se
 
 `scenarios.ts` declares the four authored release journeys, their honest curriculum slices, exact artifact allowlists, prerequisite seeds, deterministic gates, and conservative `expectedModelCalls` budgets. `run.ts` creates a fresh selected slice and normal session for every scenario repetition and creates command stubs only for post-Lesson-001 scenarios.
 
+The workbook has one model-backed role, the Main Tutor; the Judge exists only in the evaluator. Every
+Tutor operation uses a fresh restricted Pi session reconstructed from the current versioned event log.
+Provider exhaustion after three automatic attempts enters a process-local fatal workbook state; there is
+no manual retry or persisted pending-effect recovery. A release candidate passes all selected scenarios
+in one clean invocation rather than by rerunning individual failures.
+
 The runner uses the normal embedded Docker terminal boundary. Stub activation is a driver-private terminal prefix applied only to WebSocket input bytes; scenarios submit logical learner commands, and the prefix is stripped from recorded state, transcripts, traces, prompts, reports, and latest metadata. Evidence and config inside the learner mount are untrusted corroborating gate inputs: gates cross-check them against the workspace, internal raw timeline, source/Git facts, public JSON/RPC traces, and allowlisted projections, never treat them as sole authority.
 
 `public-trace.ts` rebuilds the judge-visible trace from learner-visible state, terminal transcript, reflection turns, editor status, projected progression events, and explicitly allowlisted artifacts. Keep raw timeline rows, command/evidence IDs, fixed three-attempt internal Tutor assessment activity, process-local fatal diagnostics, Tutor prompt text, credentials, and disposable paths out of public prompts and reports. Terminal assessment gates use the current submitted -> finished -> feedback/accepted lifecycle (or finished -> checking while pending); there is no persisted request event or manual retry contract.

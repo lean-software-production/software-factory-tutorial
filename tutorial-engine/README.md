@@ -38,6 +38,29 @@ Watch mode observes `workbook.md`, `parts/**/*.md`, and lesson `lesson.md`/`bloc
 
 The server binds only to `127.0.0.1`. Pi credentials remain in the server process; the browser has no filesystem or provider-credential access.
 
+## Main Tutor and session state
+
+The workbook has one model-backed role: the Main Tutor. Chat, editor review, terminal review,
+reflection, restoration, and summaries all use that role. Every operation creates a fresh restricted Pi
+session, reconstructs its history from the canonical `workbook/events.jsonl` log, and disposes the Pi
+session afterward. Authored content is prior assistant speech; active-block conversation stays detailed;
+completed evaluated blocks use block summaries; completed lessons use lesson summaries.
+
+Current logs start with an explicit `workbook-session-format` version record. Missing, old, newer, or
+old-event logs fail with a clear instruction to start a fresh session; there is no old-session migration
+or replay lane. Reopening a supported session reconstructs learner progress from the log but never resumes
+a pending model effect.
+
+During an active editor or terminal practice block, the Main Tutor receives only bounded read-only
+`list_files` and `read_file` tools scoped to that lesson's live workspace. Other blocks have no workspace
+tools. There is no shell, network, mutation, extension, skill, nested Pi, or broad filesystem authority.
+
+Each Main Tutor prompt or compaction gets exactly three automatic provider attempts. Exhaustion creates
+one learner-safe process-local fatal state: the workbook asks the learner to fix or reconnect the provider
+and restart, and blocks all progression without persisting a failure event or provider detail. There is no
+manual retry route or pending-effect recovery. Required block, lesson, and final workbook summaries are
+written before the completion event they support.
+
 Keep the launching terminal open. It prints timestamped startup, browser, Pi, tool, validation, and shutdown events. It also saves each run to `~/Library/Logs/SoftwareFactoryTutorial/` on macOS (or `$XDG_STATE_HOME/software-factory-tutorial/` elsewhere); the terminal prints the exact path. While Pi is working, a heartbeat every 15 seconds names its current activity, so a browser spinner always has a corresponding server-side status.
 
 ## Tutorial convention
@@ -96,6 +119,7 @@ npm run test:eval   # deterministic/model-free synthetic engine eval tests
 npm run eval -- --help # paid Docker-backed live engine eval CLI
 npm run test:workbook-ux:deterministic # provider-free workbook UX recording + decoded-WebM analysis + report
 npm run test:workbook-ux               # same workbook UX test plus advisory pi review when deterministic checks pass
+npm run test:visual                    # canonical devcontainer visual gate, including two combined feedback composites
 npm run check       # TypeScript, eval type-check, unit tests, browser build, and browser smoke
 ```
 
