@@ -446,7 +446,7 @@ const authoredWorkbookScenarioCatalog = [
       await driver.submitTerminalCommand("lesson--003-build-a-validator--implementation-order", brokenValidatorCommand, { label: "lesson003:broken-validator", expectedFeedback: feedbackAboutEvidenceCarriage });
       await driver.submitTerminalCommand("lesson--003-build-a-validator--implementation-order", correctedValidatorCommand, { label: "lesson003:correct-validator" });
       await driver.continueBlock("lesson--003-build-a-validator--advanced-substitute-another-validator", "lesson003:advanced");
-      await driver.submitReflection("lesson--003-build-a-validator--checks", "The validator announces validation, uses read/grep/find/ls/bash but not edit or write, opens with a VERDICT line, quotes real command evidence, writes findings through tee, and refuses if the baseline file is missing. That keeps checking separate from fixing.", "lesson003:checks");
+      await driver.submitReflection("lesson--003-build-a-validator--checks", "The terminal may announce validation before Pi runs. The captured findings file starts with a VERDICT line, uses read/grep/find/ls/bash but not edit or write, quotes real command evidence, writes through tee, and refuses if the baseline file is missing. That keeps checking separate from fixing.", "lesson003:checks");
       await driver.completeReflection("lesson--003-build-a-validator--checks", "lesson003:checks:complete");
       await driver.continueBlock("lesson--003-build-a-validator--pressure-test", "lesson003:pressure-test");
       await driver.continueBlock("lesson--004-feed-the-findings-back--key-concept", "lesson004:key-concept");
@@ -694,7 +694,7 @@ function gatePrimerValidationMisconception(input: AuthoredWorkbookScenarioGateIn
     assertion("primer-no-jump", noLessonJumpEverywhere(input), "No lesson jump was projected, copied, public, or reported in internal raw events."),
     assertion("primer-no-stubs", !input.facts.commandStubsCreated && input.commandInvocations.length === 0, "Primer uses no command stubs."),
     assertion("primer-exact-artifacts", artifactPathsMatch(input, []), "Primer captures no learner workspace artifacts."),
-    assertion("primer-normal-completion", hasProgressionOrder(input.trace, ["workbook_introduction_completed", "reflection_submitted", "reflection_reply_recorded", "reflection_follow_up_submitted", "reflection_reply_recorded", "reflection_completed"]), "Primer progresses through introduction, feedback, follow-up, and completion."),
+    assertion("primer-normal-completion", hasPrimerNormalCompletion(input.trace), "Primer progresses through introduction, feedback, follow-up, and completion."),
     assertion("primer-mistake-before-feedback", learnerTextBeforeTutorFeedback(input.trace, "factory-vs-repl", /more trust\/faith in the LLM/i), "The trust misconception appears before Tutor feedback."),
     assertion("primer-repair-after-feedback", learnerFollowUpAfterTutorFeedback(input.trace, "factory-vs-repl", [/do not trust|don't trust|not trust/i, /validation loop|validation/i, /up-front|up front/i, /autonom/i]), "The follow-up repairs the misconception with validation-loop reasoning."),
     assertion("primer-source-immutable", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged, "Authored source and disposable curriculum remain unchanged.")
@@ -713,7 +713,7 @@ function gateLesson001HeadlessBoundary(input: AuthoredWorkbookScenarioGateInput)
     assertion("lesson001-terminal-order", commandsAppearInOrder(terminalInputs, [lesson001SimpleCommand, lesson001SuppliedCommand, lesson001ChangedJobCommand]), "The three terminal commands run in authored order."),
     assertion("lesson001-reflection-boundary", /quoted|job/i.test(reflection) && /harness|pipe|subshell|invocation/i.test(reflection) && /-p/.test(reflection) && /--no-session/.test(reflection) && /exit|no conversation|without.*chat/i.test(reflection), "Reflection identifies job, harness, and headless exit behaviour."),
     assertion("lesson001-read-only", /read/.test(reflection) && /grep/.test(reflection) && /find/.test(reflection) && /ls/.test(reflection) && /not edit|cannot edit|not write|cannot.*write|not mutate/i.test(reflection), "Reflection explains the read-only tool boundary."),
-    assertion("lesson001-source-workspace-immutable", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged && input.facts.learnerWorkspaceChangedOutsideAllowlist.length === 0 && input.facts.lesson001CalculatorBeforeSha256 === input.facts.lesson001CalculatorAfterSha256, "Source, curriculum, and calculator are unchanged."),
+    assertion("lesson001-source-workspace-immutable", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged && input.facts.lesson001CalculatorBeforeSha256 === input.facts.lesson001CalculatorAfterSha256, "Authored source, disposable curriculum, and calculator source are unchanged."),
     assertion("lesson001-real-public-results", hasAcceptedTerminalProgression(input.trace, ["run-simple-pi-prompt", "run-supplied-command", "change-job"]) && terminalOutputTexts(input.trace).length >= 3 && hasExactTerminalLifecycle(input, [
       { blockSuffix: "run-simple-pi-prompt", command: lesson001SimpleCommand },
       { blockSuffix: "run-supplied-command", command: lesson001SuppliedCommand },
@@ -752,7 +752,7 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
       { station: "validator", verdict: "PASS", mutation: "none" }
     ]), "Structural command evidence shows current-run doer/validator records in exact order through FAIL, multiply-only FAIL, divide repair, and PASS."),
     assertion("lessons003004-source-complete", hasTrustedCalculatorBehavior(input, source, { requireIntermediateMultiplyOnly: true }), "Trusted calculator behavior projections and source digest show multiply and divide completed, not commented or dead code."),
-    assertion("lessons003004-findings-pass", /^VERDICT: PASS/m.test(findings), "Final validator findings report PASS."),
+    assertion("lessons003004-findings-pass", firstNonEmptyLineIsVerdict(findings, "PASS"), "The first non-empty line of the final validator findings is exactly VERDICT: PASS."),
     assertion("lessons003004-baseline-canonical", canonicalBaselinePreserved(input, files.get("factory/.tmp/refactor-quality-before.txt") ?? ""), "The original canonical quality baseline content and digest are preserved through the wrong rerun."),
     assertion("lessons003004-immutability", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged && input.facts.learnerWorkspaceChangedOutsideAllowlist.length === 0, "Only allowlisted learner workspace files changed.")
   ]);
@@ -779,7 +779,7 @@ function gateLesson013OperatorJudgement(input: AuthoredWorkbookScenarioGateInput
     ]), "Structural evidence shows steered RPC doer, PASS, and commit in exact current-run order."),
     assertion("lesson013-rpc-steering", hasSteeredRpcInvocation(input), "RPC/FIFO evidence is tied to the exact operator steer.sh command in the current terminal command record."),
     assertion("lesson013-quality-evidence", realQualityEvidencePasses(input, files.get("factory/refactor/.tmp/evidence.txt") ?? ""), "Real labelled quality and test evidence is present, current, and passes before the validator PASS."),
-    assertion("lesson013-pass-commit", /^VERDICT: PASS/m.test(findings) && commitMessage.trim() === "Refactor calculator operand parsing\n\nUse a shared operand reader across prefix operator branches." && input.facts.calculatorHeadChanged === true && input.facts.calculatorGitStatus === "" && input.facts.calculatorTopCommit === input.facts.calculatorExpectedTopCommit && input.facts.calculatorTopCommitTree === input.facts.calculatorExpectedTopCommitTree, "The run reaches PASS and leaves calculator Git clean at the exact expected top commit and tree."),
+    assertion("lesson013-pass-commit", firstNonEmptyLineIsVerdict(findings, "PASS") && commitMessage.trim() === "Refactor calculator operand parsing\n\nUse a shared operand reader across prefix operator branches." && input.facts.calculatorHeadChanged === true && input.facts.calculatorGitStatus === "" && input.facts.calculatorTopCommit === input.facts.calculatorExpectedTopCommit && input.facts.calculatorTopCommitTree === input.facts.calculatorExpectedTopCommitTree, "The run reaches PASS and leaves calculator Git clean at the exact expected top commit and tree."),
     assertion("lesson013-source-complete", hasTrustedCalculatorBehavior(input, source), "Final calculator behavior, source digest, and Git tree reflect the completed refactor."),
     assertion("lesson013-run-watch-logs", ["Starting doer", "Starting validation", "Starting commit", "Line finished"].every((marker) => runLog.includes(marker)) && ["→ read", "authored-eval", "→ edit", "queue_update"].every((marker) => watchLog.includes(marker)), "Run and watch logs contain bounded public evidence for watch.sh and RPC steering."),
     assertion("lesson013-reflection-vocabulary", /factory\//.test(reflection) && /refactor\//.test(reflection) && /run\.sh/.test(reflection) && /orchestrator/i.test(reflection) && /station/i.test(reflection) && /ask\.sh/i.test(reflection) && /no tools|no-tools/i.test(reflection) && /operator/i.test(reflection), "Reflection names the factory, line, orchestrator, stations, ask station, and operator."),
@@ -816,6 +816,11 @@ function hasProgressionOrder(trace: AuthoredWorkbookEvalTrace, types: readonly s
     if (cursor === types.length) return true;
   }
   return false;
+}
+
+function hasPrimerNormalCompletion(trace: AuthoredWorkbookEvalTrace): boolean {
+  return hasProgressionOrder(trace, ["workbook_introduction_completed", "reflection_submitted", "reflection_reply_recorded", "reflection_follow_up_submitted", "reflection_reply_recorded", "block_completed"])
+    || hasProgressionOrder(trace, ["workbook_introduction_completed", "reflection_submitted", "reflection_reply_recorded", "reflection_follow_up_submitted", "reflection_reply_recorded", "reflection_completed"]);
 }
 
 function hasLessonProgressionOrder(trace: AuthoredWorkbookEvalTrace, lessonIds: readonly string[]): boolean {
@@ -897,7 +902,7 @@ function hasExactTerminalLifecycle(input: AuthoredWorkbookScenarioGateInput, exp
     const submissions = rawEvents.filter((event): event is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> => event.type === "terminal-command-submitted" && event.blockId.endsWith(`--${wanted.blockSuffix}`));
     if (submissions.length !== 1) return false;
     const submitted = submissions[0]!;
-    if (submitted.command.replace(/[\r\n]+$/, "") !== wanted.command) return false;
+    if (normalizeRawBashLifecycleCommand(submitted.command.replace(/[\r\n]+$/, "")) !== normalizeRawBashLifecycleCommand(wanted.command)) return false;
     const submittedIndex = eventIndexes.get(submitted)!;
     const version = attemptVersions.get(submitted.attemptId);
     if (!Number.isInteger(version) || version! < 1) return false;
@@ -917,6 +922,14 @@ function hasExactTerminalLifecycle(input: AuthoredWorkbookScenarioGateInput, exp
     previousAcceptedIndex = acceptedIndex;
   }
   return true;
+}
+
+function normalizeRawBashLifecycleCommand(command: string): string {
+  return command.replace(/\\\r?\n/g, "");
+}
+
+function firstNonEmptyLineIsVerdict(text: string, verdict: "PASS" | "FAIL"): boolean {
+  return text.split(/\r?\n/).find((line) => line.trim().length > 0) === `VERDICT: ${verdict}`;
 }
 
 function publicTerminalRevision(trace: AuthoredWorkbookEvalTrace, blockId: string): number | undefined {

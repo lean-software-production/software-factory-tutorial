@@ -1,8 +1,8 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { cp, link, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -25,8 +25,10 @@ import {
   type AuthoredWorkbookScenarioGateInput,
   type AuthoredWorkbookScenarioId
 } from "../scenarios.js";
+import { dockerContainerUser } from "../../../tutorial-engine/src/workbook/terminal.js";
 import { buildAuthoredWorkbookJudgePrompt, copyAuthoredWorkbookEvalScenarioPublicDescriptor } from "../judge.js";
 import { createAuthoredCurriculumSliceWorkspace } from "../workspace.js";
+import { buildBoundedWorkspaceTar, dockerPopulateVolumeArguments, dockerVolumeCreateArguments, dockerVolumeRemoveArguments, dockerWorkspaceVolumeMount, WORKBOOK_TERMINAL_IMAGE } from "../preflight.js";
 import type { AuthoredCurriculumSliceSessionCapability } from "../workspace.js";
 const execFileAsync = promisify(execFile);
 const tempRoots: string[] = [];
@@ -258,6 +260,15 @@ describe("authored workbook scenario descriptors", () => {
     expect(authoredWorkbookScenarioById("lesson-013-operator-judgement").prerequisiteOverlay).toMatchObject({ id: "completed-factory-lesson-013", workspaceId: "refactor-line" });
   });
 
+  it("scopes the validator verdict requirement to captured findings rather than terminal progress", async () => {
+    const guidance = await readFile(resolve(import.meta.dirname, "../../../tutorial/lessons/003-build-a-validator/blocks/implementation-order.md"), "utf8");
+
+    expect(guidance).toContain("The response file's first non-empty line must be exactly");
+    expect(guidance).toContain("the terminal may print Starting validation... before it");
+    expect(guidance).toMatch(/The\s+terminal announces `Starting validation\.\.\.` before Pi runs/);
+    expect(guidance).toMatch(/that file's first non-empty line is\s+the `VERDICT`/);
+  });
+
   it("declares model-call upper bounds above the computed authored drive path", async () => {
     for (const scenario of AUTHORED_WORKBOOK_SCENARIOS) {
       const recorder = new RecordingDriver();
@@ -360,6 +371,17 @@ describe("authored workbook scenario gates", () => {
     }
   });
 
+  it("accepts the live block_completed primer completion event and legacy replay shape", async () => {
+    const scenario = authoredWorkbookScenarioById("primer-validation-misconception");
+    const live = await passingFixture("primer-validation-misconception");
+    expect(live.trace.progressionEvents.at(-1)?.type).toBe("block_completed");
+    expect(scenario.gate(live).passed).toBe(true);
+
+    const legacy = cloneInput(live);
+    legacy.trace.progressionEvents[legacy.trace.progressionEvents.length - 1] = event("reflection_completed", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl");
+    expect(scenario.gate(legacy).passed).toBe(true);
+  });
+
   it("mutation-tests primer gate assertions", async () => {
     await expectMutationsFail("primer-validation-misconception", [
       ["remove misconception", (input) => { input.trace.reflections = input.trace.reflections.filter((entry) => !entry.text.includes("trust/faith")); }],
@@ -368,12 +390,31 @@ describe("authored workbook scenario gates", () => {
       ["add unexpected artifact", (input) => { input.artifactSnapshots = [{ path: "factory/.tmp/unexpected.txt", content: "unexpected" }]; }],
       ["mark stubs created", (input) => { input.facts.commandStubsCreated = true; }],
       ["mark source changed", (input) => { input.facts.authoredSourceChanged = true; }],
+      ["remove live completion", (input) => { input.trace.progressionEvents = input.trace.progressionEvents.filter((entry) => entry.type !== "block_completed" && entry.type !== "reflection_completed"); }],
       ["inject lesson jump", (input) => { input.facts.lessonJumpStarted = true; }],
       ["inject raw lesson jump", (input) => { input.rawEvents = [{ type: "lesson_jump_started", lessonId: "copied" } as any]; }]
     ]);
   });
 
+  it("normalizes Bash line continuations only for private raw Lesson 001 lifecycle commands", async () => {
+    const scenario = authoredWorkbookScenarioById("lesson-001-headless-boundary");
+    const collapsed = cloneInput(await passingFixture("lesson-001-headless-boundary"));
+    for (const event of collapsed.rawEvents) {
+      if ((event as any).type === "terminal-command-submitted") (event as any).command = (event as any).command.replace(/\\\n/g, "");
+    }
+    expect(collapsed.trace.terminalTranscript.some((entry) => entry.text === lesson001SuppliedCommand)).toBe(true);
+    expect(scenario.gate(collapsed).passed).toBe(true);
+
+    const altered = cloneInput(await passingFixture("lesson-001-headless-boundary"));
+    (altered.rawEvents.find((event: any) => event.type === "terminal-command-submitted" && event.blockId.endsWith("--run-supplied-command")) as any).command = lesson001SuppliedCommand.replace("read,grep,find,ls", "read,edit,write");
+    expect(scenario.gate(altered).passed).toBe(false);
+  });
+
   it("mutation-tests Lesson 001 gate assertions", async () => {
+    const workspaceMetadata = await passingFixture("lesson-001-headless-boundary");
+    workspaceMetadata.facts.learnerWorkspaceChangedOutsideAllowlist = [".tmp/workbook-normal-metadata.json"];
+    expect(authoredWorkbookScenarioById("lesson-001-headless-boundary").gate(workspaceMetadata).passed).toBe(true);
+
     await expectMutationsFail("lesson-001-headless-boundary", [
       ["add unexpected artifact", (input) => { input.artifactSnapshots = [{ path: "factory/.tmp/unexpected.txt", content: "unexpected" }]; }],
       ["remove simple command", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => !entry.text.includes("capital of France")); }],
@@ -381,6 +422,8 @@ describe("authored workbook scenario gates", () => {
       ["swap order", (input) => { const rows = input.trace.terminalTranscript; [rows[0], rows[2]] = [rows[2]!, rows[0]!]; }],
       ["remove reflection boundary", (input) => { input.trace.reflections[0]!.text = "The command ran."; }],
       ["mark stubs created", (input) => { input.facts.commandStubsCreated = true; }],
+      ["mark authored source changed", (input) => { input.facts.authoredSourceChanged = true; }],
+      ["mark disposable curriculum changed", (input) => { input.facts.disposableCurriculumChanged = true; }],
       ["calculator changed", (input) => { input.facts.lesson001CalculatorAfterSha256 = "different"; }],
       ["remove public output", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => entry.direction !== "output"); }],
       ["inject lesson jump", (input) => { input.facts.lessonJumpStarted = true; }],
@@ -392,6 +435,16 @@ describe("authored workbook scenario gates", () => {
       ["mixed accepted attempt", (input) => { (input.rawEvents.find((event: any) => event.type === "attempt_accepted") as any).attemptId = "mixed"; }],
       ["inject raw lesson jump", (input) => { input.rawEvents = [{ type: "lesson_jump_started", lessonId: "copied" } as any]; }]
     ]);
+  });
+
+  it("treats terminal validation announcements separately from captured findings", async () => {
+    const scenario = authoredWorkbookScenarioById("lessons-003-004-evidence-feedback");
+    const fixture = await passingFixture("lessons-003-004-evidence-feedback");
+    fixture.trace.terminalTranscript.push({ blockId: "lesson--003-build-a-validator--implementation-order", direction: "output", text: "Starting validation...\nVERDICT: PASS\n" });
+    expect(scenario.gate(fixture).passed).toBe(true);
+
+    mutateSnapshot(fixture, "factory/.tmp/refactor-validate-findings.txt", (text) => `Starting validation...\n${text}`);
+    expect(scenario.gate(fixture).passed).toBe(false);
   });
 
   it("mutation-tests Lessons 003-004 gate assertions", async () => {
@@ -413,6 +466,7 @@ describe("authored workbook scenario gates", () => {
       ["dead if false refactor marker", (input) => { mutateCalculatorSourceAndTrustDigest(input, (text) => sourceWithFakeRefactor(text, (fake) => `if (false) {\n${fake}\n    }`)); }],
       ["calculator syntax error", (input) => { mutateCalculatorSourceAndTrustDigest(input, (text) => `${text}\nconst = ;\n`); }],
       ["remove pass findings", (input) => { mutateSnapshot(input, "factory/.tmp/refactor-validate-findings.txt", (text) => text.replace("VERDICT: PASS", "VERDICT: FAIL")); }],
+      ["prefix findings with terminal announcement", (input) => { mutateSnapshot(input, "factory/.tmp/refactor-validate-findings.txt", (text) => `Starting validation...\n${text}`); }],
       ["remove baseline", (input) => { mutateSnapshot(input, "factory/.tmp/refactor-quality-before.txt", () => ""); }],
       ["stale baseline digest", (input) => { input.facts.expectedCanonicalBaselineSha256 = "0".repeat(64); }],
       ["stale behavior projection", (input) => { input.facts.calculatorBehaviorProjection!.sourceSha256 = "0".repeat(64); }],
@@ -430,6 +484,7 @@ describe("authored workbook scenario gates", () => {
       ["remove steer evidence", (input) => { input.commandInvocations = input.commandInvocations.map((entry) => entry.mode === "rpc" && entry.rpc ? { ...entry, rpc: { ...entry.rpc, earlySteerCount: 0, commandCount: 1 } } : entry); }],
       ["raw event artifact copied public", (input) => { input.artifactSnapshots = [...input.artifactSnapshots, { path: "factory/refactor/.tmp/events/extra.jsonl", content: "{}" }]; input.trace.artifacts = input.artifactSnapshots.map((snapshot) => ({ ...snapshot })); input.workspaceFileSnapshots = input.artifactSnapshots.map((snapshot) => ({ ...snapshot })); }],
       ["remove commit", (input) => { input.facts.calculatorHeadChanged = false; }],
+      ["prefix findings with terminal announcement", (input) => { mutateSnapshot(input, "factory/refactor/.tmp/validate-findings.txt", (text) => `Starting validation...\n${text}`); }],
       ["remove source completion", (input) => { mutateSnapshot(input, "calculator/src/index.ts", (text) => text.replace('const first = readFirstOperand("by");', 'const first = read();')); }],
       ["failed quality status", (input) => { input.facts.calculatorBehaviorProjection!.qualityStatus = "failed"; }],
       ["stale git top", (input) => { input.facts.calculatorTopCommitTree = "stale-tree"; }],
@@ -488,27 +543,32 @@ describe("authored scenario shell commands", () => {
     try {
       expect(commands).toHaveLength(1);
       await execShell(stripActivation(commands[0]!), sessionWorkspace, stubbedShellEnv(handle), 20_000);
-      const evidence = await readAuthoredCommandStubEvidence(handle.hostEvidencePath);
-      expect(evidence.filter((entry) => entry.accepted && entry.kind === "pi").map((entry) => [entry.station, entry.mode, entry.verdict ?? entry.mutation])).toEqual([
-        ["doer", "rpc", "complete-refactor"],
-        ["validator", "json", "PASS"],
-        ["commit", "json", "none"],
-        ["ask", "text", "none"]
-      ]);
-      const doer = evidence.find((entry) => entry.station === "doer" && entry.mode === "rpc");
-      expect(doer?.rpc).toMatchObject({ commandCount: 2, earlySteerCount: 1, lateSteerCount: 0 });
-      expect(await readFile(join(sessionWorkspace, "factory/refactor/.tmp/validate-findings.txt"), "utf8")).toMatch(/^VERDICT: PASS/m);
-      expect(await readFile(join(sessionWorkspace, "factory/refactor/.tmp/evidence.txt"), "utf8")).toMatch(/=== QUALITY NOW ===[\s\S]*All quality checks passed\./m);
-      const status = (await execFileAsync("git", ["-C", join(sessionWorkspace, "calculator"), "status", "--porcelain"], { encoding: "utf8" })).stdout;
-      const subject = (await execFileAsync("git", ["-C", join(sessionWorkspace, "calculator"), "log", "-1", "--pretty=%s"], { encoding: "utf8" })).stdout.trim();
-      expect(status).toBe("");
-      expect(subject).toBe("Refactor calculator operand parsing");
+      await expectLesson013StubbedResult(sessionWorkspace, handle.hostEvidencePath);
     } finally {
       await handle.close().catch(() => undefined);
       await workspace.close().catch(() => undefined);
       tempRoots.splice(tempRoots.indexOf(workspace.repositoryRoot), 1);
     }
   }, 30_000);
+
+  it.runIf(process.env.AUTHORED_WORKBOOK_REAL_DOCKER === "1")("runs the Lesson 013 prerequisite path in the canonical Docker image with unpaid stubs", async () => {
+    const { workspace, sessionWorkspace, handle, commands } = await liveScenarioHarness("lesson-013-operator-judgement", { rpcEarlySteerWindowMs: AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS, rpcLateSteerWindowMs: 20 });
+    const volumeName = `authored-workbook-preflight-${randomUUID()}`;
+    try {
+      expect(commands).toHaveLength(1);
+      await execFileAsync("docker", dockerVolumeCreateArguments(volumeName), { timeout: 10_000 });
+      await execDockerWithPrivateInput(dockerPopulateVolumeArguments(volumeName, WORKBOOK_TERMINAL_IMAGE), await buildBoundedWorkspaceTar(sessionWorkspace), 20_000);
+      await execDockerWithPrivateInput([
+        "run", "--rm", "-i", "--user", dockerContainerUser(), "--network", "none", "--mount", dockerWorkspaceVolumeMount(volumeName),
+        "--workdir", "/workspace", WORKBOOK_TERMINAL_IMAGE, "bash"
+      ], Buffer.from(dockerLesson013SmokeScript(handle.containerShellActivation, stripActivation(commands[0]!)), "utf8"), 30_000);
+    } finally {
+      await execFileAsync("docker", dockerVolumeRemoveArguments(volumeName), { timeout: 10_000 }).catch(() => undefined);
+      await handle.close().catch(() => undefined);
+      await workspace.close().catch(() => undefined);
+      tempRoots.splice(tempRoots.indexOf(workspace.repositoryRoot), 1);
+    }
+  }, 60_000);
 });
 
 describe("authored workbook prerequisite seed overlays", () => {
@@ -596,7 +656,7 @@ function primerFixture(input: AuthoredWorkbookScenarioGateInput): AuthoredWorkbo
     event("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"),
     event("reflection_follow_up_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"),
     event("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"),
-    event("reflection_completed", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl")
+    event("block_completed", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl")
   ];
   input.trace.reflections = [
     { blockId: "lesson--what-is-a-factory--factory-vs-repl", role: "learner", text: "A factory requires more trust/faith in the LLM." },
@@ -889,6 +949,68 @@ async function execShell(command: string, cwd: string, env: NodeJS.ProcessEnv, t
   const shellCommand = `export PATH=${shellQuote(env.STUBBED_PATH ?? env.PATH ?? "")}; ${command}`;
   const { stdout, stderr } = await execFileAsync("/bin/bash", ["-lc", shellCommand], { cwd, env, timeout, encoding: "utf8", maxBuffer: 1024 * 1024 });
   expect(`${stdout}\n${stderr}`).not.toMatch(/authored-eval command stub rejected|Doer did not start/);
+}
+
+async function expectLesson013StubbedResult(sessionWorkspace: string, evidencePath: string): Promise<void> {
+  const evidence = await readAuthoredCommandStubEvidence(evidencePath);
+  expect(evidence.filter((entry) => entry.accepted && entry.kind === "pi").map((entry) => [entry.station, entry.mode, entry.verdict ?? entry.mutation])).toEqual([
+    ["doer", "rpc", "complete-refactor"],
+    ["validator", "json", "PASS"],
+    ["commit", "json", "none"],
+    ["ask", "text", "none"]
+  ]);
+  const doer = evidence.find((entry) => entry.station === "doer" && entry.mode === "rpc");
+  expect(doer?.rpc).toMatchObject({ commandCount: 2, earlySteerCount: 1, lateSteerCount: 0 });
+  expect(await readFile(join(sessionWorkspace, "factory/refactor/.tmp/validate-findings.txt"), "utf8")).toMatch(/^VERDICT: PASS/m);
+  expect(await readFile(join(sessionWorkspace, "factory/refactor/.tmp/evidence.txt"), "utf8")).toMatch(/=== QUALITY NOW ===[\s\S]*All quality checks passed\./m);
+  const status = (await execFileAsync("git", ["-C", join(sessionWorkspace, "calculator"), "status", "--porcelain"], { encoding: "utf8" })).stdout;
+  const subject = (await execFileAsync("git", ["-C", join(sessionWorkspace, "calculator"), "log", "-1", "--pretty=%s"], { encoding: "utf8" })).stdout.trim();
+  expect(status).toBe("");
+  expect(subject).toBe("Refactor calculator operand parsing");
+}
+
+async function execDockerWithPrivateInput(args: string[], input: Buffer, timeout = 20_000): Promise<void> {
+  await new Promise<void>((resolvePromise, reject) => {
+    const child = spawn("docker", args, { stdio: ["pipe", "ignore", "pipe"] });
+    const stderr: Buffer[] = [];
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("docker command timed out"));
+    }, timeout);
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (Buffer.concat(stderr).length < 4096) stderr.push(chunk);
+    });
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      code === 0 ? resolvePromise() : reject(new Error(`docker ${args.slice(0, 4).join(" ")} exited ${code}: ${Buffer.concat(stderr).toString("utf8").slice(0, 512)}`));
+    });
+    child.stdin.end(input);
+  });
+}
+
+function dockerLesson013SmokeScript(activation: string, command: string): string {
+  return `${activation}\nset -euo pipefail\necho smoke:check-tools >&2\ncommand -v jq >/dev/null\ntest "$(command -v pi)" = /workspace/factory/.tmp/authored-eval-command-stubs/bin/pi\ntest "$(command -v npm)" = /workspace/factory/.tmp/authored-eval-command-stubs/bin/npm\nif ! git -C calculator rev-parse --show-toplevel >/dev/null 2>&1; then\n  rm -rf .git calculator/.git\n  git -C calculator init -q -b main\n  git -C calculator config user.name 'Tutorial Factory Worker'\n  git -C calculator config user.email 'factory-worker@example.invalid'\n  git -C calculator add -A\n  git -C calculator commit -qm 'Materialize tutorial workspace refactor-line'\nfi\necho smoke:run-command >&2\nset +e\nbash <<'AUTHORED_COMMAND'\n${command}\nAUTHORED_COMMAND\ncommand_status=$?\nset -e\necho smoke:wait:$command_status >&2\nfor _ in $(seq 1 20); do\n  [ -s /workspace/factory/refactor/.tmp/commit-message.txt ] && break\n  sleep 1\ndone\nif [ ! -s /workspace/factory/refactor/.tmp/commit-message.txt ]; then\n  echo smoke:run-log >&2\n  cat /workspace/.tmp/refactor-run.log >&2 2>/dev/null || true\nfi\njobs -pr | xargs -r kill 2>/dev/null || true\necho smoke:assert >&2\nnode --input-type=module <<'NODE'\n${dockerLesson013SmokeAssertions()}\nNODE\n`;
+}
+
+function dockerLesson013SmokeAssertions(): string {
+  return String.raw`import { readFileSync } from 'node:fs';
+function fail(message) { console.error(message); process.exit(1); }
+const lines = readFileSync('/workspace/factory/.tmp/authored-eval-command-stubs/invocations.jsonl', 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+const pi = lines.filter((entry) => entry.kind === 'pi' && entry.accepted);
+const sequence = pi.map((entry) => [entry.station, entry.mode, entry.verdict ?? entry.mutation]);
+const expected = [['doer', 'rpc', 'complete-refactor'], ['validator', 'json', 'PASS'], ['commit', 'json', 'none'], ['ask', 'text', 'none']];
+if (JSON.stringify(sequence) !== JSON.stringify(expected)) fail('bad sequence ' + JSON.stringify(sequence));
+const doer = pi.find((entry) => entry.station === 'doer' && entry.mode === 'rpc');
+if (!doer?.rpc || doer.rpc.commandCount !== 2 || doer.rpc.earlySteerCount !== 1 || doer.rpc.lateSteerCount !== 0) fail('bad rpc ' + JSON.stringify(doer?.rpc));
+const npm = lines.filter((entry) => entry.kind === 'npm' && entry.accepted);
+if (npm.length !== 1 || !readFileSync('/workspace/factory/refactor/.tmp/evidence.txt', 'utf8').includes('authored-eval npm test stub')) fail('bad npm ' + npm.length);
+if (!readFileSync('/workspace/factory/refactor/.tmp/validate-findings.txt', 'utf8').startsWith('VERDICT: PASS\n')) fail('bad findings');
+if (!readFileSync('/workspace/factory/refactor/.tmp/commit-message.txt', 'utf8').startsWith('Refactor calculator operand parsing\n')) fail('bad commit message');
+`;
 }
 
 function shellQuote(value: string): string {

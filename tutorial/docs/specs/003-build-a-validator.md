@@ -56,8 +56,9 @@ in this order:
    ```
 
    The validator gets `bash` so it can run the quality check, and no `edit` or `write` so it cannot
-   repair what it finds. It stops rather than invent a comparison when there is no baseline. Its
-   findings go to the terminal and to a file, because the next lesson needs them.
+   repair what it finds. It stops rather than invent a comparison when there is no baseline. The
+   terminal may show `Starting validation...` before Pi answers; the findings file itself must still
+   start with `VERDICT: PASS` or `VERDICT: FAIL`, because the next lesson needs that answer.
 
    Notice that the script concatenates the baseline onto the prompt rather than telling the validator
    where to find it. The validator never reaches outside `calculator/`; the harness carries the
@@ -86,7 +87,8 @@ Verify by hand that the validator:
 
 - announces itself before Pi is invoked;
 - does not edit any file in `calculator/`;
-- returns exactly one `PASS` or `FAIL` verdict on its first non-empty line; and
+- may print the terminal progress line before Pi answers, but the first non-empty line of
+  `factory/.tmp/refactor-validate-findings.txt` is exactly `VERDICT: PASS` or `VERDICT: FAIL`; and
 - quotes what it actually ran, rather than asserting a conclusion.
 
 Then check the guard. The run above left a baseline behind, so delete it and run the validator on its

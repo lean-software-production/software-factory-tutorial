@@ -188,6 +188,31 @@ describe("authored workbook gate evidence", () => {
     expect(cleanupSignal).toBeDefined();
   }, 20_000);
 
+  it("narrows Lesson 001 immutability to guarded curriculum and exact calculator source", async () => {
+    const scenario = authoredWorkbookScenarioById("lesson-001-headless-boundary");
+    const dirtyBaseline = await tempWorkspace();
+    const sourcePath = join(dirtyBaseline.root, "calculator/src/index.ts");
+    await writeFile(sourcePath, `${await readFile(sourcePath, "utf8")}\n// learner had local dirt before the run\n`);
+    const dirtyTrace = lesson001Trace();
+    await writeSessionEvents(sessionFor(dirtyBaseline.root).sessionRoot, dirtyTrace.internalEvents);
+    const dirtyCollector = createAuthoredWorkbookScenarioGateEvidenceCollector({ scenario, workspace: fakeGuardedWorkspace(), session: sessionFor(dirtyBaseline.root), trace: dirtyTrace, probe: fakeProbe() });
+    await dirtyCollector.captureBaseline();
+    await writeFile(join(dirtyBaseline.root, ".tmp/normal-workbook-metadata.json"), "{}\n");
+    const dirtyInput = await dirtyCollector.collectGateInput();
+    expect(dirtyInput.facts.learnerWorkspaceChangedOutsideAllowlist).toEqual([".tmp/normal-workbook-metadata.json"]);
+    const dirtyGate = scenario.gate(dirtyInput);
+    expect(dirtyGate.passed).toBe(true);
+
+    const mutated = await tempWorkspace();
+    const mutatedSourcePath = join(mutated.root, "calculator/src/index.ts");
+    const mutatedTrace = lesson001Trace();
+    await writeSessionEvents(sessionFor(mutated.root).sessionRoot, mutatedTrace.internalEvents);
+    const mutatedCollector = createAuthoredWorkbookScenarioGateEvidenceCollector({ scenario, workspace: fakeGuardedWorkspace(), session: sessionFor(mutated.root), trace: mutatedTrace, probe: fakeProbe() });
+    await mutatedCollector.captureBaseline();
+    await writeFile(mutatedSourcePath, `${await readFile(mutatedSourcePath, "utf8")}\n// mutation after baseline\n`);
+    expect(scenario.gate(await mutatedCollector.collectGateInput()).passed).toBe(false);
+  }, 20_000);
+
   it("cross-checks command-stub evidence against the current handle runId and enforces Lesson001 no stubs", async () => {
     const lesson001 = authoredWorkbookScenarioById("lesson-001-headless-boundary");
     const base = await tempWorkspace();
@@ -364,7 +389,7 @@ function traceForScenario(id: string, options: { rawJump?: boolean }): AuthoredW
 
 function primerTrace(): AuthoredWorkbookEvalSessionTrace {
   const trace = createEmptyAuthoredWorkbookEvalSessionTrace("primer-validation-misconception");
-  trace.internalEvents = [raw("workbook_introduction_completed"), raw("reflection_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_follow_up_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_completed", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl")];
+  trace.internalEvents = [raw("workbook_introduction_completed"), raw("reflection_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_follow_up_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("block_completed", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl")];
   trace.reflections = [
     { blockId: "lesson--what-is-a-factory--factory-vs-repl", role: "learner", text: "A factory requires more trust/faith in the LLM." },
     { blockId: "lesson--what-is-a-factory--factory-vs-repl", role: "tutor", text: "The validation loop exists because you do not trust the model unchecked." },
@@ -389,7 +414,7 @@ function lesson001Trace(): AuthoredWorkbookEvalSessionTrace {
     trace.internalEvents.push({ type: "terminal-command-submitted", attemptId, lessonId: "001-run-an-agent-headlessly", blockId, command, terminalSessionId: `${attemptId}-terminal` } as any, { type: "terminal-command-finished", attemptId, exitStatus: 0, evidenceRef: `${attemptId}-evidence` } as any, { type: "attempt_accepted", attemptId, lessonId: "001-run-an-agent-headlessly", blockId, version: 1, kind: "terminal", summary: "accepted" } as any);
     trace.publicStates.push(publicState(blockId, 1));
   }
-  trace.internalEvents.push(raw("reflection_completed", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--reflection"));
+  trace.internalEvents.push(raw("block_completed", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--reflection"));
   trace.reflections = [{ blockId: "lesson--001-run-an-agent-headlessly--reflection", role: "learner", text: "The quoted text is the job. The pipe, subshell, cd, and Pi invocation are the harness. -p and --no-session make it exit with no conversation. read, grep, find, and ls can inspect but cannot edit, write, or mutate the calculator." }];
   return trace;
 }
