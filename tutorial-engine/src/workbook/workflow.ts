@@ -891,10 +891,10 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       evidence: { kind: "terminal", transcript: JSON.stringify(evidence), terminalHtml: "" }
     };
   };
-  const recordTerminalAssessmentFailure = async (request: TerminalAssessmentRequest, options: { tutorFailure?: boolean } = {}): Promise<void> => {
+  const recordTerminalAssessmentFailure = async (request: TerminalAssessmentRequest): Promise<void> => {
     await transact(async () => {
       if (!terminalRequestIsCurrent(request)) return;
-      if (options.tutorFailure) await appendFailure({ lessonId: request.lessonId, blockId: request.blockId, requestId: request.attemptId, operation: "review", publicMessage: TERMINAL_REVIEW_FAILURE_FEEDBACK });
+      await appendFailure({ lessonId: request.lessonId, blockId: request.blockId, requestId: request.attemptId, operation: "review", publicMessage: TERMINAL_REVIEW_FAILURE_FEEDBACK });
       await append({ type: "terminal-feedback-recorded", attemptId: request.attemptId, text: TERMINAL_REVIEW_FAILURE_FEEDBACK });
       notifyStateChanged({ lessonId: request.lessonId, blockId: request.blockId, status: "feedback", terminalPhase: "feedback" });
     });
@@ -915,7 +915,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
         decision = await withTerminalAssessmentTimeout(mainTutor.review({ ...review.context, attempt, privateGuidance: request.rubric, practiceCoachHandoff: handoff }));
       } catch (error) {
         log.info(`Workbook tutor terminal review failed for ${request.lessonId}/${request.blockId}: ${error instanceof Error ? error.message : String(error)}`);
-        await recordTerminalAssessmentFailure(request, { tutorFailure: true });
+        await recordTerminalAssessmentFailure(request);
         return;
       }
 
@@ -953,7 +953,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
         await recordWorkAccepted(active);
         notifyStateChanged({ lessonId: request.lessonId, blockId: request.blockId, status: "accepted", terminalPhase: "complete" });
       });
-      if (shouldRecordFailure) await recordTerminalAssessmentFailure(request, { tutorFailure: true });
+      if (shouldRecordFailure) await recordTerminalAssessmentFailure(request);
     })();
     trackTerminalAssessment(task);
   };
@@ -1265,13 +1265,17 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     if (!finished || records.some((record) => record.type === "attempt_accepted" && record.attemptId === submission.attemptId) || hasWorkAccepted(failure.blockId)) return false;
     const handoff = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-coach-handoff-recorded" }> =>
       record.type === "terminal-coach-handoff-recorded" && record.attemptId === submission.attemptId);
-    if (!handoff || !terminalFeedbackBlocksAssessment(submission.attemptId)) return false;
+    if (!terminalFeedbackBlocksAssessment(submission.attemptId)) return false;
     await append({ type: "terminal-review-retried", attemptId: submission.attemptId, failureId: failure.id });
     notifyStateChanged({ lessonId: failure.lessonId, blockId: failure.blockId, status: "reviewing", terminalPhase: "checking" });
     if (!generationIsCurrent(generation)) return true;
     const request: TerminalAssessmentRequest = { attemptId: submission.attemptId, lessonId: submission.lessonId, blockId: submission.blockId, command: submission.command, rubric: active.block.tutor, generation, evidenceRef: finished.evidenceRef };
-    const attempt = await terminalAttemptForAssessment(request);
-    if (attempt && generationIsCurrent(generation)) launchTerminalMainReview(request, { outcome: handoff.outcome, text: handoff.text }, attempt);
+    if (handoff) {
+      const attempt = await terminalAttemptForAssessment(request);
+      if (attempt && generationIsCurrent(generation)) launchTerminalMainReview(request, { outcome: handoff.outcome, text: handoff.text }, attempt);
+    } else {
+      launchTerminalAssessment(request);
+    }
     return true;
   };
 
