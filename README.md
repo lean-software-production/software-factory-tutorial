@@ -51,7 +51,8 @@ release gate; `eval:workbook -- --list` has zero side effects.
 `npm run tutorial:workbook` supplies the embedded terminal with one read-only runtime mount: root
 `node_modules/` at the active live workspace's `node_modules/`. A normal launch creates a new
 session and copies each declared workspace template; `--session <id>` reopens an existing workbook
-session. Earlier workbook event and attempt records remain readable. The removed browser tutor's
+session. Current-format workbook event and attempt records reconstruct that session; missing or
+unsupported event-log formats fail with an instruction to start fresh. The removed browser tutor's
 ignored state is neither resumed nor migrated.
 
 ## Evaluation ownership
