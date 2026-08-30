@@ -201,9 +201,67 @@ describe("workbook block progression", () => {
       );
       expect(records).toContainEqual(expect.objectContaining({ type: "block_summarized", lessonId: "001-first", blockId: "lesson--001-first--edit-answer", text: "Compacted edit block." }));
       expect(records).toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
+      expect(records).toContainEqual(expect.objectContaining({ type: "workbook_completion_summary" }));
       expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId: "lesson--001-first--orientation" }));
       expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId: "lesson--001-first--finish" }));
+
+      const blockSummaryIndex = records.findIndex((record) => record.type === "block_summarized" && record.blockId === "lesson--001-first--edit-answer");
+      const editorCompletionIndex = records.findIndex((record) => record.type === "block_completed" && record.blockId === "lesson--001-first--edit-answer");
+      const lessonSummaryIndex = records.findIndex((record) => record.type === "lesson_summarized" && record.lessonId === "001-first");
+      const workbookSummaryIndex = records.findIndex((record) => record.type === "workbook_completion_summary");
+      const finalCompletionIndex = records.findIndex((record) => record.type === "block_completed" && record.blockId === "lesson--001-first--finish");
+      expect(blockSummaryIndex).toBeLessThan(editorCompletionIndex);
+      expect(lessonSummaryIndex).toBeLessThan(finalCompletionIndex);
+      expect(workbookSummaryIndex).toBeLessThan(finalCompletionIndex);
     } finally { await server.close(); }
+  });
+
+  it("leaves progression incomplete when a required block, lesson, or workbook summary fails", async () => {
+    for (const stage of ["block", "lesson", "workbook"] as const) {
+      const dir = await fixture();
+      const tutor = {
+        ...fakeTutor({ outcome: "accepted", message: "Accepted editor answer." }),
+        summarizeBlock: async () => {
+          if (stage === "block") throw new Error("private block summary failure");
+          return "Block summary.";
+        },
+        summarizeLesson: async (input: { lessonId: string }) => {
+          if (stage === "lesson" && input.lessonId === "001-first") throw new Error("private lesson summary failure");
+          if (stage === "workbook" && input.lessonId === "workbook") throw new Error("private workbook summary failure");
+          return "Lesson summary.";
+        }
+      };
+      const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor });
+      try {
+        await complete(server.url, "workbook--introduction");
+        await complete(server.url, "part--validation-loop");
+        await complete(server.url, "lesson--001-first");
+        await complete(server.url, "lesson--001-first--orientation");
+        const draft = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", text: `answer before ${stage} summary failure` }) });
+        expect(draft.status).toBe(202);
+        await waitForState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted");
+
+        const failingBlockId = stage === "block" ? "lesson--001-first--edit-answer" : "lesson--001-first--finish";
+        if (stage !== "block") await complete(server.url, "lesson--001-first--edit-answer");
+        const response = await fetch(`${server.url}/api/workbook/complete-block`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: failingBlockId }) });
+        expect(response.status).toBe(409);
+
+        const failed = await fetch(`${server.url}/api/workbook/state`).then((result) => result.json() as any);
+        expect(failed.fatal?.message).toMatch(/restart/i);
+        expect(failed.progress.activeBlockId).toBe(failingBlockId);
+        expect(block(failed, failingBlockId)?.completed).toBe(false);
+        expect(JSON.stringify(failed)).not.toContain(`private ${stage} summary failure`);
+
+        const records = await timelineRecords(dir);
+        expect(records).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId: failingBlockId }));
+        if (stage === "block") expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId: failingBlockId }));
+        if (stage === "lesson") expect(records).not.toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
+        if (stage === "workbook") {
+          expect(records).toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
+          expect(records).not.toContainEqual(expect.objectContaining({ type: "workbook_completion_summary" }));
+        }
+      } finally { await server.close(); }
+    }
   });
 
   it("does not write late summaries after closing during completion compaction", async () => {

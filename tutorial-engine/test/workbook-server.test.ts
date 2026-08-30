@@ -1881,7 +1881,7 @@ ${bashFinishedMarker()}`);
       expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "factory acceptance marker" })).status).toBe(202);
       await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "accepted", "editor accepted before summary failure");
       const response = await completeBlock(server.url, "lesson--001-first--edit-answer");
-      expect(response.status).toBe(202);
+      expect(response.status).toBe(409);
       const failed = await waitForWorkbookState(server.url, (next) => Boolean(next.fatal), "fatal block summary");
       expectFatalState(failed);
       expect(tutor.blockSummaries).toHaveLength(1);
@@ -1889,6 +1889,7 @@ ${bashFinishedMarker()}`);
       expectNoLegacyFailureRecords(failed.timeline);
 
       const beforeRecords = await privateTimeline(dir);
+      expect(beforeRecords).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId: "lesson--001-first--edit-answer" }));
       expect((await postMessage(server.url, { blockId: "lesson--001-first--run-supplied-command", text: "Can I continue?" })).status).toBe(409);
       expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "late draft" })).status).toBe(409);
       expect(await privateTimeline(dir)).toEqual(beforeRecords);

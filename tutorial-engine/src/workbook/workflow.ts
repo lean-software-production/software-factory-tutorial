@@ -599,8 +599,8 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   const assertNoFatal = (): void => {
     if (fatal) throw new WorkbookWorkflowCommandError(409, TUTOR_INFRASTRUCTURE_FATAL_MESSAGE);
   };
-  const logSummaryFailure = (operation: "block_summary" | "lesson_summary" | "completion_summary", input: { lessonId: string; blockId: string; requestId: string }): void => {
-    log.info(`Workbook tutor ${operation} failed for ${input.lessonId}/${input.blockId} (request ${input.requestId}); fatal state latched.`);
+  const logSummaryFailure = (operation: "block_summary" | "lesson_summary" | "completion_summary", input: { lessonId: string; blockId: string }): void => {
+    log.info(`Workbook tutor ${operation} failed for ${input.lessonId}/${input.blockId}; fatal state latched.`);
   };
   const appendReviewMessage = async (attempt: Attempt, text: string): Promise<TimelineMessage> => {
     const message = await append({ type: "message", lessonId: attempt.lessonId, blockId: attempt.blockId, role: "assistant", source: "main_tutor", presentation: "review", text }) as TimelineMessage;
@@ -989,45 +989,49 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     launchTerminalMainReview(job);
   });
 
-  const summarizeDeparture = async (leaving: DeclaredWorkbookBlock, workflowId: string, generation = currentGeneration()): Promise<void> => {
-    if (!generationIsCurrent(generation)) return;
-    if (isEvaluatedBlock(leaving.block)) {
+  const summarizeDeparture = async (leaving: DeclaredWorkbookBlock, coveredThroughId: string, lessonWillComplete: boolean, generation = currentGeneration()): Promise<boolean> => {
+    if (!generationIsCurrent(generation)) return false;
+    if (isEvaluatedBlock(leaving.block) && !records.some((record) => record.type === "block_summarized" && record.blockId === leaving.id)) {
       try {
-        const text = requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId: workflowId }), "block_summary");
-        if (!generationIsCurrent(generation)) return;
-        await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text, coveredThroughId: workflowId });
+        const text = requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId }), "block_summary");
+        if (!generationIsCurrent(generation)) return false;
+        await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text, coveredThroughId });
       } catch {
-        if (!generationIsCurrent(generation)) return;
-        logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId });
+        if (!generationIsCurrent(generation)) return false;
+        logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id });
         latchTutorInfrastructureFatal("block summary");
+        return false;
       }
     }
-    if (!generationIsCurrent(generation)) return;
-    const projection = currentWorkbookProjection();
-    const lessonComplete = stream.filter((block) => block.origin === "declared" && block.lessonId === leaving.lessonId).every((block) => projection.completedBlockIds.has(block.id));
-    if (lessonComplete) {
+    if (!generationIsCurrent(generation)) return false;
+    if (lessonWillComplete && !records.some((record) => record.type === "lesson_summarized" && record.lessonId === leaving.lessonId)) {
       try {
-        const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: leaving.lessonId, coveredThroughId: workflowId }), "lesson_summary");
-        if (!generationIsCurrent(generation)) return;
-        await append({ type: "lesson_summarized", lessonId: leaving.lessonId, text, coveredThroughId: workflowId });
+        const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: leaving.lessonId, coveredThroughId }), "lesson_summary");
+        if (!generationIsCurrent(generation)) return false;
+        await append({ type: "lesson_summarized", lessonId: leaving.lessonId, text, coveredThroughId });
       } catch {
-        if (!generationIsCurrent(generation)) return;
-        logSummaryFailure("lesson_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId });
+        if (!generationIsCurrent(generation)) return false;
+        logSummaryFailure("lesson_summary", { lessonId: leaving.lessonId, blockId: leaving.id });
         latchTutorInfrastructureFatal("lesson summary");
+        return false;
       }
     }
+    return generationIsCurrent(generation);
   };
 
-  const requestCompletionSummary = async (workflowId: string, generation = currentGeneration()): Promise<void> => {
-    if (!generationIsCurrent(generation)) return;
+  const requestCompletionSummary = async (coveredThroughId: string, generation = currentGeneration()): Promise<boolean> => {
+    if (!generationIsCurrent(generation)) return false;
+    if (records.some((record) => record.type === "workbook_completion_summary")) return true;
     try {
-      const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: "workbook", coveredThroughId: workflowId }), "completion_summary");
-      if (!generationIsCurrent(generation)) return;
+      const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: "workbook", coveredThroughId }), "completion_summary");
+      if (!generationIsCurrent(generation)) return false;
       await append({ type: "workbook_completion_summary", text });
+      return true;
     } catch {
-      if (!generationIsCurrent(generation)) return;
-      logSummaryFailure("completion_summary", { lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID, requestId: workflowId });
+      if (!generationIsCurrent(generation)) return false;
+      logSummaryFailure("completion_summary", { lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID });
       latchTutorInfrastructureFatal("completion summary");
+      return false;
     }
   };
 
@@ -1043,17 +1047,29 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     if (projection.current?.id !== requested.id) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
     const eligibility = canCompleteBlock(requested, projection);
     if (!eligibility.eligible) return { outcome: "rejected", state: await stateBefore(), reason: "ineligible" };
-    const written = await append({ type: "block_completed", blockId: requested.id });
+
+    const coveredThroughId = records.at(-1)?.id ?? randomUUID();
+    const lessonWillComplete = requested.origin === "declared" && stream
+      .filter((block) => block.origin === "declared" && block.lessonId === requested.lessonId)
+      .every((block) => block.id === requested.id || projection.completedBlockIds.has(block.id));
+    const workbookWillComplete = stream.every((block) => block.id === requested.id || projection.completedBlockIds.has(block.id));
+    if (requested.origin === "declared" && !await summarizeDeparture(requested, coveredThroughId, lessonWillComplete, generation)) {
+      assertNoFatal();
+      return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
+    }
+    if (workbookWillComplete && !await requestCompletionSummary(coveredThroughId, generation)) {
+      assertNoFatal();
+      return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
+    }
+    if (!generationIsCurrent(generation)) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
+
+    await append({ type: "block_completed", blockId: requested.id });
     if (requested.origin === "declared" && requested.block.type === "terminal-practice") {
       const workspaceRoot = workspaceRootForLesson(requested.chapter.lesson);
       try { if (workspaceRoot) onTerminalContinued?.({ lessonId: requested.lessonId, blockId: requested.id, workspaceId: requested.chapter.lesson.workspace!, workspaceRoot }); }
       catch (error) { log.info(`Could not reset completed terminal ${requested.id}: ${error instanceof Error ? error.message : String(error)}`); }
     }
     const nextProjection = currentWorkbookProjection();
-    if (requested.origin === "declared") await summarizeDeparture(requested, written.id, generation);
-    if (!generationIsCurrent(generation)) return { outcome: "completed", state: await currentPublicState(), navigationTarget: successorAnchor(stream, requested.id) };
-    if (!nextProjection.current) await requestCompletionSummary(written.id, generation);
-    if (!generationIsCurrent(generation)) return { outcome: "completed", state: await currentPublicState(), navigationTarget: successorAnchor(stream, requested.id) };
     if (nextProjection.current) await ensureActiveWorkAcceptance(generation);
     return { outcome: "completed", state: await currentPublicState(), navigationTarget: successorAnchor(stream, requested.id) };
   };
