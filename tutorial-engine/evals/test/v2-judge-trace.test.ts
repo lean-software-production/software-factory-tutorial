@@ -18,6 +18,19 @@ function record(event: Record<string, unknown>): WorkbookTimelineRecord {
   return { id: "raw-id", sequence: 1, at: "2026-08-20T00:00:00.000Z", ...event } as WorkbookTimelineRecord;
 }
 
+function finishedEvidence(secret: string) {
+  return {
+    kind: "finished",
+    command: `echo command-${secret}`,
+    interactions: [
+      { kind: "input", data: `echo input-${secret}\r` },
+      { kind: "output", data: `output-${secret}\r\n` }
+    ],
+    exitStatus: 0,
+    transcriptSnapshot: { label: `snapshot-${secret}`, transcript: `transcript-snapshot-${secret}`, truncated: false }
+  };
+}
+
 describe("v2 public judge trace projection", () => {
   it("bounds judge command lifetime and rejects with a fixed sanitized error", async () => {
     const root = await mkdtemp(join(tmpdir(), "v2-judge-timeout-"));
@@ -118,11 +131,11 @@ describe("v2 public judge trace projection", () => {
     trace.publicStates.push({ label: "public", state: { progress: { activeBlockId: "exact-command" } } });
     trace.events.push(
       record({ type: "terminal-command-submitted", attemptId: "attempt-command-secret", lessonId, blockId: "exact-command", command: "echo command-secret", terminalSessionId: "terminal-session-secret" }),
-      record({ type: "terminal-command-finished", attemptId: "attempt-finished-secret", exitStatus: 0, evidenceRef: "evidence-ref-secret" }),
+      record({ type: "terminal-command-finished", attemptId: "attempt-finished-secret", evidence: finishedEvidence("finished-secret") }),
       record({ type: "terminal-transcript-snapshotted", attemptId: "attempt-transcript-secret", lessonId, blockId: "exact-command", transcript: "transcript-secret" }),
       record({ type: "terminal-feedback-recorded", attemptId: "attempt-feedback-secret", text: "feedback-secret" }),
-      record({ type: "terminal-review-requested", attemptId: "attempt-review-request-secret", lessonId, blockId: "exact-command", evidenceRef: "review-evidence-secret", requestId: "review-request-secret", mode: "automatic", callNumber: 1 }),
-      record({ type: "terminal-review-failed", attemptId: "attempt-review-failed-secret", lessonId, blockId: "exact-command", evidenceRef: "failed-evidence-secret", requestId: "failed-request-secret", failureId: "failure-id-secret", publicMessage: "failure-public-message-secret" }),
+      record({ type: "terminal-review-requested", attemptId: "attempt-review-request-secret", lessonId, blockId: "exact-command", requestId: "review-request-secret", mode: "automatic", callNumber: 1 }),
+      record({ type: "terminal-review-failed", attemptId: "attempt-review-failed-secret", lessonId, blockId: "exact-command", requestId: "failed-request-secret", failureId: "failure-id-secret", publicMessage: "failure-public-message-secret" }),
       record({ type: "attempt_accepted", lessonId, blockId: "exact-command", attemptId: "attempt-accepted-secret", version: 1, kind: "terminal", summary: "accepted-summary-secret" })
     );
     trace.artifacts.push({ path: "factory/.tmp/evaluator-command.txt", content: "public artifact\n" });
@@ -161,9 +174,11 @@ describe("v2 public judge trace projection", () => {
       expect(serialized).not.toContain("attempt-review-failed-secret");
       expect(serialized).not.toContain("attempt-accepted-secret");
       expect(serialized).not.toContain("terminal-session-secret");
-      expect(serialized).not.toContain("evidence-ref-secret");
-      expect(serialized).not.toContain("review-evidence-secret");
-      expect(serialized).not.toContain("failed-evidence-secret");
+      expect(serialized).not.toContain("command-finished-secret");
+      expect(serialized).not.toContain("input-finished-secret");
+      expect(serialized).not.toContain("output-finished-secret");
+      expect(serialized).not.toContain("snapshot-finished-secret");
+      expect(serialized).not.toContain("transcript-snapshot-finished-secret");
       expect(serialized).not.toContain("failed-request-secret");
       expect(serialized).not.toContain("failure-id-secret");
       expect(serialized).not.toContain("failure-public-message-secret");
@@ -188,7 +203,7 @@ describe("v2 public judge trace projection", () => {
         path: "path-secret",
         terminalHtml: "html-secret",
         attemptId: "attempt-secret",
-        evidenceRef: "evidence-secret",
+        terminalEvidence: { command: "evidence-command-secret" },
         tutor: "private tutor field"
       })
     );
@@ -204,7 +219,7 @@ describe("v2 public judge trace projection", () => {
     expect(JSON.stringify(judgeTrace)).not.toContain("path-secret");
     expect(JSON.stringify(judgeTrace)).not.toContain("html-secret");
     expect(JSON.stringify(judgeTrace)).not.toContain("attempt-secret");
-    expect(JSON.stringify(judgeTrace)).not.toContain("evidence-secret");
+    expect(JSON.stringify(judgeTrace)).not.toContain("evidence-command-secret");
     expect(JSON.stringify(judgeTrace)).not.toContain("private tutor field");
   });
 
@@ -362,7 +377,7 @@ describe("v2 public judge trace projection", () => {
     trace.publicStates.push({ label: "public", state: { note: "The learner says no terminal review request was exposed and terminal-command-submitted is only a label they learned about." } });
     trace.terminalTranscript.push({ blockId: "exact-command", direction: "observer", text: "Public observer text can mention terminal-review-requested as vocabulary." });
     trace.artifacts.push({ path: "factory/.tmp/public-vocabulary.txt", content: "No terminal review request was exposed; terminal-command-submitted stayed internal.\n" });
-    trace.events.push(record({ type: "terminal-review-failed", lessonId, blockId: "exact-command", attemptId: "attempt-secret", evidenceRef: "private-evidence-secret", requestId: "private-request-secret", failureId: "private-failure-secret", publicMessage: "private-review-secret" }));
+    trace.events.push(record({ type: "terminal-review-failed", lessonId, blockId: "exact-command", attemptId: "attempt-secret", requestId: "private-request-secret", failureId: "private-failure-secret", publicMessage: "private-review-secret" }));
     const judgeTrace = projectV2JudgeTrace(trace);
     const unsafeTrace = {
       ...judgeTrace,
@@ -402,9 +417,9 @@ describe("v2 public judge trace projection", () => {
     trace.publicStates.push({ label: "public", state: { progress: { activeBlockId: "exact-command" } } });
     trace.events.push(
       record({ type: "terminal-command-submitted", attemptId: "attempt-secret", lessonId, blockId: "exact-command", command: "echo secret", terminalSessionId: "session-secret" }),
-      record({ type: "terminal-command-finished", attemptId: "attempt-secret", exitStatus: 0, evidenceRef: "evidence-secret" }),
+      record({ type: "terminal-command-finished", attemptId: "attempt-secret", evidence: finishedEvidence("citation-secret") }),
       record({ type: "terminal-feedback-recorded", attemptId: "attempt-secret", text: "feedback-secret" }),
-      record({ type: "terminal-review-requested", lessonId, blockId: "exact-command", attemptId: "attempt-secret", evidenceRef: "evidence-secret", requestId: "review-secret", mode: "automatic", callNumber: 1 }),
+      record({ type: "terminal-review-requested", lessonId, blockId: "exact-command", attemptId: "attempt-secret", requestId: "review-secret", mode: "automatic", callNumber: 1 }),
       record({ type: "block_completed", lessonId, blockId: "exact-command" })
     );
     const judgeTrace = projectV2JudgeTrace(trace);

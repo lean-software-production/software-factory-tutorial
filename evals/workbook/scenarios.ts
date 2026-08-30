@@ -906,7 +906,8 @@ function hasExactTerminalLifecycle(input: AuthoredWorkbookScenarioGateInput, exp
     if (finishedRows.length !== 1) return false;
     const finished = finishedRows[0]!;
     const finishedIndex = eventIndexes.get(finished)!;
-    if (finishedIndex <= submittedIndex || finished.exitStatus !== 0) return false;
+    const evidence = finished.evidence;
+    if (finishedIndex <= submittedIndex || evidence?.kind !== "finished" || evidence.command !== submitted.command || evidence.exitStatus !== 0) return false;
 
     const acceptedRows = rawEvents.filter((event): event is Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }> => event.type === "attempt_accepted" && event.kind === "terminal" && event.attemptId === submitted.attemptId && event.lessonId === submitted.lessonId && event.blockId === submitted.blockId);
     if (acceptedRows.length !== 1) return false;

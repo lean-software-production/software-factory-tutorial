@@ -376,7 +376,7 @@ describe("authored workbook scenario gates", () => {
       ["calculator changed", (input) => { input.facts.lesson001CalculatorAfterSha256 = "different"; }],
       ["remove public output", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => entry.direction !== "output"); }],
       ["inject lesson jump", (input) => { input.facts.lessonJumpStarted = true; }],
-      ["failed terminal exit", (input) => { (input.rawEvents.find((event: any) => event.type === "terminal-command-finished") as any).exitStatus = 1; }],
+      ["failed terminal exit", (input) => { (input.rawEvents.find((event: any) => event.type === "terminal-command-finished") as any).evidence.exitStatus = 1; }],
       ["raw lifecycle reordered", (input) => { const rows = input.rawEvents as any[]; [rows[0], rows[1]] = [rows[1]!, rows[0]!]; }],
       ["accepted version 999", (input) => { (input.rawEvents.find((event: any) => event.type === "attempt_accepted") as any).version = 999; }],
       ["public version stale", (input) => { input.trace.publicStates[0]!.state.progress.blocks[0]!.terminalRevision = 999; }],
@@ -618,13 +618,13 @@ function lesson001Fixture(input: AuthoredWorkbookScenarioGateInput): AuthoredWor
   ];
   input.rawEvents = [
     rawSubmitted("a1", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--run-simple-pi-prompt", lesson001SimpleCommand),
-    rawFinished("a1", 0),
+    rawFinished("a1", lesson001SimpleCommand, 0),
     rawAccepted("a1", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--run-simple-pi-prompt", 1),
     rawSubmitted("a2", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--run-supplied-command", lesson001SuppliedCommand),
-    rawFinished("a2", 0),
+    rawFinished("a2", lesson001SuppliedCommand, 0),
     rawAccepted("a2", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--run-supplied-command", 1),
     rawSubmitted("a3", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--change-job", lesson001ChangedJobCommand),
-    rawFinished("a3", 0),
+    rawFinished("a3", lesson001ChangedJobCommand, 0),
     rawAccepted("a3", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--change-job", 1)
   ];
   input.facts.lesson001CalculatorBeforeSha256 = "same";
@@ -788,8 +788,8 @@ function rawSubmitted(attemptId: string, lessonId: string, blockId: string, comm
   return { type: "terminal-command-submitted", attemptId, lessonId, blockId, command, terminalSessionId: `${attemptId}-terminal` };
 }
 
-function rawFinished(attemptId: string, exitStatus: number): any {
-  return { type: "terminal-command-finished", attemptId, exitStatus, evidenceRef: `${attemptId}-evidence` };
+function rawFinished(attemptId: string, command: string, exitStatus: number): any {
+  return { type: "terminal-command-finished", attemptId, evidence: { kind: "finished", command, interactions: [{ kind: "input", data: command }, { kind: "output", data: "ok\n" }], exitStatus } };
 }
 
 function rawAccepted(attemptId: string, lessonId: string, blockId: string, version: number): any {

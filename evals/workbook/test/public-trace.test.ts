@@ -21,6 +21,16 @@ function record(event: Record<string, unknown>): WorkbookTimelineRecord {
   return { id: "raw-id", sequence: 1, at: "2026-08-29T00:00:00.000Z", ...event } as WorkbookTimelineRecord;
 }
 
+function privateFinishedEvidence(): Record<string, unknown> {
+  return {
+    kind: "finished",
+    command: "echo finished-command-secret",
+    interactions: [{ kind: "input", data: "finished-interaction-input-secret" }, { kind: "output", data: "finished-interaction-output-secret" }],
+    exitStatus: 0,
+    transcriptSnapshot: { label: "finished-transcript-label-secret", transcript: "finished-transcript-body-secret", truncated: false }
+  };
+}
+
 function browserPublicState(note = "Public Tutor prose can mention terminal lifecycle, terminal-command-submitted, and JSON-looking \"tutor\":."): PublicWorkbookState {
   return {
     workbook: { title: "Public workbook" },
@@ -189,8 +199,8 @@ describe("authored workbook public eval trace projection", () => {
     trace.publicStates.push({ label: "visible", state: browserPublicState() });
     trace.internalEvents.push(
       record({ type: "terminal-command-submitted", attemptId: "attempt-command-secret", lessonId, blockId: "terminal", command: "echo command-secret", terminalSessionId: "terminal-session-secret" }),
-      record({ type: "terminal-command-finished", attemptId: "attempt-finished-secret", exitStatus: 0, evidenceRef: "private-evidence-secret" }),
-      record({ type: "terminal-review-requested", attemptId: "attempt-review-secret", lessonId, blockId: "terminal", evidenceRef: "review-evidence-secret", requestId: "request-secret", mode: "automatic", callNumber: 1 }),
+      record({ type: "terminal-command-finished", attemptId: "attempt-finished-secret", evidence: privateFinishedEvidence() }),
+      record({ type: "terminal-review-requested", attemptId: "attempt-review-secret", lessonId, blockId: "terminal", requestId: "request-secret", mode: "automatic", callNumber: 1 }),
       record({ type: "terminal-feedback-recorded", attemptId: "attempt-feedback-secret", text: "private-feedback-secret" }),
       record({ type: "attempt_accepted", lessonId, blockId: "terminal", attemptId: "attempt-accepted-secret", version: 7, kind: "terminal", summary: "private-summary-secret", rubric: { private: "rubric-secret" }, path: "/private/session/path" }),
       record({ type: "block_completed", lessonId, blockId: "terminal", response: "private-response-secret" }),
@@ -207,7 +217,7 @@ describe("authored workbook public eval trace projection", () => {
       { type: "block_completed", lessonId, blockId: "terminal" }
     ]);
     const serialized = JSON.stringify({ projected });
-    for (const secret of ["attempt-command-secret", "command-secret", "terminal-session-secret", "attempt-finished-secret", "private-evidence-secret", "attempt-review-secret", "review-evidence-secret", "request-secret", "attempt-feedback-secret", "private-feedback-secret", "attempt-accepted-secret", "private-summary-secret", "rubric-secret", "/private/session/path", "private-response-secret", "future-secret"]) {
+    for (const secret of ["attempt-command-secret", "command-secret", "terminal-session-secret", "attempt-finished-secret", "finished-command-secret", "finished-interaction-input-secret", "finished-interaction-output-secret", "finished-transcript-label-secret", "finished-transcript-body-secret", "attempt-review-secret", "request-secret", "attempt-feedback-secret", "private-feedback-secret", "attempt-accepted-secret", "private-summary-secret", "rubric-secret", "/private/session/path", "private-response-secret", "future-secret"]) {
       expect(serialized).not.toContain(secret);
     }
   });

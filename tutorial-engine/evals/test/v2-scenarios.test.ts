@@ -153,7 +153,7 @@ describe("v2 live evaluator scenarios", () => {
 
   it("does not fail deterministic gates because private terminal lifecycle rows remain internal", () => {
     const trace = exactCommandTrace();
-    trace.events.push(event({ type: "terminal-review-requested", lessonId, blockId: "exact-command", attemptId: "private-attempt", evidenceRef: "evidence-secret", requestId: "request-secret", mode: "automatic", callNumber: 1 }));
+    trace.events.push(event({ type: "terminal-review-requested", lessonId, blockId: "exact-command", attemptId: "private-attempt", requestId: "request-secret", mode: "automatic", callNumber: 1 }));
 
     allGateAssertionsPass(trace);
   });

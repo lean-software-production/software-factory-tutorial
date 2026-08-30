@@ -126,7 +126,6 @@ describe("v2 public session trace", () => {
       lessonId: "001-live-session",
       blockId: "exact-command",
       attemptId: "attempt-secret",
-      evidenceRef: "evidence-secret",
       requestId: "private-review-request-secret-for-gate-only-event",
       mode: "automatic",
       callNumber: 1

@@ -401,7 +401,7 @@ function lesson001Trace(): AuthoredWorkbookEvalSessionTrace {
     const blockId = `lesson--001-run-an-agent-headlessly--${suffix}`;
     const attemptId = `a${index + 1}`;
     trace.terminalTranscript.push({ blockId, direction: "input", text: command }, { blockId, direction: "output", text: "ok\n" });
-    trace.internalEvents.push({ type: "terminal-command-submitted", attemptId, lessonId: "001-run-an-agent-headlessly", blockId, command, terminalSessionId: `${attemptId}-terminal` } as any, { type: "terminal-command-finished", attemptId, exitStatus: 0, evidenceRef: `${attemptId}-evidence` } as any, { type: "attempt_accepted", attemptId, lessonId: "001-run-an-agent-headlessly", blockId, version: 1, kind: "terminal", summary: "accepted" } as any);
+    trace.internalEvents.push({ type: "terminal-command-submitted", attemptId, lessonId: "001-run-an-agent-headlessly", blockId, command, terminalSessionId: `${attemptId}-terminal` } as any, { type: "terminal-command-finished", attemptId, evidence: finishedEvidence(command, 0, "ok\n") } as any, { type: "attempt_accepted", attemptId, lessonId: "001-run-an-agent-headlessly", blockId, version: 1, kind: "terminal", summary: "accepted" } as any);
     trace.publicStates.push(publicState(blockId, 1));
   }
   trace.internalEvents.push(raw("attempt_accepted", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--reflection", "reflection"), raw("block_completed", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--reflection"));
@@ -438,6 +438,10 @@ function lesson013Trace(options: { rawJump?: boolean } = {}): AuthoredWorkbookEv
 function raw(type: string, lessonId?: string, blockId?: string, kind?: string): any {
   if (type === "attempt_accepted") return { type, attemptId: randomUUID(), lessonId, blockId, version: 1, kind, summary: "accepted" };
   return lessonId ? { type, lessonId, blockId } : { type };
+}
+
+function finishedEvidence(command: string, exitStatus: number, output: string): any {
+  return { kind: "finished", command, interactions: [{ kind: "input", data: command }, { kind: "output", data: output }], exitStatus };
 }
 
 function publicState(blockId: string, terminalRevision: number): any {

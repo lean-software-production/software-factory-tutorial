@@ -63,8 +63,11 @@ function expectNoPrivateRawEvents(value: unknown): void {
   expect(text).not.toContain("review-request-secret");
   expect(text).not.toContain("private-review-secret");
   expect(text).not.toContain("attempt-secret");
-  expect(text).not.toContain("evidence-secret");
   expect(text).not.toContain("terminal-session-secret");
+  expect(text).not.toContain("finished-command-secret");
+  expect(text).not.toContain("finished-input-secret");
+  expect(text).not.toContain("finished-output-secret");
+  expect(text).not.toContain("finished-transcript-secret");
 }
 
 async function runWithTrace(reportsRoot: string, overrides: V2EvalRunnerDependencies = {}): Promise<V2EvalRunResult> {
@@ -81,9 +84,10 @@ async function runWithTrace(reportsRoot: string, overrides: V2EvalRunnerDependen
       runV2ScenarioSession: async ({ trace }) => {
         trace.publicStates.push({ label: "public", state: { progress: { activeBlockId: "exact-command" } } });
         trace.events.push(
-          { id: "raw-id", sequence: 1, at: "2026-08-20T00:00:00.000Z", type: "terminal-review-requested", lessonId: "001-live-session", blockId: "exact-command", attemptId: "attempt-secret", evidenceRef: "evidence-secret", requestId: "review-request-secret", mode: "automatic", callNumber: 1 } as V2SessionTrace["events"][number],
+          { id: "raw-id", sequence: 1, at: "2026-08-20T00:00:00.000Z", type: "terminal-review-requested", lessonId: "001-live-session", blockId: "exact-command", attemptId: "attempt-secret", requestId: "review-request-secret", mode: "automatic", callNumber: 1 } as V2SessionTrace["events"][number],
           { id: "raw-id", sequence: 2, at: "2026-08-20T00:00:00.000Z", type: "terminal-command-submitted", lessonId: "001-live-session", blockId: "exact-command", command: "echo secret", attemptId: "attempt-secret", terminalSessionId: "terminal-session-secret" } as V2SessionTrace["events"][number],
-          { id: "raw-id", sequence: 3, at: "2026-08-20T00:00:00.000Z", type: "block_completed", lessonId: "001-live-session", blockId: "exact-command" } as V2SessionTrace["events"][number]
+          { id: "raw-id", sequence: 3, at: "2026-08-20T00:00:00.000Z", type: "terminal-command-finished", attemptId: "attempt-secret", evidence: { kind: "finished", command: "echo finished-command-secret", interactions: [{ kind: "input", data: "finished-input-secret\r" }, { kind: "output", data: "finished-output-secret\r\n" }], exitStatus: 0, transcriptSnapshot: { label: "finished-snapshot-label", transcript: "finished-transcript-secret", truncated: false } } } as V2SessionTrace["events"][number],
+          { id: "raw-id", sequence: 4, at: "2026-08-20T00:00:00.000Z", type: "block_completed", lessonId: "001-live-session", blockId: "exact-command" } as V2SessionTrace["events"][number]
         );
         return trace;
       },
