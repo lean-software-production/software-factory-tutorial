@@ -636,11 +636,53 @@ exit 0
 
     const baseline = "Findings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n";
     const stillPartial = await run("pi", ["--no-session", "--tools", "read,grep,find,ls,bash", "-p"], { cwd: calculator, env: handle.hostEnv, input: baseline });
-    expect(stillPartial.stdout).toMatch(/^VERDICT: FAIL/);
+    expect(stillPartial.stdout).toBe(`VERDICT: FAIL
+
+EVIDENCE:
+- Validator ran read-only over the calculator and compared the current quality result with the recorded baseline supplied in the prompt.
+- Recorded baseline reports: calculator/src/index.ts duplicated operator branch parser.
+- Current quality still reports: calculator/src/index.ts duplicated operator branch parser.
+- Criterion not yet met: the refactor is partial; one or more operator branches still duplicate parser work.
+`);
+    expect(stillPartial.stdout).not.toMatch(/exact labelled TESTS|complete QUALITY\/TESTS\/DIFF|current PASS/i);
     const repair = await run("pi", ["--no-session", "--tools", "read,edit,write,grep,find,ls", "-p"], { cwd: calculator, env: handle.hostEnv, input: stillPartial.stdout });
     expect(repair).toMatchObject({ code: 0 });
     const repaired = await run("pi", ["--no-session", "--tools", "read,grep,find,ls,bash", "-p"], { cwd: calculator, env: handle.hostEnv, input: completeLabelledEvidence("authored-eval npm test stub: calculator tests passed without network.\n") });
     expect(repaired.stdout).toMatch(/^VERDICT: PASS/);
+  });
+
+  it("preserves strict labelled validator feedback when labelled evidence sections are present", async () => {
+    const workspace = await tempWorkspace();
+    const handle = await createAuthoredCommandStubs({ lessonNumber: 9, workspaceRoot: workspace });
+    const calculator = resolve(workspace, "calculator");
+    await run("pi", ["--no-session", "--tools", "read,edit,write,grep,find,ls", "-p"], { cwd: calculator, env: handle.hostEnv, input: "partial" });
+
+    const labelledButIncomplete = await run("pi", ["--no-session", "--tools", "read,grep,find,ls", "-p"], { cwd: calculator, env: handle.hostEnv, input: "=== QUALITY NOW ===\nAll quality checks passed.\n" });
+    expect(labelledButIncomplete.stdout).toMatch(/^VERDICT: FAIL/);
+    expect(labelledButIncomplete.stdout).toContain("exact labelled TESTS evidence");
+    expect(labelledButIncomplete.stdout).toContain("complete QUALITY/TESTS/DIFF evidence");
+  });
+
+  it("answers Lesson 013 ask prompts with a concrete no-tools mechanism summary", async () => {
+    const workspace = await tempWorkspace();
+    const handle = await createAuthoredCommandStubs({ lessonNumber: 13, workspaceRoot: workspace });
+    const ask = await run("pi", ["--no-session", "--no-tools", "-p"], {
+      cwd: resolve(workspace, "factory"),
+      env: handle.hostEnv,
+      input: [
+        "What happened in this run?",
+        "Below is the record of the most recent run of the 'refactor' assembly line.",
+        "{\"type\":\"tool_execution_start\",\"toolName\":\"read\",\"args\":{\"path\":\"src/index.ts\"}}",
+        "{\"type\":\"message_end\",\"message\":{\"content\":[{\"text\":\"VERDICT: PASS\"}]}}"
+      ].join("\n")
+    });
+
+    expect(ask.code).toBe(0);
+    expect(ask.stdout).toContain("deterministic authored-eval structural events");
+    for (const term of ["factory/", "refactor/", "factory/refactor/run.sh", "orchestrator", "prompt/script station pairs", "operator", "routing", "evidence", "stopped after PASS"]) {
+      expect(ask.stdout).toContain(term);
+    }
+    expect(ask.stdout).not.toMatch(/AUTHORED_EVAL_COMMAND_STUB_CONFIG|authored-eval-command-stubs\/container-config|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|Finish multiply and divide independently/);
   });
 
   it("requires one non-empty labelled evidence block in canonical order for later lessons", async () => {

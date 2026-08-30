@@ -1006,6 +1006,36 @@ function validatorVerdict(prompt) {
   const baselineOk = evidence.qualityBefore.includes(QUALITY_PASS) || evidence.baselineReduction;
   return evidence.complete && evidence.testsPassed && evidence.qualityPassed && evidence.qualityCorroborates && baselineOk && evidence.diffComplete ? "PASS" : "FAIL";
 }
+function baselineSummaryFromPrompt(prompt) {
+  if (prompt.includes(DUPLICATION_FINDING)) return "calculator/src/index.ts duplicated operator branch parser";
+  if (/Findings reported by:/i.test(prompt)) return "quality findings were supplied in the raw lesson-stage baseline";
+  return "no recorded quality finding was visible in the prompt";
+}
+function currentQualitySummary(sourceText) {
+  const quality = currentQualityFromSource(sourceText);
+  return quality.includes(DUPLICATION_FINDING) ? "calculator/src/index.ts duplicated operator branch parser" : quality.trim();
+}
+function lessonStageValidatorText(prompt) {
+  const sourceText = readSource();
+  const source = sourceState(sourceText);
+  const criterion = source.partial
+    ? "the refactor is partial; one or more operator branches still duplicate parser work"
+    : source.complete
+      ? "the source now has the shared operand reader across all operator branches"
+      : "the expected duplication-reduction edit is incomplete";
+  return "VERDICT: FAIL\n\nEVIDENCE:\n"
+    + "- Validator ran read-only over the calculator and compared the current quality result with the recorded baseline supplied in the prompt.\n"
+    + "- Recorded baseline reports: " + baselineSummaryFromPrompt(prompt) + ".\n"
+    + "- Current quality still reports: " + currentQualitySummary(sourceText) + ".\n"
+    + "- Criterion not yet met: " + criterion + ".\n";
+}
+function askSummaryText() {
+  return "The supplied record contains deterministic authored-eval structural events with zero recorded cost.\n\n"
+    + "From the supplied record: factory/ is the factory root, refactor/ is the assembly line, and factory/refactor/run.sh is the orchestrator. "
+    + "The line uses prompt/script station pairs for doer, validator, repair, and commit work, while ask.sh is a no-tools station that answers from the event record. "
+    + "run.sh handles routing between stations, carries TESTS/QUALITY/DIFF evidence into validation, branches on VERDICT to repair or commit, and stopped after PASS or its failure/iteration bounds. "
+    + "The operator starts the line, watches the bounded record, asks what happened, and keeps judgement over cost, regressions, and whether the result is worth it.\n";
+}
 function stationText(station, prompt) {
   if (station === "doer") {
     const plan = sourceState().helper ? planCompleteRefactor() : planPartialRefactor();
@@ -1016,6 +1046,8 @@ function stationText(station, prompt) {
     return { text: "Stub repair completed the deterministic calculator refactoring.\n", mutation: plan.mutation, sourcePlan: plan };
   }
   if (station === "validator") {
+    const parsed = parseLabelledSections(prompt);
+    if (!parsed.present) return { text: lessonStageValidatorText(prompt), verdict: "FAIL", mutation: "none" };
     const verdict = validatorVerdict(prompt);
     const source = sourceState();
     const evidence = labelledEvidence(prompt);
@@ -1025,7 +1057,7 @@ function stationText(station, prompt) {
     return { text, verdict, mutation: "none" };
   }
   if (station === "commit") return { text: "Refactor calculator operand parsing\n\nUse a shared operand reader across prefix operator branches.\n", mutation: "none" };
-  return { text: "The supplied record contains deterministic authored-eval structural events with zero recorded cost.\n", mutation: "none" };
+  return { text: askSummaryText(), mutation: "none" };
 }
 function assistantMessage(text) { return { role: "assistant", content: [{ type: "text", text }] }; }
 function toolArgs(toolName) {

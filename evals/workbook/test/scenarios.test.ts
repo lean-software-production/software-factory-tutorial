@@ -573,13 +573,25 @@ describe("authored scenario shell commands", () => {
       const bodies = commands.map(stripActivation);
       expect(bodies).toHaveLength(5);
       const baselinePath = join(sessionWorkspace, "factory/.tmp/refactor-quality-before.txt");
+      const outputs: string[] = [];
       for (const [index, command] of bodies.entries()) {
-        await execShell(command, sessionWorkspace, stubbedShellEnv(handle), index === 4 ? 20_000 : 10_000);
+        outputs.push(await execShell(command, sessionWorkspace, stubbedShellEnv(handle), index === 4 ? 20_000 : 10_000));
         if (index === 1) {
           const baseline = await readFile(baselinePath, "utf8");
           expect(sha256Text(baseline)).toBe(sha256Text(await readFile(baselinePath, "utf8")));
         }
+        if (index === 2) {
+          const sourceAfterWrongRerun = await readFile(join(sessionWorkspace, "calculator/src/index.ts"), "utf8");
+          expect(sourceAfterWrongRerun).toContain('const first = readFirstOperand("and");');
+          expect(sourceAfterWrongRerun).toContain('if (pieces[place++] !== "by") fail();');
+        }
       }
+      expect(outputs[1]).toMatch(/^Starting validation\.\.\.\nVERDICT: FAIL/m);
+      expect(outputs[1]).toContain("Current quality still reports: calculator/src/index.ts duplicated operator branch parser.");
+      expect(outputs[1]).not.toMatch(/exact labelled TESTS|complete QUALITY\/TESTS\/DIFF|current PASS/i);
+      expect(outputs[2]).toMatch(/^Starting validation\.\.\.\nVERDICT: FAIL/m);
+      expect(outputs[2]).toContain("Criterion not yet met: the refactor is partial");
+      expect(outputs[2]).not.toMatch(/exact labelled TESTS|complete QUALITY\/TESTS\/DIFF|current PASS/i);
       const baseline = await readFile(baselinePath, "utf8");
       const baselineDigest = sha256Text(baseline);
       expect(sha256Text(await readFile(baselinePath, "utf8"))).toBe(baselineDigest);
@@ -857,7 +869,7 @@ function lesson013Fixture(input: AuthoredWorkbookScenarioGateInput): AuthoredWor
   ];
   input.trace.terminalTranscript = [
     { blockId: "lesson--013-oversee-the-orchestrator--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\n./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &\n./factory/steer.sh refactor \"Finish multiply and divide independently before validation.\"\n./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &\necho \"=== RUN LOG (tail) ===\"\ntail -n 80 .tmp/refactor-run.log\nprintf '\\n'\necho \"=== WATCH LOG (tail) ===\"\ntail -n 80 .tmp/refactor-watch.log\nprintf '\\n'\necho \"=== ASK SUMMARY ===\"\n./factory/ask.sh refactor \"What happened in this run?\"" },
-    { blockId: "lesson--013-oversee-the-orchestrator--implementation-order", direction: "output", text: "=== RUN LOG (tail) ===\nStarting doer\nStarting validation\nStarting commit\nLine finished after 1 iterations.\n=== WATCH LOG (tail) ===\n→ read\nauthored-eval accepted early steer\n→ edit\n=== ASK SUMMARY ===\nThe supplied record contains deterministic authored-eval structural events with zero recorded cost.\n" }
+    { blockId: "lesson--013-oversee-the-orchestrator--implementation-order", direction: "output", text: "=== RUN LOG (tail) ===\nStarting doer\nStarting validation\nStarting commit\nLine finished after 1 iterations.\n=== WATCH LOG (tail) ===\n→ read\nauthored-eval accepted early steer\n→ edit\n=== ASK SUMMARY ===\nThe supplied record contains deterministic authored-eval structural events with zero recorded cost.\n\nFrom the supplied record: factory/ is the factory root, refactor/ is the assembly line, and factory/refactor/run.sh is the orchestrator. The line uses prompt/script station pairs for doer, validator, repair, and commit work, while ask.sh is a no-tools station that answers from the event record. run.sh handles routing between stations, carries TESTS/QUALITY/DIFF evidence into validation, branches on VERDICT to repair or commit, and stopped after PASS or its failure/iteration bounds. The operator starts the line, watches the bounded record, asks what happened, and keeps judgement over cost, regressions, and whether the result is worth it.\n" }
   ];
   input.trace.reflections = [{ blockId: "lesson--013-oversee-the-orchestrator--checks", role: "learner", text: "The factory is factory/. The line is refactor/. The orchestrator is run.sh: it starts the line, hands inputs to stations, branches on VERDICT, handles failures with repair, and stops by counters. Prompt/script pairs are stations. ask.sh is no-tools because the record is supplied. I am the operator. Repeated FAIL can mean an unmet criterion or missing/unreachable evidence. Cost, regressions, and whether the result is worth it are still operator judgement." }];
   input.commandInvocations = [
@@ -1033,7 +1045,10 @@ function expectLesson013VisibleOutput(output: string): void {
   expect(output).toContain("→ edit");
   expect(output).toContain("=== ASK SUMMARY ===");
   expect(output).toContain("deterministic authored-eval structural events");
-  expect(output).not.toMatch(/AUTHORED_EVAL_COMMAND_STUB_CONFIG|authored-eval-command-stubs\/container-config|\/var\/folders|\/private\/tmp/);
+  for (const term of ["factory/", "refactor/", "factory/refactor/run.sh", "orchestrator", "prompt/script station pairs", "operator", "routing", "evidence", "stopped after PASS"]) {
+    expect(output).toContain(term);
+  }
+  expect(output).not.toMatch(/AUTHORED_EVAL_COMMAND_STUB_CONFIG|authored-eval-command-stubs\/container-config|\/var\/folders|\/private\/tmp|Finish multiply and divide independently/);
 }
 
 async function expectLesson013StubbedResult(sessionWorkspace: string, evidencePath: string): Promise<void> {
