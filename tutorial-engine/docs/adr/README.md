@@ -46,4 +46,4 @@ Update the index below whenever you create a record or change its status.
 | [0022](0022-use-one-shot-terminal-workflow-assessment.md) | superseded | Use one-shot terminal workflow assessment |
 | [0023](0023-scope-lesson-work-to-optional-shared-session-folders.md) | superseded | Scope lesson work to optional shared-session folders |
 | [0024](0024-isolate-lesson-workspaces-as-live-repositories.md) | accepted | Isolate lesson workspaces as live repositories |
-| [0025](0025-use-one-main-tutor-for-practice-review.md) | accepted | Use one Main Tutor for practice review |
+| [0026](0026-use-one-stateless-main-tutor-for-practice-review.md) | accepted | Use one stateless Main Tutor for practice review |
