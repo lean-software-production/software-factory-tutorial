@@ -17,28 +17,8 @@ import type { EditorPracticeBlock, WorkbookBlock, WorkbookLesson } from "./contr
 import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTerminal, PublicTerminalSnapshot, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookLesson, PublicWorkbookOrderedBlock, PublicWorkbookState } from "./public-contract.js";
 import { TUTOR_INFRASTRUCTURE_FATAL_MESSAGE, publicTutorInfrastructureFatalState, type PublicTutorInfrastructureFatalState } from "./tutor-infrastructure.js";
 
-const TERMINAL_ASSESSMENT_TIMEOUT_MS = 30_000;
 const WORKFLOW_CLOSE_GRACE_MS = 250;
 const MAX_PUBLIC_TERMINAL_SNAPSHOT_BYTES = 16_000;
-
-class TerminalAssessmentTimeoutError extends Error {
-  constructor() { super("Terminal assessment timed out."); }
-}
-
-/** Injectable so terminal assessment timeouts have deterministic fake-timer coverage. */
-export interface TerminalAssessmentScheduler {
-  schedule(delayMs: number, callback: () => void): unknown;
-  cancel(handle: unknown): void;
-}
-
-const terminalAssessmentScheduler: TerminalAssessmentScheduler = {
-  schedule: (delayMs, callback) => {
-    const timer = setTimeout(callback, delayMs);
-    timer.unref?.();
-    return timer;
-  },
-  cancel: (handle) => clearTimeout(handle as NodeJS.Timeout),
-};
 
 type AcceptedCheckpoint = { summary: string; kind: AttemptEvidence["kind"] };
 type CompleteBlockResult = PublicCompleteBlockResult;
@@ -388,7 +368,6 @@ export interface WorkbookWorkflowDependencies {
   timeline: WorkbookTimeline;
   attempts: AttemptStore;
   mainTutor: MainWorkbookTutor;
-  terminalAssessmentScheduler?: TerminalAssessmentScheduler;
   activeTerminalContext?: () => ActiveTerminalTranscriptContext | undefined;
   onTerminalContinued?: (block: ActiveObservedTerminalBlock) => void;
   log: TutorialLogger;
@@ -417,8 +396,7 @@ export interface WorkbookWorkflow {
   submitEvent(input: { blockId: string; action: string; response?: string }): Promise<Awaited<ReturnType<typeof publicState>>>;
 }
 
-export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, timeline, attempts, mainTutor, terminalAssessmentScheduler: injectedTerminalAssessmentScheduler, activeTerminalContext: currentActiveTerminalContext, onTerminalContinued, log }: WorkbookWorkflowDependencies): Promise<WorkbookWorkflow> {
-  const assessmentScheduler = injectedTerminalAssessmentScheduler ?? terminalAssessmentScheduler;
+export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, timeline, attempts, mainTutor, activeTerminalContext: currentActiveTerminalContext, onTerminalContinued, log }: WorkbookWorkflowDependencies): Promise<WorkbookWorkflow> {
   let loaded = await loadWorkbook(contentRoot);
   let stream = buildWorkbookBlockStream(loaded);
   let records = await timeline.read();
@@ -769,7 +747,6 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     generation: number;
   };
   type TerminalReviewResult = { outcome: "accepted" | "feedback"; message: string };
-  const terminalAssessmentTimeouts = new Set<unknown>();
   const terminalAssessmentTasks = new Set<Promise<void>>();
 
   const trackTerminalAssessment = (task: Promise<void>): void => {
@@ -781,12 +758,6 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
         log.info("Terminal direct review task failed before recording an outcome.");
       }
     );
-  };
-  const cancelAllTerminalAssessmentTimeouts = (): void => {
-    for (const handle of [...terminalAssessmentTimeouts]) {
-      assessmentScheduler.cancel(handle);
-      terminalAssessmentTimeouts.delete(handle);
-    }
   };
   const boundedDrain = async (promises: Promise<unknown>[], timeoutMs: number): Promise<void> => {
     if (promises.length === 0) return;
@@ -801,22 +772,6 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       ]);
     } finally {
       if (timer) clearTimeout(timer);
-    }
-  };
-  const withTerminalAssessmentTimeout = async <T>(operation: Promise<T>): Promise<T> => {
-    let handle: unknown;
-    const timeout = new Promise<T>((_resolve, reject) => {
-      handle = assessmentScheduler.schedule(TERMINAL_ASSESSMENT_TIMEOUT_MS, () => {
-        terminalAssessmentTimeouts.delete(handle);
-        reject(new TerminalAssessmentTimeoutError());
-      });
-      terminalAssessmentTimeouts.add(handle);
-    });
-    try {
-      return await Promise.race([operation, timeout]);
-    } finally {
-      assessmentScheduler.cancel(handle);
-      terminalAssessmentTimeouts.delete(handle);
     }
   };
   const terminalReviewDurationMs = (startedAtMs: number): number => Math.max(0, Date.now() - startedAtMs);
@@ -916,7 +871,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       let decision: TutorDecision;
       const startedAtMs = Date.now();
       try {
-        decision = await withTerminalAssessmentTimeout(mainTutor.review({ ...review.context, attempt, privateGuidance: job.rubric }));
+        decision = await mainTutor.review({ ...review.context, attempt, privateGuidance: job.rubric });
       } catch {
         logTerminalReviewCall(startedAtMs, "infrastructure_failure");
         await latchTerminalReviewFatal(job);
@@ -1222,7 +1177,6 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       // roles first so active or racing provider sessions are cancelled before the short drain.
       closed = true;
       reloadGeneration += 1;
-      cancelAllTerminalAssessmentTimeouts();
       mainTutor.dispose();
       // Guarded callbacks observe `closed`; do not let a stalled provider prevent terminal close.
       await boundedDrain([...ordinaryCommands, ...reviewFinalizers, ...terminalAssessmentTasks], WORKFLOW_CLOSE_GRACE_MS);

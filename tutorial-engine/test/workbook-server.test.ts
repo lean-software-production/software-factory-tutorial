@@ -131,25 +131,6 @@ class ServerFakePty implements TerminalPty {
   onExit(callback: (event: { exitCode: number }) => void): void { this.exit = callback; }
 }
 
-/** Deterministic timeout seam: models are fakes and tests trigger assessment timeouts explicitly. */
-class FakeTerminalAssessmentScheduler {
-  #next = 0;
-  #pending = new Map<number, () => void>();
-  schedule(_delayMs: number, callback: () => void): number {
-    const handle = ++this.#next;
-    this.#pending.set(handle, callback);
-    return handle;
-  }
-  cancel(handle: unknown): void { this.#pending.delete(handle as number); }
-  runNext(): void {
-    const next = this.#pending.entries().next().value as [number, () => void] | undefined;
-    if (!next) throw new Error("No terminal assessment timeout is scheduled.");
-    this.#pending.delete(next[0]);
-    next[1]();
-  }
-  get pending(): number { return this.#pending.size; }
-}
-
 function deferred<T>() {
   let resolvePromise!: (value: T | PromiseLike<T>) => void;
   let rejectPromise!: (reason?: unknown) => void;
@@ -1795,37 +1776,6 @@ ${bashFinishedMarker()}`);
       } finally { await server.close(); }
     });
   }
-
-  it("bounds a hung Main Tutor terminal review, latches fatal state, and ignores the late result", async () => {
-    const dir = await fixture();
-    const pty = new ServerFakePty(false);
-    const scheduler = new FakeTerminalAssessmentScheduler();
-    const hung = deferred<TutorDecision>();
-    const tutor = new FakeMainTutor(
-      { outcome: "accepted", message: "Editor accepted." },
-      hung.promise,
-    );
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalAssessmentScheduler: scheduler, mainTutor: tutor });
-    try {
-      await introduceAndOpenEditor(server.url);
-      await acceptEditor(server.url, tutor);
-      pty.data?.(bashCommandMarker("run"));
-      pty.data?.(`done
-${bashFinishedMarker()}`);
-      await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.terminal?.phase === "checking" && tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal").length === 1 && scheduler.pending === 1, "hung Main Tutor timeout pending");
-      scheduler.runNext();
-      const failed = await waitForWorkbookState(server.url, (next) => Boolean(next.fatal), "hung Main Tutor fatal");
-      expectFatalState(failed);
-      expect(tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(1);
-      expect(scheduler.pending).toBe(0);
-
-      hung.resolve({ outcome: "feedback", message: "Late feedback must not replace the timeout." });
-      await waitMs(30);
-      const latest = await state(server.url);
-      expectFatalState(latest);
-      expect(await privateTimeline(dir)).not.toContainEqual(expect.objectContaining({ type: "terminal-feedback-recorded", text: "Late feedback must not replace the timeout." }));
-    } finally { await server.close(); }
-  });
 
   it("drops a stale direct terminal review result when Bash submits a newer command", async () => {
     const dir = await fixture();
