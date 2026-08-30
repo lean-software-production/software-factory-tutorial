@@ -1776,6 +1776,60 @@ describe("workbook browser API", () => {
         expect.objectContaining({ type: "terminal-review-retried", attemptId: expect.any(String), failureId: failure.failureId }),
         expect.objectContaining({ type: "attempt_accepted", kind: "terminal", summary: "Accepted after terminal review retry." }),
       ]));
+
+      const replay = await fetch(`${server.url}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId: failure.failureId }) });
+      expect(replay.status).toBe(202);
+      const replayedState = await replay.json();
+      expect(block(replayedState, "run-supplied-command")?.terminal).toEqual({ phase: "complete", message: "Accepted after terminal review retry." });
+      await waitMs(30);
+      const afterReplay = await privateTimeline(dir);
+      expect(pty.writes).toEqual(["run\r"]);
+      expect(tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(2);
+      expect(afterReplay.filter((record) => record.type === "terminal-command-submitted")).toHaveLength(1);
+      expect(afterReplay.filter((record) => record.type === "terminal-review-retried" && record.failureId === failure.failureId)).toHaveLength(1);
+      ws.close();
+    } finally { await server.close(); }
+  });
+
+  it("does not replay a consumed transient terminal failure after later Tutor feedback", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty(false);
+    const tutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      new Error("temporary provider outage"),
+      { outcome: "feedback", message: "Legitimate visible feedback." },
+    );
+    const coach = new FakePracticeCoach();
+    coach.queue.push({ outcome: "ready", text: "private handoff" });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: tutor, practiceCoach: coach });
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      const ws = await connect(server.url, server.url);
+      ws.send(JSON.stringify({ type: "input", data: "run\r" }));
+      pty.data?.(bashCommandMarker("run"));
+      pty.data?.(`done\r\n${bashFinishedMarker()}`);
+      const failed = await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.terminal?.message === "Review is temporarily unavailable. Please run the command again in a moment.", "initial transient terminal failure");
+      const failure = failed.timeline.find((record: any) => record.type === "tutor_failed" && record.operation === "review" && record.blockId === "lesson--001-first--run-supplied-command");
+      expect(failure?.failureId).toEqual(expect.any(String));
+
+      const retry = await fetch(`${server.url}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId: failure.failureId }) });
+      expect(retry.status).toBe(202);
+      const feedback = await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.terminal?.message === "Legitimate visible feedback.", "legitimate terminal feedback after retry");
+      expect(block(feedback, "run-supplied-command")?.terminal).toEqual({ phase: "feedback", message: "Legitimate visible feedback." });
+
+      const replay = await fetch(`${server.url}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId: failure.failureId }) });
+      expect(replay.status).toBe(202);
+      expect(block(await replay.json(), "run-supplied-command")?.terminal).toEqual({ phase: "feedback", message: "Legitimate visible feedback." });
+      await waitMs(30);
+
+      const records = await privateTimeline(dir);
+      expect(pty.writes).toEqual(["run\r"]);
+      expect(coach.assessments).toHaveLength(1);
+      expect(tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(2);
+      expect(records.filter((record) => record.type === "terminal-command-submitted")).toHaveLength(1);
+      expect(records.filter((record) => record.type === "terminal-review-retried" && record.failureId === failure.failureId)).toHaveLength(1);
+      expect(block(await state(server.url), "run-supplied-command")?.terminal).toEqual({ phase: "feedback", message: "Legitimate visible feedback." });
       ws.close();
     } finally { await server.close(); }
   });

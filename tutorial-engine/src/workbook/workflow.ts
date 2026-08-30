@@ -1252,6 +1252,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
 
   const requeueTerminalReviewFromFailure = async (failure: TutorFailure, generation: number): Promise<boolean> => {
     if (failure.publicMessage !== TERMINAL_REVIEW_FAILURE_FEEDBACK) return false;
+    if (records.some((record) => record.type === "terminal-review-retried" && record.failureId === failure.id)) return false;
     const active = activeDeclaredBlock();
     if (!active || active.block.type !== "terminal-practice" || active.lessonId !== failure.lessonId || active.id !== failure.blockId) return false;
     const submission = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
@@ -1331,7 +1332,8 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
         await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: "restore", operation: "restore", publicMessage: TUTOR_UNAVAILABLE });
       }
     } else if (failure.operation === "review") {
-      if (!await requeueTerminalReviewFromFailure(failure, generation)) await requeueActiveAttempt({ generation });
+      if (failure.publicMessage === TERMINAL_REVIEW_FAILURE_FEEDBACK) await requeueTerminalReviewFromFailure(failure, generation);
+      else await requeueActiveAttempt({ generation });
     } else if (failure.operation === "block_summary") {
       const leaving = stream.find((block): block is DeclaredWorkbookBlock => block.origin === "declared" && block.lessonId === failure.lessonId && block.id === failure.blockId);
       if (leaving) {
