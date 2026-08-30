@@ -1190,7 +1190,7 @@ function hasTrustedCalculatorBehavior(input: AuthoredWorkbookScenarioGateInput, 
   if (!hasCompletedMultiplyAndDivideRefactor(source)) return false;
   if (options.requireIntermediateMultiplyOnly) {
     const multiplyOnly = input.facts.calculatorBehaviorTimeline?.find((entry) => entry.label === "after-multiply-only");
-    if (!multiplyOnly || multiplyOnly.testStatus !== "passed") return false;
+    if (!multiplyOnly || multiplyOnly.testStatus !== "passed" || multiplyOnly.sourceSha256 === projection.sourceSha256) return false;
     const intermediate = new Map(multiplyOnly.cases.map((entry) => [entry.input, entry.output]));
     if (intermediate.get("multiply 6 by 7") !== 42 || intermediate.has("divide 84 by 2")) return false;
   }

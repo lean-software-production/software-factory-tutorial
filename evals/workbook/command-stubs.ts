@@ -127,6 +127,53 @@ const MAX_EVIDENCE_LINE_BYTES = 16_384;
 const MAX_EVIDENCE_ENTRIES = 1_000;
 const MAX_EVIDENCE_ARRAY_LENGTH = 64;
 
+export const AUTHORED_CALCULATOR_REFACTOR_HELPER = "\n    const readFirstOperand = (separator: \"and\" | \"from\" | \"by\"): number => {\n      const first = read();\n      if (pieces[place++] !== separator) fail();\n      return first;\n    };\n";
+
+export const AUTHORED_CALCULATOR_REFACTOR_ANCHORS = Object.freeze({
+  insertion: "\n    // Operators are prefix forms. Each branch repeats the same parser work on\n",
+  addBefore: "    if (word === \"add\") {\n      const first = read();\n      if (pieces[place++] !== \"and\") fail();\n      const second = read();\n      return first + second;\n    }",
+  addAfter: "    if (word === \"add\") {\n      const first = readFirstOperand(\"and\");\n      const second = read();\n      return first + second;\n    }",
+  subtractBefore: "    if (word === \"subtract\") {\n      const first = read();\n      if (pieces[place++] !== \"from\") fail();\n      const second = read();\n      return second - first;\n    }",
+  subtractAfter: "    if (word === \"subtract\") {\n      const first = readFirstOperand(\"from\");\n      const second = read();\n      return second - first;\n    }",
+  multiplyBefore: "    if (word === \"multiply\") {\n      const first = read();\n      if (pieces[place++] !== \"by\") fail();\n      const second = read();\n      return first * second;\n    }",
+  multiplyAfter: "    if (word === \"multiply\") {\n      const first = readFirstOperand(\"by\");\n      const second = read();\n      return first * second;\n    }",
+  divideBefore: "    if (word === \"divide\") {\n      const first = read();\n      if (pieces[place++] !== \"by\") fail();\n      const second = read();\n      if (second === 0) fail();\n      return first / second;\n    }",
+  divideAfter: "    if (word === \"divide\") {\n      const first = readFirstOperand(\"by\");\n      const second = read();\n      if (second === 0) fail();\n      return first / second;\n    }"
+});
+
+export function authoredCalculatorCanonicalRefactorSource(source: string): string | undefined {
+  const branches = [
+    [AUTHORED_CALCULATOR_REFACTOR_ANCHORS.addBefore, AUTHORED_CALCULATOR_REFACTOR_ANCHORS.addAfter],
+    [AUTHORED_CALCULATOR_REFACTOR_ANCHORS.subtractBefore, AUTHORED_CALCULATOR_REFACTOR_ANCHORS.subtractAfter],
+    [AUTHORED_CALCULATOR_REFACTOR_ANCHORS.multiplyBefore, AUTHORED_CALCULATOR_REFACTOR_ANCHORS.multiplyAfter],
+    [AUTHORED_CALCULATOR_REFACTOR_ANCHORS.divideBefore, AUTHORED_CALCULATOR_REFACTOR_ANCHORS.divideAfter]
+  ] as const;
+  const helperCount = occurrences(source, "const readFirstOperand = ");
+  if (helperCount > 1) return undefined;
+  const complete = helperCount === 1 && branches.every(([, after]) => occurrences(source, after) === 1) && branches.every(([before]) => occurrences(source, before) === 0);
+  if (complete) return source;
+  let next = source;
+  if (helperCount === 0) {
+    if (occurrences(next, AUTHORED_CALCULATOR_REFACTOR_ANCHORS.insertion) !== 1) return undefined;
+    next = next.replace(AUTHORED_CALCULATOR_REFACTOR_ANCHORS.insertion, AUTHORED_CALCULATOR_REFACTOR_HELPER + AUTHORED_CALCULATOR_REFACTOR_ANCHORS.insertion);
+  }
+  for (const [before, after] of branches) {
+    const beforeCount = occurrences(next, before);
+    const afterCount = occurrences(next, after);
+    if (afterCount === 1 && beforeCount === 0) continue;
+    if (afterCount === 0 && beforeCount === 1) {
+      next = next.replace(before, after);
+      continue;
+    }
+    return undefined;
+  }
+  return authoredCalculatorCanonicalRefactorSource(next) === next ? next : undefined;
+}
+
+function occurrences(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
+
 export async function createAuthoredCommandStubs(options: AuthoredCommandStubOptions): Promise<AuthoredCommandStubHandle> {
   if (!Number.isInteger(options.lessonNumber) || options.lessonNumber < 2 || options.lessonNumber > 13) {
     throw new Error("Authored command stubs are only for post-Lesson-001 authored scenarios (002-013).");
@@ -842,18 +889,8 @@ function writeSourceAtomic(text) {
     throw error;
   }
 }
-const HELPER = "\n    const readFirstOperand = (separator: \"and\" | \"from\" | \"by\"): number => {\n      const first = read();\n      if (pieces[place++] !== separator) fail();\n      return first;\n    };\n";
-const ANCHORS = Object.freeze({
-  insertion: "\n    // Operators are prefix forms. Each branch repeats the same parser work on\n",
-  addBefore: "    if (word === \"add\") {\n      const first = read();\n      if (pieces[place++] !== \"and\") fail();\n      const second = read();\n      return first + second;\n    }",
-  addAfter: "    if (word === \"add\") {\n      const first = readFirstOperand(\"and\");\n      const second = read();\n      return first + second;\n    }",
-  subtractBefore: "    if (word === \"subtract\") {\n      const first = read();\n      if (pieces[place++] !== \"from\") fail();\n      const second = read();\n      return second - first;\n    }",
-  subtractAfter: "    if (word === \"subtract\") {\n      const first = readFirstOperand(\"from\");\n      const second = read();\n      return second - first;\n    }",
-  multiplyBefore: "    if (word === \"multiply\") {\n      const first = read();\n      if (pieces[place++] !== \"by\") fail();\n      const second = read();\n      return first * second;\n    }",
-  multiplyAfter: "    if (word === \"multiply\") {\n      const first = readFirstOperand(\"by\");\n      const second = read();\n      return first * second;\n    }",
-  divideBefore: "    if (word === \"divide\") {\n      const first = read();\n      if (pieces[place++] !== \"by\") fail();\n      const second = read();\n      if (second === 0) fail();\n      return first / second;\n    }",
-  divideAfter: "    if (word === \"divide\") {\n      const first = readFirstOperand(\"by\");\n      const second = read();\n      if (second === 0) fail();\n      return first / second;\n    }"
-});
+const HELPER = ${JSON.stringify(AUTHORED_CALCULATOR_REFACTOR_HELPER)};
+const ANCHORS = Object.freeze(${JSON.stringify(AUTHORED_CALCULATOR_REFACTOR_ANCHORS)});
 function occurrences(source, needle) { return source.split(needle).length - 1; }
 function sourceState(source = readSource()) {
   const helperCount = occurrences(source, "const readFirstOperand = ");
