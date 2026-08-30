@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import confetti from "canvas-confetti";
 import { defaultKeymap } from "@codemirror/commands";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
@@ -503,37 +504,60 @@ function reducedMotionPreferred(): boolean {
   return false;
 }
 
-export function AcceptanceConfetti({ acceptedKey }: { acceptedKey: string | undefined }) {
-  const initialized = useRef(false);
-  const seen = useRef(new Set<string>());
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const [visibleKey, setVisibleKey] = useState<string>();
+const LESSON_COMPLETION_CONFETTI_BURSTS = [
+  { angle: 58, origin: { x: 0, y: 1 } },
+  { angle: 122, origin: { x: 1, y: 1 } },
+] as const;
 
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-  useEffect(() => {
-    if (!initialized.current) {
-      initialized.current = true;
-      if (acceptedKey) seen.current.add(acceptedKey);
-      return;
-    }
-    if (!acceptedKey || seen.current.has(acceptedKey)) return;
-    seen.current.add(acceptedKey);
-    if (reducedMotionPreferred()) return;
-    if (timer.current) clearTimeout(timer.current);
-    setVisibleKey(acceptedKey);
-    timer.current = setTimeout(() => setVisibleKey(undefined), 1_000);
-  }, [acceptedKey]);
+type ConfettiCannon = ReturnType<typeof confetti.create>;
 
-  if (!visibleKey) return null;
-  return <div className="acceptance-confetti" aria-hidden="true" style={{ pointerEvents: "none" }}>{Array.from({ length: 24 }, (_, index) => <span key={`${visibleKey}-${index}`} className="confetti-particle" style={{ "--x": `${(index % 8) * 13 - 46}vw`, "--delay": `${(index % 6) * 35}ms`, "--hue": `${(index * 47) % 360}` } as React.CSSProperties} />)}</div>;
+function fireLessonCompletionConfetti(cannon: ConfettiCannon) {
+  for (const burst of LESSON_COMPLETION_CONFETTI_BURSTS) {
+    void cannon({
+      ...burst,
+      particleCount: 68,
+      spread: 62,
+      startVelocity: 48,
+      decay: 0.91,
+      scalar: 0.98,
+      ticks: 190,
+      disableForReducedMotion: true,
+    });
+  }
 }
 
-function activeAcceptedKey(progress: Progress): string | undefined {
-  const accepted = progress.blocks.find((block) => block.active && !block.completed && (block.checkpoint?.status === "accepted" || block.terminal?.phase === "complete"));
-  if (!accepted) return undefined;
-  const evidence = accepted.checkpoint?.evidence;
-  const message = accepted.terminal?.phase === "complete" ? accepted.terminal.message : accepted.checkpoint?.successMessage ?? accepted.checkpoint?.summary ?? "accepted";
-  return `${progress.activeLessonId}/${accepted.id}/${evidence?.kind ?? "terminal"}/${message}`;
+export function LessonCompletionConfetti({ completedLessonIds }: { completedLessonIds: readonly string[] }) {
+  const canvas = useRef<HTMLCanvasElement | null>(null);
+  const cannon = useRef<ConfettiCannon | undefined>(undefined);
+  const initialized = useRef(false);
+  const seen = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!canvas.current) return;
+    const nextCannon = confetti.create(canvas.current, { resize: true, disableForReducedMotion: true });
+    cannon.current = nextCannon;
+    return () => {
+      nextCannon.reset();
+      if (cannon.current === nextCannon) cannon.current = undefined;
+    };
+  }, []);
+
+  useEffect(() => {
+    const completed = [...new Set(completedLessonIds)];
+    if (!initialized.current) {
+      completed.forEach((lessonId) => seen.current.add(lessonId));
+      initialized.current = true;
+      return;
+    }
+
+    const newlyCompleted = completed.filter((lessonId) => !seen.current.has(lessonId));
+    completed.forEach((lessonId) => seen.current.add(lessonId));
+    const activeCannon = cannon.current;
+    if (newlyCompleted.length === 0 || !activeCannon) return;
+    newlyCompleted.forEach(() => fireLessonCompletionConfetti(activeCannon));
+  }, [completedLessonIds]);
+
+  return <canvas ref={canvas} className="lesson-completion-confetti-canvas" aria-hidden="true" style={{ pointerEvents: "none" }} />;
 }
 
 function readySuccessorId(progress: Progress): string | undefined {
@@ -772,7 +796,7 @@ export function App() {
   };
   return <div className="shell">
     {contentReloadError && <aside className="author-reload-notice" aria-live="polite"><b>Author reload failed.</b> {contentReloadError}</aside>}
-    <AcceptanceConfetti acceptedKey={activeAcceptedKey(state.progress)} />
+    <LessonCompletionConfetti completedLessonIds={state.progress.completedLessons} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
       <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} onDoItForMe={terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} renderTerminalHistory={(record) => <TerminalHistory state={state.progress.blocks.find((block) => block.id === record.blockId)} />} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand key={activitySource.block.id} lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={setState} onTerminalInsertionChange={registerTerminalInsertion} /> : undefined} completionPanel={<CompletionPanel state={state} onRetry={(failureId) => retryTutorOperation(failureId).then((next) => setState(next))} />} />
