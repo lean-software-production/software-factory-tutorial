@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { defaultKeymap } from "@codemirror/commands";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
@@ -369,8 +369,8 @@ function EditorPracticeBlockView({ block, state, refresh }: { block: EditorPract
   const canEdit = Boolean(state?.active && !completed && !accepted);
   const initialText = state?.draftText ?? "";
 
-  useEffect(() => { refreshRef.current = refresh; }, [refresh]);
-  useEffect(() => {
+  useLayoutEffect(() => { refreshRef.current = refresh; }, [refresh]);
+  useLayoutEffect(() => {
     if (currentBlockId.current !== block.id) {
       currentBlockId.current = block.id;
       baseRevision.current = state?.revision ?? 0;

@@ -1,5 +1,5 @@
 import { JSDOM } from "jsdom";
-import { StrictMode, act, createElement, useState } from "react";
+import { StrictMode, act, createElement, useEffect, useLayoutEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -145,6 +145,18 @@ function activeEditorProgressFor(block: EditorPracticeBlock, overrides: Partial<
 
 function activeEditorProgress(overrides: Partial<Progress["blocks"][number]> = {}): Progress {
   return activeEditorProgressFor(editorBlock, overrides);
+}
+
+function EditorCommitWindowHarness({ block, progress, refresh, afterLayout, afterPassive }: {
+  block: EditorPracticeBlock;
+  progress: Progress;
+  refresh(state: State): void;
+  afterLayout?(): void;
+  afterPassive?(): void;
+}) {
+  useLayoutEffect(() => { afterLayout?.(); }, [afterLayout]);
+  useEffect(() => { afterPassive?.(); }, [afterPassive]);
+  return createElement(BlockView, { block, progress, refresh });
 }
 
 function activeBlockProgress(block: { id: string; type: string }, overrides: Partial<Progress["blocks"][number]> = {}): Progress {
@@ -1146,6 +1158,55 @@ describe("workbook lesson UI", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(JSON.parse(String(fetchMock.mock.calls[2]![1]!.body))).toEqual({ blockId: "edit-answer", revision: 3, text: "edited revision three" });
+  });
+
+  it("rejects an old editor response resolved after a block-switch commit but before passive effects", async () => {
+    vi.useFakeTimers();
+    const seed = "seeded answer draft";
+    const nextBlock = { ...editorBlock, id: "edit-prompt", path: "prompt.md" };
+    const oldResponse = deferred<State>();
+    const order: string[] = [];
+    const oldRefresh = vi.fn(() => { order.push("old refresh"); });
+    const newRefresh = vi.fn(() => { order.push("new refresh"); });
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => oldResponse.promise }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await mount(createElement(EditorCommitWindowHarness, {
+      block: editorBlock,
+      progress: activeEditorProgress({ revision: 0, draftText: seed } as any),
+      refresh: oldRefresh,
+    }));
+    await act(async () => {
+      vi.advanceTimersByTime(750);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const layoutCommitted = deferred<void>();
+    // act() flushes passive effects, which would erase the interval under test. This concurrent-root
+    // render commits first; the parent layout effect then resolves both gates before passive effects.
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", false);
+    mountedRoot!.render(createElement(EditorCommitWindowHarness, {
+      block: nextBlock,
+      progress: activeEditorProgressFor(nextBlock, { revision: 0, draftText: "" } as any),
+      refresh: newRefresh,
+      afterLayout: () => {
+        order.push("layout");
+        expect(document.querySelector("[aria-label='Editor for prompt.md']")).not.toBeNull();
+        oldResponse.resolve(workbookState(activeEditorProgress({ revision: 1, draftText: seed, editorStatus: "feedback" } as any)));
+        layoutCommitted.resolve();
+      },
+      afterPassive: () => { order.push("passive"); },
+    }));
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    await layoutCommitted.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(order).toEqual(["layout"]);
+    expect(oldRefresh).not.toHaveBeenCalled();
+    expect(newRefresh).not.toHaveBeenCalled();
   });
 
   it("resets editor revision tracking when the active editor block changes", async () => {
