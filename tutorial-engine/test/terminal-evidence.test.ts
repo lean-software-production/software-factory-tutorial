@@ -1,64 +1,64 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   MAX_TERMINAL_COMMAND_BYTES,
-  TerminalEvidenceRepository,
+  MAX_TERMINAL_EVIDENCE_BYTES,
+  MAX_TERMINAL_INTERACTIONS,
+  MAX_TERMINAL_INTERACTION_BYTES,
+  MAX_TERMINAL_TRANSCRIPT_SNAPSHOT_BYTES,
+  validateTerminalEvidence,
+  type TerminalEvidence,
 } from "../src/workbook/terminal-evidence.js";
 
-let directories: string[] = [];
-
-async function stateRoot(): Promise<string> {
-  const directory = await mkdtemp(resolve(tmpdir(), "terminal-evidence-"));
-  directories.push(directory);
-  return directory;
-}
-
-afterEach(async () => {
-  await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })));
-  directories = [];
-});
-
-describe("TerminalEvidenceRepository", () => {
-  it("writes one immutable finished snapshot outside the timeline", async () => {
-    const repository = new TerminalEvidenceRepository({ stateRoot: await stateRoot() });
-    const finishedRef = await repository.writeFinished({
-      command: "npm test",
-      interactions: [{ kind: "input", data: "npm test\r" }, { kind: "output", data: "PASS\n" }],
-      exitStatus: 0,
-    });
-
-    expect(finishedRef).toMatch(/^[0-9a-f-]{36}$/i);
-    await expect(repository.read(finishedRef)).resolves.toEqual({
+describe("validateTerminalEvidence", () => {
+  it("accepts a bounded finished snapshot and returns a deep copy", () => {
+    const input: TerminalEvidence = {
       kind: "finished",
       command: "npm test",
       interactions: [{ kind: "input", data: "npm test\r" }, { kind: "output", data: "PASS\n" }],
       exitStatus: 0,
+      transcriptSnapshot: { label: "Command-local terminal transcript at command completion", transcript: "PASS\n", truncated: false },
+    };
+
+    const validated = validateTerminalEvidence(input);
+    input.interactions[0]!.data = "mutated";
+    input.transcriptSnapshot!.transcript = "mutated";
+
+    expect(validated).toEqual({
+      kind: "finished",
+      command: "npm test",
+      interactions: [{ kind: "input", data: "npm test\r" }, { kind: "output", data: "PASS\n" }],
+      exitStatus: 0,
+      transcriptSnapshot: { label: "Command-local terminal transcript at command completion", transcript: "PASS\n", truncated: false },
     });
   });
 
-  it("refuses a reference collision instead of overwriting the original snapshot", async () => {
-    const evidenceRef = "00000000-0000-4000-8000-000000000001";
-    const repository = new TerminalEvidenceRepository({ stateRoot: await stateRoot(), createEvidenceRef: () => evidenceRef });
-    await repository.writeFinished({ command: "first", interactions: [], exitStatus: 0 });
-
-    await expect(repository.writeFinished({ command: "second", interactions: [], exitStatus: 0 })).rejects.toMatchObject({ code: "EEXIST" });
-    await expect(repository.read(evidenceRef)).resolves.toEqual({ kind: "finished", command: "first", interactions: [], exitStatus: 0 });
+  it("rejects an oversized command", () => {
+    expect(() => validateTerminalEvidence({ kind: "finished", command: "x".repeat(MAX_TERMINAL_COMMAND_BYTES + 1), interactions: [], exitStatus: 0 }))
+      .toThrow("Terminal evidence command is invalid.");
   });
 
-  it("validates bounded snapshots when writing and when reading persisted JSON", async () => {
-    const root = await stateRoot();
-    const repository = new TerminalEvidenceRepository({ stateRoot: root });
-    await expect(repository.writeFinished({ command: "x".repeat(MAX_TERMINAL_COMMAND_BYTES + 1), interactions: [], exitStatus: 0 }))
-      .rejects.toThrow("Terminal evidence command is invalid.");
+  it("rejects oversized or too many interactions", () => {
+    expect(() => validateTerminalEvidence({ kind: "finished", command: "ok", interactions: [{ kind: "output", data: "x".repeat(MAX_TERMINAL_INTERACTION_BYTES + 1) }], exitStatus: 0 }))
+      .toThrow("Terminal evidence interaction is invalid.");
+    expect(() => validateTerminalEvidence({ kind: "finished", command: "ok", interactions: Array.from({ length: MAX_TERMINAL_INTERACTIONS + 1 }, () => ({ kind: "output", data: "x" })), exitStatus: 0 }))
+      .toThrow("Terminal evidence interactions are invalid.");
+  });
 
-    const evidenceRef = "00000000-0000-4000-8000-000000000002";
-    const directory = resolve(root, "workbook", "terminal-evidence");
-    const path = resolve(directory, `${evidenceRef}.json`);
-    await mkdir(directory, { recursive: true });
-    await writeFile(path, "{\"kind\":\"finished\",\"command\":\"npm test\",\"interactions\":[{\"kind\":\"output\",\"data\":42}],\"exitStatus\":0}\n", "utf8");
+  it("rejects an oversized aggregate evidence snapshot", () => {
+    const data = "x".repeat(MAX_TERMINAL_INTERACTION_BYTES);
+    const interactions = Array.from({ length: Math.ceil(MAX_TERMINAL_EVIDENCE_BYTES / MAX_TERMINAL_INTERACTION_BYTES) + 1 }, () => ({ kind: "output" as const, data }));
 
-    await expect(repository.read(evidenceRef)).rejects.toThrow("Terminal evidence");
+    expect(() => validateTerminalEvidence({ kind: "finished", command: "ok", interactions, exitStatus: 0 }))
+      .toThrow("Terminal evidence exceeds the snapshot limit.");
+  });
+
+  it("rejects an oversized labelled transcript snapshot", () => {
+    expect(() => validateTerminalEvidence({
+      kind: "finished",
+      command: "ok",
+      interactions: [],
+      exitStatus: 0,
+      transcriptSnapshot: { label: "completion", transcript: "x".repeat(MAX_TERMINAL_TRANSCRIPT_SNAPSHOT_BYTES + 1), truncated: true },
+    })).toThrow("Terminal transcript snapshot is invalid.");
   });
 });

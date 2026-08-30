@@ -3,6 +3,7 @@ import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { tutorialSessionStatePath, tutorialStatePath } from "./tutorial-state.js";
 import type { AttemptKind } from "./attempts.js";
+import { validateTerminalEvidence, type TerminalEvidence } from "./terminal-evidence.js";
 
 export type TimelineMetadata = { id: string; sequence: number; at: string };
 
@@ -22,7 +23,7 @@ export class UnsupportedWorkbookSessionError extends Error {
 }
 
 /**
- * The durable terminal lifecycle. Commands, evidence references, and review requests/failures stay
+ * The durable terminal lifecycle. Commands, inline finished evidence, and review requests/failures stay
  * private. A bounded, sanitized terminal transcript is the sole browser-safe terminal payload: it is
  * written only when an attempt is accepted and is projected as historical output for that authored
  * block.
@@ -31,9 +32,9 @@ export type TerminalReviewRequestMode = "automatic" | "manual";
 
 export type TerminalLifecycleInput =
   | { type: "terminal-command-submitted"; attemptId: string; lessonId: string; blockId: string; command: string; terminalSessionId: string }
-  | { type: "terminal-command-finished"; attemptId: string; exitStatus: number; evidenceRef: string }
-  | { type: "terminal-review-requested"; attemptId: string; lessonId: string; blockId: string; evidenceRef: string; requestId: string; mode: TerminalReviewRequestMode; callNumber: number }
-  | { type: "terminal-review-failed"; attemptId: string; lessonId: string; blockId: string; evidenceRef: string; requestId: string; failureId: string; publicMessage: string }
+  | { type: "terminal-command-finished"; attemptId: string; evidence: TerminalEvidence }
+  | { type: "terminal-review-requested"; attemptId: string; lessonId: string; blockId: string; requestId: string; mode: TerminalReviewRequestMode; callNumber: number }
+  | { type: "terminal-review-failed"; attemptId: string; lessonId: string; blockId: string; requestId: string; failureId: string; publicMessage: string }
   | { type: "terminal-transcript-snapshotted"; attemptId: string; lessonId: string; blockId: string; transcript: string }
   | { type: "terminal-feedback-recorded"; attemptId: string; text: string };
 
@@ -157,6 +158,79 @@ function parseJsonLine(line: string, lineNumber: number): unknown {
   catch { throw new Error(`Invalid workbook timeline record at line ${lineNumber}: invalid JSONL event`); }
 }
 
+function assertExactKeys(value: Record<string, unknown>, line: number, keys: readonly string[]): void {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    throw new Error(`Invalid workbook timeline record at line ${line}: ${value.type} fields are invalid.`);
+  }
+}
+
+function assertStringField(value: Record<string, unknown>, key: string, line: number): string {
+  const field = value[key];
+  if (typeof field !== "string" || !field) throw new Error(`Invalid workbook timeline record at line ${line}: ${key} is required.`);
+  return field;
+}
+
+function assertPositiveIntegerField(value: Record<string, unknown>, key: string, line: number): number {
+  const field = value[key];
+  if (!Number.isInteger(field) || (field as number) <= 0) throw new Error(`Invalid workbook timeline record at line ${line}: ${key} is required.`);
+  return field as number;
+}
+
+function normalizeTerminalLifecycleRecord(value: Record<string, unknown>, line: number, metadata: TimelineMetadata): TerminalLifecycleEvent {
+  switch (value.type) {
+    case "terminal-command-submitted":
+      assertExactKeys(value, line, ["type", "id", "sequence", "at", "attemptId", "lessonId", "blockId", "command", "terminalSessionId"]);
+      return {
+        ...metadata,
+        type: "terminal-command-submitted",
+        attemptId: assertStringField(value, "attemptId", line),
+        lessonId: assertStringField(value, "lessonId", line),
+        blockId: assertStringField(value, "blockId", line),
+        command: assertStringField(value, "command", line),
+        terminalSessionId: assertStringField(value, "terminalSessionId", line),
+      };
+    case "terminal-command-finished": {
+      assertExactKeys(value, line, ["type", "id", "sequence", "at", "attemptId", "evidence"]);
+      let evidence: TerminalEvidence;
+      try { evidence = validateTerminalEvidence(value.evidence); }
+      catch (error) {
+        const message = error instanceof Error ? error.message : "Terminal evidence is invalid.";
+        throw new Error(`Invalid workbook timeline record at line ${line}: ${message}`);
+      }
+      return { ...metadata, type: "terminal-command-finished", attemptId: assertStringField(value, "attemptId", line), evidence };
+    }
+    case "terminal-review-requested":
+      assertExactKeys(value, line, ["type", "id", "sequence", "at", "attemptId", "lessonId", "blockId", "requestId", "mode", "callNumber"]);
+      if (value.mode !== "automatic" && value.mode !== "manual") throw new Error(`Invalid workbook timeline record at line ${line}: mode is required.`);
+      return {
+        ...metadata,
+        type: "terminal-review-requested",
+        attemptId: assertStringField(value, "attemptId", line),
+        lessonId: assertStringField(value, "lessonId", line),
+        blockId: assertStringField(value, "blockId", line),
+        requestId: assertStringField(value, "requestId", line),
+        mode: value.mode,
+        callNumber: assertPositiveIntegerField(value, "callNumber", line),
+      };
+    case "terminal-review-failed":
+      assertExactKeys(value, line, ["type", "id", "sequence", "at", "attemptId", "lessonId", "blockId", "requestId", "failureId", "publicMessage"]);
+      return {
+        ...metadata,
+        type: "terminal-review-failed",
+        attemptId: assertStringField(value, "attemptId", line),
+        lessonId: assertStringField(value, "lessonId", line),
+        blockId: assertStringField(value, "blockId", line),
+        requestId: assertStringField(value, "requestId", line),
+        failureId: assertStringField(value, "failureId", line),
+        publicMessage: assertStringField(value, "publicMessage", line),
+      };
+    default:
+      return value as TerminalLifecycleEvent;
+  }
+}
+
 export function assertCurrentWorkbookSessionFormatRecord(value: unknown): asserts value is WorkbookSessionFormatRecord {
   if (!isRecord(value) || value.type !== WORKBOOK_SESSION_FORMAT_RECORD_TYPE) throw new UnsupportedWorkbookSessionError(unsupportedVersionDetail(undefined));
   if (value.version !== CURRENT_WORKBOOK_SESSION_FORMAT_VERSION) throw new UnsupportedWorkbookSessionError(unsupportedVersionDetail(value.version));
@@ -168,9 +242,11 @@ export function normalizeWorkbookTimelineRecord(value: unknown, line: number): W
   if (!isRecord(value) || typeof value.type !== "string") throw new Error(`Invalid workbook timeline record at line ${line}.`);
   if (LEGACY_RECORD_TYPES.has(value.type)) throw new UnsupportedWorkbookSessionError(`record '${value.type}' belongs to an older workbook session format`);
   if (!CURRENT_RECORD_TYPES.has(value.type)) throw new Error(`Invalid workbook timeline record at line ${line}: unknown record type '${value.type}'.`);
-  if (typeof value.id !== "string" || !value.id) throw new Error(`Invalid workbook timeline record at line ${line}: id is required.`);
-  if (!Number.isInteger(value.sequence) || (value.sequence as number) <= 0) throw new Error(`Invalid workbook timeline record at line ${line}: sequence is required.`);
-  if (typeof value.at !== "string" || !value.at) throw new Error(`Invalid workbook timeline record at line ${line}: at is required.`);
+  const id = assertStringField(value, "id", line);
+  const sequence = assertPositiveIntegerField(value, "sequence", line);
+  const at = assertStringField(value, "at", line);
+  const metadata = { id, sequence, at };
+  if (value.type.startsWith("terminal-")) return normalizeTerminalLifecycleRecord(value, line, metadata);
   if (value.type === "message") {
     if (value.source !== "authored" && value.source !== "learner" && value.source !== "main_tutor") throw new Error(`Invalid workbook timeline record at line ${line}: message source is invalid.`);
   }
@@ -262,7 +338,7 @@ export class WorkbookTimeline {
   /** Append as one step of an operation already serialized through run(). */
   async appendWithinRun(input: TimelineAppendInput): Promise<WorkbookTimelineRecord> {
     const existing = await this.readWithinRun();
-    const record = { ...input, id: randomUUID(), sequence: (existing.at(-1)?.sequence ?? 0) + 1, at: new Date().toISOString() } as WorkbookTimelineRecord;
+    const record = normalizeWorkbookTimelineRecord({ ...input, id: randomUUID(), sequence: (existing.at(-1)?.sequence ?? 0) + 1, at: new Date().toISOString() }, 0);
     await mkdir(dirname(this.eventPath), { recursive: true });
     await appendFile(this.eventPath, `${JSON.stringify(record)}\n`, "utf8");
     for (const listener of this.#listeners) listener(record);

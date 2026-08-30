@@ -7,7 +7,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tutorialSessionStatePath, tutorialStatePath } from "../src/workbook/tutorial-state.js";
-import { MAX_TERMINAL_TRANSCRIPT_SNAPSHOT_BYTES, TerminalEvidenceRepository } from "../src/workbook/terminal-evidence.js";
+import { MAX_TERMINAL_TRANSCRIPT_SNAPSHOT_BYTES } from "../src/workbook/terminal-evidence.js";
 import { SessionWorkspaceManager } from "../src/session-workspace.js";
 import { startWorkbookServer } from "../src/workbook/server.js";
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
@@ -20,6 +20,7 @@ import { UnsupportedWorkbookSessionError, WorkbookTimeline, workbookSessionForma
 import { QueuedMainTutor as FakeMainTutor } from "./support/fake-tutors.js";
 
 let dirs: string[] = [];
+const LEGACY_EVIDENCE_REFERENCE_KEY = "evidence" + "Ref";
 
 async function fixture(options: { editorPath?: string; firstLessonWorkspace?: string } = {}) {
   const dir = await mkdtemp(resolve(tmpdir(), "workbook-server-")); dirs.push(dir);
@@ -276,15 +277,23 @@ function timelineRecord(sequence: number, input: Record<string, unknown>): Recor
 function currentTimelineText(rows: Record<string, unknown>[]): string {
   return [workbookSessionFormatRecord(), ...rows].map((row) => JSON.stringify(row)).join("\n") + "\n";
 }
+async function privateTimelinePath(workspaceOrSessionRoot: string): Promise<string> {
+  const direct = tutorialSessionStatePath(workspaceOrSessionRoot, "workbook/events.jsonl");
+  try { await access(direct); return direct; }
+  catch (error: any) { if (error?.code !== "ENOENT") throw error; }
+  return tutorialStatePath(workspaceOrSessionRoot, "workbook", "events.jsonl");
+}
 async function privateTimeline(workspaceOrSessionRoot: string): Promise<WorkbookTimelineRecord[]> {
-  let text: string;
-  try {
-    text = await readFile(tutorialSessionStatePath(workspaceOrSessionRoot, "workbook/events.jsonl"), "utf8");
-  } catch (error: any) {
-    if (error?.code !== "ENOENT") throw error;
-    text = await readFile(tutorialStatePath(workspaceOrSessionRoot, "workbook", "events.jsonl"), "utf8");
-  }
+  const text = await readFile(await privateTimelinePath(workspaceOrSessionRoot), "utf8");
   return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)).filter((record) => record.type !== "workbook-session-format") as WorkbookTimelineRecord[];
+}
+async function rewritePrivateTimeline(workspaceOrSessionRoot: string, rewrite: (records: Record<string, unknown>[]) => Record<string, unknown>[]): Promise<void> {
+  const path = await privateTimelinePath(workspaceOrSessionRoot);
+  const text = await readFile(path, "utf8");
+  const rows = text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  const header = rows.shift();
+  if (!header || header.type !== "workbook-session-format") throw new Error("missing workbook session format header");
+  await writeFile(path, [JSON.stringify(header), ...rewrite(rows as Record<string, unknown>[]).map((row) => JSON.stringify(row))].join("\n") + "\n", "utf8");
 }
 async function completeBlock(serverUrl: string, blockId: string) {
   return fetch(`${serverUrl}/api/workbook/complete-block`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId }) });
@@ -334,6 +343,15 @@ async function acceptEditor(serverUrl: string, tutor: FakeMainTutor, text = "fac
 function terminalReviewTranscript(review: { attempt: Attempt }): string {
   if (review.attempt.evidence.kind !== "terminal") throw new Error("Expected a terminal review.");
   return review.attempt.evidence.transcript;
+}
+
+function terminalReviewCommandEvidence(review: { attempt: Attempt }): unknown {
+  return JSON.parse(terminalReviewTranscript(review)).commandEvidence;
+}
+
+function commandEvidenceFromFinished(finished: Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }>): unknown {
+  const evidence = finished.evidence;
+  return { kind: evidence.kind, command: evidence.command, interactions: evidence.interactions, exitStatus: evidence.exitStatus };
 }
 
 async function submitTerminalAttempt(serverUrl: string, blockId: string) {
@@ -1296,52 +1314,49 @@ describe("workbook browser API", () => {
       const replyContext = secondTutor.replies.at(-1)!.activeContext as any;
       expect(replyContext.terminal).toMatchObject({ transcript: expect.stringContaining("fresh-session-output") });
       expect(replyContext.terminal.latestCommand).toBeUndefined();
-      expect(JSON.stringify(await response.json())).not.toMatch(/fresh-session-output|stale-old-session-context|workbook-command|evidenceRef|attemptId/);
+      expect(JSON.stringify(await response.json())).not.toMatch(/fresh-session-output|stale-old-session-context|workbook-command|attemptId/);
       ws.close();
     } finally { await secondServer.close(); }
   });
 
-  it("omits an old-session finished command from ordinary chat when finished evidence is missing or inconsistent", async () => {
-    for (const scenario of ["missing", "inconsistent"] as const) {
-      const dir = await fixture();
-      const oldPty = new ServerFakePty(false);
-      const firstTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
-      const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => oldPty, mainTutor: firstTutor });
-      const blockId = "lesson--001-first--run-supplied-command";
-      const staleCommand = `printf stale-old-finished-${scenario}-context`;
-      try {
-        await introduceAndOpenEditor(firstServer.url);
-        await acceptEditor(firstServer.url, firstTutor);
-        const ws = await connect(firstServer.url, firstServer.url);
-        oldPty.data?.(bashCommandMarker(staleCommand));
-        ws.send(JSON.stringify({ type: "input", data: `${staleCommand}\r` }));
-        await waitForWorkbookState(firstServer.url, () => oldPty.writes.includes(`${staleCommand}\r`), "terminal input to reach the pty");
-        oldPty.data?.(`stale-finished-output\r\n${bashFinishedMarker(7)}`);
-        const records = await waitForPrivateTimeline(dir, (latest) => latest.some((record) => record.type === "terminal-command-finished"), "old finished command evidence");
-        const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished")!;
-        const evidence = new TerminalEvidenceRepository({ stateRoot: tutorialStatePath(dir) });
-        const evidencePath = resolve(evidence.evidenceDirectory, `${finished.evidenceRef}.json`);
-        if (scenario === "missing") await rm(evidencePath);
-        else await writeFile(evidencePath, `${JSON.stringify({ kind: "finished", command: "tampered command", exitStatus: 0, interactions: [{ kind: "output", data: "tampered output" }] })}\n`, "utf8");
-        ws.close();
-      } finally { await firstServer.close(); }
+  it("omits an old-session finished command from ordinary chat when inline finished evidence is inconsistent", async () => {
+    const dir = await fixture();
+    const oldPty = new ServerFakePty(false);
+    const firstTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => oldPty, mainTutor: firstTutor });
+    const blockId = "lesson--001-first--run-supplied-command";
+    const staleCommand = "printf stale-old-finished-context";
+    try {
+      await introduceAndOpenEditor(firstServer.url);
+      await acceptEditor(firstServer.url, firstTutor);
+      const ws = await connect(firstServer.url, firstServer.url);
+      oldPty.data?.(bashCommandMarker(staleCommand));
+      ws.send(JSON.stringify({ type: "input", data: `${staleCommand}\r` }));
+      await waitForWorkbookState(firstServer.url, () => oldPty.writes.includes(`${staleCommand}\r`), "terminal input to reach the pty");
+      oldPty.data?.(`stale-finished-output\r\n${bashFinishedMarker(7)}`);
+      await waitForPrivateTimeline(dir, (latest) => latest.some((record) => record.type === "terminal-command-finished"), "old finished command evidence");
+      ws.close();
+    } finally { await firstServer.close(); }
 
-      const newPty = new ServerFakePty(false);
-      const secondTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
-      const secondServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => newPty, mainTutor: secondTutor });
-      try {
-        const ws = await connect(secondServer.url, secondServer.url);
-        newPty.data?.(`fresh-${scenario}-session-output\r\n`);
+    await rewritePrivateTimeline(dir, (rows) => rows.map((row: any) => row.type === "terminal-command-finished"
+      ? { ...row, evidence: { ...row.evidence, command: "tampered command", interactions: [{ kind: "output", data: "tampered output" }] } }
+      : row));
 
-        const response = await postMessage(secondServer.url, { blockId, text: `What does the terminal show after the ${scenario} stale evidence?` });
-        expect(response.status).toBe(202);
-        const replyContext = secondTutor.replies.at(-1)!.activeContext as any;
-        expect(replyContext.terminal).toMatchObject({ transcript: expect.stringContaining(`fresh-${scenario}-session-output`) });
-        expect(replyContext.terminal.latestCommand).toBeUndefined();
-        expect(JSON.stringify(await response.json())).not.toMatch(/fresh-missing-session-output|fresh-inconsistent-session-output|stale-old-finished|tampered output|workbook-command|evidenceRef|attemptId/);
-        ws.close();
-      } finally { await secondServer.close(); }
-    }
+    const newPty = new ServerFakePty(false);
+    const secondTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
+    const secondServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => newPty, mainTutor: secondTutor });
+    try {
+      const ws = await connect(secondServer.url, secondServer.url);
+      newPty.data?.("fresh-inconsistent-session-output\r\n");
+
+      const response = await postMessage(secondServer.url, { blockId, text: "What does the terminal show after stale evidence?" });
+      expect(response.status).toBe(202);
+      const replyContext = secondTutor.replies.at(-1)!.activeContext as any;
+      expect(replyContext.terminal).toMatchObject({ transcript: expect.stringContaining("fresh-inconsistent-session-output") });
+      expect(replyContext.terminal.latestCommand).toBeUndefined();
+      expect(JSON.stringify(await response.json())).not.toMatch(/fresh-inconsistent-session-output|stale-old-finished|tampered output|workbook-command|attemptId/);
+      ws.close();
+    } finally { await secondServer.close(); }
   });
 
   it("gives ordinary Main Tutor chat private active terminal context for a running command only", async () => {
@@ -1371,8 +1386,8 @@ describe("workbook browser API", () => {
       });
       expect(replyContext.terminal.transcript).toContain("private-running-output");
       expect(replyContext.terminal.latestCommand.finishedEvidence).toBeUndefined();
-      expect(JSON.stringify(browserState)).not.toMatch(/private-running-context|private-running-output|workbook-command|evidenceRef|attemptId/);
-      expect(JSON.stringify(await timelineSnapshot(server.url))).not.toMatch(/private-running-context|private-running-output|workbook-command|evidenceRef|attemptId/);
+      expect(JSON.stringify(browserState)).not.toMatch(/private-running-context|private-running-output|workbook-command|attemptId/);
+      expect(JSON.stringify(await timelineSnapshot(server.url))).not.toMatch(/private-running-context|private-running-output|workbook-command|attemptId/);
       ws.close();
     } finally { await server.close(); }
   });
@@ -1401,9 +1416,8 @@ describe("workbook browser API", () => {
       expect(replyContext.terminal).toMatchObject({
         transcript: expect.stringContaining("private-finished-output"),
         latestCommand: {
-          command,
+          attemptId: expect.any(String),
           status: "finished",
-          exitStatus: 7,
           finishedEvidence: {
             kind: "finished",
             command,
@@ -1415,50 +1429,26 @@ describe("workbook browser API", () => {
           }
         }
       });
-      expect(replyContext.terminal.latestCommand.evidenceRef).toMatch(/.+/);
-      expect(JSON.stringify(browserState)).not.toMatch(/private-finished-context|private-finished-output|workbook-command|evidenceRef|attemptId/);
-      expect(JSON.stringify(await timelineSnapshot(server.url))).not.toMatch(/private-finished-context|private-finished-output|workbook-command|evidenceRef|attemptId/);
+      expect(replyContext.terminal.latestCommand).not.toHaveProperty(LEGACY_EVIDENCE_REFERENCE_KEY);
+      expect(replyContext.terminal.latestCommand).not.toHaveProperty("command");
+      expect(replyContext.terminal.latestCommand).not.toHaveProperty("exitStatus");
+      expect(JSON.stringify(browserState)).not.toMatch(/private-finished-context|private-finished-output|workbook-command|attemptId/);
+      expect(JSON.stringify(await timelineSnapshot(server.url))).not.toMatch(/private-finished-context|private-finished-output|workbook-command|attemptId/);
       ws.close();
     } finally { await server.close(); }
   });
 
-  it("treats the latest ordinary-chat terminal command as running when finished evidence is missing or inconsistent", async () => {
-    for (const scenario of ["missing", "inconsistent"] as const) {
-      const dir = await fixture();
-      const pty = new ServerFakePty(false);
-      const tutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
-      const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: tutor });
-      try {
-        await introduceAndOpenEditor(server.url);
-        await acceptEditor(server.url, tutor);
-        const blockId = "lesson--001-first--run-supplied-command";
-        const ws = await connect(server.url, server.url);
-        const command = `printf private-${scenario}-context`;
-        pty.data?.(bashCommandMarker(command));
-        ws.send(JSON.stringify({ type: "input", data: `${command}\r` }));
-        await waitForWorkbookState(server.url, () => pty.writes.includes(`${command}\r`), "terminal input to reach the pty");
-        pty.data?.(`private-${scenario}-output\r\n${bashFinishedMarker(7)}`);
-        const records = await waitForPrivateTimeline(dir, (latest) => latest.some((record) => record.type === "terminal-command-finished"), "finished command evidence");
-        const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished")!;
-        const evidence = new TerminalEvidenceRepository({ stateRoot: tutorialStatePath(dir) });
-        const evidencePath = resolve(evidence.evidenceDirectory, `${finished.evidenceRef}.json`);
-        if (scenario === "missing") await rm(evidencePath);
-        else await writeFile(evidencePath, `${JSON.stringify({ kind: "finished", command: "tampered command", exitStatus: 0, interactions: [{ kind: "output", data: "tampered output" }] })}\n`, "utf8");
+  it("rejects malformed inline terminal evidence in current session logs", async () => {
+    const dir = await fixture();
+    await mkdir(resolve(dir, ".tutorial/.tmp/workbook"), { recursive: true });
+    await writeFile(tutorialStatePath(dir, "workbook", "events.jsonl"), currentTimelineText([
+      timelineRecord(1, { type: "session_started" }),
+      timelineRecord(2, { type: "workbook_introduction_completed" }),
+      timelineRecord(3, { type: "terminal-command-submitted", attemptId: "attempt-1", lessonId: "001-first", blockId: "lesson--001-first--run-supplied-command", command: "npm test", terminalSessionId: "terminal-1" }),
+      timelineRecord(4, { type: "terminal-command-finished", attemptId: "attempt-1", evidence: { kind: "finished", command: "tampered command", interactions: [{ kind: "output", data: "x".repeat(100_000) }], exitStatus: 0 } }),
+    ]));
 
-        const response = await postMessage(server.url, { blockId, text: `What happened in the ${scenario} terminal attempt?` });
-        expect(response.status).toBe(202);
-        const replyContext = tutor.replies.at(-1)!.activeContext as any;
-        expect(replyContext.terminal).toMatchObject({
-          transcript: expect.stringContaining(`private-${scenario}-output`),
-          latestCommand: { command, status: "running" }
-        });
-        expect(replyContext.terminal.latestCommand).not.toHaveProperty("exitStatus");
-        expect(replyContext.terminal.latestCommand).not.toHaveProperty("evidenceRef");
-        expect(replyContext.terminal.latestCommand).not.toHaveProperty("finishedEvidence");
-        expect(JSON.stringify(await response.json())).not.toMatch(/private-missing-context|private-inconsistent-context|private-missing-output|private-inconsistent-output|tampered output|evidenceRef|attemptId/);
-        ws.close();
-      } finally { await server.close(); }
-    }
+    await expect(startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor() })).rejects.toThrow(/Terminal evidence interaction is invalid|Terminal evidence exceeds the snapshot limit/);
   });
 
   it("rejects legacy unexpected-output and help event actions on an active terminal block and appends no record", async () => {
@@ -1571,12 +1561,14 @@ describe("workbook browser API", () => {
 
       const records = await privateTimeline(dir);
       const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished");
-      expect(finished).toBeTruthy();
-      const evidence = new TerminalEvidenceRepository({ stateRoot: tutorialStatePath(dir) });
-      expect(await evidence.read(finished!.evidenceRef)).toMatchObject({ kind: "finished", command, exitStatus: 0, transcriptSnapshot: expect.any(Object) });
-      expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ type: "terminal-review-requested", attemptId: finished!.attemptId, evidenceRef: finished!.evidenceRef })]));
+      expect(finished).toMatchObject({ type: "terminal-command-finished", attemptId: expect.any(String), evidence: { kind: "finished", command, exitStatus: 0, transcriptSnapshot: expect.any(Object) } });
+      expect(finished).not.toHaveProperty("exitStatus");
+      expect(finished).not.toHaveProperty(LEGACY_EVIDENCE_REFERENCE_KEY);
+      expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ type: "terminal-review-requested", attemptId: finished!.attemptId })]));
+      expect(records.find((record) => record.type === "terminal-review-requested")).not.toHaveProperty(LEGACY_EVIDENCE_REFERENCE_KEY);
+      await expect(access(tutorialStatePath(dir, "workbook", "terminal-evidence"))).rejects.toThrow();
       expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-coach-handoff-recorded" }));
-      expect(JSON.stringify(feedback)).not.toMatch(/cat -n|output for|attemptId|evidenceRef|Observe run result/);
+      expect(JSON.stringify(feedback)).not.toMatch(/cat -n|output for|attemptId|Observe run result/);
     } finally { await server.close(); }
   });
 
@@ -1610,9 +1602,9 @@ describe("workbook browser API", () => {
 
       const records = await privateTimeline(dir);
       const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished")!;
-      const evidence = await new TerminalEvidenceRepository({ stateRoot: tutorialStatePath(dir) }).read(finished.evidenceRef);
-      expect(Buffer.byteLength(evidence!.transcriptSnapshot!.transcript, "utf8")).toBeLessThanOrEqual(MAX_TERMINAL_TRANSCRIPT_SNAPSHOT_BYTES);
-      expect(evidence!.transcriptSnapshot).toMatchObject({ label: expect.stringMatching(/terminal transcript/i), truncated: true });
+      expect(Buffer.byteLength(finished.evidence.transcriptSnapshot!.transcript, "utf8")).toBeLessThanOrEqual(MAX_TERMINAL_TRANSCRIPT_SNAPSHOT_BYTES);
+      expect(finished.evidence.transcriptSnapshot).toMatchObject({ label: expect.stringMatching(/terminal transcript/i), truncated: true });
+      expect(finished).not.toHaveProperty(LEGACY_EVIDENCE_REFERENCE_KEY);
     } finally { await server.close(); }
   });
 
@@ -1645,7 +1637,7 @@ describe("workbook browser API", () => {
 
       const snapshot = block(accepted, blockId).terminalSnapshot;
       expect(snapshot.transcript).toContain(`ran:run ${blockId}`);
-      expect(snapshot.transcript).not.toMatch(/workbook-command|workbook-finished|attemptId|evidenceRef|Observe run result/);
+      expect(snapshot.transcript).not.toMatch(/workbook-command|workbook-finished|attemptId|Observe run result/);
       expect((await timelineSnapshot(server.url)).some((record) => record.type === "terminal-transcript-snapshotted")).toBe(false);
       const records = await privateTimeline(dir);
       expect(records).toContainEqual(expect.objectContaining({ type: "terminal-transcript-snapshotted", lessonId: "001-first", blockId, transcript: snapshot.transcript }));
@@ -1683,9 +1675,13 @@ describe("workbook browser API", () => {
       expect(terminalReviews).toHaveLength(2);
       expect(terminalReviewTranscript(terminalReviews[0]!)).toBe(terminalReviewTranscript(terminalReviews[1]!));
       const records = await privateTimeline(dir);
+      const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished")!;
+      expect(terminalReviewCommandEvidence(terminalReviews[0]!)).toEqual(commandEvidenceFromFinished(finished));
+      expect(terminalReviewCommandEvidence(terminalReviews[1]!)).toEqual(commandEvidenceFromFinished(finished));
       const requests = records.filter((record) => record.type === "terminal-review-requested");
       expect(requests).toHaveLength(2);
-      expect(new Set(requests.map((record: any) => record.evidenceRef)).size).toBe(1);
+      expect(new Set(requests.map((record) => record.attemptId)).size).toBe(1);
+      expect(requests.every((record) => !(LEGACY_EVIDENCE_REFERENCE_KEY in record))).toBe(true);
       expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-review-failed" }));
       expect(JSON.stringify(recovered)).not.toContain("provider detail");
     } finally { await server.close(); }
@@ -1761,7 +1757,7 @@ describe("workbook browser API", () => {
     );
     const first = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, logger, terminalPtyFactory: () => firstPty, mainTutor: tutor });
     let failureId = "";
-    let evidenceRef = "";
+    let originalCommandEvidence: unknown;
     try {
       await introduceAndOpenEditor(first.url);
       await acceptEditor(first.url, tutor);
@@ -1776,10 +1772,14 @@ describe("workbook browser API", () => {
 
       const records = await privateTimeline(dir);
       const requests = records.filter((record) => record.type === "terminal-review-requested") as any[];
+      const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished")!;
+      originalCommandEvidence = commandEvidenceFromFinished(finished);
       expect(requests).toHaveLength(2);
-      evidenceRef = requests[0]!.evidenceRef;
-      expect(new Set(requests.map((record) => record.evidenceRef))).toEqual(new Set([evidenceRef]));
-      expect(records).toContainEqual(expect.objectContaining({ type: "terminal-review-failed", failureId, evidenceRef }));
+      expect(new Set(requests.map((record) => record.attemptId))).toEqual(new Set([finished.attemptId]));
+      expect(requests.every((record) => !(LEGACY_EVIDENCE_REFERENCE_KEY in record))).toBe(true);
+      expect(tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal").map((review) => terminalReviewCommandEvidence(review))).toEqual([originalCommandEvidence, originalCommandEvidence]);
+      expect(records).toContainEqual(expect.objectContaining({ type: "terminal-review-failed", failureId, attemptId: finished.attemptId, requestId: requests[1]!.requestId }));
+      expect(records.find((record) => record.type === "terminal-review-failed")).not.toHaveProperty(LEGACY_EVIDENCE_REFERENCE_KEY);
       expect(records.filter((record) => record.type === "terminal-command-submitted")).toHaveLength(1);
       expect(records.filter((record) => record.type === "terminal-command-finished")).toHaveLength(1);
       expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-coach-handoff-recorded" }));
@@ -1810,7 +1810,9 @@ describe("workbook browser API", () => {
       expect(recordsAfterRetry.filter((record) => record.type === "terminal-command-finished")).toHaveLength(1);
       const requestsAfterRetry = recordsAfterRetry.filter((record) => record.type === "terminal-review-requested") as any[];
       expect(requestsAfterRetry).toHaveLength(3);
-      expect(new Set(requestsAfterRetry.map((record) => record.evidenceRef))).toEqual(new Set([evidenceRef]));
+      expect(new Set(requestsAfterRetry.map((record) => record.attemptId))).toEqual(new Set([requestsAfterRetry[0]!.attemptId]));
+      expect(requestsAfterRetry.every((record) => !(LEGACY_EVIDENCE_REFERENCE_KEY in record))).toBe(true);
+      expect(terminalReviewCommandEvidence(retryTutor.reviews.find((review) => review.attempt.evidence.kind === "terminal")!)).toEqual(originalCommandEvidence);
     } finally { await second.close(); }
   });
 
@@ -1954,15 +1956,17 @@ describe("workbook browser API", () => {
       waitingReview.promise,
     );
     const first = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => firstPty, mainTutor: firstTutor });
-    let evidenceRef = "";
+    let originalCommandEvidence: unknown;
     try {
       await introduceAndOpenEditor(first.url);
       await acceptEditor(first.url, firstTutor);
       firstPty.data?.(bashCommandMarker("finished"));
       firstPty.data?.(`done\r\n${bashFinishedMarker()}`);
       const records = await waitForPrivateTimeline(dir, (latest) => latest.some((record) => record.type === "terminal-review-requested"), "first direct terminal review request");
-      evidenceRef = (records.find((record) => record.type === "terminal-review-requested") as any).evidenceRef;
+      const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished")!;
+      originalCommandEvidence = commandEvidenceFromFinished(finished);
       expect(firstTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(1);
+      expect(terminalReviewCommandEvidence(firstTutor.reviews.find((review) => review.attempt.evidence.kind === "terminal")!)).toEqual(originalCommandEvidence);
     } finally { await first.close(); }
 
     const secondTutor = new FakeMainTutor({ outcome: "feedback", message: "Recovered feedback." });
@@ -1971,13 +1975,13 @@ describe("workbook browser API", () => {
       const recovered = await waitForWorkbookState(second.url, (next) => block(next, "run-supplied-command")?.terminal?.message === "Recovered feedback.", "recovered direct terminal review");
       expect(block(recovered, "run-supplied-command")?.terminal).toEqual({ phase: "feedback", message: "Recovered feedback." });
       const terminalReview = secondTutor.reviews.find((review) => review.attempt.evidence.kind === "terminal")!;
-      const reviewEvidence = JSON.parse(terminalReviewTranscript(terminalReview));
-      expect(reviewEvidence.commandEvidence.command).toBe("finished");
+      expect(terminalReviewCommandEvidence(terminalReview)).toEqual(originalCommandEvidence);
       const requests = (await privateTimeline(dir)).filter((record) => record.type === "terminal-review-requested") as any[];
       expect(requests).toHaveLength(2);
       expect(requests.map((record) => record.callNumber)).toEqual([1, 2]);
       expect(requests.map((record) => record.mode)).toEqual(["automatic", "automatic"]);
-      expect(new Set(requests.map((record) => record.evidenceRef))).toEqual(new Set([evidenceRef]));
+      expect(new Set(requests.map((record) => record.attemptId))).toEqual(new Set([requests[0]!.attemptId]));
+      expect(requests.every((record) => !(LEGACY_EVIDENCE_REFERENCE_KEY in record))).toBe(true);
       expect(requests[1]!.requestId).not.toBe(requests[0]!.requestId);
     } finally { await second.close(); }
   });
@@ -1992,16 +1996,17 @@ describe("workbook browser API", () => {
       pendingSecondReview.promise,
     );
     const first = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => firstPty, mainTutor: firstTutor });
-    let evidenceRef = "";
+    let originalCommandEvidence: unknown;
     try {
       await introduceAndOpenEditor(first.url);
       await acceptEditor(first.url, firstTutor);
       firstPty.data?.(bashCommandMarker("restart-budget-secret"));
       firstPty.data?.(`done\r\n${bashFinishedMarker()}`);
       const records = await waitForPrivateTimeline(dir, (latest) => latest.filter((record) => record.type === "terminal-review-requested").length === 2, "second automatic direct terminal review request");
-      const requests = records.filter((record) => record.type === "terminal-review-requested") as any[];
-      evidenceRef = requests[0]!.evidenceRef;
+      const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished")!;
+      originalCommandEvidence = commandEvidenceFromFinished(finished);
       expect(firstTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(2);
+      expect(firstTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal").map((review) => terminalReviewCommandEvidence(review))).toEqual([originalCommandEvidence, originalCommandEvidence]);
     } finally { await first.close(); }
 
     const secondTutor = new FakeMainTutor({ outcome: "feedback", message: "Should not replay beyond budget." });
@@ -2015,8 +2020,10 @@ describe("workbook browser API", () => {
       const requests = records.filter((record) => record.type === "terminal-review-requested") as any[];
       expect(requests).toHaveLength(2);
       expect(requests.map((record) => record.callNumber)).toEqual([1, 2]);
-      expect(new Set(requests.map((record) => record.evidenceRef))).toEqual(new Set([evidenceRef]));
-      expect(records).toContainEqual(expect.objectContaining({ type: "terminal-review-failed", requestId: requests[1]!.requestId, evidenceRef }));
+      expect(new Set(requests.map((record) => record.attemptId))).toEqual(new Set([requests[0]!.attemptId]));
+      expect(requests.every((record) => !(LEGACY_EVIDENCE_REFERENCE_KEY in record))).toBe(true);
+      expect(records).toContainEqual(expect.objectContaining({ type: "terminal-review-failed", requestId: requests[1]!.requestId, attemptId: requests[1]!.attemptId }));
+      expect(records.find((record) => record.type === "terminal-review-failed")).not.toHaveProperty(LEGACY_EVIDENCE_REFERENCE_KEY);
     } finally { await second.close(); }
   });
 

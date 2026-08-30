@@ -11,7 +11,6 @@ import { NO_RUNTIME_PROVISION, trustRuntimeProvision, type RuntimeProvisionProfi
 import { AttemptStore } from "./attempts.js";
 import { DefaultMainWorkbookTutor, type MainWorkbookTutor } from "./tutor.js";
 import { WorkbookTimeline } from "./timeline.js";
-import { TerminalEvidenceRepository } from "./terminal-evidence.js";
 import { tutorialStatePath } from "./tutorial-state.js";
 import { watchWorkbookContent, type ContentWatch, type ContentWatchFactory } from "./content-watch.js";
 import { createWorkbookWorkflow, WorkbookWorkflowCommandError, type TerminalAssessmentScheduler } from "./workflow.js";
@@ -162,7 +161,6 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
 
   const timeline = new WorkbookTimeline({ stateRoot: runtime.sessionRoot });
   const attempts = new AttemptStore({ stateRoot: runtime.sessionRoot });
-  const terminalEvidence = new TerminalEvidenceRepository({ stateRoot: runtime.sessionRoot });
   const mainTutor = options.mainTutor ?? new DefaultMainWorkbookTutor({ workspace: runtime.contentRoot, log });
   let terminal: WorkbookTerminalManager | undefined;
   const workflow = await createWorkbookWorkflow({
@@ -171,7 +169,6 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     timeline,
     attempts,
     mainTutor,
-    terminalEvidence,
     terminalAssessmentScheduler: options.terminalAssessmentScheduler,
     activeTerminalContext: () => terminal?.activeTranscriptContext(),
     onTerminalContinued: (block) => terminal?.resetAfterTerminalContinuation(block),

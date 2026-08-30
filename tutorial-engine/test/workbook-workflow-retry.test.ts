@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AttemptStore, type Attempt } from "../src/workbook/attempts.js";
-import { TerminalEvidenceRepository } from "../src/workbook/terminal-evidence.js";
 import { WorkbookTimeline, type TutorFailure, type WorkbookTimelineRecord } from "../src/workbook/timeline.js";
 import { createWorkbookWorkflow } from "../src/workbook/workflow.js";
 
@@ -30,7 +29,6 @@ describe("workbook workflow retry cancellation", () => {
           workspaceRootForId: (workspaceId) => workspaceId === WORKSPACE_ID ? resolve(dir, "workspaces", WORKSPACE_ID) : undefined,
           timeline,
           attempts,
-          terminalEvidence: new TerminalEvidenceRepository(dir),
           mainTutor: tutor as any,
           log: { info() {}, error() {} }
         });

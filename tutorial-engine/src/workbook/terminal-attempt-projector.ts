@@ -1,4 +1,4 @@
-import type { TerminalEvidenceReader } from "./terminal-evidence.js";
+import { validateTerminalEvidence, type TerminalEvidence } from "./terminal-evidence.js";
 import type { WorkbookTimelineRecord } from "./timeline.js";
 import { canStartManualTerminalReview, terminalReviewCallCounts, type TerminalReviewRequestLike } from "./terminal-review-policy.js";
 
@@ -23,13 +23,18 @@ type Attempt = {
   terminalSessionId: string;
   revision: number;
   finished: boolean;
-  evidenceRef?: string;
+  evidence?: TerminalEvidence;
   feedback?: string;
   reviewFailure?: { message: string; failureId?: string };
   reviewRequests: TerminalReviewRequestLike[];
   latestReviewRequestId?: string;
   accepted?: string;
 };
+
+function inlineEvidence(record: Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }>): TerminalEvidence | undefined {
+  try { return validateTerminalEvidence(record.evidence); }
+  catch { return undefined; }
+}
 
 /**
  * Replays private terminal records without I/O. Finished evidence is checked only to establish
@@ -39,7 +44,6 @@ type Attempt = {
  */
 export function projectTerminalAttempts(
   records: readonly WorkbookTimelineRecord[],
-  readEvidence: TerminalEvidenceReader,
   activeTerminalSessionId?: string,
 ): ReadonlyMap<string, ProjectedTerminalAttempt> {
   const attempts = new Map<string, Attempt>();
@@ -66,15 +70,15 @@ export function projectTerminalAttempts(
       }
       case "terminal-command-finished": {
         const attempt = attempts.get(record.attemptId);
-        const evidence = attempt && !attempt.finished ? readEvidence(record.evidenceRef) : undefined;
-        if (!attempt || evidence?.kind !== "finished" || evidence.command !== attempt.command || evidence.exitStatus !== record.exitStatus) break;
+        const evidence = attempt && !attempt.finished ? inlineEvidence(record) : undefined;
+        if (!attempt || evidence?.kind !== "finished" || evidence.command !== attempt.command) break;
         attempt.finished = true;
-        attempt.evidenceRef = record.evidenceRef;
+        attempt.evidence = evidence;
         break;
       }
       case "terminal-review-requested": {
         const attempt = attempts.get(record.attemptId);
-        if (!attempt?.finished || attempt.evidenceRef !== record.evidenceRef || attempt.lessonId !== record.lessonId || attempt.blockId !== record.blockId) break;
+        if (!attempt?.finished || attempt.lessonId !== record.lessonId || attempt.blockId !== record.blockId) break;
         attempt.reviewRequests.push(record);
         attempt.latestReviewRequestId = record.requestId;
         attempt.reviewFailure = undefined;
@@ -82,9 +86,9 @@ export function projectTerminalAttempts(
       }
       case "terminal-review-failed": {
         const attempt = attempts.get(record.attemptId);
-        if (!attempt?.finished || attempt.evidenceRef !== record.evidenceRef || attempt.lessonId !== record.lessonId || attempt.blockId !== record.blockId) break;
+        if (!attempt?.finished || attempt.lessonId !== record.lessonId || attempt.blockId !== record.blockId) break;
         if (attempt.latestReviewRequestId && attempt.latestReviewRequestId !== record.requestId) break;
-        const counts = terminalReviewCallCounts(attempt.reviewRequests, { evidenceRef: record.evidenceRef });
+        const counts = terminalReviewCallCounts(attempt.reviewRequests, { attemptId: record.attemptId });
         attempt.reviewFailure = { message: record.publicMessage, ...(canStartManualTerminalReview(counts) ? { failureId: record.failureId } : {}) };
         break;
       }

@@ -7,7 +7,6 @@ export const TERMINAL_TOTAL_REVIEW_CALL_BUDGET = TERMINAL_AUTOMATIC_REVIEW_CALL_
 export type TerminalReviewRequestLike = {
   type: "terminal-review-requested";
   attemptId: string;
-  evidenceRef: string;
   mode: TerminalReviewRequestMode;
 };
 
@@ -17,8 +16,8 @@ export type TerminalReviewCallCounts = {
   total: number;
 };
 
-export function terminalReviewCallCounts(records: readonly TerminalReviewRequestLike[], input: { evidenceRef: string }): TerminalReviewCallCounts {
-  const requests = records.filter((record) => record.evidenceRef === input.evidenceRef);
+export function terminalReviewCallCounts(records: readonly TerminalReviewRequestLike[], input: { attemptId: string }): TerminalReviewCallCounts {
+  const requests = records.filter((record) => record.attemptId === input.attemptId);
   const automatic = requests.filter((record) => record.mode === "automatic").length;
   const manual = requests.filter((record) => record.mode === "manual").length;
   return { automatic, manual, total: requests.length };

@@ -6,7 +6,7 @@ import {
   formatPartPreambleText,
   formatWorkbookIntroductionText,
 } from "./authored-text.js";
-import type { TerminalEvidence, TerminalEvidenceRef } from "./terminal-evidence.js";
+import type { TerminalEvidence } from "./terminal-evidence.js";
 import type { BlockSummary, LessonSummary, TimelineMessage, WorkbookTimelineRecord } from "./timeline.js";
 
 export type PiHistorySummary = {
@@ -39,14 +39,9 @@ export const LESSON_FRAME_BLOCK_ID = "__lesson_frame__";
 
 export function partLessonId(partId: string): string { return `workbook:part:${partId}`; }
 
-export type ActiveTerminalCommandContext = {
-  attemptId: string;
-  command: string;
-  status: "running" | "finished";
-  exitStatus?: number;
-  evidenceRef?: TerminalEvidenceRef;
-  finishedEvidence?: TerminalEvidence;
-};
+export type ActiveTerminalCommandContext =
+  | { attemptId: string; command: string; status: "running" }
+  | { attemptId: string; status: "finished"; finishedEvidence: TerminalEvidence };
 
 export type ActiveTerminalContext = {
   /** Private, bounded, session-memory-only transcript for the current active terminal-practice block. */

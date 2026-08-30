@@ -2,9 +2,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { MAX_TERMINAL_COMMAND_BYTES, validateTerminalEvidence, type TerminalEvidence } from "../src/workbook/terminal-evidence.js";
 import { CURRENT_WORKBOOK_SESSION_FORMAT_VERSION, UnsupportedWorkbookSessionError, WorkbookTimeline, workbookSessionFormatRecord } from "../src/workbook/timeline.js";
 
 let directories: string[] = [];
+const LEGACY_EVIDENCE_REFERENCE_KEY = "evidence" + "Ref";
 
 async function workspace(): Promise<string> {
   const directory = await mkdtemp(resolve(tmpdir(), "workbook-timeline-"));
@@ -94,8 +96,53 @@ describe("WorkbookTimeline", () => {
     });
 
     expect(record).toMatchObject({ type: "terminal-command-submitted", command: "npm test" });
-    expect("evidenceRef" in record).toBe(false);
+    expect(LEGACY_EVIDENCE_REFERENCE_KEY in record).toBe(false);
     expect(await timeline.read()).toEqual([record]);
+  });
+
+  it("round-trips validated inline terminal evidence without duplicate command or exit status fields", async () => {
+    const timeline = new WorkbookTimeline(await workspace());
+    const evidence: TerminalEvidence = {
+      kind: "finished",
+      command: "npm test",
+      interactions: [{ kind: "input", data: "npm test\r" }, { kind: "output", data: "PASS\n" }],
+      exitStatus: 0,
+      transcriptSnapshot: { label: "Command-local terminal transcript at command completion", transcript: "PASS\n", truncated: false },
+    };
+
+    const record = await timeline.append({ type: "terminal-command-finished", attemptId: "attempt-1", evidence });
+    evidence.interactions[1]!.data = "mutated";
+    evidence.transcriptSnapshot!.transcript = "mutated";
+
+    expect(record).toEqual(expect.objectContaining({ type: "terminal-command-finished", attemptId: "attempt-1", evidence: validateTerminalEvidence({
+      kind: "finished",
+      command: "npm test",
+      interactions: [{ kind: "input", data: "npm test\r" }, { kind: "output", data: "PASS\n" }],
+      exitStatus: 0,
+      transcriptSnapshot: { label: "Command-local terminal transcript at command completion", transcript: "PASS\n", truncated: false },
+    }) }));
+    expect(record).not.toHaveProperty("exitStatus");
+    expect(record).not.toHaveProperty(LEGACY_EVIDENCE_REFERENCE_KEY);
+    expect(await timeline.read()).toEqual([record]);
+  });
+
+  it("rejects untrusted current logs with malformed inline terminal evidence", async () => {
+    const timeline = new WorkbookTimeline(await workspace());
+    await writeCurrentTimelineLog(timeline, [
+      { type: "terminal-command-finished", id: "finished", sequence: 1, at: "2026-08-21T00:00:00.000Z", attemptId: "attempt-1", evidence: { kind: "finished", command: "x".repeat(MAX_TERMINAL_COMMAND_BYTES + 1), interactions: [], exitStatus: 0 } },
+    ]);
+
+    await expect(timeline.read()).rejects.toThrow(/Terminal evidence command is invalid/);
+  });
+
+  it("rejects legacy evidence-reference terminal lifecycle rows in current logs", async () => {
+    const timeline = new WorkbookTimeline(await workspace());
+    await writeCurrentTimelineLog(timeline, [
+      { type: "terminal-command-finished", id: "finished", sequence: 1, at: "2026-08-21T00:00:00.000Z", attemptId: "attempt-1", exitStatus: 0, [LEGACY_EVIDENCE_REFERENCE_KEY]: "old-ref" },
+      { type: "terminal-review-requested", id: "request", sequence: 2, at: "2026-08-21T00:00:01.000Z", attemptId: "attempt-1", lessonId: "lesson", blockId: "block", [LEGACY_EVIDENCE_REFERENCE_KEY]: "old-ref", requestId: "request-1", mode: "automatic", callNumber: 1 },
+    ]);
+
+    await expect(timeline.read()).rejects.toThrow(/terminal-command-finished fields are invalid/);
   });
 
   it("persists a browser-safe terminal snapshot separately from private command evidence", async () => {
@@ -109,7 +156,7 @@ describe("WorkbookTimeline", () => {
     });
 
     expect(record).toMatchObject({ type: "terminal-transcript-snapshotted", lessonId: "lesson-1", blockId: "lesson-1--terminal", transcript: "sanitized learner-visible output\n" });
-    expect(JSON.stringify(record)).not.toMatch(/command|evidenceRef|rubric|handoff|secret/i);
+    expect(JSON.stringify(record)).not.toMatch(/command|evidence|rubric|handoff|secret/i);
     expect(await timeline.read()).toEqual([record]);
   });
 
