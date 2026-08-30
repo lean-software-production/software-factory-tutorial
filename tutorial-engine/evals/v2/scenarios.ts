@@ -9,7 +9,7 @@ export type V2ScenarioAction =
   | { type: "complete-introduction" }
   | { type: "continue"; blockId: string }
   | { type: "editor"; blockId: string; text: string }
-  | { type: "terminal"; blockId: string; command: string; complete?: boolean }
+  | { type: "terminal"; blockId: string; command: string; complete?: boolean; expectedFeedback?: string | RegExp }
   | { type: "reflection-submit"; blockId: string; response: string }
   | { type: "reflection-follow-up"; blockId: string; response: string }
   | { type: "reflection-complete"; blockId: string }
@@ -26,7 +26,8 @@ export interface V2Scenario {
 
 const lessonId = "001-live-session";
 export const exactCommand = "mkdir -p factory/.tmp && printf 'command block complete\\n' > factory/.tmp/evaluator-command.txt && cat factory/.tmp/evaluator-command.txt";
-export const clueCommand = "mkdir -p factory/.tmp && printf 'clue block complete\\n' > factory/.tmp/evaluator-clue.txt && cat factory/.tmp/evaluator-clue.txt";
+export const clueCommand = "mkdir -p factory/.tmp && printf 'clue block complete\\n' > factory/.tmp/evaluator-clue.txt";
+export const clueDisplayCommand = "cat factory/.tmp/evaluator-clue.txt";
 export const insufficientEditorDraft = "This is a vague draft.";
 export const satisfactoryEditorDraft = "editor-artifacts/evaluator-editor.txt: editor practice draft is ready for promotion.\n";
 
@@ -45,9 +46,10 @@ const exactCommandActions: V2ScenarioAction[] = [
 ];
 const clueOnlyActions: V2ScenarioAction[] = [
   ...exactCommandActions,
-  { type: "terminal", blockId: "clue-only", command: clueCommand }
+  { type: "terminal", blockId: "clue-only", command: clueCommand, complete: false, expectedFeedback: /display|print|read|second command/i },
+  { type: "terminal", blockId: "clue-only", command: clueDisplayCommand }
 ];
-const reflectionResponse = "The exact-command block gave me a shell command. The clue-only block gave me the goal and made me choose the command.";
+const reflectionResponse = "I noticed the two terminal blocks were different, but I need help explaining the distinction and what the evaluator should record.";
 const reflectionFollowUp = "The clue-only prompt was public guidance, but the hidden tutor instructions stayed out of the workbook state. The evaluator should record only learner-visible state because hidden guidance was not something the learner could act on; visible state keeps judging grounded in observable prompts and actions.";
 const reflectionActions: V2ScenarioAction[] = [
   ...clueOnlyActions,
@@ -158,7 +160,7 @@ export async function driveV2Scenario(driver: V2WorkbookDriver, scenario: V2Scen
     if (action.type === "complete-introduction") await driver.completeIntroduction();
     else if (action.type === "continue") await driver.continueBlock(action.blockId);
     else if (action.type === "editor") await driver.submitEditorDraft(action.blockId, action.text);
-    else if (action.type === "terminal") await driver.submitTerminalCommand(action.blockId, action.command, { complete: action.complete });
+    else if (action.type === "terminal") await driver.submitTerminalCommand(action.blockId, action.command, { complete: action.complete, expectedFeedback: action.expectedFeedback });
     else if (action.type === "reflection-submit") await driver.submitReflection(action.blockId, action.response);
     else if (action.type === "reflection-follow-up") await driver.submitReflectionFollowUp(action.blockId, action.response);
     else if (action.type === "reflection-complete") await driver.completeReflection(action.blockId);

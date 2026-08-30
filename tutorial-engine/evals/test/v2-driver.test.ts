@@ -290,6 +290,23 @@ describe("v2 workbook driver", () => {
     ]));
   });
 
+  it("accepts expected terminal feedback so a clue-only task can continue with a second command", async () => {
+    const blockId = "lesson--001-live-session--clue-only";
+    const trace = createEmptyV2SessionTrace("expected-terminal-feedback-test");
+    const feedback = { progress: { blocks: [{ id: blockId, terminal: { phase: "feedback", message: "Now display the visible file with a second command." } }] } };
+    const driver = new V2WorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      WebSocket: DriverFakeWebSocket as any,
+      fetch: async () => new Response(JSON.stringify(feedback), { status: 200 })
+    });
+
+    const reviewed = await driver.submitTerminalCommand(blockId, "printf result > visible.txt", { complete: false, expectedFeedback: /display.*second command/i });
+
+    expect(reviewed.progress.blocks[0]?.terminal).toEqual({ phase: "feedback", message: "Now display the visible file with a second command." });
+    expect(trace.terminalTranscript).toContainEqual({ blockId, direction: "input", text: "printf result > visible.txt\r" });
+  });
+
   it("records every terminal frame the server sends, not only the ones a scenario asserts on", async () => {
     const blockId = "lesson--001-live-session--exact-command";
     // One of each terminal transport frame. Lifecycle state is in the public workbook state, not

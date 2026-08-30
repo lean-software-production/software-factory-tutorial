@@ -18,10 +18,13 @@ export interface V2WorkbookDriverOptions {
   editorReviewTimeoutMs?: number;
 }
 
+export type TerminalFeedbackExpectation = string | RegExp | ((message: string, state: WorkbookApiState) => boolean);
+
 export interface SubmitTerminalCommandOptions {
   label?: string;
   complete?: boolean;
   timeoutMs?: number;
+  expectedFeedback?: TerminalFeedbackExpectation;
 }
 
 export interface SubmitEditorDraftOptions {
@@ -116,8 +119,9 @@ export class V2WorkbookDriver {
     const authoredBlockId = blockId;
     blockId = await this.#canonicalBlockId(blockId);
     const input = /[\r\n]$/.test(command) ? command : `${command}\r`;
-    const acceptedState = await this.#submitTerminalInput(blockId, input, options.label ?? `terminal:${authoredBlockId}`, options.timeoutMs ?? this.#terminalReviewTimeoutMs);
-    if (options.complete === false) return acceptedState;
+    const reviewedState = await this.#submitTerminalInput(blockId, input, options.label ?? `terminal:${authoredBlockId}`, options.timeoutMs ?? this.#terminalReviewTimeoutMs, options.expectedFeedback);
+    const terminal = reviewedState.progress?.blocks?.find((candidate: any) => candidate?.id === blockId)?.terminal;
+    if (terminal?.phase === "feedback" || options.complete === false) return reviewedState;
     return this.completeTerminalBlock(blockId);
   }
 
@@ -211,23 +215,28 @@ export class V2WorkbookDriver {
     return status;
   }
 
-  async #waitForAcceptedCheckpoint(blockId: string, label: string, timeoutMs: number): Promise<WorkbookApiState> {
+  async #waitForAcceptedCheckpoint(blockId: string, label: string, timeoutMs: number, expectedFeedback: TerminalFeedbackExpectation | undefined): Promise<WorkbookApiState> {
     const deadline = Date.now() + timeoutMs;
     let attempt = 0;
     while (Date.now() <= deadline) {
       await delay(25);
       const state = await this.readState(`${label}:reviewed:${++attempt}`);
       const terminal = state.progress?.blocks?.find((candidate: any) => candidate?.id === blockId)?.terminal;
-      if (terminal?.phase === "complete") return state;
+      if (terminal?.phase === "complete") {
+        if (expectedFeedback !== undefined) throw new Error(`Expected terminal feedback for ${blockId}, but the attempt was accepted.`);
+        return state;
+      }
       if (terminal?.phase === "feedback") {
-        const feedback = typeof terminal.message === "string" && terminal.message.trim().length > 0 ? `: ${terminal.message}` : ".";
-        throw new Error(`Terminal attempt for ${blockId} received tutor feedback${feedback}`);
+        const message = typeof terminal.message === "string" ? terminal.message : "";
+        if (expectedFeedback === undefined) throw new Error(`Terminal attempt for ${blockId} received tutor feedback${message.trim() ? `: ${message}` : "."}`);
+        if (!feedbackMatches(expectedFeedback, message, state)) throw new Error(`Terminal attempt for ${blockId} received unexpected tutor feedback: ${message}`);
+        return state;
       }
     }
     throw new Error(`Timed out waiting for accepted terminal attempt for ${blockId}.`);
   }
 
-  async #submitTerminalInput(blockId: string, input: string, label: string, reviewTimeoutMs: number): Promise<WorkbookApiState> {
+  async #submitTerminalInput(blockId: string, input: string, label: string, reviewTimeoutMs: number, expectedFeedback: TerminalFeedbackExpectation | undefined): Promise<WorkbookApiState> {
     const ws = new this.#WebSocket(`${this.serverUrl.replace(/^http/, "ws")}/api/workbook/terminal`, { headers: { Origin: this.serverUrl } });
     try {
       await new Promise<void>((resolve, reject) => {
@@ -261,7 +270,7 @@ export class V2WorkbookDriver {
         });
         ws.once("error", (error) => finish(error instanceof Error ? error : new Error(String(error))));
         ws.send(JSON.stringify({ type: "input", data: input }));
-        void this.#waitForAcceptedCheckpoint(blockId, label, reviewTimeoutMs).then(finish, (error) => finish(error instanceof Error ? error : new Error(String(error))));
+        void this.#waitForAcceptedCheckpoint(blockId, label, reviewTimeoutMs, expectedFeedback).then(finish, (error) => finish(error instanceof Error ? error : new Error(String(error))));
       });
     } finally {
       await closeWebSocket(ws);
@@ -285,6 +294,12 @@ function terminalTranscriptRow(frame: PublicTerminalFrame, blockId: string): V2T
     case "busy": return { blockId, direction: "observer", text: frame.message };
     case "exit": return { blockId, direction: "observer", text: `exit:${frame.exitCode}${frame.signal === undefined ? "" : ` signal:${frame.signal}`}` };
   }
+}
+
+function feedbackMatches(expectation: TerminalFeedbackExpectation, message: string, state: WorkbookApiState): boolean {
+  if (typeof expectation === "string") return message.includes(expectation);
+  if (expectation instanceof RegExp) return expectation.test(message);
+  return expectation(message, state);
 }
 
 function delay(ms: number): Promise<void> {
