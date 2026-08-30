@@ -969,6 +969,91 @@ describe("workbook lesson UI", () => {
     expect(document.activeElement).toBe(refreshedEditor);
   });
 
+  it("automatically reviews a fresh seeded editor after the quiet period and keeps focus through the refresh", async () => {
+    vi.useFakeTimers();
+    const seed = "seeded spec.md draft";
+    const refresh = vi.fn((next: State) => {
+      mountedRoot!.render(createElement(BlockView, { block: editorBlock, progress: next.progress, refresh }));
+    });
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, draftText: seed, editorStatus: "reviewing" } as any)) }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: seed } as any), refresh }));
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+    editor.focus();
+    expect(document.activeElement).toBe(editor);
+
+    await act(async () => { vi.advanceTimersByTime(749); });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ blockId: "edit-answer", revision: 1, text: seed });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(container.querySelector("[role='textbox'][contenteditable='true']"));
+  });
+
+  it("does not auto-review a blank seeded editor or a draft that already has a revision", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, draftText: "", editorStatus: "reviewing" } as any)) }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: "" } as any), refresh: vi.fn() }));
+    await act(async () => { vi.advanceTimersByTime(750); });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 1, draftText: "seeded spec.md draft", editorStatus: "waiting" } as any), refresh: vi.fn() }));
+    await act(async () => { vi.advanceTimersByTime(750); });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("submits the latest edited text instead of the seed during the quiet period", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, draftText: "latest edited draft", editorStatus: "reviewing" } as any)) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const container = await mount(createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: "seeded spec.md draft" } as any), refresh: vi.fn() }));
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+
+    editor.textContent = "first edited draft";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    await act(async () => { vi.advanceTimersByTime(375); });
+    editor.textContent = "latest edited draft";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    await act(async () => { vi.advanceTimersByTime(749); });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ blockId: "edit-answer", revision: 1, text: "latest edited draft" });
+  });
+
+  it("replays the seeded auto-review only once under StrictMode", async () => {
+    vi.useFakeTimers();
+    const seed = "seeded spec.md draft";
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, draftText: seed, editorStatus: "reviewing" } as any)) }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await mount(createElement(StrictMode, null, createElement(BlockView, { block: editorBlock, progress: activeEditorProgress({ revision: 0, draftText: seed } as any), refresh: vi.fn() })));
+    await act(async () => {
+      vi.advanceTimersByTime(750);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ blockId: "edit-answer", revision: 1, text: seed });
+  });
+
   it("shows one-second pointer-inert confetti only for new accepted keys and respects reduced motion", async () => {
     vi.useFakeTimers();
     const matchMedia = vi.fn((query: string) => ({ matches: false, media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() }));

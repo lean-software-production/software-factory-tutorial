@@ -405,6 +405,8 @@ function EditorPracticeBlockView({ block, state, refresh }: { block: EditorPract
       parent
     });
     editor.current = view;
+    const seededDraft = initialTextRef.current;
+    if (baseRevision.current === 0 && seededDraft.trim()) scheduleReview(seededDraft);
     return () => {
       activeRef.current = false;
       if (timer.current) clearTimeout(timer.current);
