@@ -251,6 +251,11 @@ ${authoredValidatorPrompt}EOF
 cat > factory/refactor-validate.sh <<'EOF'
 ${authoredValidatorScript}EOF
 chmod +x factory/refactor-validate.sh
+sed -n '1,120p' factory/refactor-validate.sh
+echo 'Mechanic: missing-baseline guard'
+echo 'Mechanic: baseline concatenated into validation'
+echo 'Mechanic: tools read,grep,find,ls,bash (no edit/write)'
+echo 'Mechanic: findings captured through tee'
 ./factory/refactor-validate.sh`;
 
 const lesson004WrongCommand = `./factory/refactor-validate.sh`;
@@ -294,6 +299,8 @@ const lesson004DivideCommand = String.raw`(cd factory \
 ${lesson004CurrentEvidenceAndValidationCommand}`;
 
 const lesson013SteerMessage = "Finish multiply and divide independently before validation.";
+const lesson013InitialReflection = "The factory root lives in factory/. The current assembly line is factory/refactor/. A second line would be a sibling such as factory/second-line/, with its own run.sh and prompt/script station files such as refactor.md, validate.md, repair.md, commit.md, and success.md. The current orchestrator is factory/refactor/run.sh. Its exact five unattended jobs are: start the doer, hand/carry inputs and evidence between stations, branch on the validator VERDICT, run repair after failures, and stop when PASS commits or the iteration/failure counters fire. factory/watch.sh and factory/ask.sh work for any line name; ask.sh is a no-tools station because the event record is piped to it. The most expensive unattended action is letting run.sh keep calling model stations, so the event record and logs are what I inspect for cost and behaviour. Repeated FAIL can mean the criterion is not met, or the evidence is missing or unreachable; I would compare the record and evidence with the criterion. Cost, regressions, and whether the result is worth it are still operator judgement.";
+const lesson013ReflectionFollowUp = "To be explicit: the current line is factory/refactor/; a second line would be a sibling directory such as factory/second-line/ with its own run.sh, station prompts/scripts, success.md, and .tmp record. The current run.sh orchestrates refactor.md, validate.md, repair.md, commit.md, success.md, and the .tmp record. run.sh has five jobs: start stations, pass inputs/evidence along, branch on VERDICT, invoke repair on FAIL, and stop/commit on PASS or bounds. The costly unattended action is repeated model station work, which I audit through watch.sh, ask.sh, run logs, and the event record; deciding cost, regressions, and value remains human operator judgement.";
 const lesson013PromptAcceptanceWaitMs = 30_000;
 const lesson013RpcEventClasses: readonly AuthoredEventClass[] = ["response", "queue_update", "tool_execution_start", "message_update", "message_end", "agent_end"];
 
@@ -501,8 +508,8 @@ const authoredWorkbookScenarioCatalog = [
       await driver.submitTerminalCommand("implementation-order", lesson013RunCommand, { label: "lesson013:run-line", timeoutMs: 120_000 });
       await driver.continueBlock("what-the-line-took-over", "lesson013:line-took-over");
       await driver.continueBlock("what-is-left", "lesson013:what-is-left");
-      await driver.submitReflection("checks", "The factory is factory/. The line is refactor/. The orchestrator is factory/refactor/run.sh: it starts the line, hands inputs to stations, branches on VERDICT, handles failures with repair, and stops by counters. The prompt/script pairs are stations; factory/watch.sh and factory/ask.sh operate on any line name, and ask.sh uses no tools because the record is piped to it. Repeated FAIL can mean the criterion is not met, or the evidence is missing or unreachable; I would compare the record and evidence with the criterion. Cost, regressions, and whether the result is worth it are still operator judgement.", "lesson013:checks");
-      await driver.completeReflection("checks", "lesson013:checks:complete");
+      const reflectionState = await driver.submitReflection("checks", lesson013InitialReflection, "lesson013:checks");
+      await completeReflectionAfterPossibleFeedback(driver, "checks", reflectionState, lesson013ReflectionFollowUp, "lesson013:checks:complete");
       await driver.continueBlock("pressure-test", "lesson013:pressure-test");
       await driver.continueBlock("capstone-closure", "lesson013:capstone");
     },
@@ -688,9 +695,30 @@ function freezeStrings(values: readonly string[]): readonly string[] {
 }
 
 async function requireFeedback(promise: Promise<unknown>, blockId: string): Promise<void> {
-  const state = await promise as { progress?: { blocks?: Array<{ id?: string; checkpoint?: { status?: string } }> } };
+  const state = await promise as WorkbookPublicStateLike;
+  if (checkpointStatusFor(state, blockId) !== "feedback") throw new Error(`Expected Tutor feedback for ${blockId}.`);
+}
+
+type WorkbookPublicStateLike = { progress?: { blocks?: Array<{ id?: string; checkpoint?: { status?: string } }> } };
+
+async function completeReflectionAfterPossibleFeedback(
+  driver: Pick<AuthoredWorkbookDriver, "submitReflectionFollowUp" | "completeReflection">,
+  blockId: string,
+  state: unknown,
+  followUp: string,
+  label: string
+): Promise<void> {
+  if (checkpointStatusFor(state as WorkbookPublicStateLike, blockId) === "feedback") {
+    const followUpState = await driver.submitReflectionFollowUp(blockId, followUp, `${label}:follow-up`);
+    if (checkpointStatusFor(followUpState as WorkbookPublicStateLike, blockId) === "feedback") throw new Error(`Tutor still requested feedback for ${blockId} after the authored follow-up.`);
+  }
+  await driver.completeReflection(blockId, label);
+}
+
+function checkpointStatusFor(state: WorkbookPublicStateLike | null | undefined, blockId: string): string | undefined {
+  if (!state || typeof state !== "object") return undefined;
   const block = state.progress?.blocks?.find((candidate) => candidate.id === blockId || candidate.id?.endsWith(`--${blockId}`));
-  if (block?.checkpoint?.status !== "feedback") throw new Error(`Expected Tutor feedback for ${blockId}.`);
+  return block?.checkpoint?.status;
 }
 
 function feedbackAboutEvidenceCarriage(message: string): boolean {
@@ -742,6 +770,7 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
   const validatorPrompt = files.get("factory/refactor-validate.md") ?? "";
   const source = files.get("calculator/src/index.ts") ?? "";
   const findings = files.get("factory/.tmp/refactor-validate-findings.txt") ?? "";
+  const terminalOutput = terminalOutputTexts(input.trace).join("\n");
   return evaluateGate([
     assertion("lessons003004-source-order", hasLessonProgressionOrder(input.trace, ["003-build-a-validator", "004-feed-the-findings-back"]), "Lessons 003 and 004 progress in authored order."),
     assertion("lessons003004-no-jump", noLessonJumpEverywhere(input), "No lesson jump entered internal raw events or the public trace."),
@@ -751,6 +780,7 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
     assertion("lessons003004-concat-tee", validatorScript.includes("cat refactor-validate.md .tmp/refactor-quality-before.txt") && validatorScript.includes("| tee .tmp/refactor-validate-findings.txt") && validatorScript.includes("--tools read,grep,find,ls,bash -p") && !/--tools [^\n]*(edit|write)/.test(validatorScript), "Validator concatenates baseline, tees findings, and stays read-only except bash checks."),
     assertion("lessons003004-prompt-exact", validatorPrompt === authoredValidatorPrompt, "Validator prompt matches the authored evaluator seed."),
     assertion("lessons003004-script-exact", validatorScript === authoredValidatorScript, "Validator script matches the authored mechanism exactly."),
+    assertion("lessons003004-visible-corrected-mechanics", ["Mechanic: missing-baseline guard", "Mechanic: baseline concatenated into validation", "Mechanic: tools read,grep,find,ls,bash (no edit/write)", "Mechanic: findings captured through tee"].every((marker) => terminalOutput.includes(marker)), "Corrected validator output visibly displays the guard, baseline concatenation, read-only tool list, and tee."),
     assertion("lessons003004-broken-before-feedback", /cat refactor-validate\.md\s*\\\s*\|/.test(terminalInputs) && tutorFeedbackAfterInput(input.trace, /cat refactor-validate\.md\s*\\\s*\|/, /baseline|guard|findings|tee|evidence/i), "Broken validator lacking evidence carriage occurs before feedback."),
     assertion("lessons003004-wrong-rerun-before-feedback", terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004WrongCommand)) && tutorFeedbackAfterInput(input.trace, /\.\/factory\/refactor-validate\.sh\s*$/, /rerun|validator|baseline|findings|append|doer context/i), "The wrong validator-only rerun occurs before feedback and does not re-record the baseline."),
     assertion("lessons003004-multiply-then-divide", terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004MultiplyCommand)) && terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004DivideCommand)) && suffixInputIndex(terminalInputTexts(input.trace), lesson004DivideCommand) > suffixInputIndex(terminalInputTexts(input.trace), lesson004MultiplyCommand), "The repair is split into multiply-only and divide/final turns after feedback."),

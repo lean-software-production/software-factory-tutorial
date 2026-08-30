@@ -399,6 +399,9 @@ describe("authored workbook scenario descriptors", () => {
     const stubbed = new RecordingDriver();
     await authoredWorkbookScenarioById("lessons-003-004-evidence-feedback").drive({ driver: stubbed });
     const commands = stubbed.calls.filter((call) => call.method === "submitTerminalCommand").map((call) => call.command ?? "");
+    expect(commands[1]).toContain("sed -n '1,120p' factory/refactor-validate.sh");
+    expect(commands[1]).toContain("Mechanic: missing-baseline guard");
+    expect(commands[1]).toContain("Mechanic: findings captured through tee");
     expect(commands.some((command) => command.endsWith(lesson004WrongCommand))).toBe(true);
     expect(commands.some((command) => command.endsWith(lesson004MultiplyCommand))).toBe(true);
     expect(commands.some((command) => command.endsWith(lesson004DivideCommand))).toBe(true);
@@ -406,6 +409,9 @@ describe("authored workbook scenario descriptors", () => {
 
     const capstone = new RecordingDriver();
     await authoredWorkbookScenarioById("lesson-013-operator-judgement").drive({ driver: capstone });
+    expect(capstone.calls.filter((call) => call.method === "submitReflectionFollowUp")).toHaveLength(0);
+    const capstoneReflection = capstone.calls.find((call) => call.method === "submitReflection")?.response ?? "";
+    for (const term of ["factory/refactor/", "refactor.md", "validate.md", "repair.md", "commit.md", "success.md", "start the doer", "hand/carry inputs", "branch on the validator VERDICT", "run repair", "stop when PASS", "most expensive unattended action", "event record"]) expect(capstoneReflection).toContain(term);
     const capstoneCommand = capstone.calls.find((call) => call.method === "submitTerminalCommand")?.command ?? "";
     expect(capstoneCommand).toContain("./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &");
     expect(capstoneCommand).toContain("./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &");
@@ -414,6 +420,18 @@ describe("authored workbook scenario descriptors", () => {
     expect(capstoneCommand).toContain("./factory/ask.sh refactor \"What happened in this run?\"");
     expect(capstoneCommand).not.toMatch(/ask\.sh refactor \"What happened in this run\?\"\s*>/);
     expect(capstoneCommand).toContain("./factory/steer.sh refactor \"Finish multiply and divide independently before validation.\"");
+  });
+
+  it("repairs legitimate Lesson 013 reflection feedback before completing the checkpoint", async () => {
+    const scenario = authoredWorkbookScenarioById("lesson-013-operator-judgement");
+    expect(scenario.expectedModelCalls.mainTutor).toBe(14);
+    const driver = new Lesson013ReflectionFeedbackDriver();
+    await scenario.drive({ driver });
+    const reflectionCalls = driver.calls.filter((call) => ["submitReflection", "submitReflectionFollowUp", "completeReflection"].includes(call.method));
+    expect(reflectionCalls.map((call) => call.method)).toEqual(["submitReflection", "submitReflectionFollowUp", "completeReflection"]);
+    expect(reflectionCalls[1]!.response).toEqual(expect.stringContaining("factory/refactor/"));
+    expect(reflectionCalls[1]!.response).toEqual(expect.stringContaining("five jobs"));
+    expect(reflectionCalls[1]!.response).toEqual(expect.stringContaining("costly unattended action"));
   });
 
   it("captures runner-private gate checkpoints in authored order with an optional no-op default", async () => {
@@ -552,6 +570,9 @@ describe("authored workbook scenario gates", () => {
       const publicTrace = projectAuthoredWorkbookEvalTrace({ ...trace, internalEvents: rawEvents });
       const inputs = publicTrace.terminalTranscript.filter((entry) => entry.direction === "input").map((entry) => entry.text.replace(/[\r\n]+$/, ""));
       expect(inputs).toHaveLength(5);
+      expect(inputs[1]).toContain("sed -n '1,120p' factory/refactor-validate.sh");
+      const visibleOutput = publicTrace.terminalTranscript.filter((entry) => entry.direction === "output").map((entry) => entry.text).join("\n");
+      for (const marker of ["Mechanic: missing-baseline guard", "Mechanic: baseline concatenated into validation", "Mechanic: tools read,grep,find,ls,bash (no edit/write)", "Mechanic: findings captured through tee"]) expect(visibleOutput).toContain(marker);
       expect(checkpoints.labels).toEqual(["lessons003004:after-multiply-only"]);
       const feedbackMessages = publicTrace.publicStates.flatMap((entry) => entry.state.progress.blocks.flatMap((block) => block.terminal?.phase === "feedback" ? [block.terminal.message] : []));
       expect(feedbackMessages).toEqual(expect.arrayContaining([
@@ -664,6 +685,7 @@ describe("authored workbook scenario gates", () => {
       ["remove guard", (input) => { mutateSnapshot(input, "factory/refactor-validate.sh", (text) => text.replace("if [ ! -f .tmp/refactor-quality-before.txt ]; then", "# missing guard")); }],
       ["remove tee", (input) => { mutateSnapshot(input, "factory/refactor-validate.sh", (text) => text.replace("| tee .tmp/refactor-validate-findings.txt", "")); }],
       ["change prompt", (input) => { mutateSnapshot(input, "factory/refactor-validate.md", (text) => text.replace("single refactoring", "large rewrite")); }],
+      ["remove visible corrected mechanics", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => entry.direction !== "output" || !entry.text.includes("refactor-quality-before.txt")); }],
       ["remove broken command", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => !entry.text.includes("cat refactor-validate.md \\\n  |")); }],
       ["remove wrong rerun", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => !entry.text.endsWith(lesson004WrongCommand)); }],
       ["remove multiply command", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => !entry.text.endsWith(lesson004MultiplyCommand)); }],
@@ -759,6 +781,7 @@ describe("authored scenario shell commands", () => {
           expect(sourceAfterWrongRerun).toContain('if (pieces[place++] !== "by") fail();');
         }
       }
+      for (const marker of ["if [ ! -f .tmp/refactor-quality-before.txt ]; then", "cat refactor-validate.md .tmp/refactor-quality-before.txt", "| tee .tmp/refactor-validate-findings.txt", "--tools read,grep,find,ls,bash -p"]) expect(outputs[1]).toContain(marker);
       expect(outputs[1]).toMatch(/^Starting validation\.\.\.\nVERDICT: FAIL/m);
       expect(outputs[1]).toContain("Current quality still reports: calculator/src/index.ts duplicated operator branch parser.");
       expect(outputs[1]).not.toMatch(/exact labelled TESTS|complete QUALITY\/TESTS\/DIFF|current PASS/i);
@@ -782,6 +805,68 @@ describe("authored scenario shell commands", () => {
         ["repair", "complete-refactor"],
         ["validator", "PASS"]
       ]);
+    } finally {
+      await handle.close().catch(() => undefined);
+      await workspace.close().catch(() => undefined);
+      tempRoots.splice(tempRoots.indexOf(workspace.repositoryRoot), 1);
+    }
+  }, 30_000);
+
+  it("sanitizes and bounds native-binding quality output in Lesson 013 validation evidence", async () => {
+    const { workspace, sessionWorkspace, handle } = await liveScenarioHarness("lesson-013-operator-judgement");
+    const aliasedSessionWorkspace = join(dirname(sessionWorkspace), "regex[workspace].alias");
+    try {
+      await symlink(sessionWorkspace, aliasedSessionWorkspace, "dir");
+      await mkdir(join(sessionWorkspace, "factory/refactor/.tmp"), { recursive: true });
+      await writeFile(join(sessionWorkspace, "factory/refactor/.tmp/quality-before.txt"), "Findings reported by: baseline.\n");
+      await writeFile(join(sessionWorkspace, "calculator/scripts/quality.mjs"), String.raw`const cwd = process.cwd();
+console.error('Error: native binding failed at /workspace/node_modules/native-binding/build/Release/addon.node');
+console.error('    at load (/opt/workbook/node_modules/native-loader/index.js:12:3)');
+console.error('    at local (' + cwd + '/node_modules/native-loader/index.js:34:5)');
+for (let index = 1; index <= 120; index += 1) console.log('native frame ' + index + ' ' + '/workspace/node_modules/'.repeat(8));
+console.log('Findings reported by: native binding probe.');
+process.exit(1);
+`);
+      const statusProbe = await execShell(String.raw`cd '${aliasedSessionWorkspace}/factory/refactor'
+eval "$(sed -n '/^sanitize_quality_paths()/,/^mkdir -p \.tmp$/p' validate.sh | sed '$d')"
+mkdir -p .tmp
+set +e
+quality_now > .tmp/quality-status-probe.txt
+quality_status=$?
+set -e
+printf 'quality-status=%s\n' "$quality_status"`, aliasedSessionWorkspace, stubbedShellEnv(handle), 10_000);
+      expect(statusProbe).toContain("quality-status=1");
+      await execShell(`cd '${aliasedSessionWorkspace}' && ./factory/refactor/validate.sh`, sessionWorkspace, stubbedShellEnv(handle), 10_000);
+      const evidence = await readFile(join(sessionWorkspace, "factory/refactor/.tmp/evidence.txt"), "utf8");
+      const qualityNow = evidenceSection(evidence, "QUALITY NOW");
+      expect(Buffer.byteLength(qualityNow, "utf8")).toBeLessThanOrEqual(16 * 1024);
+      expect(qualityNow.split(/\r?\n/).length).toBeLessThanOrEqual(62);
+      expect(qualityNow).toContain("<workspace>/node_modules/native-binding/build/Release/addon.node");
+      expect(qualityNow).toContain("<workbook>/node_modules/native-loader/index.js");
+      expect(qualityNow).toContain("<calculator>/node_modules/native-loader/index.js");
+      expect(qualityNow).toContain("Findings reported by: native binding probe.");
+      expect(qualityNow).not.toMatch(/\/workspace|\/opt\/workbook|\/var\/folders|\/private\/var|native frame 120/);
+      expect(await readFile(join(sessionWorkspace, "factory/refactor/.tmp/validate-findings.txt"), "utf8")).toMatch(/^VERDICT: /m);
+    } finally {
+      await handle.close().catch(() => undefined);
+      await workspace.close().catch(() => undefined);
+      tempRoots.splice(tempRoots.indexOf(workspace.repositoryRoot), 1);
+    }
+  }, 30_000);
+
+  it("sanitizes real shell calculator paths while preserving a passing quality summary", async () => {
+    const { workspace, sessionWorkspace, handle } = await liveScenarioHarness("lesson-013-operator-judgement");
+    try {
+      await mkdir(join(sessionWorkspace, "factory/refactor/.tmp"), { recursive: true });
+      await writeFile(join(sessionWorkspace, "factory/refactor/.tmp/quality-before.txt"), "Findings reported by: baseline.\n");
+      await writeFile(join(sessionWorkspace, "calculator/scripts/quality.mjs"), "console.log('loaded from ' + process.cwd() + '/native/binding.node');\nconsole.log('All quality checks passed.');\n");
+      await execShell("./factory/refactor/validate.sh", sessionWorkspace, stubbedShellEnv(handle), 10_000);
+      const evidence = await readFile(join(sessionWorkspace, "factory/refactor/.tmp/evidence.txt"), "utf8");
+      const qualityNow = evidenceSection(evidence, "QUALITY NOW");
+      expect(qualityNow).toContain("<calculator>/native/binding.node");
+      expect(qualityNow).toContain("All quality checks passed.");
+      expect(qualityNow).not.toContain(sessionWorkspace);
+      expect(qualityNow).not.toMatch(/\/var\/folders|\/private\/var/);
     } finally {
       await handle.close().catch(() => undefined);
       await workspace.close().catch(() => undefined);
@@ -904,6 +989,27 @@ class RecordingDriver {
   async completeTerminalBlock(blockId: string): Promise<any> { this.calls.push({ method: "completeTerminalBlock", blockId }); return state("accepted", blockId); }
 }
 
+class Lesson013ReflectionFeedbackDriver extends RecordingDriver {
+  #followedUp = false;
+
+  override async submitReflection(blockId: string, response: string): Promise<any> {
+    this.calls.push({ method: "submitReflection", blockId, response });
+    return blockId === "checks" ? state("feedback", blockId) : state("accepted", blockId);
+  }
+
+  override async submitReflectionFollowUp(blockId: string, response: string): Promise<any> {
+    this.#followedUp = true;
+    this.calls.push({ method: "submitReflectionFollowUp", blockId, response });
+    return state("accepted", blockId);
+  }
+
+  override async completeReflection(blockId: string): Promise<any> {
+    if (blockId === "checks" && !this.#followedUp) throw new Error("409 checkpoint still has feedback");
+    this.calls.push({ method: "completeReflection", blockId });
+    return state("accepted", blockId);
+  }
+}
+
 function state(status: "accepted" | "feedback", blockId = "block"): any {
   return { progress: { blocks: [{ id: blockId, checkpoint: { status } }] } };
 }
@@ -1020,6 +1126,7 @@ async function lessons003004Fixture(input: AuthoredWorkbookScenarioGateInput): P
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\ncat refactor-validate.md \\\n  | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p)" },
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "observer", text: "Feedback: carry the baseline with a guard and tee findings." },
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\ncat refactor-validate.md .tmp/refactor-quality-before.txt \\\n  | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p)" },
+    { blockId: "lesson--003-build-a-validator--implementation-order", direction: "output", text: "#!/usr/bin/env bash\nset -euo pipefail\nif [ ! -f .tmp/refactor-quality-before.txt ]; then\ncat refactor-validate.md .tmp/refactor-quality-before.txt \\\n  | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p) \\\n  | tee .tmp/refactor-validate-findings.txt\nMechanic: missing-baseline guard\nMechanic: baseline concatenated into validation\nMechanic: tools read,grep,find,ls,bash (no edit/write)\nMechanic: findings captured through tee\nStarting validation...\nVERDICT: FAIL\n" },
     { blockId: "lesson--004-feed-the-findings-back--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\n" + lesson004WrongCommand },
     { blockId: "lesson--004-feed-the-findings-back--implementation-order", direction: "observer", text: "Feedback: rerunning the validator only preserves the baseline but does not append findings to the doer context." },
     { blockId: "lesson--004-feed-the-findings-back--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\n" + lesson004MultiplyCommand },
@@ -1047,6 +1154,15 @@ async function lessons003004Fixture(input: AuthoredWorkbookScenarioGateInput): P
     "calculator/src/index.ts": completedSource
   });
   return input;
+}
+
+function evidenceSection(evidence: string, headerName: string): string {
+  const header = `=== ${headerName} ===`;
+  const start = evidence.indexOf(header);
+  if (start < 0) throw new Error(`missing evidence section ${headerName}`);
+  const bodyStart = start + header.length;
+  const next = evidence.slice(bodyStart).search(/\n=== [^\n]+ ===/);
+  return evidence.slice(bodyStart, next < 0 ? undefined : bodyStart + next).trim();
 }
 
 function helperOnlyCompleteEvidence(testOutput: string): string {
