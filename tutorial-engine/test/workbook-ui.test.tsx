@@ -1395,6 +1395,8 @@ describe("workbook lesson UI", () => {
     expect(canvas!.tagName).toBe("CANVAS");
     expect(canvas!.getAttribute("aria-hidden")).toBe("true");
     expect(canvas!.style.pointerEvents).toBe("none");
+    expect(stylesCss).toMatch(/\.lesson-completion-confetti-canvas\s*\{[^}]*position:\s*fixed;/s);
+    expect(stylesCss).toMatch(/\.lesson-completion-confetti-canvas\s*\{[^}]*inset:\s*0;/s);
     expect(confettiMock.create).toHaveBeenCalled();
     expect(confettiMock.create.mock.calls.at(-1)![0]).toBe(canvas);
     expect(confettiMock.create.mock.calls.at(-1)![1]).toMatchObject({ resize: true, disableForReducedMotion: true });

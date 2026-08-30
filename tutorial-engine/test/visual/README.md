@@ -37,7 +37,8 @@ neutralize `main`'s decorative notebook grid so unrelated document height change
 grid phase and fail an otherwise unchanged band.
 
 `.embedded-terminal` and `.cm-editor` are masked magenta in the band approvals: xterm's canvas and
-CodeMirror's caret do not reproduce deterministically. The `practice-feedback-*` approvals are a
-separate state gallery at desktop and narrow widths. They do not mask feedback bars, and they cover
-editor reviewing, retained-updating feedback, actionable feedback, temporary failure, and success,
-plus terminal running, checking, actionable feedback, retryable temporary failure, and success.
+CodeMirror's caret do not reproduce deterministically. Two combined `practice-feedback-*` approvals
+cover the full editor-and-terminal state matrix at desktop and 390px narrow widths. They do not mask
+feedback bars or fatal banners. Each composite covers editor reviewing, retained-updating feedback,
+actionable feedback, fatal and success states, plus terminal running, checking, actionable feedback,
+fatal and success states.

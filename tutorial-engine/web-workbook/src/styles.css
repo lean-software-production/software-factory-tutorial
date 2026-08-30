@@ -106,6 +106,13 @@ pre {
   min-height: 100vh;
   margin: 0 auto;
 }
+.lesson-completion-confetti-canvas {
+  position: fixed;
+  z-index: 45;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+}
 .rail {
   position: sticky;
   top: 0;

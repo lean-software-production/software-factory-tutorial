@@ -50,30 +50,26 @@ class EchoPty implements TerminalPty {
   onExit(): void {}
 }
 
-type FeedbackSurface = "editor" | "terminal";
 type FeedbackViewport = { name: "desktop" | "narrow"; width: number; height: number };
 
 const FEEDBACK_VIEWPORTS: readonly FeedbackViewport[] = [
   { name: "desktop", width: 1280, height: 900 },
   { name: "narrow", width: 390, height: 900 },
 ];
-const FEEDBACK_SURFACES: readonly FeedbackSurface[] = ["editor", "terminal"];
-const EXPECTED_FEEDBACK_STATES: Record<FeedbackSurface, readonly string[]> = {
-  editor: ["editor-reviewing", "editor-updating", "editor-feedback", "editor-temporary-failure", "editor-success"],
-  terminal: ["terminal-running", "terminal-checking", "terminal-feedback", "terminal-retryable-failure", "terminal-success"],
-};
+const EXPECTED_FEEDBACK_STATES = [
+  "editor-reviewing", "editor-updating", "editor-feedback", "editor-fatal", "editor-success",
+  "terminal-running", "terminal-checking", "terminal-feedback", "terminal-fatal", "terminal-success",
+] as const;
 const EDITOR_RETAINED_FEEDBACK = "Add the acceptance marker and explain why that proves the change is complete.";
-const EDITOR_TEMPORARY_FAILURE = "Review is temporarily unavailable. Please retry after your connection recovers.";
 const TERMINAL_FEEDBACK = "Run the command again after fixing the failing assertion.";
-const TERMINAL_RETRYABLE_FAILURE = "Review is temporarily unavailable. You can retry the review without rerunning the command.";
+const FATAL_MESSAGE = "The AI tutor provider is unavailable. Fix or reconnect the provider, then restart this workbook to continue.";
 const VISUAL_EDITOR_PATH = "factory/answer.md";
 const TERMINAL_TRANSCRIPT = "$ npm test -- --runInBand\nPASS visual fixture\n";
 
-const noop = () => undefined;
 type PracticeFeedbackBarComponent = typeof import("../web-workbook/src/practice-feedback-bar.js").PracticeFeedbackBar;
 let practiceFeedbackBarComponent: PracticeFeedbackBarComponent | undefined;
 
-function feedbackBar(tone: PracticeFeedbackTone, options: { markdown?: string; status?: string; label?: string; title?: string; busy?: boolean; className: string; retry?: { label: string; onClick(): void } }): ReactNode {
+function feedbackBar(tone: PracticeFeedbackTone, options: { markdown?: string; status?: string; label?: string; title?: string; busy?: boolean; className: string }): ReactNode {
   if (!practiceFeedbackBarComponent) throw new Error("PracticeFeedbackBar was not loaded before rendering the visual state gallery.");
   return createElement(practiceFeedbackBarComponent, { tone, ...options });
 }
@@ -86,8 +82,8 @@ function editorSurface(): ReactNode {
   return createElement("div", { className: "editor-surface", "aria-label": `Editor for ${VISUAL_EDITOR_PATH}` });
 }
 
-function editorLiveVisual(tone: PracticeFeedbackTone, options: { markdown?: string; status?: string; busy?: boolean }): ReactNode {
-  return createElement("div", { className: "work-block editor-practice is-active" },
+function editorLiveVisual(tone: PracticeFeedbackTone, options: { markdown?: string; status?: string; busy?: boolean }, disabled = false): ReactNode {
+  return createElement("div", { className: "work-block editor-practice is-active", "aria-disabled": disabled ? "true" : undefined },
     editorTarget(),
     createElement("div", { className: "editor-live-surface has-feedback" },
       editorSurface(),
@@ -108,17 +104,17 @@ function editorSuccessVisual(): ReactNode {
   );
 }
 
-function embeddedTerminalPanel(): ReactNode {
+function embeddedTerminalPanel(disabled = false): ReactNode {
   return createElement("div", { className: "embedded-terminal-panel" },
     createElement("span", { className: "terminal-connection-status connected", "aria-label": "Terminal connected" }),
-    createElement("div", { className: "embedded-terminal", "aria-label": "Embedded terminal" }),
+    createElement("div", { className: "embedded-terminal", "aria-label": "Embedded terminal", "aria-disabled": disabled ? "true" : undefined, inert: disabled ? true : undefined }),
   );
 }
 
-function terminalLiveVisual(tone: PracticeFeedbackTone, options: { markdown?: string; status?: string; busy?: boolean; retry?: { label: string; onClick(): void } }): ReactNode {
-  return createElement("div", { className: "work-block terminal is-active" },
+function terminalLiveVisual(tone: PracticeFeedbackTone, options: { markdown?: string; status?: string; busy?: boolean }, disabled = false): ReactNode {
+  return createElement("div", { className: "work-block terminal is-active", "aria-disabled": disabled ? "true" : undefined },
     createElement("div", { className: "terminal-live-surface has-feedback" },
-      embeddedTerminalPanel(),
+      embeddedTerminalPanel(disabled),
       feedbackBar(tone, { ...options, className: "live-block-feedback terminal-feedback-overlay" }),
     ),
   );
@@ -139,6 +135,21 @@ function terminalSuccessVisual(): ReactNode {
   );
 }
 
+function fatalNotice(): ReactNode {
+  return createElement("aside", { className: "workbook-fatal-notice visual-feedback-fatal-notice", role: "alert", "aria-label": "Workbook paused" },
+    createElement("span", { className: "workbook-fatal-icon", "aria-hidden": "true" }, "!"),
+    createElement("div", null,
+      createElement("p", { className: "workbook-fatal-eyebrow" }, "Workbook paused"),
+      createElement("h2", null, "Tutor unavailable"),
+      createElement("p", null, FATAL_MESSAGE),
+    ),
+  );
+}
+
+function fatalVisual(surface: ReactNode): ReactNode {
+  return createElement("div", { className: "visual-feedback-fatal-state" }, fatalNotice(), surface);
+}
+
 function feedbackCard(state: string, label: string, visual: ReactNode, welded = true): ReactNode {
   return createElement("section", { key: state, className: "visual-feedback-card", "data-feedback-state": state, "data-feedback-welded": welded ? "true" : "false" },
     createElement("p", { className: "visual-feedback-state-label" }, label),
@@ -151,7 +162,7 @@ function editorFeedbackCards(): ReactNode[] {
     feedbackCard("editor-reviewing", "Editor — reviewing latest revision", editorLiveVisual("status", { busy: true, status: "Reviewing your latest revision…" })),
     feedbackCard("editor-updating", "Editor — retained feedback while updating", editorLiveVisual("updating", { busy: true, markdown: EDITOR_RETAINED_FEEDBACK, status: "Updating feedback…" })),
     feedbackCard("editor-feedback", "Editor — actionable feedback", editorLiveVisual("feedback", { markdown: EDITOR_RETAINED_FEEDBACK })),
-    feedbackCard("editor-temporary-failure", "Editor — temporary review failure", editorLiveVisual("failure", { markdown: EDITOR_RETAINED_FEEDBACK, status: EDITOR_TEMPORARY_FAILURE })),
+    feedbackCard("editor-fatal", "Editor — workbook paused", fatalVisual(editorLiveVisual("feedback", { markdown: EDITOR_RETAINED_FEEDBACK }, true))),
     feedbackCard("editor-success", "Editor — accepted success", editorSuccessVisual(), false),
   ];
 }
@@ -161,20 +172,20 @@ function terminalFeedbackCards(): ReactNode[] {
     feedbackCard("terminal-running", "Terminal — command running", terminalLiveVisual("status", { busy: true, status: "Running…" })),
     feedbackCard("terminal-checking", "Terminal — transcript checking", terminalLiveVisual("status", { busy: true, status: "Checking…" })),
     feedbackCard("terminal-feedback", "Terminal — actionable feedback", terminalLiveVisual("feedback", { markdown: TERMINAL_FEEDBACK })),
-    feedbackCard("terminal-retryable-failure", "Terminal — retryable temporary failure", terminalLiveVisual("failure", { markdown: TERMINAL_RETRYABLE_FAILURE, retry: { label: "Retry review", onClick: noop } })),
+    feedbackCard("terminal-fatal", "Terminal — workbook paused", fatalVisual(terminalLiveVisual("feedback", { markdown: TERMINAL_FEEDBACK }, true))),
     feedbackCard("terminal-success", "Terminal — accepted success", terminalSuccessVisual()),
   ];
 }
 
-function renderFeedbackGallery(surface: FeedbackSurface): string {
-  const cards = surface === "editor" ? editorFeedbackCards() : terminalFeedbackCards();
+function renderFeedbackGallery(): string {
+  const cards = [...editorFeedbackCards(), ...terminalFeedbackCards()];
   return renderToStaticMarkup(createElement("div", { className: "shell visual-feedback-gallery-shell" },
     createElement("main", null,
-      createElement("article", { className: "page visual-feedback-gallery", "data-feedback-surface": surface },
+      createElement("article", { className: "page visual-feedback-gallery", "data-feedback-composite": "editor-terminal" },
         createElement("header", null,
           createElement("p", { className: "section-label" }, "Canonical visual state matrix"),
-          createElement("h1", null, `${surface === "editor" ? "Editor" : "Terminal"} welded feedback bars`),
-          createElement("p", { className: "visual-feedback-gallery-subtitle" }, "Bars are photographed directly; no feedback bar is masked."),
+          createElement("h1", null, "Editor and terminal feedback states"),
+          createElement("p", { className: "visual-feedback-gallery-subtitle" }, "Feedback bars and fatal banners are photographed directly; none is masked."),
         ),
         createElement("div", { className: "visual-feedback-state-grid" }, cards),
       ),
@@ -241,6 +252,22 @@ body.visual-feedback-gallery-body {
   font-weight: 800;
   letter-spacing: 0.11em;
   text-transform: uppercase;
+}
+.visual-feedback-fatal-state {
+  display: grid;
+  gap: 10px;
+}
+.visual-feedback-card .visual-feedback-fatal-notice {
+  position: static;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+.visual-feedback-card .visual-feedback-fatal-notice h2 {
+  font-size: 1rem;
+}
+.visual-feedback-card .visual-feedback-fatal-notice p:not(.workbook-fatal-eyebrow) {
+  font-size: 0.8rem;
 }
 .visual-feedback-card .work-block {
   margin: 0;
@@ -362,30 +389,32 @@ async function approve(page: any, name: string, shot: Buffer): Promise<void> {
   else await accept();
 }
 
-async function showFeedbackGallery(page: any, surface: FeedbackSurface, viewport: FeedbackViewport): Promise<void> {
+async function showFeedbackGallery(page: any, viewport: FeedbackViewport): Promise<void> {
   await page.setViewportSize({ width: viewport.width, height: viewport.height });
   await page.evaluate((markup: string) => {
     document.body.className = "visual-feedback-gallery-body";
     document.body.innerHTML = markup;
     window.scrollTo(0, 0);
-  }, renderFeedbackGallery(surface));
+  }, renderFeedbackGallery());
   await page.evaluate(async () => { await document.fonts.ready; });
   await page.waitForTimeout(80);
 }
 
-async function assertFeedbackGalleryCoverage(page: any, surface: FeedbackSurface, viewport: FeedbackViewport): Promise<void> {
-  const expectedStates = EXPECTED_FEEDBACK_STATES[surface];
+async function assertFeedbackGalleryCoverage(page: any, viewport: FeedbackViewport): Promise<void> {
   const result = await page.evaluate(() => {
     const details = [...document.querySelectorAll<HTMLElement>(".visual-feedback-card")].map((card) => {
       const bar = card.querySelector<HTMLElement>(".practice-feedback-bar");
+      const fatal = card.querySelector<HTMLElement>(".workbook-fatal-notice");
       const workSurface = card.querySelector<HTMLElement>(".editor-surface, .embedded-terminal-panel, .frozen-terminal");
       const barRect = bar?.getBoundingClientRect();
+      const fatalRect = fatal?.getBoundingClientRect();
       const surfaceRect = workSurface?.getBoundingClientRect();
       return {
         state: card.dataset.feedbackState ?? "",
         welded: card.dataset.feedbackWelded !== "false",
         hasBar: Boolean(bar && barRect && barRect.width > 0 && barRect.height > 0),
-        text: bar?.innerText.trim() ?? "",
+        hasFatal: Boolean(fatal && fatalRect && fatalRect.width > 0 && fatalRect.height > 0),
+        text: `${fatal?.innerText.trim() ?? ""} ${bar?.innerText.trim() ?? ""}`.trim(),
         gap: barRect && surfaceRect ? Math.round(barRect.top - surfaceRect.bottom) : null,
         widthDelta: barRect && surfaceRect ? Math.round(barRect.width - surfaceRect.width) : null,
         leftDelta: barRect && surfaceRect ? Math.round(barRect.left - surfaceRect.left) : null,
@@ -394,20 +423,22 @@ async function assertFeedbackGalleryCoverage(page: any, surface: FeedbackSurface
     return { states: details.map((detail) => detail.state), details, viewportWidth: window.innerWidth };
   });
 
-  expectClose(result.viewportWidth, viewport.width, 0, `${surface} feedback gallery ${viewport.name}: viewport width`);
-  for (const expected of expectedStates) {
-    check(result.states.includes(expected), `${surface} feedback gallery ${viewport.name}: missing state ${expected}`);
+  expectClose(result.viewportWidth, viewport.width, 0, `feedback composite ${viewport.name}: viewport width`);
+  for (const expected of EXPECTED_FEEDBACK_STATES) {
+    check(result.states.includes(expected), `feedback composite ${viewport.name}: missing state ${expected}`);
   }
+  check(result.states.length === EXPECTED_FEEDBACK_STATES.length, `feedback composite ${viewport.name}: expected ${EXPECTED_FEEDBACK_STATES.length} states, found ${result.states.length}`);
   for (const detail of result.details) {
-    check(detail.hasBar, `${surface} feedback gallery ${viewport.name}/${detail.state}: feedback bar is not visible`);
-    check(detail.text.length > 0, `${surface} feedback gallery ${viewport.name}/${detail.state}: feedback bar has no learner-visible text`);
+    check(detail.hasBar, `feedback composite ${viewport.name}/${detail.state}: feedback bar is not visible`);
+    check(detail.text.length > 0, `feedback composite ${viewport.name}/${detail.state}: learner-visible state text is empty`);
+    if (detail.state.endsWith("-fatal")) check(detail.hasFatal, `feedback composite ${viewport.name}/${detail.state}: fatal banner is not visible`);
     if (detail.welded) {
       if (detail.gap === null || detail.widthDelta === null || detail.leftDelta === null) {
-        failures.push(`${surface} feedback gallery ${viewport.name}/${detail.state}: could not compare feedback bar with work surface`);
+        failures.push(`feedback composite ${viewport.name}/${detail.state}: could not compare feedback bar with work surface`);
       } else {
-        expectClose(detail.gap, 0, 1, `${surface} feedback gallery ${viewport.name}/${detail.state}: weld gap`);
-        expectClose(detail.widthDelta, 0, 1, `${surface} feedback gallery ${viewport.name}/${detail.state}: bar width versus surface`);
-        expectClose(detail.leftDelta, 0, 1, `${surface} feedback gallery ${viewport.name}/${detail.state}: bar left edge versus surface`);
+        expectClose(detail.gap, 0, 1, `feedback composite ${viewport.name}/${detail.state}: weld gap`);
+        expectClose(detail.widthDelta, 0, 1, `feedback composite ${viewport.name}/${detail.state}: bar width versus surface`);
+        expectClose(detail.leftDelta, 0, 1, `feedback composite ${viewport.name}/${detail.state}: bar left edge versus surface`);
       }
     }
   }
@@ -416,12 +447,10 @@ async function assertFeedbackGalleryCoverage(page: any, surface: FeedbackSurface
 async function validatePracticeFeedbackVisuals(page: any): Promise<void> {
   await page.addStyleTag({ content: FEEDBACK_GALLERY_STYLE });
   for (const viewport of FEEDBACK_VIEWPORTS) {
-    for (const surface of FEEDBACK_SURFACES) {
-      await showFeedbackGallery(page, surface, viewport);
-      await assertFeedbackGalleryCoverage(page, surface, viewport);
-      const gallery = page.locator(`.visual-feedback-gallery[data-feedback-surface="${surface}"]`);
-      await approve(page, `practice-feedback-${surface}-${viewport.name}`, await gallery.screenshot());
-    }
+    await showFeedbackGallery(page, viewport);
+    await assertFeedbackGalleryCoverage(page, viewport);
+    const gallery = page.locator('.visual-feedback-gallery[data-feedback-composite="editor-terminal"]');
+    await approve(page, `practice-feedback-${viewport.name}`, await gallery.screenshot());
   }
 }
 
