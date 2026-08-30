@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -22,8 +22,18 @@ import {
 import {
   AUTHORED_WORKBOOK_LOCAL_DIAGNOSTIC_FILENAMES,
   AUTHORED_WORKBOOK_REPORT_FILENAMES,
+  atomicWriteText,
   createAuthoredWorkbookEvalReportBundleObjects,
+  authoredWorkbookEvalLocalDiagnosticText,
+  authoredWorkbookEvalStabilityPassed,
+  authoredWorkbookEvalStatusAfterCleanup,
+  createAuthoredWorkbookEvalFailureMetadataEnvelope,
+  createAuthoredWorkbookEvalLatestEnvelope,
+  createAuthoredWorkbookEvalLatestRunEntry,
+  writeAuthoredWorkbookEvalFailureDiagnostic,
   writeAuthoredWorkbookEvalGateDiagnostic,
+  writeAuthoredWorkbookEvalLatestEnvelope,
+  writeAuthoredWorkbookEvalFailureMetadata,
   writeAuthoredWorkbookEvalReportBundle,
   type AuthoredWorkbookEvalModelIdentities
 } from "../reports.js";
@@ -73,9 +83,9 @@ function gate(passed = true): AuthoredWorkbookEvalGateResult {
 
 function modelIdentities(): AuthoredWorkbookEvalModelIdentities {
   return {
-    mainTutor: { requested: "anthropic/claude", selected: "anthropic/claude-4" },
-    practiceCoach: { requested: "openai/gpt", selected: "openai/gpt-5" },
-    judge: { requested: "google/gemini", selected: "google/gemini-2.5" }
+    "Main Tutor": { requested: "anthropic/claude", selected: "anthropic/claude-4" },
+    "Practice Coach": { requested: "openai/gpt", selected: "openai/gpt-5" },
+    Judge: { requested: "google/gemini", selected: "google/gemini-2.5" }
   };
 }
 
@@ -307,17 +317,17 @@ describe("authored workbook report bundle", () => {
     const report = await readJson<Record<string, unknown>>(join(result.directory, "report.json"));
     const metadata = await readJson<Record<string, unknown>>(join(result.directory, "metadata.json"));
     const summary = await readFile(join(result.directory, "summary.md"), "utf8");
-    const judgeInput = await readFile(join(result.directory, "judge-input.txt"), "utf8");
+    const judgeInputEnvelope = await readJson<Record<string, unknown>>(join(result.directory, "judge-input.json"));
 
-    for (const envelope of [traceEnvelope, judgeEnvelope, report, metadata]) expect(envelope).toMatchObject(AUTHORED_WORKBOOK_EVAL_MARKERS);
-    expect(report).toMatchObject({ runId, files: { trace: "trace.json", judgeInput: "judge-input.txt", judge: "judge.json" } });
+    for (const envelope of [traceEnvelope, judgeInputEnvelope, judgeEnvelope, report, metadata]) expect(envelope).toMatchObject(AUTHORED_WORKBOOK_EVAL_MARKERS);
+    expect(report).toMatchObject({ runId, files: { trace: "trace.json", judgeInput: "judge-input.json", judge: "judge.json" } });
     expect(report).not.toHaveProperty("trace");
     expect(report).not.toHaveProperty("judgeInput");
     expect(report).not.toHaveProperty("judge");
-    expect(metadata).toMatchObject({ files: AUTHORED_WORKBOOK_REPORT_FILENAMES, diagnosticStatus: { gate: "not-written", failure: "not-written", cleanupFailure: "not-written" } });
-    expect(judgeInput).toBe(prompt);
+    expect(metadata).toMatchObject({ files: AUTHORED_WORKBOOK_REPORT_FILENAMES, status: "completed", outcome: "passed", modelIdentities: modelIdentities() });
+    expect(judgeInputEnvelope).toMatchObject({ prompt, traceFile: "trace.json" });
     expect(summary).toContain("Judge verdict: **100%** (pass)");
-    expectNoPrivate({ traceEnvelope, judgeEnvelope, report, metadata, summary, judgeInput });
+    expectNoPrivate({ traceEnvelope, judgeInputEnvelope, judgeEnvelope, report, metadata, summary });
 
     await expect(pathExists(join(result.directory, AUTHORED_WORKBOOK_LOCAL_DIAGNOSTIC_FILENAMES.gate))).resolves.toBe(false);
     const diagnosticStatus = await writeAuthoredWorkbookEvalGateDiagnostic(result.directory, gate(false));
@@ -325,6 +335,17 @@ describe("authored workbook report bundle", () => {
     const diagnostic = await readFile(join(result.directory, AUTHORED_WORKBOOK_LOCAL_DIAGNOSTIC_FILENAMES.gate), "utf8");
     expect(diagnostic).toContain("private gate assertion detail secret");
     expect(JSON.stringify(await readJson<Record<string, unknown>>(join(result.directory, "metadata.json")))).not.toContain(AUTHORED_WORKBOOK_LOCAL_DIAGNOSTIC_FILENAMES.gate);
+
+    await expect(writeAuthoredWorkbookEvalReportBundle({
+      reportsRoot: root,
+      runId,
+      scenario: scenario(),
+      trace,
+      gate: gate(),
+      judgeInput: prompt,
+      judge: judgeResult(),
+      modelIdentities: modelIdentities()
+    })).rejects.toThrow(/already exists/i);
   });
 
   it("rejects mismatched injected prompts, invalid judge results, failed gates, bad run ids, and unsafe model identities", () => {
@@ -336,6 +357,283 @@ describe("authored workbook report bundle", () => {
     expect(() => createAuthoredWorkbookEvalReportBundleObjects({ ...base, judge: { criteria: { ...judgeResult().criteria, "public-contract": { score: 2, citations: [999], rationale: "bad" } }, summary: "bad" } })).toThrow(/unknown trace citation/i);
     expect(() => createAuthoredWorkbookEvalReportBundleObjects({ ...base, gate: gate(false) })).toThrow(/deterministic gate failed/i);
     expect(() => createAuthoredWorkbookEvalReportBundleObjects({ ...base, runId: "../private" })).toThrow(/run id/i);
-    expect(() => createAuthoredWorkbookEvalReportBundleObjects({ ...base, modelIdentities: { ...modelIdentities(), judge: { requested: "google/gemini", selected: "google/gemini\nOPENCODE_API_KEY=sk-secret-token" } } })).toThrow(/model identity/i);
+    expect(() => createAuthoredWorkbookEvalReportBundleObjects({ ...base, modelIdentities: { ...modelIdentities(), Judge: { requested: "google/gemini", selected: "google/gemini\nOPENCODE_API_KEY=sk-secret-token" } } })).toThrow(/model identity/i);
+  });
+
+  it("rolls back every partially written success bundle so failure metadata can reuse the run id", async () => {
+    const root = await mkdtemp(join(tmpdir(), "authored-report-rollback-"));
+    tempRoots.push(root);
+    const trace = projectedTrace();
+    const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
+
+    for (let failAfter = 1; failAfter <= Object.keys(AUTHORED_WORKBOOK_REPORT_FILENAMES).length; failAfter += 1) {
+      const runId = `rollback-${failAfter}`;
+      let writes = 0;
+      await expect(writeAuthoredWorkbookEvalReportBundle({
+        reportsRoot: root,
+        runId,
+        scenario: scenario(),
+        trace,
+        gate: gate(),
+        judgeInput: prompt,
+        judge: judgeResult(),
+        modelIdentities: modelIdentities(),
+        writeText: async (path, data) => {
+          writes += 1;
+          await writeFile(path, data, { mode: 0o600 });
+          if (writes === failAfter) throw new Error("simulated partial write");
+        }
+      })).rejects.toThrow("simulated partial write");
+      await expect(pathExists(join(root, runId))).resolves.toBe(false);
+      await expect(writeAuthoredWorkbookEvalFailureMetadata({ reportsRoot: root, runId, scenarioId: scenario().id, status: "report", modelIdentities: modelIdentities() })).resolves.toMatchObject({ files: { metadata: "metadata.json" } });
+    }
+  });
+
+  it("sanitizes native filesystem errors from public report APIs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "authored-report-fs-error-"));
+    tempRoots.push(root);
+    const native = Object.assign(new Error(`EIO native path leak ${root}`), { code: "EIO", path: join(root, "private-path"), syscall: "write" });
+    await expect(atomicWriteText(join(root, "missing", "file.json"), "{}\n")).rejects.toThrow("Unable to write authored workbook report file.");
+    await expect(writeAuthoredWorkbookEvalFailureMetadata({
+      reportsRoot: root,
+      runId: "native-error",
+      scenarioId: scenario().id,
+      status: "setup",
+      modelIdentities: modelIdentities(),
+      writeText: async () => { throw native; }
+    })).rejects.toThrow("Unable to write authored workbook report artifacts.");
+    let error: Error | undefined;
+    try {
+      await writeAuthoredWorkbookEvalFailureMetadata({
+        reportsRoot: root,
+        runId: "native-error-2",
+        scenarioId: scenario().id,
+        status: "setup",
+        modelIdentities: modelIdentities(),
+        writeText: async () => { throw native; }
+      });
+    } catch (caught) {
+      error = caught as Error;
+    }
+    expect(error?.message).not.toContain(root);
+    expect(error?.message).not.toContain("EIO");
+    expect(error?.message).not.toContain("private-path");
+  });
+
+  it("creates sanitized failure metadata without advertising local diagnostics or judge artifacts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "authored-report-failure-"));
+    tempRoots.push(root);
+    const written = await writeAuthoredWorkbookEvalFailureMetadata({
+      reportsRoot: root,
+      runId: "gate-failure-001",
+      scenarioId: scenario().id,
+      status: "gate",
+      modelIdentities: modelIdentities()
+    });
+    const metadata = await readJson<Record<string, unknown>>(join(written.directory, "metadata.json"));
+    const metadataObject = createAuthoredWorkbookEvalFailureMetadataEnvelope({
+      runId: "gate-failure-002",
+      scenarioId: scenario().id,
+      status: "cleanup",
+      modelIdentities: modelIdentities(),
+      publicMessage: "caller-controlled prose ignored",
+      lifecycle: { completed: "yes", interrupted: "yes" },
+      verdict: { passed: true, percentage: 1, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" },
+      files: AUTHORED_WORKBOOK_REPORT_FILENAMES
+    } as unknown as Parameters<typeof createAuthoredWorkbookEvalFailureMetadataEnvelope>[0]);
+
+    expect(metadata).toMatchObject({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, status: "gate", outcome: "failed", files: { metadata: "metadata.json" } });
+    expect(JSON.stringify(metadata)).not.toContain("gate.json");
+    expect(JSON.stringify(metadata)).not.toContain("failure.txt");
+    expect(JSON.stringify(metadata)).not.toContain("/tmp/private-gate-path");
+
+    expect(metadataObject).toMatchObject({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, status: "cleanup", verdict: { passed: false, percentage: 0, rule: "not-judged" }, lifecycle: { completed: "no", interrupted: "no", cleanup: "failed" }, files: { metadata: "metadata.json" } });
+    await expect(pathExists(join(written.directory, "judge-input.json"))).resolves.toBe(false);
+    await expect(pathExists(join(written.directory, "judge.json"))).resolves.toBe(false);
+    await expect(pathExists(join(written.directory, "report.json"))).resolves.toBe(false);
+    await expect(pathExists(join(written.directory, "summary.md"))).resolves.toBe(false);
+
+    const directory = written.directory;
+    await expect(writeAuthoredWorkbookEvalGateDiagnostic(directory, gate(false))).resolves.toBe("written");
+    await expect(writeAuthoredWorkbookEvalFailureDiagnostic(directory, authoredWorkbookEvalLocalDiagnosticText("raw stack /tmp/private-path OPENCODE_API_KEY=sk-secret-token"))).resolves.toBe("written");
+    expect(await readFile(join(directory, "gate.json"), "utf8")).toContain("/tmp/private-gate-path");
+  });
+
+  it("creates atomic marked latest envelopes from attempted runs only and preserves prior latest on failure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "authored-latest-"));
+    tempRoots.push(root);
+    const trace = projectedTrace();
+    const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
+    await writeAuthoredWorkbookEvalReportBundle({
+      reportsRoot: root,
+      runId: "run-001",
+      scenario: scenario(),
+      trace,
+      gate: gate(),
+      judgeInput: prompt,
+      judge: judgeResult(),
+      modelIdentities: modelIdentities()
+    });
+    await writeAuthoredWorkbookEvalFailureMetadata({
+      reportsRoot: root,
+      runId: "run-002",
+      scenarioId: scenario().id,
+      repetition: 2,
+      status: "interrupted",
+      modelIdentities: modelIdentities()
+    });
+    const success = createAuthoredWorkbookEvalLatestRunEntry({
+      scenario: scenario().id,
+      repetition: 1,
+      status: "completed",
+      verdict: { passed: true, percentage: 1, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" },
+      reportDirectory: "run-001",
+      files: AUTHORED_WORKBOOK_REPORT_FILENAMES
+    });
+    const interrupted = createAuthoredWorkbookEvalLatestRunEntry({
+      scenario: scenario().id,
+      repetition: 2,
+      status: "interrupted",
+      verdict: { passed: false, percentage: 0, rule: "not-judged" },
+      reportDirectory: "run-002",
+      files: { metadata: "metadata.json" }
+    });
+    const latest = createAuthoredWorkbookEvalLatestEnvelope({ generatedAt: "2026-08-29T00:00:00.000Z", invocation: { scope: "scenario", scenarioIds: [scenario().id], repeat: 2 }, runs: [success, interrupted] });
+
+    expect(Object.isFrozen(latest.runs[0]!.files)).toBe(true);
+    expect(latest).toMatchObject({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, invocation: { repeat: 2 } });
+    expect(latest.runs[0]).toMatchObject({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, scenario: scenario().id, files: AUTHORED_WORKBOOK_REPORT_FILENAMES });
+    expect(JSON.stringify(latest)).not.toContain("gate.json");
+    expect(JSON.stringify(latest)).not.toContain("/tmp/");
+    await writeAuthoredWorkbookEvalLatestEnvelope(root, latest);
+    const prior = await readFile(join(root, "latest.json"), "utf8");
+    await expect(writeAuthoredWorkbookEvalLatestEnvelope(root, latest, async () => { throw new Error("boom"); })).rejects.toThrow("Unable to update authored workbook latest report.");
+    await expect(readFile(join(root, "latest.json"), "utf8")).resolves.toBe(prior);
+
+    const alias = join(root, "latest-alias.json");
+    await expect(writeAuthoredWorkbookEvalLatestEnvelope(root, latest, async (path, data) => {
+      await writeFile(path, data);
+      await link(path, alias);
+    })).rejects.toThrow("Unable to update authored workbook latest report.");
+    await expect(readFile(join(root, "latest.json"), "utf8")).resolves.toBe(prior);
+    expect(JSON.stringify(await readJson<Record<string, unknown>>(join(root, "latest.json")))).not.toContain("latest-alias");
+
+    const missing = createAuthoredWorkbookEvalLatestEnvelope({ invocation: { scope: "scenario", scenarioIds: [scenario().id], repeat: 1 }, runs: [createAuthoredWorkbookEvalLatestRunEntry({ ...success, reportDirectory: "missing-run" })] });
+    await expect(writeAuthoredWorkbookEvalLatestEnvelope(root, missing)).rejects.toThrow("Unable to update authored workbook latest report.");
+    await expect(readFile(join(root, "latest.json"), "utf8")).resolves.toBe(prior);
+
+    expect(() => createAuthoredWorkbookEvalLatestEnvelope({ invocation: { scope: "scenario", scenarioIds: [scenario().id], repeat: 2 }, runs: [success, success] })).toThrow(/duplicate/i);
+    expect(() => createAuthoredWorkbookEvalLatestEnvelope({ invocation: { scope: "scenario", scenarioIds: [scenario().id], repeat: 1 }, runs: [createAuthoredWorkbookEvalLatestRunEntry({ ...success, reportDirectory: "/tmp/private" })] })).toThrow(/directory/i);
+    expect(() => createAuthoredWorkbookEvalLatestRunEntry({ ...success, status: "gate", verdict: { passed: false, percentage: 0, rule: "not-judged" }, files: AUTHORED_WORKBOOK_REPORT_FILENAMES })).toThrow(/curated files/i);
+    expect(() => createAuthoredWorkbookEvalLatestEnvelope({ invocation: { scope: "release", scenarioIds: [scenario().id], repeat: 2 }, runs: [] })).toThrow(/release/i);
+  });
+
+  it("rejects adversarial latest metadata identity changes without replacing prior latest", async () => {
+    const root = await mkdtemp(join(tmpdir(), "authored-latest-adversarial-"));
+    tempRoots.push(root);
+    const trace = projectedTrace();
+    const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
+    await writeAuthoredWorkbookEvalReportBundle({
+      reportsRoot: root,
+      runId: "run-001",
+      scenario: scenario(),
+      trace,
+      gate: gate(),
+      judgeInput: prompt,
+      judge: judgeResult(),
+      modelIdentities: modelIdentities()
+    });
+    const success = createAuthoredWorkbookEvalLatestRunEntry({
+      scenario: scenario().id,
+      repetition: 1,
+      status: "completed",
+      verdict: { passed: true, percentage: 1, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" },
+      reportDirectory: "run-001",
+      files: AUTHORED_WORKBOOK_REPORT_FILENAMES
+    });
+    const latest = createAuthoredWorkbookEvalLatestEnvelope({ generatedAt: "2026-08-29T00:00:00.000Z", invocation: { scope: "scenario", scenarioIds: [scenario().id], repeat: 1 }, runs: [success] });
+    await writeAuthoredWorkbookEvalLatestEnvelope(root, latest);
+    const prior = await readFile(join(root, "latest.json"), "utf8");
+    const metadataPath = join(root, "run-001", "metadata.json");
+    const originalMetadataText = await readFile(metadataPath, "utf8");
+    const originalMetadata = JSON.parse(originalMetadataText) as Record<string, unknown>;
+    const writeMetadata = async (value: unknown): Promise<void> => {
+      await atomicWriteText(metadataPath, `${JSON.stringify(value, null, 2)}\n`);
+    };
+    const expectLatestRejectedAndUnchanged = async (mutate: () => Promise<(() => Promise<void>) | void>, candidate = latest): Promise<void> => {
+      const cleanup = await mutate();
+      try {
+        let rejected: unknown;
+        try {
+          await writeAuthoredWorkbookEvalLatestEnvelope(root, candidate);
+        } catch (error) {
+          rejected = error;
+        }
+        expect(rejected).toBeInstanceOf(Error);
+        expect((rejected as Error).message).toBe("Unable to update authored workbook latest report.");
+        expect(String(rejected)).not.toContain("private-secret");
+        expect(String(rejected)).not.toContain("OPENCODE_API_KEY");
+        await expect(readFile(join(root, "latest.json"), "utf8")).resolves.toBe(prior);
+      } finally {
+        await cleanup?.();
+        await writeMetadata(originalMetadata);
+      }
+    };
+
+    await expectLatestRejectedAndUnchanged(async () => writeMetadata({ ...originalMetadata, scenario: "other-public-scenario" }));
+    await expectLatestRejectedAndUnchanged(async () => writeMetadata({ ...originalMetadata, repetition: 2 }));
+    await expectLatestRejectedAndUnchanged(async () => writeMetadata(createAuthoredWorkbookEvalFailureMetadataEnvelope({ runId: "run-001", scenarioId: scenario().id, status: "gate", modelIdentities: modelIdentities() })));
+    await expectLatestRejectedAndUnchanged(async () => writeMetadata({ ...originalMetadata, outcome: "failed", verdict: { passed: false, percentage: 0.8, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" } }));
+    await expectLatestRejectedAndUnchanged(async () => writeMetadata({ ...originalMetadata, verdict: { passed: false, percentage: 1, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" } }));
+    await expectLatestRejectedAndUnchanged(async () => writeMetadata({ ...originalMetadata, namespace: "tutorial-engine/evals/v2" }));
+    await expectLatestRejectedAndUnchanged(async () => writeMetadata({ ...originalMetadata, privateStack: "/tmp/private-secret OPENCODE_API_KEY=sk-secret" }));
+    await expectLatestRejectedAndUnchanged(async () => {
+      await atomicWriteText(metadataPath, "{not json\n");
+    });
+    await expectLatestRejectedAndUnchanged(async () => {
+      await writeFile(metadataPath, "x".repeat(4 * 1024 * 1024 + 1));
+      await chmod(metadataPath, 0o600);
+    });
+    const differingButValidLatest = createAuthoredWorkbookEvalLatestEnvelope({
+      generatedAt: "2026-08-29T00:00:00.000Z",
+      invocation: { scope: "scenario", scenarioIds: [scenario().id], repeat: 1 },
+      runs: [createAuthoredWorkbookEvalLatestRunEntry({ ...success, verdict: { passed: false, percentage: 0.8, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" } })]
+    });
+    await expectLatestRejectedAndUnchanged(async () => undefined, differingButValidLatest);
+
+    const alias = join(root, "metadata-hardlink-alias.json");
+    await expectLatestRejectedAndUnchanged(async () => {
+      await link(metadataPath, alias);
+      return async () => { await rm(alias, { force: true }); };
+    });
+
+    await expect(writeAuthoredWorkbookEvalLatestEnvelope(root, latest, async (path, data) => {
+      await atomicWriteText(path, data);
+      await writeMetadata({ ...originalMetadata, outcome: "failed", verdict: { passed: false, percentage: 0.8, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" } });
+    })).rejects.toThrow("Unable to update authored workbook latest report.");
+    await expect(readFile(join(root, "latest.json"), "utf8")).resolves.toBe(prior);
+    await writeMetadata(originalMetadata);
+
+    expect(() => createAuthoredWorkbookEvalLatestRunEntry({ ...success, verdict: { passed: false, percentage: 1, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" } })).toThrow(/verdict/i);
+    expect(() => createAuthoredWorkbookEvalLatestEnvelope({
+      invocation: { scope: "scenario", scenarioIds: [scenario().id, "other-public-scenario"], repeat: 1 },
+      runs: [
+        success,
+        createAuthoredWorkbookEvalLatestRunEntry({ ...success, scenario: "other-public-scenario", reportDirectory: "run-001" })
+      ]
+    })).toThrow(/duplicate report/i);
+    expect(await readFile(join(root, "latest.json"), "utf8")).toBe(prior);
+  });
+
+  it("aggregates stability with one pass, two pass, and two-of-three pass rules", () => {
+    expect(authoredWorkbookEvalStabilityPassed([{ passed: true }])).toBe(true);
+    expect(authoredWorkbookEvalStabilityPassed([{ passed: false }])).toBe(false);
+    expect(authoredWorkbookEvalStabilityPassed([{ passed: true }, { passed: true }])).toBe(true);
+    expect(authoredWorkbookEvalStabilityPassed([{ passed: true }, { passed: false }])).toBe(false);
+    expect(authoredWorkbookEvalStabilityPassed([{ passed: true }, { passed: false }, { passed: true }])).toBe(true);
+    expect(authoredWorkbookEvalStabilityPassed([{ passed: true }, { passed: false }, { passed: false }])).toBe(false);
+    expect(authoredWorkbookEvalStatusAfterCleanup({ status: "completed", verdict: { passed: true, percentage: 1, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" }, cleanupFailed: true })).toMatchObject({ status: "cleanup", verdict: { passed: false, percentage: 0, rule: "not-judged" } });
+    expect(authoredWorkbookEvalStatusAfterCleanup({ status: "completed", verdict: { passed: false, percentage: 0.5, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" }, cleanupFailed: true })).toMatchObject({ status: "cleanup", verdict: { passed: false, percentage: 0, rule: "not-judged" } });
+    expect(authoredWorkbookEvalStatusAfterCleanup({ status: "gate", verdict: { passed: false, percentage: 0, rule: "not-judged" }, cleanupFailed: true })).toMatchObject({ status: "gate", verdict: { passed: false, percentage: 0, rule: "not-judged" } });
   });
 });
