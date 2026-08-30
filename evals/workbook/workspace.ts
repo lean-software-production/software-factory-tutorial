@@ -147,6 +147,8 @@ export interface AuthoredCurriculumSliceWorkspace {
   sessions: TutorialSessionPaths[];
   latestSession(): TutorialSessionPaths;
   startServer(serverOptions?: Partial<Omit<WorkbookServerOptions, "target" | "webRoot" | "session">>, options?: StartAuthoredSliceServerOptions): Promise<StartedWorkbookServer>;
+  /** Public pre-Judge guard: verifies authored source and disposable curriculum identity manifests still match. */
+  assertGuardedStateUnchanged(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -189,6 +191,7 @@ const generatedOrSessionEntryNames = new Set([".tmp", ".tutorial", "node_modules
 const defaultPrerequisiteRoot = resolve(import.meta.dirname, "prerequisites");
 const maxPrerequisiteOverlayFiles = 64;
 const maxPrerequisiteOverlayBytes = 1024 * 1024;
+const guardedStateChangedPublicMessage = "Authored curriculum guarded state changed.";
 
 export function trustedAuthoredSliceRuntimeProvision(repositoryRoot = defaultRepositoryRoot): TrustedRuntimeProvision {
   return trustRuntimeProvision({ mounts: [{ source: resolve(repositoryRoot, "node_modules"), target: "node_modules", readonly: true }] });
@@ -948,6 +951,22 @@ export async function createAuthoredCurriculumSliceWorkspace(options: CreateAuth
       catch (error) { failures.push(error); }
       return failures;
     };
+    let publicGuardFailure: Error | undefined;
+    let publicGuardCheckPromise: Promise<void> | undefined;
+    const assertGuardedStateUnchanged = async (): Promise<void> => {
+      if (publicGuardFailure) throw publicGuardFailure;
+      if (publicGuardCheckPromise) return publicGuardCheckPromise;
+      publicGuardCheckPromise = (async () => {
+        const failures = await collectGuardedStateFailures("Evaluator run");
+        if (!failures.length) return;
+        guardedStateFailure ??= new AggregateError(failures, `Guarded authored curriculum state changed: ${failures.map(errorMessage).join("; ")}`);
+        publicGuardFailure = new Error(guardedStateChangedPublicMessage);
+        throw publicGuardFailure;
+      })().finally(() => {
+        publicGuardCheckPromise = undefined;
+      });
+      return publicGuardCheckPromise;
+    };
 
     const workspace: AuthoredCurriculumSliceWorkspace = {
       repositoryRoot,
@@ -1015,15 +1034,16 @@ export async function createAuthoredCurriculumSliceWorkspace(options: CreateAuth
           close: async () => closeManagedServer(server)
         };
       },
+      assertGuardedStateUnchanged,
       async close() {
         if (closePromise) return closePromise;
         if (cleanupComplete) return;
         closePromise = (async () => {
           closedToNewServers = true;
           const failures: unknown[] = [];
+          failures.push(...await collectGuardedStateFailures("Evaluator run"));
           const closeResults = await Promise.allSettled([...servers].map((server) => closeManagedServer(server)));
           for (const result of closeResults) if (result.status === "rejected") failures.push(result.reason);
-          failures.push(...await collectGuardedStateFailures("Evaluator run"));
           if (!options.keepWorkspace && !repositoryRemoved) {
             try { await rm(repositoryRoot, { recursive: true, force: true }); repositoryRemoved = true; }
             catch (error) { failures.push(error); }

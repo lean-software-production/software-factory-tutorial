@@ -33,6 +33,7 @@ export interface AuthoredWorkbookDriverOptions {
   editorReviewTimeoutMs?: number;
   requestTimeoutMs?: number;
   maxStructuralAutoProgressionSteps?: number;
+  signal?: AbortSignal;
 }
 
 export interface SubmitTerminalCommandOptions {
@@ -57,6 +58,7 @@ export class AuthoredWorkbookDriver {
   readonly #editorReviewTimeoutMs: number;
   readonly #requestTimeoutMs: number;
   readonly #maxStructuralAutoProgressionSteps: number;
+  readonly #signal?: AbortSignal;
 
   constructor(options: AuthoredWorkbookDriverOptions) {
     this.serverUrl = options.serverUrl.replace(/\/$/, "");
@@ -68,6 +70,7 @@ export class AuthoredWorkbookDriver {
     this.#editorReviewTimeoutMs = options.editorReviewTimeoutMs ?? 120_000;
     this.#requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
     this.#maxStructuralAutoProgressionSteps = options.maxStructuralAutoProgressionSteps ?? 100;
+    this.#signal = options.signal;
   }
 
   async readState(label = "state"): Promise<WorkbookApiState> {
@@ -160,7 +163,8 @@ export class AuthoredWorkbookDriver {
   async #requestState(method: "GET" | "POST", path: string, body: unknown, label: string, signal?: AbortSignal): Promise<WorkbookApiState> {
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(new Error("Timed out waiting for workbook HTTP response.")), this.#requestTimeoutMs);
-    const combinedSignal = combineAbortSignals(signal, timeout.signal);
+    const combined = combineAbortSignals(this.#signal, signal, timeout.signal);
+    const combinedSignal = combined.signal;
     try {
       throwIfAborted(combinedSignal);
       const response = await withAbort(this.#fetch(`${this.serverUrl}${path}`, {
@@ -181,10 +185,11 @@ export class AuthoredWorkbookDriver {
       return recordAuthoredWorkbookEvalPublicState(this.trace, label, state).state;
     } catch (error) {
       if (timeout.signal.aborted) throw new Error("Timed out waiting for workbook HTTP response.");
-      if (signal?.aborted) throw new Error("Workbook HTTP request was cancelled.");
+      if (this.#signal?.aborted || signal?.aborted) throw cancelledError();
       throw error;
     } finally {
       clearTimeout(timer);
+      combined.cleanup();
     }
   }
 
@@ -213,50 +218,54 @@ export class AuthoredWorkbookDriver {
   }
 
   async #waitForReflectionReview(blockId: string, label: string, timeoutMs: number): Promise<WorkbookApiState> {
-    const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    const timeoutController = new AbortController();
+    const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
     const timeout = () => new Error(`Timed out waiting for reflection review for ${blockId}.`);
+    const combined = combineAbortSignals(this.#signal, timeoutController.signal);
     try {
       const deadline = Date.now() + timeoutMs;
       let attempt = 0;
       while (Date.now() <= deadline) {
-        await delay(25);
-        if (abort.signal.aborted) throw timeout();
-        const state = await this.#requestState("GET", "/api/workbook/state", undefined, `${label}:${++attempt}`, abort.signal);
-        if (abort.signal.aborted) throw timeout();
+        await delay(25, combined.signal);
+        const state = await this.#requestState("GET", "/api/workbook/state", undefined, `${label}:${++attempt}`, combined.signal);
+        throwIfAborted(combined.signal);
         this.#recordReflectionConversation(blockId, state);
         if (this.#reflectionReviewComplete(blockId, state)) return state;
       }
       throw timeout();
     } catch (error) {
-      if (abort.signal.aborted) throw timeout();
+      if (timeoutController.signal.aborted) throw timeout();
+      if (this.#signal?.aborted) throw cancelledError();
       throw error;
     } finally {
       clearTimeout(timer);
+      combined.cleanup();
     }
   }
 
   async #waitForEditorReview(blockId: string, revision: number, label: string, timeoutMs: number): Promise<WorkbookApiState> {
-    const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    const timeoutController = new AbortController();
+    const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
     const timeout = () => new Error(`Timed out waiting for editor-practice review for ${blockId} revision ${revision}.`);
+    const combined = combineAbortSignals(this.#signal, timeoutController.signal);
     try {
       const deadline = Date.now() + timeoutMs;
       let attempt = 0;
       while (Date.now() <= deadline) {
-        await delay(25);
-        if (abort.signal.aborted) throw timeout();
-        const state = await this.#requestState("GET", "/api/workbook/state", undefined, `${label}:${++attempt}`, abort.signal);
-        if (abort.signal.aborted) throw timeout();
+        await delay(25, combined.signal);
+        const state = await this.#requestState("GET", "/api/workbook/state", undefined, `${label}:${++attempt}`, combined.signal);
+        throwIfAborted(combined.signal);
         const status = this.#recordEditorProgress(blockId, revision, state);
         if (status === "feedback" || status === "unlocked") return state;
       }
       throw timeout();
     } catch (error) {
-      if (abort.signal.aborted) throw timeout();
+      if (timeoutController.signal.aborted) throw timeout();
+      if (this.#signal?.aborted) throw cancelledError();
       throw error;
     } finally {
       clearTimeout(timer);
+      combined.cleanup();
     }
   }
 
@@ -277,7 +286,7 @@ export class AuthoredWorkbookDriver {
     let attempt = 0;
     let observedReviewTransition = false;
     while (Date.now() <= deadline) {
-      await delay(25);
+      await delay(25, signal);
       throwIfAborted(signal);
       const state = await this.#requestState("GET", "/api/workbook/state", undefined, `${label}:reviewed:${++attempt}`, signal);
       throwIfAborted(signal);
@@ -302,23 +311,36 @@ export class AuthoredWorkbookDriver {
   }
 
   async #submitTerminalInput(blockId: string, input: string, label: string, reviewTimeoutMs: number, expectedFeedback: TerminalFeedbackExpectation | undefined): Promise<WorkbookApiState> {
+    throwIfAborted(this.#signal);
     const ws = new this.#WebSocket(`${this.serverUrl.replace(/^http/, "ws")}/api/workbook/terminal`, { headers: { Origin: this.serverUrl } });
     try {
       return await new Promise<WorkbookApiState>((resolve, reject) => {
         let settled = false;
         const reviewAbort = new AbortController();
         let reviewTimer: ReturnType<typeof setTimeout> | undefined;
+        let openTimer: ReturnType<typeof setTimeout> | undefined;
         let cleanupSocket = () => {};
+        let cleanupExternalAbort = () => {};
         const finish = (result: Error | WorkbookApiState) => {
           if (settled) return;
           settled = true;
-          clearTimeout(openTimer);
+          if (openTimer !== undefined) clearTimeout(openTimer);
           if (reviewTimer !== undefined) clearTimeout(reviewTimer);
-          reviewAbort.abort();
+          reviewAbort.abort(result instanceof Error ? result : undefined);
           cleanupSocket();
+          cleanupExternalAbort();
           if (result instanceof Error) reject(result); else resolve(result);
         };
-        const handleSocketError = (error: unknown) => finish(error instanceof Error ? error : new Error(String(error)));
+        const handleSocketError = () => finish(new Error(`Workbook terminal socket errored before terminal review completed for ${blockId}.`));
+        const handleExternalAbort = () => finish(cancelledError());
+        if (this.#signal) {
+          if (this.#signal.aborted) handleExternalAbort();
+          else {
+            this.#signal.addEventListener("abort", handleExternalAbort, { once: true });
+            cleanupExternalAbort = () => this.#signal?.removeEventListener("abort", handleExternalAbort);
+          }
+        }
+        if (settled) return;
         const handleSocketClose = () => {
           if (!settled) finish(new Error(`Workbook terminal socket closed before terminal review completed for ${blockId}.`));
         };
@@ -372,11 +394,12 @@ export class AuthoredWorkbookDriver {
           void (async () => {
             const baselineState = await this.#requestState("GET", "/api/workbook/state", undefined, `${label}:baseline`, reviewAbort.signal);
             const baseline = terminalReviewBaseline(baselineState, blockId);
+            throwIfAborted(reviewAbort.signal);
             if (settled) return;
             try {
               bufferingDuringSend = true;
+              throwIfAborted(reviewAbort.signal);
               ws.send(JSON.stringify({ type: "input", data: input }));
-              commandSent = true;
             } catch (error) {
               bufferedDuringSend.length = 0;
               finish(error instanceof Error ? error : new Error(String(error)));
@@ -384,13 +407,21 @@ export class AuthoredWorkbookDriver {
             } finally {
               bufferingDuringSend = false;
             }
+            if (settled || reviewAbort.signal.aborted) {
+              bufferedDuringSend.length = 0;
+              return;
+            }
+            commandSent = true;
             recordAuthoredWorkbookEvalTerminalTranscript(this.trace, { blockId, direction: "input", text: input });
             for (const frame of bufferedDuringSend.splice(0)) processPostSendFrame(frame);
-            if (settled) return;
+            if (settled || reviewAbort.signal.aborted) return;
             void this.#waitForTerminalReview(blockId, label, reviewTimeoutMs, expectedFeedback, baseline, reviewAbort.signal).then(finish, (error) => finish(error instanceof Error ? error : new Error(String(error))));
-          })().catch((error) => finish(error instanceof Error ? error : new Error(String(error))));
+          })().catch((error) => {
+            if (this.#signal?.aborted) finish(cancelledError());
+            else finish(error instanceof Error ? error : new Error(String(error)));
+          });
         };
-        const openTimer = setTimeout(() => finish(new Error(`Timed out connecting to workbook terminal for ${blockId}.`)), this.#terminalTimeoutMs);
+        openTimer = setTimeout(() => finish(new Error(`Timed out connecting to workbook terminal for ${blockId}.`)), this.#terminalTimeoutMs);
         cleanupSocket = () => {
           ws.off("message", handleMessage);
           ws.off("error", handleSocketError);
@@ -466,34 +497,64 @@ function terminalTranscriptRow(frame: PublicTerminalFrame, blockId: string): Aut
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      reject(cancelledError());
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function withAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   if (!signal) return promise;
   throwIfAborted(signal);
   return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(new Error("Workbook public state request was cancelled."));
+    let settled = false;
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    const abort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(cancelledError());
+    };
     signal.addEventListener("abort", abort, { once: true });
     promise.then(
       (value) => {
-        signal.removeEventListener("abort", abort);
+        if (settled) return;
+        settled = true;
+        cleanup();
         resolve(value);
       },
       (error) => {
-        signal.removeEventListener("abort", abort);
+        if (settled) return;
+        settled = true;
+        cleanup();
         reject(error);
       }
     );
   });
 }
 
-function combineAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
-  const active = signals.filter((signal): signal is AbortSignal => signal !== undefined);
-  if (active.length === 0) return undefined;
-  if (active.length === 1) return active[0];
+function combineAbortSignals(...signals: Array<AbortSignal | undefined>): { signal: AbortSignal | undefined; cleanup: () => void } {
+  const active = [...new Set(signals.filter((signal): signal is AbortSignal => signal !== undefined))];
+  if (active.length === 0) return { signal: undefined, cleanup: () => {} };
+  if (active.length === 1) return { signal: active[0], cleanup: () => {} };
   const controller = new AbortController();
+  const listeners: Array<readonly [AbortSignal, () => void]> = [];
   const abort = (signal: AbortSignal) => {
     if (!controller.signal.aborted) controller.abort(signal.reason);
   };
@@ -502,15 +563,26 @@ function combineAbortSignals(...signals: Array<AbortSignal | undefined>): AbortS
       abort(signal);
       break;
     }
-    signal.addEventListener("abort", () => abort(signal), { once: true });
+    const listener = () => abort(signal);
+    signal.addEventListener("abort", listener, { once: true });
+    listeners.push([signal, listener]);
   }
-  return controller.signal;
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      for (const [signal, listener] of listeners) signal.removeEventListener("abort", listener);
+      listeners.length = 0;
+    }
+  };
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;
-  if (signal.reason instanceof Error) throw signal.reason;
-  throw new Error("Workbook operation was cancelled.");
+  throw cancelledError();
+}
+
+function cancelledError(): Error {
+  return new Error("Authored workbook driver operation was cancelled.");
 }
 
 function closeWebSocket(ws: WebSocket): Promise<void> {

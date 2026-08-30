@@ -15,13 +15,16 @@ import {
 } from "../command-stubs.js";
 import type { AuthoredWorkbookEvalArtifactSnapshot, AuthoredWorkbookEvalTrace } from "../types.js";
 import {
+  AUTHORED_WORKBOOK_GATE_CHECKPOINT_LABELS,
   AUTHORED_WORKBOOK_PREREQUISITE_SEED_FILES,
   AUTHORED_WORKBOOK_SCENARIOS,
   authoredWorkbookScenarioById,
+  createAuthoredWorkbookScenarioGateCheckpointRecorder,
   type AuthoredWorkbookScenarioDescriptor,
   type AuthoredWorkbookScenarioGateInput,
   type AuthoredWorkbookScenarioId
 } from "../scenarios.js";
+import { buildAuthoredWorkbookJudgePrompt, copyAuthoredWorkbookEvalScenarioPublicDescriptor } from "../judge.js";
 import { createAuthoredCurriculumSliceWorkspace } from "../workspace.js";
 import type { AuthoredCurriculumSliceSessionCapability } from "../workspace.js";
 const execFileAsync = promisify(execFile);
@@ -216,6 +219,14 @@ describe("authored workbook scenario descriptors", () => {
       expect(Object.isFrozen(scenario)).toBe(true);
       expect(Object.isFrozen(scenario.selection.parts)).toBe(true);
       expect(Object.isFrozen(scenario.artifactAllowlist)).toBe(true);
+      if (scenario.runnerPrivate) {
+        expect(Object.isFrozen(scenario.runnerPrivate)).toBe(true);
+        expect(Object.isFrozen(scenario.runnerPrivate.gateEvidence.workspaceFiles)).toBe(true);
+        expect(Object.isFrozen(scenario.runnerPrivate.gateEvidence.workspacePathPrefixes)).toBe(true);
+        expect(Object.isFrozen(scenario.runnerPrivate.mutationAllowlist.learnerWorkspaceFiles)).toBe(true);
+        expect(Object.isFrozen(scenario.runnerPrivate.mutationAllowlist.learnerWorkspacePathPrefixes)).toBe(true);
+      }
+      if (scenario.gateCheckpoints) expect(Object.isFrozen(scenario.gateCheckpoints)).toBe(true);
       if (scenario.prerequisiteOverlay) {
         expect(Object.isFrozen(scenario.prerequisiteOverlay)).toBe(true);
         expect(Object.isFrozen(scenario.prerequisiteOverlay.files)).toBe(true);
@@ -290,6 +301,55 @@ describe("authored workbook scenario descriptors", () => {
     expect(capstoneCommand).toContain("./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &");
     expect(capstoneCommand).toContain("./factory/ask.sh refactor \"What happened in this run?\"");
     expect(capstoneCommand).toContain("./factory/steer.sh refactor \"Finish multiply and divide independently before validation.\"");
+  });
+
+  it("captures runner-private gate checkpoints in authored order with an optional no-op default", async () => {
+    const scenario = authoredWorkbookScenarioById("lessons-003-004-evidence-feedback");
+    expect(AUTHORED_WORKBOOK_GATE_CHECKPOINT_LABELS).toEqual(["lessons003004:after-multiply-only"]);
+    expect(Object.isFrozen(AUTHORED_WORKBOOK_GATE_CHECKPOINT_LABELS)).toBe(true);
+
+    const noOpRecorder = new RecordingDriver();
+    await scenario.drive({ driver: noOpRecorder, containerShellActivation: "export PATH='/workspace/factory/.tmp/authored-eval-command-stubs/bin':\"$PATH\"" });
+
+    const checkpointRecorder = createAuthoredWorkbookScenarioGateCheckpointRecorder(scenario);
+    const recorder = new RecordingDriver();
+    const checkpointCallCounts: number[] = [];
+    await scenario.drive({
+      driver: recorder,
+      containerShellActivation: "export PATH='/workspace/factory/.tmp/authored-eval-command-stubs/bin':\"$PATH\"",
+      captureGateCheckpoint: (label) => { checkpointRecorder.captureGateCheckpoint(label); checkpointCallCounts.push(recorder.calls.length); }
+    });
+    expect(checkpointRecorder.labels).toEqual(["lessons003004:after-multiply-only"]);
+    const multiplyCall = recorder.calls.findIndex((call) => call.command?.endsWith(lesson004MultiplyCommand));
+    const divideCall = recorder.calls.findIndex((call) => call.command?.endsWith(lesson004DivideCommand));
+    expect(checkpointCallCounts).toEqual([multiplyCall + 1]);
+    expect(divideCall).toBe(multiplyCall + 1);
+    expect(() => checkpointRecorder.captureGateCheckpoint("lessons003004:after-multiply-only")).toThrow(/duplicate gate checkpoint/);
+    const primerRecorder = createAuthoredWorkbookScenarioGateCheckpointRecorder(authoredWorkbookScenarioById("primer-validation-misconception"));
+    expect(() => primerRecorder.captureGateCheckpoint("lessons003004:after-multiply-only")).toThrow(/does not declare gate checkpoint/);
+    expect(() => createAuthoredWorkbookScenarioGateCheckpointRecorder({ id: "lessons-003-004-evidence-feedback", gateCheckpoints: ["unknown" as any] })).toThrow(/Unknown authored workbook gate checkpoint label/);
+  });
+
+  it("keeps runner-private evidence declarations frozen, path-safe, and out of public Judge descriptors", () => {
+    const lesson013 = authoredWorkbookScenarioById("lesson-013-operator-judgement");
+    expect(lesson013.runnerPrivate?.gateEvidence.workspaceFiles).toEqual(["factory/.tmp/authored-eval-command-stubs/invocations.jsonl"]);
+    expect(lesson013.runnerPrivate?.gateEvidence.workspacePathPrefixes).toEqual(["factory/refactor/.tmp/events/"]);
+    expect(lesson013.artifactAllowlist).not.toContain("factory/refactor/.tmp/events/extra.jsonl");
+    expect(() => (lesson013.runnerPrivate!.gateEvidence.workspaceFiles as string[]).push("/unsafe")).toThrow(TypeError);
+    for (const scenario of AUTHORED_WORKBOOK_SCENARIOS) {
+      for (const path of scenario.runnerPrivate?.gateEvidence.workspaceFiles ?? []) expect(path).not.toMatch(/^\/|\.\.|\\|\0/);
+      for (const prefix of scenario.runnerPrivate?.gateEvidence.workspacePathPrefixes ?? []) {
+        expect(prefix).toMatch(/\/$/);
+        expect(prefix).not.toMatch(/^\/|\.\.|\\|\0/);
+      }
+      const publicDescriptor = copyAuthoredWorkbookEvalScenarioPublicDescriptor(scenario);
+      expect(publicDescriptor).not.toHaveProperty("runnerPrivate");
+      expect(publicDescriptor).not.toHaveProperty("gateCheckpoints");
+      const prompt = buildAuthoredWorkbookJudgePrompt(publicDescriptor, { scenarioId: scenario.id as any, publicStates: [], terminalTranscript: [], reflections: [], editors: [], progressionEvents: [], artifacts: [] }, { passed: true, assertions: [] });
+      expect(prompt).not.toContain("runnerPrivate");
+      expect(prompt).not.toContain("authored-eval-command-stubs/invocations.jsonl");
+      expect(prompt).not.toContain("factory/refactor/.tmp/events/");
+    }
   });
 });
 
