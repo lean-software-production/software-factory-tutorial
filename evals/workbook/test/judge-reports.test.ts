@@ -48,7 +48,7 @@ function record(event: Record<string, unknown>): WorkbookTimelineRecord {
   return { id: "raw-event-id-secret", sequence: 99, at: "2026-08-29T00:00:00.000Z", ...event } as WorkbookTimelineRecord;
 }
 
-function publicState(note = "Visible public Tutor prose can mention Coach handoff, terminal-command-submitted, and JSON-looking \"tutor\":."): PublicWorkbookState {
+function publicState(note = "Visible public Tutor prose can mention terminal lifecycle, terminal-command-submitted, and JSON-looking \"tutor\":."): PublicWorkbookState {
   return {
     workbook: { title: "Public workbook" },
     introduction: "Intro",
@@ -98,11 +98,13 @@ function projectedTrace() {
   trace.editors.push({ blockId: "editor", revision: 1, status: "feedback", feedback: "Visible editor feedback.", at: "editor-at-secret" });
   trace.internalEvents.push(
     record({ type: "terminal-command-submitted", attemptId: "attempt-command-secret", command: "echo command-secret", terminalSessionId: "terminal-session-secret" }),
-    record({ type: "terminal-coach-handoff-recorded", attemptId: "attempt-handoff-secret", text: "private-handoff-secret" }),
+    record({ type: "terminal-command-finished", attemptId: "attempt-finished-secret", exitStatus: 0, evidenceRef: "finished-evidence-secret" }),
+    record({ type: "terminal-review-requested", attemptId: "attempt-review-secret", lessonId, blockId: "terminal", evidenceRef: "review-evidence-secret", requestId: "request-secret", mode: "automatic", callNumber: 1 }),
+    record({ type: "terminal-feedback-recorded", attemptId: "attempt-feedback-secret", text: "private-feedback-secret" }),
     record({ type: "attempt_accepted", lessonId, blockId: "terminal", kind: "terminal", attemptId: "attempt-accepted-secret", evidenceRef: "evidence-secret", summary: "private-summary-secret", path: "/tmp/private-session-path" }),
     record({ type: "future-private-event", text: "future-private-event-secret" })
   );
-  trace.artifacts.push({ path: "factory/.tmp/public.txt", content: "Visible artifact can mention Coach handoff.\n" });
+  trace.artifacts.push({ path: "factory/.tmp/public.txt", content: "Visible artifact can mention terminal lifecycle.\n" });
   return projectAuthoredWorkbookEvalTrace(trace);
 }
 
@@ -132,11 +134,12 @@ function expectNoPrivate(value: unknown): void {
   const text = serialize(value);
   for (const secret of [
     "frontmatter-secret", "lesson-spec-secret", "private-rubric-secret", "prerequisite-internal-secret",
-    "attempt-command-secret", "command-secret", "terminal-session-secret", "attempt-handoff-secret", "private-handoff-secret",
+    "attempt-command-secret", "command-secret", "terminal-session-secret", "attempt-finished-secret", "finished-evidence-secret",
+    "attempt-review-secret", "review-evidence-secret", "request-secret", "attempt-feedback-secret", "private-feedback-secret",
     "attempt-accepted-secret", "evidence-secret", "private-summary-secret", "future-private-event-secret",
     "raw-event-id-secret", "terminal-at-secret", "reflection-at-secret", "editor-at-secret", "private gate assertion name secret",
     "private gate assertion detail secret", "/tmp/private-session-path", "/tmp/private-gate-path", "OPENCODE_API_KEY", "sk-secret-token",
-    "tutor prompt secret", "coach response secret", "private steering secret"
+    "tutor prompt secret", "terminal feedback private secret", "private steering secret"
   ]) expect(text).not.toContain(secret);
 }
 
@@ -164,13 +167,13 @@ describe("authored workbook judge prompt and result validation", () => {
   it("builds a JSON-only prompt from rebuilt scenario, public trace, prompt citations, and public gate projection", () => {
     const unsafeTrace = {
       ...projectedTrace(),
-      internalEvents: [{ type: "terminal-coach-handoff-recorded", text: "top-level-internal-secret" }],
+      internalEvents: [{ type: "terminal-feedback-recorded", attemptId: "top-level-internal-attempt-secret", text: "top-level-internal-secret" }],
       events: [{ type: "terminal-command-submitted", text: "top-level-events-secret" }],
-      handoffs: [{ text: "top-level-handoff-secret" }],
+      terminalLifecycle: [{ text: "top-level-lifecycle-secret" }],
       credentials: { OPENCODE_API_KEY: "sk-secret-token" },
       paths: { absolute: "/tmp/private-session-path" },
       tutorPrompt: "tutor prompt secret",
-      coachResponse: "coach response secret",
+      terminalFeedback: "terminal feedback private secret",
       privateSteering: "private steering secret",
       config: { secret: "config-secret" }
     };
@@ -182,7 +185,7 @@ describe("authored workbook judge prompt and result validation", () => {
     } as unknown as AuthoredWorkbookEvalScenarioPublicDescriptor, unsafeTrace, gate());
 
     expect(prompt).toContain("Return JSON only");
-    expect(prompt).toContain("Visible artifact can mention Coach handoff");
+    expect(prompt).toContain("Visible artifact can mention terminal lifecycle");
     expect(prompt).toContain("\"value\"");
     expect(prompt).toContain("\"public-contract\"");
     expect(prompt).toContain("JSON-looking \\\"tutor\\\":");

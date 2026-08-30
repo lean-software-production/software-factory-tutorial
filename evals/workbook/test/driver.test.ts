@@ -151,7 +151,7 @@ describe("authored workbook public driver", () => {
   it("records browser-public states through the HTTP API without duplicating or narrowing their schema", async () => {
     const trace = createEmptyAuthoredWorkbookEvalSessionTrace("driver-state");
     const visibleState = stateWithTerminal("running");
-    visibleState.adapter.note = "Public text can mention Tutor, Coach handoff, terminal-command-submitted, and JSON-looking \"tutor\":";
+    visibleState.adapter.note = "Public text can mention Tutor, terminal lifecycle, terminal-command-submitted, and JSON-looking \"tutor\":";
     const driver = new AuthoredWorkbookDriver({
       serverUrl: "http://workbook.invalid",
       trace,
@@ -162,7 +162,7 @@ describe("authored workbook public driver", () => {
 
     expect(state).toEqual(visibleState);
     expect(trace.publicStates).toEqual([{ label: "initial", state: visibleState }]);
-    expect(JSON.stringify(trace.publicStates)).toContain("Coach handoff");
+    expect(JSON.stringify(trace.publicStates)).toContain("terminal lifecycle");
   });
 
   it("rejects malformed state responses through the shared public parser", async () => {

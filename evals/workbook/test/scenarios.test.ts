@@ -582,13 +582,8 @@ async function passingFixture(id: AuthoredWorkbookScenarioId): Promise<AuthoredW
 function primerFixture(input: AuthoredWorkbookScenarioGateInput): AuthoredWorkbookScenarioGateInput {
   input.trace.progressionEvents = [
     event("workbook_introduction_completed"),
-    event("reflection_submitted", "what-is-a-factory", "lesson--what-is-a-factory--importance-of-validation"),
-    event("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--importance-of-validation"),
-    event("reflection_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"),
-    event("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"),
-    event("reflection_follow_up_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"),
-    event("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"),
-    event("reflection_completed", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl")
+    accepted("what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl", "reflection"),
+    event("block_completed", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl")
   ];
   input.trace.reflections = [
     { blockId: "lesson--what-is-a-factory--factory-vs-repl", role: "learner", text: "A factory requires more trust/faith in the LLM." },
@@ -613,7 +608,8 @@ function lesson001Fixture(input: AuthoredWorkbookScenarioGateInput): AuthoredWor
     accepted("001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--run-simple-pi-prompt", "terminal"),
     accepted("001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--run-supplied-command", "terminal"),
     accepted("001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--change-job", "terminal"),
-    event("reflection_completed", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--reflection")
+    accepted("001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--reflection", "reflection"),
+    event("block_completed", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--reflection")
   ];
   input.trace.publicStates = [
     publicStateWithTerminalRevision("lesson--001-run-an-agent-headlessly--run-simple-pi-prompt", 1),
@@ -658,10 +654,12 @@ async function lessons003004Fixture(input: AuthoredWorkbookScenarioGateInput): P
   input.trace.progressionEvents = [
     event("workbook_introduction_completed"),
     accepted("003-build-a-validator", "lesson--003-build-a-validator--implementation-order", "terminal"),
-    event("reflection_completed", "003-build-a-validator", "lesson--003-build-a-validator--checks"),
-    event("lesson_transitioned", "004-feed-the-findings-back", "lesson--004-feed-the-findings-back--key-concept"),
+    accepted("003-build-a-validator", "lesson--003-build-a-validator--checks", "reflection"),
+    event("block_completed", "003-build-a-validator", "lesson--003-build-a-validator--checks"),
+    event("block_completed", "004-feed-the-findings-back", "lesson--004-feed-the-findings-back--key-concept"),
     accepted("004-feed-the-findings-back", "lesson--004-feed-the-findings-back--implementation-order", "terminal"),
-    event("reflection_completed", "004-feed-the-findings-back", "lesson--004-feed-the-findings-back--checks")
+    accepted("004-feed-the-findings-back", "lesson--004-feed-the-findings-back--checks", "reflection"),
+    event("block_completed", "004-feed-the-findings-back", "lesson--004-feed-the-findings-back--checks")
   ];
   input.trace.terminalTranscript = [
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\ncat refactor-validate.md \\\n  | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p)" },
@@ -717,7 +715,8 @@ function lesson013Fixture(input: AuthoredWorkbookScenarioGateInput): AuthoredWor
   input.trace.progressionEvents = [
     event("workbook_introduction_completed"),
     accepted("013-oversee-the-orchestrator", "lesson--013-oversee-the-orchestrator--implementation-order", "terminal"),
-    event("reflection_completed", "013-oversee-the-orchestrator", "lesson--013-oversee-the-orchestrator--checks")
+    accepted("013-oversee-the-orchestrator", "lesson--013-oversee-the-orchestrator--checks", "reflection"),
+    event("block_completed", "013-oversee-the-orchestrator", "lesson--013-oversee-the-orchestrator--checks")
   ];
   input.trace.terminalTranscript = [{ blockId: "lesson--013-oversee-the-orchestrator--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\n./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &\n./factory/steer.sh refactor \"Finish multiply and divide independently before validation.\"\n./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &\n./factory/ask.sh refactor \"What happened in this run?\"" }];
   input.trace.reflections = [{ blockId: "lesson--013-oversee-the-orchestrator--checks", role: "learner", text: "The factory is factory/. The line is refactor/. The orchestrator is run.sh: it starts the line, hands inputs to stations, branches on VERDICT, handles failures with repair, and stops by counters. Prompt/script pairs are stations. ask.sh is no-tools because the record is supplied. I am the operator. Repeated FAIL can mean an unmet criterion or missing/unreachable evidence. Cost, regressions, and whether the result is worth it are still operator judgement." }];

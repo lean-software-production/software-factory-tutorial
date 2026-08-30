@@ -113,32 +113,12 @@ export function projectAuthoredWorkbookProgressionEvent(record: unknown): Author
       return { type: "workbook_introduction_completed" };
     case "attempt_accepted":
       return typeof record.lessonId === "string" && typeof record.blockId === "string" && isPublicAttemptKind(record.kind) ? { type: "attempt_accepted", lessonId: record.lessonId, blockId: record.blockId, kind: record.kind } : undefined;
-    case "work_accepted":
-      return typeof record.blockId === "string" ? { type: "work_accepted", blockId: record.blockId } : undefined;
     case "block_completed": {
       if (typeof record.blockId !== "string") return undefined;
       const lessonId = record.lessonId;
       if ("lessonId" in record && typeof lessonId !== "string") return undefined;
       return typeof lessonId === "string" ? { type: "block_completed", lessonId, blockId: record.blockId } : { type: "block_completed", blockId: record.blockId };
     }
-    case "reflection_submitted":
-      return hasLessonBlock(record) ? { type: "reflection_submitted", lessonId: record.lessonId, blockId: record.blockId } : undefined;
-    case "reflection_follow_up_submitted":
-      return hasLessonBlock(record) ? { type: "reflection_follow_up_submitted", lessonId: record.lessonId, blockId: record.blockId } : undefined;
-    case "reflection_reply_recorded":
-      return hasLessonBlock(record) ? { type: "reflection_reply_recorded", lessonId: record.lessonId, blockId: record.blockId } : undefined;
-    case "observation_acknowledged":
-      return typeof record.lessonId === "string" && typeof record.blockId === "string" ? { type: "observation_acknowledged", lessonId: record.lessonId, blockId: record.blockId, kind: "terminal" } : undefined;
-    case "observation_verified":
-      return typeof record.lessonId === "string" && typeof record.blockId === "string" ? { type: "observation_verified", lessonId: record.lessonId, blockId: record.blockId, kind: "terminal" } : undefined;
-    case "block_continued":
-      return hasLessonBlock(record) ? { type: "block_continued", lessonId: record.lessonId, blockId: record.blockId } : undefined;
-    case "reflection_completed":
-      return hasLessonBlock(record) ? { type: "reflection_completed", lessonId: record.lessonId, blockId: record.blockId } : undefined;
-    case "editor_practice_unlocked":
-      return typeof record.lessonId === "string" && typeof record.blockId === "string" ? { type: "editor_practice_unlocked", lessonId: record.lessonId, blockId: record.blockId, kind: "editor" } : undefined;
-    case "lesson_transitioned":
-      return hasLessonBlock(record) ? { type: "lesson_transitioned", lessonId: record.lessonId, blockId: record.blockId } : undefined;
     default:
       return undefined;
   }
@@ -212,10 +192,6 @@ function hasPublicTraceArrays(value: Record<string, unknown>): value is Record<"
 
 function isPublicAttemptKind(value: unknown): value is PublicAttemptKind {
   return value === "editor" || value === "terminal" || value === "reflection";
-}
-
-function hasLessonBlock(record: Record<string, unknown>): record is Record<string, unknown> & { lessonId: string; blockId: string } {
-  return typeof record.lessonId === "string" && typeof record.blockId === "string";
 }
 
 function copyRecordedPublicState(value: unknown, index: number): AuthoredWorkbookEvalRecordedPublicState {

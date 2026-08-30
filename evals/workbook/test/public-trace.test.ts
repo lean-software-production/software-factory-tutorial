@@ -21,7 +21,7 @@ function record(event: Record<string, unknown>): WorkbookTimelineRecord {
   return { id: "raw-id", sequence: 1, at: "2026-08-29T00:00:00.000Z", ...event } as WorkbookTimelineRecord;
 }
 
-function browserPublicState(note = "Public Tutor prose can mention Coach handoff, terminal-command-submitted, and JSON-looking \"tutor\":."): PublicWorkbookState {
+function browserPublicState(note = "Public Tutor prose can mention terminal lifecycle, terminal-command-submitted, and JSON-looking \"tutor\":."): PublicWorkbookState {
   return {
     workbook: { title: "Public workbook" },
     introduction: "Intro",
@@ -88,7 +88,7 @@ describe("authored workbook public eval trace projection", () => {
     const projected = projectAuthoredWorkbookEvalTrace(trace);
 
     expect(projected.publicStates).toEqual([{ label: "visible", state }]);
-    expect(JSON.stringify(projected)).toContain("Coach handoff");
+    expect(JSON.stringify(projected)).toContain("terminal lifecycle");
     expect(JSON.stringify(projected)).toContain("terminal-command-submitted");
     expect(JSON.stringify(projected)).toContain('"tutor"');
   });
@@ -189,7 +189,9 @@ describe("authored workbook public eval trace projection", () => {
     trace.publicStates.push({ label: "visible", state: browserPublicState() });
     trace.internalEvents.push(
       record({ type: "terminal-command-submitted", attemptId: "attempt-command-secret", lessonId, blockId: "terminal", command: "echo command-secret", terminalSessionId: "terminal-session-secret" }),
-      record({ type: "terminal-coach-handoff-recorded", attemptId: "attempt-handoff-secret", outcome: "ready", text: "private-handoff-secret" }),
+      record({ type: "terminal-command-finished", attemptId: "attempt-finished-secret", exitStatus: 0, evidenceRef: "private-evidence-secret" }),
+      record({ type: "terminal-review-requested", attemptId: "attempt-review-secret", lessonId, blockId: "terminal", evidenceRef: "review-evidence-secret", requestId: "request-secret", mode: "automatic", callNumber: 1 }),
+      record({ type: "terminal-feedback-recorded", attemptId: "attempt-feedback-secret", text: "private-feedback-secret" }),
       record({ type: "attempt_accepted", lessonId, blockId: "terminal", attemptId: "attempt-accepted-secret", version: 7, kind: "terminal", summary: "private-summary-secret", rubric: { private: "rubric-secret" }, path: "/private/session/path" }),
       record({ type: "block_completed", lessonId, blockId: "terminal", response: "private-response-secret" }),
       record({ type: "future_internal_event", lessonId, blockId: "terminal", token: "future-secret" })
@@ -197,7 +199,7 @@ describe("authored workbook public eval trace projection", () => {
 
     const projected = projectAuthoredWorkbookEvalTrace(trace);
 
-    expect(trace.internalEvents).toHaveLength(5);
+    expect(trace.internalEvents).toHaveLength(7);
     expect(projected).not.toHaveProperty("internalEvents");
     expect(projected).not.toHaveProperty("events");
     expect(projected.progressionEvents).toEqual([
@@ -205,7 +207,7 @@ describe("authored workbook public eval trace projection", () => {
       { type: "block_completed", lessonId, blockId: "terminal" }
     ]);
     const serialized = JSON.stringify({ projected });
-    for (const secret of ["attempt-command-secret", "command-secret", "terminal-session-secret", "attempt-handoff-secret", "private-handoff-secret", "attempt-accepted-secret", "private-summary-secret", "rubric-secret", "/private/session/path", "private-response-secret", "future-secret"]) {
+    for (const secret of ["attempt-command-secret", "command-secret", "terminal-session-secret", "attempt-finished-secret", "private-evidence-secret", "attempt-review-secret", "review-evidence-secret", "request-secret", "attempt-feedback-secret", "private-feedback-secret", "attempt-accepted-secret", "private-summary-secret", "rubric-secret", "/private/session/path", "private-response-secret", "future-secret"]) {
       expect(serialized).not.toContain(secret);
     }
   });
@@ -221,15 +223,15 @@ describe("authored workbook public eval trace projection", () => {
         { blockId: "terminal", direction: "output", text: "visible output", at: "terminal-at-secret", credentials: { token: "terminal-token-secret" } },
         { blockId: "terminal", direction: "output", text: "visible output", at: "duplicate-at-secret" }
       ],
-      reflections: [{ blockId: "reflection", role: "tutor", text: "Visible reply mentioning Private editor criterion as public prose.", at: "reflection-at-secret", tutorHandoff: { text: "reflection-handoff-secret" } }],
+      reflections: [{ blockId: "reflection", role: "tutor", text: "Visible reply mentioning Private editor criterion as public prose.", at: "reflection-at-secret", lifecycleDetails: { text: "reflection-lifecycle-secret" } }],
       editors: [{ blockId: "editor", revision: 1, status: "feedback", feedback: "Visible feedback", path: "/private/editor/path", rubric: { text: "editor-rubric-secret" } }],
-      progressionEvents: [{ type: "attempt_accepted", lessonId, blockId: "terminal", kind: "terminal", attemptId: "progression-attempt-secret", path: "/private/progression/path", tutorHandoff: { text: "progression-handoff-secret" } }],
-      artifacts: [{ path: "factory/.tmp/public.txt", content: "Visible artifact can mention Coach handoff.", credentials: "artifact-credential-secret" }],
+      progressionEvents: [{ type: "attempt_accepted", lessonId, blockId: "terminal", kind: "terminal", attemptId: "progression-attempt-secret", path: "/private/progression/path", lifecycleDetails: { text: "progression-lifecycle-secret" } }],
+      artifacts: [{ path: "factory/.tmp/public.txt", content: "Visible artifact can mention terminal lifecycle.", credentials: "artifact-credential-secret" }],
       internalEvents: [{ type: "terminal-command-submitted", attemptId: "top-level-internal-secret" }],
-      events: [{ type: "terminal-coach-handoff-recorded", text: "top-level-events-secret" }],
+      events: [{ type: "terminal-feedback-recorded", attemptId: "top-level-events-attempt-secret", text: "top-level-events-secret" }],
       credentials: { token: "top-level-token-secret" },
       paths: { session: "/private/top-level/path" },
-      tutorHandoff: { text: "top-level-handoff-secret" }
+      terminalLifecycle: { text: "top-level-lifecycle-secret" }
     };
 
     const copied = copyAuthoredWorkbookEvalTrace(unsafeTrace);
@@ -248,16 +250,16 @@ describe("authored workbook public eval trace projection", () => {
       reflections: [{ blockId: "reflection", role: "tutor", text: "Visible reply mentioning Private editor criterion as public prose." }],
       editors: [{ blockId: "editor", revision: 1, status: "feedback", feedback: "Visible feedback" }],
       progressionEvents: [{ type: "attempt_accepted", lessonId, blockId: "terminal", kind: "terminal" }],
-      artifacts: [{ path: "factory/.tmp/public.txt", content: "Visible artifact can mention Coach handoff." }]
+      artifacts: [{ path: "factory/.tmp/public.txt", content: "Visible artifact can mention terminal lifecycle." }]
     });
     expect(citations.map((citation) => citation.id)).toEqual([0, 1, 2, 3, 4, 5]);
     expect(citations.filter((citation) => citation.kind === "publicState")).toHaveLength(1);
     expect(citations.filter((citation) => citation.kind === "terminalTranscript")).toHaveLength(1);
-    expect(JSON.stringify(citations)).not.toContain("Visible artifact can mention Coach handoff.");
+    expect(JSON.stringify(citations)).not.toContain("Visible artifact can mention terminal lifecycle.");
     const serialized = JSON.stringify({ copied, citations });
-    expect(serialized).toContain("Coach handoff");
+    expect(serialized).toContain("terminal lifecycle");
     expect(serialized).toContain("Private editor criterion");
-    for (const secret of ["public-state-extra-secret", "second-public-state-extra-secret", "terminal-at-secret", "terminal-token-secret", "duplicate-at-secret", "reflection-at-secret", "reflection-handoff-secret", "/private/editor/path", "editor-rubric-secret", "progression-attempt-secret", "/private/progression/path", "progression-handoff-secret", "artifact-credential-secret", "top-level-internal-secret", "top-level-events-secret", "top-level-token-secret", "/private/top-level/path", "top-level-handoff-secret"]) {
+    for (const secret of ["public-state-extra-secret", "second-public-state-extra-secret", "terminal-at-secret", "terminal-token-secret", "duplicate-at-secret", "reflection-at-secret", "reflection-lifecycle-secret", "/private/editor/path", "editor-rubric-secret", "progression-attempt-secret", "/private/progression/path", "progression-lifecycle-secret", "artifact-credential-secret", "top-level-internal-secret", "top-level-events-secret", "top-level-token-secret", "/private/top-level/path", "top-level-lifecycle-secret"]) {
       expect(serialized).not.toContain(secret);
     }
   });

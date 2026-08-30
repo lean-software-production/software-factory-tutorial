@@ -397,7 +397,7 @@ const authoredWorkbookScenarioCatalog = [
     runnerPrivate: runnerPrivateDeclaration({ rawWorkbookTimeline: true }),
     expectedModelCalls: freezeExpectedCalls({ mainTutor: 16, judge: 1 }),
     expectedModelCallDerivation: freezeStrings([
-      "Main Tutor upper bound: actual path includes three direct terminal reviews, one reflection review, evaluated terminal/reflection blocks, lesson summary, workbook summary, and the former Coach explanation/review paths; conservative margin 16.",
+      "Main Tutor upper bound: actual path includes three direct terminal reviews, one reflection review, evaluated terminal/reflection blocks, lesson summary, workbook summary, and current explanation/review paths; conservative margin 16.",
       "Judge: exactly one stateless public-report judge call."
     ]),
     criteria: [
@@ -428,7 +428,7 @@ const authoredWorkbookScenarioCatalog = [
     gateCheckpoints: ["lessons003004:after-multiply-only"],
     expectedModelCalls: freezeExpectedCalls({ mainTutor: 35, judge: 1 }),
     expectedModelCallDerivation: freezeStrings([
-      "Main Tutor upper bound: actual path includes five direct terminal reviews, two reflection reviews, evaluated terminal/reflection/narrative blocks, lesson/part summaries, workbook summary, and the former Coach explanation/review paths for broken validator, corrected validator, wrong rerun, multiply-only, divide/final, and two reflection/transition assists; conservative margin 35.",
+      "Main Tutor upper bound: actual path includes five direct terminal reviews, two reflection reviews, evaluated terminal/reflection/narrative blocks, lesson/part summaries, workbook summary, and current explanation/review paths for broken validator, corrected validator, wrong rerun, multiply-only, divide/final, and two reflection/transition assists; conservative margin 35.",
       "Judge: exactly one stateless public-report judge call."
     ]),
     criteria: [
@@ -470,7 +470,7 @@ const authoredWorkbookScenarioCatalog = [
     runnerPrivate: runnerPrivateDeclaration({ workspaceFiles: [commandStubInvocationEvidenceFile], workspacePathPrefixes: [lesson013RawEventPrefix], commandStubInvocations: true, rawWorkbookTimeline: true, learnerWorkspaceFiles: lesson013ArtifactAllowlist }),
     expectedModelCalls: freezeExpectedCalls({ mainTutor: 16, judge: 1 }),
     expectedModelCallDerivation: freezeStrings([
-      "Main Tutor upper bound: actual path includes one direct terminal review, one reflection review, evaluated terminal/reflection/narrative blocks, lesson summary, workbook summary, and the former Coach operator-command explanation and reflection/review assist paths; conservative margin 16.",
+      "Main Tutor upper bound: actual path includes one direct terminal review, one reflection review, evaluated terminal/reflection/narrative blocks, lesson summary, workbook summary, and current operator-command explanation plus reflection/review assist paths; conservative margin 16.",
       "Judge: exactly one stateless public-report judge call."
     ]),
     criteria: [
@@ -690,7 +690,7 @@ function gatePrimerValidationMisconception(input: AuthoredWorkbookScenarioGateIn
     assertion("primer-no-jump", noLessonJumpEverywhere(input), "No lesson jump was projected, copied, public, or reported in internal raw events."),
     assertion("primer-no-stubs", !input.facts.commandStubsCreated && input.commandInvocations.length === 0, "Primer uses no command stubs."),
     assertion("primer-exact-artifacts", artifactPathsMatch(input, []), "Primer captures no learner workspace artifacts."),
-    assertion("primer-normal-completion", hasProgressionOrder(input.trace, ["workbook_introduction_completed", "reflection_submitted", "reflection_reply_recorded", "reflection_follow_up_submitted", "reflection_reply_recorded", "reflection_completed"]), "Primer progresses through introduction, feedback, follow-up, and completion."),
+    assertion("primer-normal-completion", hasProgressionOrder(input.trace, ["workbook_introduction_completed", "attempt_accepted", "block_completed"]) && hasAcceptedProgression(input.trace, "factory-vs-repl", "reflection"), "Primer progresses through introduction, feedback, follow-up, accepted reflection, and completion."),
     assertion("primer-mistake-before-feedback", learnerTextBeforeTutorFeedback(input.trace, "factory-vs-repl", /more trust\/faith in the LLM/i), "The trust misconception appears before Tutor feedback."),
     assertion("primer-repair-after-feedback", learnerFollowUpAfterTutorFeedback(input.trace, "factory-vs-repl", [/do not trust|don't trust|not trust/i, /validation loop|validation/i, /up-front|up front/i, /autonom/i]), "The follow-up repairs the misconception with validation-loop reasoning."),
     assertion("primer-source-immutable", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged, "Authored source and disposable curriculum remain unchanged.")
@@ -871,7 +871,11 @@ function tutorFeedbackAfterInput(trace: AuthoredWorkbookEvalTrace, inputPattern:
 }
 
 function hasAcceptedTerminalProgression(trace: AuthoredWorkbookEvalTrace, blockSuffixes: readonly string[]): boolean {
-  return blockSuffixes.every((suffix) => trace.progressionEvents.some((event) => event.type === "attempt_accepted" && event.kind === "terminal" && event.blockId.endsWith(`--${suffix}`)));
+  return blockSuffixes.every((suffix) => hasAcceptedProgression(trace, suffix, "terminal"));
+}
+
+function hasAcceptedProgression(trace: AuthoredWorkbookEvalTrace, blockSuffix: string, kind: "editor" | "reflection" | "terminal"): boolean {
+  return trace.progressionEvents.some((event) => event.type === "attempt_accepted" && event.kind === kind && (event.blockId === blockSuffix || event.blockId.endsWith(`--${blockSuffix}`)));
 }
 
 function hasExactTerminalLifecycle(input: AuthoredWorkbookScenarioGateInput, expected: readonly { blockSuffix: string; command: string }[]): boolean {

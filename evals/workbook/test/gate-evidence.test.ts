@@ -330,15 +330,26 @@ function sessionFor(root: string) {
 
 async function writeSessionEvents(sessionRoot: string, events: readonly unknown[]): Promise<void> {
   await mkdir(join(sessionRoot, "workbook"), { recursive: true });
-  await writeFile(join(sessionRoot, "workbook/events.jsonl"), events.map((event) => JSON.stringify(event)).join("\n") + (events.length ? "\n" : ""));
+  await writeFile(join(sessionRoot, "workbook/events.jsonl"), events.map((event, index) => JSON.stringify(timelineRecord(event, index + 1))).join("\n") + (events.length ? "\n" : ""));
 }
 
 async function tempSessionRoot(events: unknown[]): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "authored-gate-test-session-"));
   tempRoots.push(root);
   await mkdir(join(root, "workbook"), { recursive: true });
-  if (events.length) await writeFile(join(root, "workbook/events.jsonl"), events.map((event) => JSON.stringify(event)).join("\n") + "\n");
+  if (events.length) await writeFile(join(root, "workbook/events.jsonl"), events.map((event, index) => JSON.stringify(timelineRecord(event, index + 1))).join("\n") + "\n");
   return root;
+}
+
+function timelineRecord(event: unknown, sequence: number): unknown {
+  if (!event || typeof event !== "object" || Array.isArray(event)) return event;
+  const record = event as Record<string, unknown>;
+  return {
+    ...record,
+    id: typeof record.id === "string" && record.id ? record.id : `test-event-${sequence}-${randomUUID()}`,
+    sequence: Number.isInteger(record.sequence) && (record.sequence as number) > 0 ? record.sequence : sequence,
+    at: typeof record.at === "string" && record.at ? record.at : new Date(Date.UTC(2026, 7, 30, 0, 0, sequence)).toISOString()
+  };
 }
 
 function fakeGuardedWorkspace(options: { failGuard?: boolean } = {}) {
@@ -364,7 +375,7 @@ function traceForScenario(id: string, options: { rawJump?: boolean }): AuthoredW
 
 function primerTrace(): AuthoredWorkbookEvalSessionTrace {
   const trace = createEmptyAuthoredWorkbookEvalSessionTrace("primer-validation-misconception");
-  trace.internalEvents = [raw("workbook_introduction_completed"), raw("reflection_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_follow_up_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_completed", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl")];
+  trace.internalEvents = [raw("workbook_introduction_completed"), raw("attempt_accepted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl", "reflection"), raw("block_completed", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl")];
   trace.reflections = [
     { blockId: "lesson--what-is-a-factory--factory-vs-repl", role: "learner", text: "A factory requires more trust/faith in the LLM." },
     { blockId: "lesson--what-is-a-factory--factory-vs-repl", role: "tutor", text: "The validation loop exists because you do not trust the model unchecked." },
@@ -389,14 +400,14 @@ function lesson001Trace(): AuthoredWorkbookEvalSessionTrace {
     trace.internalEvents.push({ type: "terminal-command-submitted", attemptId, lessonId: "001-run-an-agent-headlessly", blockId, command, terminalSessionId: `${attemptId}-terminal` } as any, { type: "terminal-command-finished", attemptId, exitStatus: 0, evidenceRef: `${attemptId}-evidence` } as any, { type: "attempt_accepted", attemptId, lessonId: "001-run-an-agent-headlessly", blockId, version: 1, kind: "terminal", summary: "accepted" } as any);
     trace.publicStates.push(publicState(blockId, 1));
   }
-  trace.internalEvents.push(raw("reflection_completed", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--reflection"));
+  trace.internalEvents.push(raw("attempt_accepted", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--reflection", "reflection"), raw("block_completed", "001-run-an-agent-headlessly", "lesson--001-run-an-agent-headlessly--reflection"));
   trace.reflections = [{ blockId: "lesson--001-run-an-agent-headlessly--reflection", role: "learner", text: "The quoted text is the job. The pipe, subshell, cd, and Pi invocation are the harness. -p and --no-session make it exit with no conversation. read, grep, find, and ls can inspect but cannot edit, write, or mutate the calculator." }];
   return trace;
 }
 
 function lessons003004Trace(options: { rawJump?: boolean } = {}): AuthoredWorkbookEvalSessionTrace {
   const trace = createEmptyAuthoredWorkbookEvalSessionTrace("lessons-003-004-evidence-feedback");
-  trace.internalEvents = [raw("workbook_introduction_completed"), raw("attempt_accepted", "003-build-a-validator", "lesson--003-build-a-validator--implementation-order", "terminal"), raw("reflection_completed", "003-build-a-validator", "lesson--003-build-a-validator--checks"), raw("lesson_transitioned", "004-feed-the-findings-back", "lesson--004-feed-the-findings-back--key-concept"), raw("attempt_accepted", "004-feed-the-findings-back", "lesson--004-feed-the-findings-back--implementation-order", "terminal"), raw("reflection_completed", "004-feed-the-findings-back", "lesson--004-feed-the-findings-back--checks")];
+  trace.internalEvents = [raw("workbook_introduction_completed"), raw("attempt_accepted", "003-build-a-validator", "lesson--003-build-a-validator--implementation-order", "terminal"), raw("attempt_accepted", "003-build-a-validator", "lesson--003-build-a-validator--checks", "reflection"), raw("block_completed", "003-build-a-validator", "lesson--003-build-a-validator--checks"), raw("block_completed", "004-feed-the-findings-back", "lesson--004-feed-the-findings-back--key-concept"), raw("attempt_accepted", "004-feed-the-findings-back", "lesson--004-feed-the-findings-back--implementation-order", "terminal"), raw("attempt_accepted", "004-feed-the-findings-back", "lesson--004-feed-the-findings-back--checks", "reflection"), raw("block_completed", "004-feed-the-findings-back", "lesson--004-feed-the-findings-back--checks")];
   if (options.rawJump) trace.internalEvents.push({ type: "lesson_jump_started", lessonId: "copied" } as any);
   trace.terminalTranscript = [
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\ncat refactor-validate.md \\\n  | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p)" },
@@ -413,7 +424,7 @@ function lessons003004Trace(options: { rawJump?: boolean } = {}): AuthoredWorkbo
 
 function lesson013Trace(options: { rawJump?: boolean } = {}): AuthoredWorkbookEvalSessionTrace {
   const trace = createEmptyAuthoredWorkbookEvalSessionTrace("lesson-013-operator-judgement");
-  trace.internalEvents = [raw("workbook_introduction_completed"), raw("attempt_accepted", "013-oversee-the-orchestrator", "lesson--013-oversee-the-orchestrator--implementation-order", "terminal"), raw("reflection_completed", "013-oversee-the-orchestrator", "lesson--013-oversee-the-orchestrator--checks")];
+  trace.internalEvents = [raw("workbook_introduction_completed"), raw("attempt_accepted", "013-oversee-the-orchestrator", "lesson--013-oversee-the-orchestrator--implementation-order", "terminal"), raw("attempt_accepted", "013-oversee-the-orchestrator", "lesson--013-oversee-the-orchestrator--checks", "reflection"), raw("block_completed", "013-oversee-the-orchestrator", "lesson--013-oversee-the-orchestrator--checks")];
   if (options.rawJump) trace.internalEvents.push({ type: "lesson_jump_started", lessonId: "copied" } as any);
   trace.terminalTranscript = [{ blockId: "lesson--013-oversee-the-orchestrator--implementation-order", direction: "input", text: 'export PATH=/stubs:$PATH\n./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &\n./factory/steer.sh refactor "Finish multiply and divide independently before validation."\n./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &\n./factory/ask.sh refactor "What happened in this run?"' }];
   trace.reflections = [{ blockId: "lesson--013-oversee-the-orchestrator--checks", role: "learner", text: "The factory is factory/. The line is refactor/. The orchestrator is run.sh: it starts the line, hands inputs to stations, branches on VERDICT, handles failures with repair, and stops by counters. Prompt/script pairs are stations. ask.sh is no-tools because the record is supplied. I am the operator. Repeated FAIL can mean an unmet criterion or missing/unreachable evidence. Cost, regressions, and whether the result is worth it are still operator judgement." }];
@@ -422,7 +433,7 @@ function lesson013Trace(options: { rawJump?: boolean } = {}): AuthoredWorkbookEv
 
 function raw(type: string, lessonId?: string, blockId?: string, kind?: string): any {
   if (type === "attempt_accepted") return { type, attemptId: randomUUID(), lessonId, blockId, version: 1, kind, summary: "accepted" };
-  return lessonId ? { type, lessonId, blockId, response: "ok" } : { type };
+  return lessonId ? { type, lessonId, blockId } : { type };
 }
 
 function publicState(blockId: string, terminalRevision: number): any {

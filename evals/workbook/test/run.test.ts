@@ -16,7 +16,7 @@ import {
 } from "../run.js";
 import { AUTHORED_WORKBOOK_SCENARIOS, authoredWorkbookScenarioById } from "../scenarios.js";
 import { authoredWorkbookEvalStabilityPassed } from "../reports.js";
-import { createEmptyAuthoredWorkbookEvalSessionTrace, type AuthoredWorkbookEvalSessionTrace, type AuthoredWorkbookEvalTrace } from "../public-trace.js";
+import { createEmptyAuthoredWorkbookEvalSessionTrace, projectAuthoredWorkbookEvalTrace, type AuthoredWorkbookEvalSessionTrace, type AuthoredWorkbookEvalTrace } from "../public-trace.js";
 import { AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL, createAuthoredWorkbookRunnerModelConfiguration, type AuthoredWorkbookEvalPreflightRequest, type AuthoredWorkbookEvalPublicSummary } from "../preflight.js";
 import { DefaultMainWorkbookTutor } from "../../../tutorial-engine/src/workbook/tutor.js";
 
@@ -67,15 +67,7 @@ function summary(ids = ["primer-validation-misconception"], repeat: 1 | 2 | 3 = 
 }
 
 function publicTraceFrom(trace: AuthoredWorkbookEvalSessionTrace): AuthoredWorkbookEvalTrace {
-  return {
-    scenarioId: trace.scenarioId,
-    publicStates: [],
-    terminalTranscript: trace.terminalTranscript.map(({ blockId, direction, text }) => blockId ? { blockId, direction, text } : { direction, text }),
-    reflections: trace.reflections.map(({ blockId, role, text }) => ({ blockId, role, text })),
-    editors: [],
-    progressionEvents: trace.internalEvents as AuthoredWorkbookEvalTrace["progressionEvents"],
-    artifacts: trace.artifacts
-  };
+  return projectAuthoredWorkbookEvalTrace(trace);
 }
 
 function makeDeps(options: { failGate?: boolean; judgePass?: boolean; abortOnDrive?: AbortController; cleanupFails?: boolean } = {}) {
@@ -117,7 +109,7 @@ function makeDeps(options: { failGate?: boolean; judgePass?: boolean; abortOnDri
     createDriver: ({ trace }) => fakeDriver(trace, events, options.abortOnDrive),
     createGateEvidenceCollector: ({ trace, commandStubHandle }) => ({
       captureBaseline: async () => { events.push("baseline"); return {}; },
-      captureGateCheckpoint: async (label: string) => { events.push(`checkpoint:${label}`); trace.internalEvents.push({ type: "observation_verified", lessonId: "004-feed-the-findings-back", blockId: "lesson--004-feed-the-findings-back--implementation-order" } as any); },
+      captureGateCheckpoint: async (label: string) => { events.push(`checkpoint:${label}`); },
       collectGateInput: async () => { events.push("gate-input"); return { trace: publicTraceFrom(trace), commandInvocations: [], artifactSnapshots: [], workspaceFileSnapshots: [], rawEvents: trace.internalEvents, facts: { authoredSourceChanged: false, disposableCurriculumChanged: false, lessonJumpStarted: false, commandStubsCreated: commandStubHandle !== undefined, learnerWorkspaceChangedOutsideAllowlist: [], lesson001CalculatorBeforeSha256: "same", lesson001CalculatorAfterSha256: "same" } } as any; }
     } as any),
     judge: async ({ scenario }) => {
@@ -140,16 +132,29 @@ function makeDeps(options: { failGate?: boolean; judgePass?: boolean; abortOnDri
 }
 
 function fakeDriver(trace: AuthoredWorkbookEvalSessionTrace, events: string[], abortOnDrive?: AbortController): any {
-  const push = (type: string, extra: Record<string, unknown> = {}) => trace.internalEvents.push({ type, lessonId: "what-is-a-factory", blockId: String(extra.blockId ?? "factory-vs-repl"), ...extra } as any);
+  let sequence = 0;
+  const lessonIdFor = (blockId: string) => /^lesson--(.+?)--/.exec(blockId)?.[1] ?? "what-is-a-factory";
+  const append = (event: Record<string, unknown>) => {
+    sequence += 1;
+    trace.internalEvents.push({ id: `fake-event-${sequence}`, sequence, at: new Date(Date.UTC(2026, 7, 30, 0, 0, sequence)).toISOString(), ...event } as any);
+  };
+  const push = (type: string, blockId = "factory-vs-repl", extra: Record<string, unknown> = {}) => {
+    if (type === "workbook_introduction_completed") append({ type });
+    else append({ type, lessonId: lessonIdFor(blockId), blockId, ...extra });
+  };
+  const reflectionTurn = (blockId: string, role: "learner" | "tutor", text: string) => {
+    trace.reflections.push({ blockId, role, text });
+    append({ type: "message", lessonId: lessonIdFor(blockId), blockId, role: role === "learner" ? "user" : "assistant", source: role === "learner" ? "learner" : "main_tutor", presentation: role === "learner" ? "chat" : "review", text });
+  };
   const state = (blockId = "factory-vs-repl", status = "accepted") => ({ progress: { blocks: [{ id: blockId, checkpoint: { status } }] } });
   return {
     completeIntroduction: async () => { events.push("drive:intro"); push("workbook_introduction_completed"); return state(); },
-    continueBlock: async (blockId: string) => { events.push(`drive:continue:${blockId}`); push("block_continued", { blockId }); return state(blockId); },
-    submitReflection: async (blockId: string, response: string) => { events.push(`drive:reflection:${blockId}`); trace.reflections.push({ blockId, role: "learner", text: response }); trace.reflections.push({ blockId, role: "tutor", text: "Tutor feedback: use validation rather than trust." }); push("reflection_submitted", { blockId }); push("reflection_reply_recorded", { blockId }); if (abortOnDrive) { abortOnDrive.abort(); throw new Error("aborted by test"); } return state(blockId, "feedback"); },
-    submitReflectionFollowUp: async (blockId: string, response: string) => { trace.reflections.push({ blockId, role: "learner", text: response }); trace.reflections.push({ blockId, role: "tutor", text: "accepted" }); push("reflection_follow_up_submitted", { blockId }); push("reflection_reply_recorded", { blockId }); return state(blockId, "accepted"); },
-    completeReflection: async (blockId: string) => { push("reflection_completed", { blockId }); return state(blockId); },
-    submitTerminalCommand: async (blockId: string, command: string) => { trace.terminalTranscript.push({ blockId, direction: "input", text: command }); trace.terminalTranscript.push({ blockId, direction: "output", text: "ok" }); push("attempt_accepted", { blockId, kind: "terminal" }); return state(blockId, "feedback"); },
-    completeTerminalBlock: async (blockId: string) => { push("block_completed", { blockId }); return state(blockId); }
+    continueBlock: async (blockId: string) => { events.push(`drive:continue:${blockId}`); push("block_completed", blockId); return state(blockId); },
+    submitReflection: async (blockId: string, response: string) => { events.push(`drive:reflection:${blockId}`); reflectionTurn(blockId, "learner", response); reflectionTurn(blockId, "tutor", "Tutor feedback: use validation rather than trust."); if (abortOnDrive) { abortOnDrive.abort(); throw new Error("aborted by test"); } return state(blockId, "feedback"); },
+    submitReflectionFollowUp: async (blockId: string, response: string) => { reflectionTurn(blockId, "learner", response); push("attempt_accepted", blockId, { kind: "reflection", attemptId: `${blockId}:reflection-attempt`, version: 1, summary: "accepted" }); reflectionTurn(blockId, "tutor", "accepted"); return state(blockId, "accepted"); },
+    completeReflection: async (blockId: string) => { push("block_completed", blockId); return state(blockId); },
+    submitTerminalCommand: async (blockId: string, command: string) => { trace.terminalTranscript.push({ blockId, direction: "input", text: command }); trace.terminalTranscript.push({ blockId, direction: "output", text: "ok" }); push("attempt_accepted", blockId, { kind: "terminal", attemptId: `${blockId}:terminal-attempt`, version: 1, summary: "accepted" }); return state(blockId, "feedback"); },
+    completeTerminalBlock: async (blockId: string) => { push("block_completed", blockId); return state(blockId); }
   };
 }
 

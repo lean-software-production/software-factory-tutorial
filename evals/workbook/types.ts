@@ -59,7 +59,7 @@ export interface AuthoredWorkbookEvalArtifactSnapshot {
  * In-memory trace for authored-workbook deterministic gates.
  *
  * `internalEvents` may contain raw workbook timeline rows, including private attempt IDs, evidence
- * refs, terminal lifecycle records, private Tutor/Coach handoffs, paths, and future fields. Do not
+ * refs, terminal lifecycle records, private tutor lifecycle details, paths, and future fields. Do not
  * serialize this type into judge prompts, public reports, or durable eval artifacts. First project it
  * with `projectAuthoredWorkbookEvalTrace`, which rebuilds the public trace from allowlisted fields.
  */
@@ -77,17 +77,7 @@ export type AuthoredWorkbookEvalProgressionEvent =
   | { type: "session_started" }
   | { type: "workbook_introduction_completed" }
   | { type: "attempt_accepted"; lessonId: string; blockId: string; kind: PublicAttemptKind }
-  | { type: "work_accepted"; blockId: string }
-  | { type: "block_completed"; lessonId?: string; blockId: string }
-  | { type: "reflection_submitted"; lessonId: string; blockId: string }
-  | { type: "reflection_follow_up_submitted"; lessonId: string; blockId: string }
-  | { type: "reflection_reply_recorded"; lessonId: string; blockId: string }
-  | { type: "observation_acknowledged"; lessonId: string; blockId: string; kind: "terminal" }
-  | { type: "observation_verified"; lessonId: string; blockId: string; kind: "terminal" }
-  | { type: "block_continued"; lessonId: string; blockId: string }
-  | { type: "reflection_completed"; lessonId: string; blockId: string }
-  | { type: "editor_practice_unlocked"; lessonId: string; blockId: string; kind: "editor" }
-  | { type: "lesson_transitioned"; lessonId: string; blockId: string };
+  | { type: "block_completed"; lessonId?: string; blockId: string };
 
 /** Serializable, browser-public trace allowed in judge prompts and eval reports. */
 export interface AuthoredWorkbookEvalTrace {
