@@ -1,1 +1,0 @@
-Merged as fb93e25 after adapting calculator workspace path to tutorial/workspaces/refactor-line/calculator. Post-merge onboarding: 20 passed. Fresh recreated devcontainer proved host sentinels at root/engine/calculator dependency paths remained untouched and invisible; Linux node-pty, Rollup, Vite and workbook build passed. Warm reuse imports passed.
