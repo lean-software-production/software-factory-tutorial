@@ -17,8 +17,10 @@ import {
   type DockerCommandRunner,
   type DockerCommandSyncOptions
 } from "../../tutorial-engine/src/workbook/terminal.js";
-import { PRACTICE_COACH_MODEL_ENV, TUTOR_MODEL_ENV } from "../../tutorial-engine/src/workbook/model.js";
+import { PRACTICE_COACH_MODEL_ENV, TUTOR_MODEL_ENV, type WorkbookModelEnvironment } from "../../tutorial-engine/src/workbook/model.js";
 import { probePiWorkbookRoleModel, type WorkbookModelIdentity } from "../../tutorial-engine/src/workbook/model-preflight.js";
+import { FastPracticeCoach, PRACTICE_COACH_LOG_PROMPT_ENV, type FastPracticeCoachOptions } from "../../tutorial-engine/src/workbook/practice-coach.js";
+import { DefaultMainWorkbookTutor, type MainWorkbookTutorOptions } from "../../tutorial-engine/src/workbook/tutor.js";
 import { trustRuntimeProvision, type TrustedRuntimeProvision } from "../../tutorial-engine/src/workbook/runtime-provision.js";
 import { probeV2JudgeCommandModel, type JudgeCommandLabel, type V2JudgeCommandPreflightResult } from "../../tutorial-engine/evals/v2/judge.js";
 import { createAuthoredCommandStubs, type AuthoredCommandStubHandle } from "./command-stubs.js";
@@ -30,7 +32,7 @@ const execFileAsync = promisify(execFile);
 
 export const SUPPORTED_NODE_RANGE = ">=24.2.0 <25";
 export const SUPPORTED_NPM_RANGE = ">=11.0.0";
-export const PRACTICE_COACH_LOG_PROMPT_ENV = "PRACTICE_COACH_LOG_PROMPT";
+export { PRACTICE_COACH_LOG_PROMPT_ENV };
 export const EVAL_JUDGE_MODEL_ENV = "EVAL_JUDGE_MODEL";
 export const EVAL_JUDGE_COMMAND_ENV = "EVAL_JUDGE_COMMAND";
 export const AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL = 2_000;
@@ -99,6 +101,7 @@ export interface AuthoredWorkbookEvalCostBudget {
 
 export interface AuthoredWorkbookEvalPreflightRequestInput {
   scenarioIds: readonly (AuthoredWorkbookScenarioId | string)[];
+  repeat?: number;
   costBudget: AuthoredWorkbookEvalCostBudgetInput;
   models?: Partial<Record<AuthoredWorkbookEvalRoleKey, string>>;
   environment?: NodeJS.ProcessEnv;
@@ -111,6 +114,7 @@ export type AuthoredWorkbookEvalEnvironment = Readonly<Record<string, string>>;
 
 export interface AuthoredWorkbookEvalPreflightRequest {
   scenarios: readonly Required<Pick<AuthoredWorkbookEvalScenario, "id" | "expectedBudgetFlags" | "expectedCapabilityFlags" | "expectedModelCalls">>[];
+  repeat: number;
   costBudget: AuthoredWorkbookEvalCostBudget;
   expectedCosts: AuthoredWorkbookEvalExpectedCosts;
   models: Readonly<AuthoredWorkbookEvalModels>;
@@ -132,6 +136,7 @@ export interface AuthoredWorkbookEvalExpectedCosts {
   estimatedTokensPerPaidCall: number;
   expectedEstimatedTokensTotal: number;
   releaseScenarioCount: number;
+  releaseRunCount: number;
 }
 
 export interface AuthoredWorkbookEvalPartialFixtureLease {
@@ -231,6 +236,7 @@ export interface AuthoredWorkbookEvalCallCounts {
 
 export interface AuthoredWorkbookEvalPublicSummary {
   scenarioIds: string[];
+  repeat: number;
   configuredModelIdentities: Array<{ role: AuthoredWorkbookEvalRoleLabel } & PublicModelIdentity>;
   selectedModelIdentities: Array<{ role: AuthoredWorkbookEvalRoleLabel } & PublicModelIdentity>;
   judge: { commandLabel: JudgeCommandLabel; model: string; capabilities: { jsonObject: true } };
@@ -301,6 +307,7 @@ export function formatAuthoredWorkbookEvalPreflightHelp(): string {
     "Required bounded budget options:",
     "  --max-paid-model-calls <integer>",
     "  --max-estimated-tokens <integer>",
+    "  --repeat <1|2|3>                         Optional; defaults to 1. The final release CLI will force 1.",
     "",
     "The parser only validates arguments. It does not create reports, session workspaces, curriculum slices, Docker containers, or model sessions."
   ].join("\n");
@@ -321,6 +328,12 @@ export function parseAuthoredWorkbookEvalPreflightArgs(
   const scenarioIds: string[] = [];
   const models: Partial<Record<AuthoredWorkbookEvalRoleKey, string>> = {};
   const costBudget: Partial<AuthoredWorkbookEvalCostBudgetInput> = {};
+  let repeat: number | undefined;
+  const singletonFlags = new Set<string>();
+  const recordSingleton = (flag: string) => {
+    if (singletonFlags.has(flag)) throw validationError();
+    singletonFlags.add(flag);
+  };
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index];
     if (flag === undefined || !flag.startsWith("--")) throw validationError();
@@ -328,17 +341,18 @@ export function parseAuthoredWorkbookEvalPreflightArgs(
     if (value === undefined || value.startsWith("--")) throw validationError();
     index += 1;
     if (flag === "--scenario") scenarioIds.push(value);
-    else if (flag === "--tutor-model") models.mainTutor = value;
-    else if (flag === "--practice-coach-model") models.practiceCoach = value;
-    else if (flag === "--judge-model") models.judge = value;
-    else if (flag === "--max-paid-model-calls") costBudget.maxPaidModelCalls = parsePositiveInteger(value);
-    else if (flag === "--max-estimated-tokens") costBudget.maxEstimatedTokens = parsePositiveInteger(value);
+    else if (flag === "--tutor-model") { recordSingleton(flag); models.mainTutor = value; }
+    else if (flag === "--practice-coach-model") { recordSingleton(flag); models.practiceCoach = value; }
+    else if (flag === "--judge-model") { recordSingleton(flag); models.judge = value; }
+    else if (flag === "--max-paid-model-calls") { recordSingleton(flag); costBudget.maxPaidModelCalls = parsePositiveInteger(value); }
+    else if (flag === "--max-estimated-tokens") { recordSingleton(flag); costBudget.maxEstimatedTokens = parsePositiveInteger(value); }
+    else if (flag === "--repeat") { recordSingleton(flag); repeat = parseRepeat(value); }
     else throw validationError();
   }
 
   const resolvedScenarioIds = resolveScenarioIdsForParser(scenarioIds, scenarioCatalogForTest);
   for (const role of WORKBOOK_EVAL_ROLES) models[role.key] ??= environment[role.env];
-  const request = Object.freeze({ scenarioIds: Object.freeze([...resolvedScenarioIds]), models: Object.freeze({ ...models }), costBudget: Object.freeze({ ...costBudget }) as AuthoredWorkbookEvalCostBudgetInput, environment });
+  const request = Object.freeze({ scenarioIds: Object.freeze([...resolvedScenarioIds]), repeat: repeat ?? 1, models: Object.freeze({ ...models }), costBudget: Object.freeze({ ...costBudget }) as AuthoredWorkbookEvalCostBudgetInput, environment });
   validateAuthoredWorkbookEvalPreflightRequestInternal(request, scenarioCatalogForTest ?? AUTHORED_WORKBOOK_SCENARIOS);
   return { kind: "request", request };
 }
@@ -356,6 +370,7 @@ function validateAuthoredWorkbookEvalPreflightRequestInternal(input: AuthoredWor
   if (!input || typeof input !== "object" || Object.hasOwn(input, "scenarios")) throw validationError();
   const environment = snapshotAuthoredWorkbookEvalEnvironment(input.environment ?? process.env, input.models);
   const scenarios = resolveScenariosFromCatalog(input.scenarioIds, catalog);
+  const repeat = validateRepeat(input.repeat);
   const models = validateModels(input.models, environment);
   const repositoryRoot = input.repositoryRoot === undefined ? process.cwd() : validateHostPath(input.repositoryRoot);
   const nodeRange = input.nodeRange ?? SUPPORTED_NODE_RANGE;
@@ -366,12 +381,13 @@ function validateAuthoredWorkbookEvalPreflightRequestInternal(input: AuthoredWor
   if (!satisfiesVersionRange(process.version, nodeRange)) throw new AuthoredWorkbookEvalPreflightError("runtime", { code: "unsupported_node_version" });
 
   const costBudget = validateCostBudget(input.costBudget);
-  const expectedCosts = expectedCostsFor(scenarios, costBudget);
+  const expectedCosts = expectedCostsFor(scenarios, costBudget, repeat);
   if (costBudget.maxPaidModelCalls < expectedCosts.expectedPaidModelCallsTotal) throw new AuthoredWorkbookEvalPreflightError("budget", { code: "paid_model_call_budget_too_low" });
   if (costBudget.maxEstimatedTokens < expectedCosts.expectedEstimatedTokensTotal) throw new AuthoredWorkbookEvalPreflightError("budget", { code: "estimated_token_budget_too_low" });
 
   return deepFreezePlain({
     scenarios,
+    repeat,
     costBudget,
     expectedCosts,
     models,
@@ -503,6 +519,7 @@ export function publicPreflightSummary(
 ): AuthoredWorkbookEvalPublicSummary {
   return deepFreezePlain({
     scenarioIds: request.scenarios.map((scenario) => scenario.id),
+    repeat: request.repeat,
     configuredModelIdentities: WORKBOOK_EVAL_ROLES.map((role) => ({ role: role.label, provider: request.models[role.key].provider, id: request.models[role.key].id })),
     selectedModelIdentities: selectedModels.map((model) => ({ role: model.role, provider: model.provider, id: model.id })),
     judge: { commandLabel: judgeResult.commandLabel, model: judgeResult.model, capabilities: { jsonObject: true } },
@@ -511,6 +528,49 @@ export function publicPreflightSummary(
     expectedCapabilityFlags: mergeScenarioFlags(request.scenarios, "expectedCapabilityFlags"),
     warnings: [`Paid model-token checks are enabled for Main Tutor, Practice Coach, and Judge. Budget allows ${request.costBudget.maxPaidModelCalls} paid calls and ${request.costBudget.maxEstimatedTokens} estimated tokens.`]
   });
+}
+
+export interface AuthoredWorkbookRunnerModelConfiguration {
+  createMainTutor(options: Omit<MainWorkbookTutorOptions, "environment">): DefaultMainWorkbookTutor;
+  createPracticeCoach(options: Omit<FastPracticeCoachOptions, "environment">): FastPracticeCoach;
+}
+
+/**
+ * Runner API note: the future authored runner should call this after a successful preflight and pass
+ * the returned factories into workbook server construction, so both live tutor roles use the same
+ * private least-privilege model environment derived from preflight. The public summary is accepted
+ * here to make any runner handoff prove it is using the matching preflight result, without exposing credentials.
+ */
+export function createAuthoredWorkbookRunnerModelConfiguration(
+  request: AuthoredWorkbookEvalPreflightRequest,
+  summary: Pick<AuthoredWorkbookEvalPublicSummary, "configuredModelIdentities" | "repeat" | "scenarioIds">
+): AuthoredWorkbookRunnerModelConfiguration {
+  assertRunnerSummaryMatchesRequest(request, summary);
+  const environment = createAuthoredWorkbookRunnerRoleEnvironment(request);
+  return Object.freeze({
+    createMainTutor: (options: Omit<MainWorkbookTutorOptions, "environment">) => new DefaultMainWorkbookTutor({ ...options, environment }),
+    createPracticeCoach: (options: Omit<FastPracticeCoachOptions, "environment">) => new FastPracticeCoach({ ...options, environment })
+  });
+}
+
+function createAuthoredWorkbookRunnerRoleEnvironment(request: AuthoredWorkbookEvalPreflightRequest): WorkbookModelEnvironment {
+  const environment: Record<string, string> = {
+    [TUTOR_MODEL_ENV]: request.models.mainTutor.identity,
+    [PRACTICE_COACH_MODEL_ENV]: request.models.practiceCoach.identity
+  };
+  const practiceCoachLogPrompt = request.environment[PRACTICE_COACH_LOG_PROMPT_ENV];
+  if (practiceCoachLogPrompt !== undefined) environment[PRACTICE_COACH_LOG_PROMPT_ENV] = practiceCoachLogPrompt;
+  return Object.freeze(environment);
+}
+
+function assertRunnerSummaryMatchesRequest(
+  request: AuthoredWorkbookEvalPreflightRequest,
+  summary: Pick<AuthoredWorkbookEvalPublicSummary, "configuredModelIdentities" | "repeat" | "scenarioIds">
+): void {
+  if (summary.repeat !== request.repeat) throw validationError();
+  if (JSON.stringify(summary.scenarioIds) !== JSON.stringify(request.scenarios.map((scenario) => scenario.id))) throw validationError();
+  const expected = WORKBOOK_EVAL_ROLES.map((role) => ({ role: role.label, provider: request.models[role.key].provider, id: request.models[role.key].id }));
+  if (JSON.stringify(summary.configuredModelIdentities) !== JSON.stringify(expected)) throw validationError();
 }
 
 export function defaultPreflightOperations(dependencies: AuthoredWorkbookEvalDefaultOperationDependencies = {}): AuthoredWorkbookEvalExternalOperations {
@@ -969,15 +1029,15 @@ function validateCostBudget(raw: AuthoredWorkbookEvalCostBudgetInput | undefined
   return deepFreezePlain({ maxPaidModelCalls: raw.maxPaidModelCalls, maxEstimatedTokens: raw.maxEstimatedTokens, estimatedTokensPerPaidCall });
 }
 
-function expectedCostsFor(scenarios: AuthoredWorkbookEvalPreflightRequest["scenarios"], budget: AuthoredWorkbookEvalCostBudget): AuthoredWorkbookEvalExpectedCosts {
+function expectedCostsFor(scenarios: AuthoredWorkbookEvalPreflightRequest["scenarios"], budget: AuthoredWorkbookEvalCostBudget, repeat: number): AuthoredWorkbookEvalExpectedCosts {
   const paidPreflightCallsByRole = emptyRoleCounts();
   const paidReleaseCallsByRole = emptyRoleCounts();
   for (const role of WORKBOOK_EVAL_ROLES) paidPreflightCallsByRole[role.label] = 1;
   let expectedPaidReleaseCalls = 0;
   for (const scenario of scenarios) {
     const counts = normalizeExpectedModelCalls(scenario.expectedModelCalls);
-    expectedPaidReleaseCalls += counts.total;
-    for (const role of WORKBOOK_EVAL_ROLES) paidReleaseCallsByRole[role.label] += counts.byRole[role.label];
+    expectedPaidReleaseCalls += counts.total * repeat;
+    for (const role of WORKBOOK_EVAL_ROLES) paidReleaseCallsByRole[role.label] += counts.byRole[role.label] * repeat;
   }
   const expectedPaidPreflightCalls = 3 as const;
   const expectedPaidModelCallsTotal = expectedPaidPreflightCalls + expectedPaidReleaseCalls;
@@ -989,7 +1049,8 @@ function expectedCostsFor(scenarios: AuthoredWorkbookEvalPreflightRequest["scena
     expectedPaidModelCallsTotal,
     estimatedTokensPerPaidCall: budget.estimatedTokensPerPaidCall,
     expectedEstimatedTokensTotal: expectedPaidModelCallsTotal * budget.estimatedTokensPerPaidCall,
-    releaseScenarioCount: scenarios.length
+    releaseScenarioCount: scenarios.length,
+    releaseRunCount: scenarios.length * repeat
   });
 }
 
@@ -1028,6 +1089,17 @@ function parsePositiveInteger(value: string): number {
   const parsed = Number(value);
   if (!isPositiveInteger(parsed)) throw validationError();
   return parsed;
+}
+
+function parseRepeat(value: string): number {
+  if (!/^\d+$/.test(value)) throw validationError();
+  return validateRepeat(Number(value));
+}
+
+function validateRepeat(value: unknown): number {
+  if (value === undefined) return 1;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 3) throw validationError();
+  return value;
 }
 
 function isPositiveInteger(value: unknown): value is number {

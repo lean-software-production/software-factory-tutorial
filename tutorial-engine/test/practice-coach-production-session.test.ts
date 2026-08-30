@@ -49,6 +49,7 @@ function providerErrorSession(errorMessage: string) {
 function logger() { return { info: vi.fn(), error: vi.fn() }; }
 
 const originalPracticeCoachModel = process.env.PRACTICE_COACH_MODEL;
+const originalPracticeCoachPromptLog = process.env.PRACTICE_COACH_LOG_PROMPT;
 
 beforeEach(() => {
   pi.createAgentSession.mockReset();
@@ -58,14 +59,66 @@ beforeEach(() => {
   pi.sessionManagers.splice(0);
   pi.settings.splice(0);
   delete process.env.PRACTICE_COACH_MODEL;
+  delete process.env.PRACTICE_COACH_LOG_PROMPT;
 });
 
 afterEach(() => {
   if (originalPracticeCoachModel === undefined) delete process.env.PRACTICE_COACH_MODEL;
   else process.env.PRACTICE_COACH_MODEL = originalPracticeCoachModel;
+  if (originalPracticeCoachPromptLog === undefined) delete process.env.PRACTICE_COACH_LOG_PROMPT;
+  else process.env.PRACTICE_COACH_LOG_PROMPT = originalPracticeCoachPromptLog;
 });
 
 describe("Practice Coach production session factory", () => {
+  it("uses per-instance environment snapshots for concurrent coaches without prompt-log or model leakage", async () => {
+    process.env.PRACTICE_COACH_MODEL = "provider/global";
+    process.env.PRACTICE_COACH_LOG_PROMPT = "1";
+    pi.resolveCliModel.mockImplementation(({ cliModel }: { cliModel: string }) => {
+      const [provider, id = "model"] = cliModel.split("/");
+      return { model: { api: "test-api", provider, id } };
+    });
+    pi.createAgentSession.mockImplementation(async (options: any) => ({
+      session: {
+        state: { model: options.model },
+        subscribe() { return () => undefined; },
+        async prompt() {
+          await options.customTools[0].execute("tool", { outcome: "ready", text: `ready ${options.model.id}` });
+          return "ok";
+        },
+        dispose: vi.fn(),
+      },
+    }));
+    const logA = logger();
+    const logB = logger();
+    const { FastPracticeCoach } = await import("../src/workbook/practice-coach.js");
+    const coachA = new FastPracticeCoach({ workspace: "/tmp/workbook-a", log: logA, environment: { PRACTICE_COACH_MODEL: "provider/coach-a" } });
+    const coachB = new FastPracticeCoach({ workspace: "/tmp/workbook-b", log: logB, environment: { PRACTICE_COACH_MODEL: "provider/coach-b", PRACTICE_COACH_LOG_PROMPT: "0" } });
+    const attempt = {
+      id: "attempt",
+      lessonId: "001",
+      blockId: "block",
+      version: 1,
+      status: "reviewing",
+      evidence: { kind: "terminal", transcript: "done", terminalHtml: "<pre>done</pre>" },
+    } as any;
+
+    await expect(Promise.all([
+      coachA.assess({ attempt, rubric: "private rubric a" }),
+      coachB.assess({ attempt: { ...attempt, id: "attempt-b" }, rubric: "private rubric b" })
+    ])).resolves.toEqual([
+      { outcome: "ready", text: "ready coach-a" },
+      { outcome: "ready", text: "ready coach-b" }
+    ]);
+
+    expect(pi.resolveCliModel).toHaveBeenCalledWith({ cliModel: "provider/coach-a", modelRuntime: expect.anything() });
+    expect(pi.resolveCliModel).toHaveBeenCalledWith({ cliModel: "provider/coach-b", modelRuntime: expect.anything() });
+    expect(pi.resolveCliModel).not.toHaveBeenCalledWith({ cliModel: "provider/global", modelRuntime: expect.anything() });
+    expect(pi.createAgentSession.mock.calls.map(([options]) => options.model.id).sort()).toEqual(["coach-a", "coach-b"]);
+    expect(logA.info).not.toHaveBeenCalledWith(expect.stringContaining("Practice Coach prompt begin"));
+    expect(logB.info).not.toHaveBeenCalledWith(expect.stringContaining("Practice Coach prompt begin"));
+    expect(process.env.PRACTICE_COACH_MODEL).toBe("provider/global");
+  });
+
   it("uses one low-level Pi prompt for a runtime provider terminal error and disposes", async () => {
     const session = providerErrorSession("usage limit reached");
     pi.createAgentSession.mockResolvedValueOnce({ session });

@@ -12,11 +12,13 @@ import {
   EVAL_JUDGE_COMMAND_ENV,
   EVAL_JUDGE_MODEL_ENV,
   OPENCODE_API_KEY_ENV,
+  PRACTICE_COACH_LOG_PROMPT_ENV,
   WORKBOOK_TERMINAL_IMAGE,
   authoredTerminalDockerRunArguments,
   createDefaultJudgeProbe,
   defaultPreflightOperations,
   defaultRemoveDisposablePreflightFixture,
+  createAuthoredWorkbookRunnerModelConfiguration,
   dockerClientEnvironment,
   parseAuthoredWorkbookEvalPreflightArgs,
   runAuthoredWorkbookEvalPreflight,
@@ -64,6 +66,7 @@ function validRequest(overrides: Partial<AuthoredWorkbookEvalPreflightRequestInp
       HOME: process.env.HOME,
       [OPENCODE_API_KEY_ENV]: secret,
       [EVAL_JUDGE_COMMAND_ENV]: `${privatePath}/judge.sh`,
+      [PRACTICE_COACH_LOG_PROMPT_ENV]: "0",
       EXTRA_SECRET: "must-not-copy"
     },
     repositoryRoot: process.cwd(),
@@ -256,6 +259,73 @@ describe("authored workbook eval preflight", () => {
     expect(Object.isFrozen(process.env)).toBe(false);
     expect(Object.isFrozen(request.environment)).toBe(true);
     expect(request.environment.EXTRA_SECRET).toBeUndefined();
+  });
+
+  it("validates repeat defaults and multiplies only selected release scenario calls", async () => {
+    const defaultRepeat = validateAuthoredWorkbookEvalPreflightRequest(validRequest());
+    expect(defaultRepeat.repeat).toBe(1);
+    expect(defaultRepeat.scenarios[0]?.expectedModelCalls).toEqual({ mainTutor: 14, practiceCoach: 0, judge: 1, total: 15 });
+    expect(defaultRepeat.expectedCosts.paidReleaseCallsByRole).toEqual({ "Main Tutor": 14, "Practice Coach": 0, Judge: 1 });
+    expect(defaultRepeat.expectedCosts.paidPreflightCallsByRole).toEqual({ "Main Tutor": 1, "Practice Coach": 1, Judge: 1 });
+
+    const request = validateAuthoredWorkbookEvalPreflightRequest(validRequest({
+      scenarioIds: ["primer-validation-misconception"],
+      repeat: 3,
+      costBudget: { maxPaidModelCalls: 48, maxEstimatedTokens: 96_000, estimatedTokensPerPaidCall: 2_000 }
+    }));
+
+    expect(request.repeat).toBe(3);
+    expect(request.expectedCosts.paidPreflightCallsByRole).toEqual({ "Main Tutor": 1, "Practice Coach": 1, Judge: 1 });
+    expect(request.expectedCosts.expectedPaidPreflightCalls).toBe(3);
+    expect(request.expectedCosts.paidReleaseCallsByRole).toEqual({ "Main Tutor": 42, "Practice Coach": 0, Judge: 3 });
+    expect(request.expectedCosts.expectedPaidReleaseCalls).toBe(45);
+    expect(request.expectedCosts.expectedPaidModelCallsTotal).toBe(48);
+    expect(request.expectedCosts.releaseScenarioCount).toBe(1);
+    expect(request.expectedCosts.releaseRunCount).toBe(3);
+
+    const events: string[] = [];
+    const summary = await runAuthoredWorkbookEvalPreflight(validRequest({
+      scenarioIds: ["primer-validation-misconception"],
+      repeat: 3,
+      costBudget: { maxPaidModelCalls: 48, maxEstimatedTokens: 96_000, estimatedTokensPerPaidCall: 2_000 }
+    }), { operations: recordingOperations(events) });
+
+    expect(summary.repeat).toBe(3);
+    expect(summary.counts.paidPreflightCallsByRole).toEqual({ "Main Tutor": 1, "Practice Coach": 1, Judge: 1 });
+    expect(summary.counts.paidReleaseCallsByRole).toEqual({ "Main Tutor": 42, "Practice Coach": 0, Judge: 3 });
+    expect(events.filter((event) => event.startsWith("paid:"))).toHaveLength(3);
+  });
+
+  it("rejects invalid, missing, or duplicate repeat flags and repeat underbudgets before side effects", async () => {
+    const badArgv = [
+      ["--scenario", "part-1-happy-path", "--max-paid-model-calls", "9", "--max-estimated-tokens", "18000", "--repeat"],
+      ["--scenario", "part-1-happy-path", "--max-paid-model-calls", "9", "--max-estimated-tokens", "18000", "--repeat", "0"],
+      ["--scenario", "part-1-happy-path", "--max-paid-model-calls", "9", "--max-estimated-tokens", "18000", "--repeat", "4"],
+      ["--scenario", "part-1-happy-path", "--max-paid-model-calls", "9", "--max-estimated-tokens", "18000", "--repeat", "3", "--repeat", "2"],
+      ["--scenario", "part-1-happy-path", "--max-paid-model-calls", "9", "--max-paid-model-calls", "10", "--max-estimated-tokens", "18000"]
+    ];
+    const parserEnvironment = {
+      ...validRequest().environment,
+      TUTOR_MODEL: "anthropic/claude-sonnet-4-5",
+      PRACTICE_COACH_MODEL: "openai/gpt-5-mini",
+      EVAL_JUDGE_MODEL: "google/gemini-3-pro"
+    };
+    for (const argv of badArgv) expect(() => parseAuthoredWorkbookEvalPreflightArgs(argv, parserEnvironment, CATALOG)).toThrow(AuthoredWorkbookEvalPreflightError);
+
+    expect(() => parseAuthoredWorkbookEvalPreflightArgs([
+      "--scenario", "part-1-happy-path",
+      "--max-paid-model-calls", "14",
+      "--max-estimated-tokens", "28000",
+      "--repeat", "3"
+    ], parserEnvironment, CATALOG)).toThrow(AuthoredWorkbookEvalPreflightError);
+
+    const events: string[] = [];
+    const error = await expectPreflightFailure(validRequest({
+      repeat: 3,
+      costBudget: { maxPaidModelCalls: 47, maxEstimatedTokens: 96_000, estimatedTokensPerPaidCall: 2_000 }
+    }), recordingOperations(events));
+    expect(error.phase).toBe("budget");
+    expect(events).toEqual([]);
   });
 
   it("fails pure argument and budget validation before npm, Docker, stubs, artifacts, or paid calls", async () => {
@@ -521,6 +591,22 @@ describe("authored workbook eval preflight", () => {
 
     await expect(probe({ request, timeoutMs: 4321, role: "judge", roleLabel: "Judge", model: request.models.judge })).resolves.toEqual({ commandLabel: "configured-command", model: "google/gemini-3-pro", capabilities: { jsonObject: true } });
     expect(calls).toEqual([{ command: `${privatePath}/judge.sh`, model: "google/gemini-3-pro", timeout: 4321 }]);
+  });
+
+  it("provides runner factories that carry the validated environment without exposing credentials", async () => {
+    const request = validateAuthoredWorkbookEvalPreflightRequest(validRequest());
+    const summary = await runAuthoredWorkbookEvalPreflight(validRequest(), { operations: recordingOperations([]) });
+    const configuration = createAuthoredWorkbookRunnerModelConfiguration(request, summary);
+
+    expect(Reflect.ownKeys(configuration).sort()).toEqual(["createMainTutor", "createPracticeCoach"]);
+    expect(Object.hasOwn(configuration, "environment")).toBe(false);
+    expect(JSON.stringify(configuration)).not.toContain(secret);
+    expect(JSON.stringify(configuration)).not.toContain(OPENCODE_API_KEY_ENV);
+    expect(JSON.stringify(configuration)).not.toContain("EXTRA_SECRET");
+    expect(configuration.createMainTutor({ workspace: "/tmp/workbook", log: { info() {}, error() {} }, sessionFactory: async () => ({ prompt: async () => "ok", compact: async () => ({ summary: "ok" }), dispose() {} }) })).toBeDefined();
+    expect(configuration.createPracticeCoach({ workspace: "/tmp/workbook", log: { info() {}, error() {} }, sessionFactory: async () => ({ prompt: async () => "ok", dispose() {} }) })).toBeDefined();
+    expect(() => createAuthoredWorkbookRunnerModelConfiguration(request, { ...summary, repeat: 2 })).toThrow(AuthoredWorkbookEvalPreflightError);
+    expect(JSON.stringify(summary)).not.toContain(secret);
   });
 
   it("produces a strictly public summary with budget warning, release budget, and same env identities", async () => {

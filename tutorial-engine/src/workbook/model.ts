@@ -3,6 +3,15 @@ import { resolveCliModel, type ModelRuntime, type ScopedModel } from "@earendil-
 export const TUTOR_MODEL_ENV = "TUTOR_MODEL";
 export const PRACTICE_COACH_MODEL_ENV = "PRACTICE_COACH_MODEL";
 
+export type WorkbookModelEnvironment = Readonly<Record<string, string | undefined>>;
+
+/** Copy caller-provided model environment once so concurrent tutor/coach instances do not share mutable ambient state. */
+export function snapshotWorkbookModelEnvironment(environment: WorkbookModelEnvironment): WorkbookModelEnvironment {
+  const snapshot: Record<string, string> = {};
+  for (const [key, value] of Object.entries(environment)) if (typeof value === "string") snapshot[key] = value;
+  return Object.freeze(snapshot);
+}
+
 /** Pi chooses its configured default when no usable tutor model is requested. */
 export interface TutorModelChoice extends Partial<ScopedModel> {
   /** The configured model that matched the environment request, even when not usable for selection. */
