@@ -2,7 +2,7 @@
 
 ## Result
 
-Task 11 is complete in commit `7b23b71 Document stateless tutor lifecycle`.
+Task 11's implementation is in `7b23b71 Document stateless tutor lifecycle`; the following report commit records its result.
 
 ## Deterministic lifecycle coverage
 
