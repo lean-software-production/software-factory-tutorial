@@ -13,8 +13,9 @@
   repository root. A lesson may declare a lowercase ID such as `workspace: refactor-line`; the
   launcher copies `tutorial/workspaces/<id>/` and initializes that copy as its own Git repository.
 - The root `npm run tutorial:workbook` command launches the workbook. By default it creates a fresh
-  session and prints the session ID and workspace path. `npm run tutorial:workbook -- --session <id>`
-  is the only way to reopen that ID; browser-tutor state is not resumed.
+  session and prints the session ID and workspace path.
+  `npm run tutorial:workbook -- --session <id>` is the only way to reopen that ID; browser-tutor
+  state is not resumed.
 - Engine documentation starts in [`tutorial-engine/README.md`](tutorial-engine/README.md); durable
   engine architecture decisions live under [`tutorial-engine/docs/adr/`](tutorial-engine/docs/adr/).
 - Historical plans live under `docs/plans/`, `docs/superpowers/plans/`, and
@@ -29,26 +30,42 @@ plan and repository. Ask Matt only when an irreversible or security-sensitive ac
 consent, an external side effect needs approval, or a genuine product decision remains unresolved
 by the plan and codebase.
 
+## Testing workflow
+
+Use [`docs/testing.md`](docs/testing.md) as the authoritative command workflow. Run
+`npm run test:fast` for the normal deterministic gate; `npm run check` is only its compatibility
+alias. Do not run paid live evals, Docker-backed release lanes, visual approval, or root
+`npm run test` unless the task explicitly asks for them.
+
+Visual validation and approval are canonical-devcontainer work. `npm run check:visual` may launch
+the canonical devcontainer from the host; `npm run approve:visual` must run inside it after a human
+inspects received screenshots.
+
+Live evals spend Main Tutor, Practice Coach, and Judge tokens and write ignored reports. Keep raw
+events, gate diagnostics, cleanup failures, prompts, credentials, server URLs, and disposable paths
+private.
+
 ## Tutorial-engine architecture decisions
 
-Record durable tutorial-engine architecture decisions as ADRs in `tutorial-engine/docs/adr/`. ADRgen is
-installed in the development container, not on the host: from the repository root run
+Record durable tutorial-engine architecture decisions as ADRs in `tutorial-engine/docs/adr/`.
+ADRgen is installed in the development container, not on the host: from the repository root run
 `devcontainer exec --workspace-folder . bash -lc 'cd tutorial-engine && adrgen <command>'`. Keep
-`tutorial-engine/docs/adr/README.md` indexed, and supersede accepted ADRs rather than rewriting them.
-This convention does not apply to the tutorial curriculum or lesson specifications.
+`tutorial-engine/docs/adr/README.md` indexed, and supersede accepted ADRs rather than rewriting
+them. This convention does not apply to the tutorial curriculum or lesson specifications.
 
 ## Writing lesson specifications
 
 Lessons live in `tutorial/docs/specs/NNN-*.md` and are read by two audiences: the coach agent,
 which paraphrases them for the learner, and whoever maintains the curriculum. A specification that
-reads well but describes the mechanism loosely produces a lesson explanation that is confidently wrong,
-because the coach paraphrases faithfully.
+reads well but describes the mechanism loosely produces a lesson explanation that is confidently
+wrong, because the coach paraphrases faithfully.
 
-**Name the mechanism, not a picture of it.** Every claim about what the line does should survive being
-checked against the shell. Prefer the verb that actually happens — runs, appends, reads, writes,
-deletes — over one that stands in for it. A sentence like "the harness gathers the evidence and
-carries it to a machine that cannot reach for it" fails twice: nothing is *carried* (the output is
-concatenated onto the prompt), and the validator's incapacity is not that it cannot *reach* existing
+**Name the mechanism, not a picture of it.** Every claim about what the line does should survive
+being checked against the shell. Prefer the verb that actually happens — runs, appends, reads,
+writes, deletes — over one that stands in for it. A sentence like "the harness gathers the
+evidence and carries it to a machine that cannot reach for it" fails twice: nothing is *carried*
+(the output is concatenated onto the prompt), and the validator's incapacity is not that it cannot
+*reach* existing
 evidence but that it cannot *run the commands that produce it*.
 
 Concretely, when writing a lesson's **Key concept**:
@@ -68,9 +85,9 @@ Concretely, when writing a lesson's **Key concept**:
   is before reaching for it. A new term means a new row there.
 - **Prose wraps at 100 columns**, matching the existing specs.
 
-The `## What this costs` section exists to state a trade honestly. Do not soften it into a footnote:
-both halves — the guarantee and the limitation — should be stated plainly enough that a learner could
-argue with them.
+The `## What this costs` section exists to state a trade honestly. Do not soften it into a
+footnote: both halves — the guarantee and limitation — should be stated plainly enough that a
+reader could argue with them.
 
 ## Session state belongs under tutorial/.tutorial/<id>/, never in the curriculum
 
@@ -85,26 +102,28 @@ encodes. Lessons that declare the same workspace ID share that live workspace an
 files the learner writes are session-local work, and regenerated evidence belongs under a nearby
 `.tmp/` rather than in the authored tutorial.
 
-- **The learner's line** — every `.sh` and `.md` they write — is tracked by the session-local Git
-  repository, so their own work survives a mistake inside that session and can be committed there.
+- **The learner's line** — every `.sh` and `.md` they write — is tracked by the session-local
+  Git repository, so their own work survives a mistake inside that session and can be committed
+  there.
 - **Everything else** goes in a `.tmp/` beside the script that writes it. The product repository
   ignores authored example `.tmp/` paths and all of `tutorial/.tutorial/`, so regenerated evidence,
   findings, baselines, commit messages, iteration records, workbook state, and session-local Git
   history never churn the product history.
 
-So a lesson that writes anything a run recreates writes it to `.tmp/`, whatever its name or format.
-Scripts `cd "$(dirname "$0")"` before doing anything, so the path is just `.tmp/evidence.txt`, and a
-learner who builds a second line gets the same rule without a second `.gitignore` entry. A script that
-writes there needs `mkdir -p .tmp` after its `cd`: this curriculum's reset clears its learner work.
-Existing ignored browser-tutor state under `tutorial/.tutorial/.tmp/` may remain on disk but is not
-resumed or migrated by the launcher.
+So a lesson that writes anything a run recreates writes it to `.tmp/`, whatever its name or
+format. Scripts `cd "$(dirname "$0")"` before doing anything, so the path is just
+`.tmp/evidence.txt`, and a learner who builds a second line gets the same rule without a second
+`.gitignore` entry. A script that writes there needs `mkdir -p .tmp` after its `cd`: this
+curriculum's reset clears its learner work. Existing ignored browser-tutor state under
+`tutorial/.tutorial/.tmp/` may remain on disk but is not resumed or migrated by the launcher.
 
 ## The line commits to the session-local repository
 
-From lesson 007 the line commits to the calculator, and from 008 it does so unattended. Those commits
-land in `tutorial/.tutorial/<session-id>/workspaces/refactor-line/.git`, not in the cloned tutorial
-repository. A plain `npm run tutorial:workbook` creates new live workspace repositories; `--session
-<id>` reopens those same repositories so the learner can inspect or continue private history.
+From lesson 007 the line commits to the calculator, and from 008 it does so unattended. Those
+commits land in `tutorial/.tutorial/<session-id>/workspaces/refactor-line/.git`, not in the cloned
+tutorial repository. A plain `npm run tutorial:workbook` creates new live workspace repositories;
+`--session <id>` reopens those same repositories so the learner can inspect or continue private
+history.
 
 ## Changing a Part 1 lesson means changing the Part 2 seed
 
