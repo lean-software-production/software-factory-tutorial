@@ -1,4 +1,4 @@
-import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile, access } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile, access } from "node:fs/promises";
 import * as terminalModule from "../src/workbook/terminal.js";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -16,7 +16,7 @@ import type { TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.j
 import type { Attempt } from "../src/workbook/attempts.js";
 import { DefaultMainWorkbookTutor, type TutorDecision, type WorkbookTutorSessionFactoryRequest } from "../src/workbook/tutor.js";
 import { createResilientTutorSession, type PiTutorSessionEvent } from "../src/workbook/pi-tutor-session.js";
-import { WorkbookTimeline, type TimelineMessage, type WorkbookTimelineRecord } from "../src/workbook/timeline.js";
+import { UnsupportedWorkbookSessionError, WorkbookTimeline, workbookSessionFormatRecord, type TimelineMessage, type WorkbookTimelineRecord } from "../src/workbook/timeline.js";
 import { QueuedMainTutor as FakeMainTutor } from "./support/fake-tutors.js";
 
 let dirs: string[] = [];
@@ -270,6 +270,12 @@ async function waitForWatchPath(fake: ReturnType<typeof fakeContentWatchFactory>
   }
   throw new Error(`Timed out waiting for watch subscription ${path}`);
 }
+function timelineRecord(sequence: number, input: Record<string, unknown>): Record<string, unknown> {
+  return { id: `fixture-event-${sequence}`, sequence, at: `2026-08-21T00:00:${String(sequence).padStart(2, "0")}.000Z`, ...input };
+}
+function currentTimelineText(rows: Record<string, unknown>[]): string {
+  return [workbookSessionFormatRecord(), ...rows].map((row) => JSON.stringify(row)).join("\n") + "\n";
+}
 async function privateTimeline(workspaceOrSessionRoot: string): Promise<WorkbookTimelineRecord[]> {
   let text: string;
   try {
@@ -278,7 +284,7 @@ async function privateTimeline(workspaceOrSessionRoot: string): Promise<Workbook
     if (error?.code !== "ENOENT") throw error;
     text = await readFile(tutorialStatePath(workspaceOrSessionRoot, "workbook", "events.jsonl"), "utf8");
   }
-  return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as WorkbookTimelineRecord);
+  return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)).filter((record) => record.type !== "workbook-session-format") as WorkbookTimelineRecord[];
 }
 async function completeBlock(serverUrl: string, blockId: string) {
   return fetch(`${serverUrl}/api/workbook/complete-block`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId }) });
@@ -1086,14 +1092,13 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("backfills legacy completed-introduction openings without adding a late introduction note", async () => {
+  it("projects current-format completed-introduction openings without adding a late introduction note", async () => {
     const dir = await fixture();
     await mkdir(resolve(dir, ".tutorial/.tmp/workbook"), { recursive: true });
-    await writeFile(tutorialStatePath(dir, "workbook", "events.jsonl"), [
-      JSON.stringify({ id: "legacy-session", sequence: 1, at: "2026-08-21T00:00:00.000Z", type: "session_started" }),
-      JSON.stringify({ id: "legacy-intro-complete", sequence: 2, at: "2026-08-21T00:00:01.000Z", type: "workbook_introduction_completed" }),
-      ""
-    ].join("\n"));
+    await writeFile(tutorialStatePath(dir, "workbook", "events.jsonl"), currentTimelineText([
+      timelineRecord(1, { type: "session_started" }),
+      timelineRecord(2, { type: "workbook_introduction_completed" }),
+    ]));
 
     const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor() });
     let authored: any[];
@@ -1115,22 +1120,21 @@ describe("workbook browser API", () => {
     } finally { await secondServer.close(); }
   });
 
-  it("projects historical lesson milestones through the canonical ordered block stream", async () => {
+  it("projects current-format lesson milestones through the canonical ordered block stream", async () => {
     const dir = await fixture();
     await mkdir(resolve(dir, ".tutorial/.tmp/workbook"), { recursive: true });
-    await writeFile(tutorialStatePath(dir, "workbook", "events.jsonl"), [
-      JSON.stringify({ type: "session_started", at: "2026-08-21T00:00:00.000Z" }),
-      JSON.stringify({ type: "workbook_introduction_completed", at: "2026-08-21T00:00:01.000Z" }),
-      JSON.stringify({ type: "block_completed", blockId: "part--loop", at: "2026-08-21T00:00:02.000Z" }),
-      JSON.stringify({ type: "block_completed", blockId: "lesson--001-first", at: "2026-08-21T00:00:03.000Z" }),
-      JSON.stringify({ type: "block_continued", lessonId: "001-first", blockId: "orientation", at: "2026-08-21T00:00:04.000Z" }),
-      JSON.stringify({ type: "editor_practice_unlocked", lessonId: "001-first", blockId: "edit-answer", revisionId: 1, path: "factory/answer.md", at: "2026-08-21T00:00:05.000Z" }),
-      JSON.stringify({ type: "block_completed", lessonId: "001-first", blockId: "run-supplied-command", at: "2026-08-21T00:00:06.000Z" }),
-      JSON.stringify({ type: "block_completed", lessonId: "001-first", blockId: "change-job", at: "2026-08-21T00:00:07.000Z" }),
-      JSON.stringify({ type: "reflection_completed", lessonId: "001-first", blockId: "reflection", at: "2026-08-21T00:00:08.000Z" }),
-      JSON.stringify({ type: "lesson_transitioned", lessonId: "001-first", blockId: "transition", at: "2026-08-21T00:00:09.000Z" }),
-      ""
-    ].join("\n"));
+    await writeFile(tutorialStatePath(dir, "workbook", "events.jsonl"), currentTimelineText([
+      timelineRecord(1, { type: "session_started" }),
+      timelineRecord(2, { type: "workbook_introduction_completed" }),
+      timelineRecord(3, { type: "block_completed", blockId: "part--loop" }),
+      timelineRecord(4, { type: "block_completed", blockId: "lesson--001-first" }),
+      timelineRecord(5, { type: "block_completed", lessonId: "001-first", blockId: "lesson--001-first--orientation" }),
+      timelineRecord(6, { type: "block_completed", lessonId: "001-first", blockId: "lesson--001-first--edit-answer" }),
+      timelineRecord(7, { type: "block_completed", lessonId: "001-first", blockId: "lesson--001-first--run-supplied-command" }),
+      timelineRecord(8, { type: "block_completed", lessonId: "001-first", blockId: "lesson--001-first--change-job" }),
+      timelineRecord(9, { type: "block_completed", lessonId: "001-first", blockId: "lesson--001-first--reflection" }),
+      timelineRecord(10, { type: "block_completed", lessonId: "001-first", blockId: "lesson--001-first--transition" }),
+    ]));
 
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor() });
     try {
@@ -1148,15 +1152,14 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("projects missing legacy frames before an already-authored active block without rewriting append order", async () => {
+  it("projects missing current-format frames before an already-authored active block without rewriting append order", async () => {
     const dir = await fixture();
     await mkdir(resolve(dir, ".tutorial/.tmp/workbook"), { recursive: true });
-    await writeFile(tutorialStatePath(dir, "workbook", "events.jsonl"), [
-      JSON.stringify({ id: "legacy-session", sequence: 1, at: "2026-08-21T00:00:00.000Z", type: "session_started" }),
-      JSON.stringify({ id: "legacy-intro-complete", sequence: 2, at: "2026-08-21T00:00:01.000Z", type: "workbook_introduction_completed" }),
-      JSON.stringify({ id: "legacy-active-block", sequence: 3, at: "2026-08-21T00:00:02.000Z", type: "message", lessonId: "001-first", blockId: "lesson--001-first--orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nStart with the concept." }),
-      ""
-    ].join("\n"));
+    await writeFile(tutorialStatePath(dir, "workbook", "events.jsonl"), currentTimelineText([
+      timelineRecord(1, { type: "session_started" }),
+      timelineRecord(2, { type: "workbook_introduction_completed" }),
+      timelineRecord(3, { type: "message", lessonId: "001-first", blockId: "lesson--001-first--orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nStart with the concept." }),
+    ]));
 
     const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor() });
     let projectedAuthored: any[];
@@ -1165,11 +1168,11 @@ describe("workbook browser API", () => {
       expect(projectedAuthored.map((record: any) => [record.id, record.lessonId, record.blockId])).toEqual([
         [expect.any(String), "part--loop", "part--loop"],
         [expect.any(String), "lesson--001-first", "lesson--001-first"],
-        ["legacy-active-block", "001-first", "lesson--001-first--orientation"],
+        ["fixture-event-3", "001-first", "lesson--001-first--orientation"],
       ]);
       const canonicalLog = (await privateTimeline(dir)).filter((record) => record.type === "message" && record.source === "authored");
       expect(canonicalLog.map((record: any) => [record.id, record.lessonId, record.blockId])).toEqual([
-        ["legacy-active-block", "001-first", "lesson--001-first--orientation"],
+        ["fixture-event-3", "001-first", "lesson--001-first--orientation"],
         [expect.any(String), "part--loop", "part--loop"],
         [expect.any(String), "lesson--001-first", "lesson--001-first"],
       ]);
@@ -2024,34 +2027,16 @@ describe("workbook browser API", () => {
     } finally { await second.close(); }
   });
 
-  it("keeps a legacy terminal-coach handoff private while replaying old pending terminal sessions", async () => {
+  it("rejects sessions containing old Practice Coach handoff events instead of replaying them", async () => {
     const dir = await fixture();
-    const setupTutor = new FakeMainTutor({ outcome: "accepted", message: "Editor accepted." });
-    const setup = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: setupTutor });
-    try {
-      await introduceAndOpenEditor(setup.url);
-      await acceptEditor(setup.url, setupTutor);
-    } finally { await setup.close(); }
+    await mkdir(resolve(dir, ".tutorial/.tmp/workbook"), { recursive: true });
+    await writeFile(tutorialStatePath(dir, "workbook", "events.jsonl"), currentTimelineText([
+      timelineRecord(1, { type: "session_started" }),
+      timelineRecord(2, { type: "terminal-coach-handoff-recorded", attemptId: "11111111-1111-4111-8111-111111111111", outcome: "ready", text: "Legacy private handoff." }),
+    ]));
 
-    const timeline = new WorkbookTimeline({ stateRoot: tutorialStatePath(dir) });
-    const evidenceRef = await new TerminalEvidenceRepository({ stateRoot: tutorialStatePath(dir) }).writeFinished({ command: "legacy command", interactions: [{ kind: "output", data: "legacy output\n" }], exitStatus: 0 });
-    await timeline.append({ type: "terminal-command-submitted", attemptId: "11111111-1111-4111-8111-111111111111", lessonId: "001-first", blockId: "lesson--001-first--run-supplied-command", command: "legacy command", terminalSessionId: "legacy-terminal" });
-    await timeline.append({ type: "terminal-command-finished", attemptId: "11111111-1111-4111-8111-111111111111", exitStatus: 0, evidenceRef });
-    const sequence = (await timeline.read()).at(-1)!.sequence + 1;
-    const legacyHandoffType = "terminal-coach" + "-handoff-recorded";
-    await appendFile(timeline.eventPath, `${JSON.stringify({ type: legacyHandoffType, id: "legacy-handoff", sequence, at: "2026-08-23T00:00:00.000Z", attemptId: "11111111-1111-4111-8111-111111111111", outcome: "ready", text: "Legacy private handoff." })}\n`, "utf8");
-
-    const tutor = new FakeMainTutor({ outcome: "feedback", message: "Legacy replay feedback." });
-    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: tutor });
-    try {
-      const replayed = await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.terminal?.message === "Legacy replay feedback.", "legacy handoff replay");
-      expect(block(replayed, "run-supplied-command")?.terminal).toEqual({ phase: "feedback", message: "Legacy replay feedback." });
-      const terminalReview = tutor.reviews.find((review) => review.attempt.evidence.kind === "terminal")!;
-      expect(Object.keys(terminalReview)).not.toContain("practice" + "CoachHandoff");
-      expect(JSON.stringify(replayed)).not.toMatch(/legacy command|legacy output|Legacy private handoff|evidenceRef|attemptId/);
-      const handoffs = (await privateTimeline(dir)).filter((record) => record.type === "terminal-coach-handoff-recorded");
-      expect(handoffs).toHaveLength(1);
-    } finally { await server.close(); }
+    await expect(startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor() })).rejects.toThrow(UnsupportedWorkbookSessionError);
+    await expect(startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor() })).rejects.toThrow(/terminal-coach-handoff-recorded.*start fresh/i);
   });
 
 

@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { LESSON_WORKSPACE_PATTERN } from "./workbook/contract.js";
 import { loadWorkbook } from "./workbook/load.js";
 import { NO_RUNTIME_PROVISION, trustRuntimeProvision, type RuntimeProvisionInput, type SafeWorkspaceRelativePath, type TrustedRuntimeProvision } from "./workbook/runtime-provision.js";
+import { WorkbookTimeline } from "./workbook/timeline.js";
 
 const run = promisify(execFile);
 
@@ -273,6 +274,7 @@ export class SessionWorkspaceManager {
 
     await mkdir(paths.workspacesRoot, { recursive: true });
     try {
+      await new WorkbookTimeline({ stateRoot: paths.sessionRoot }).initialize();
       for (const workspaceId of workspaceIds) {
         const source = await validateAuthoredWorkspaceTemplate(this.contentRoot, workspaceId);
         const destination = workspaceRootFor(paths, workspaceId);

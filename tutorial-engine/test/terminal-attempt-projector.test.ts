@@ -21,7 +21,7 @@ function reviewFailed(requestId = "request-1", failureId = "failure-1", sequence
 }
 
 describe("projectTerminalAttempts", () => {
-  it("projects direct terminal review states with revisions and without private fields or legacy handoff requirements", () => {
+  it("projects direct terminal review states with revisions and without private fields", () => {
     const events: WorkbookTimelineRecord[] = [submitted()];
     expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running", revision: 1 });
 
@@ -81,16 +81,6 @@ describe("projectTerminalAttempts", () => {
       record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Too early." }, 5),
     ];
     expect(projectTerminalAttempts(events, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "running", revision: 1 });
-  });
-
-  it("continues to read legacy terminal-coach handoffs for old accepted sessions", () => {
-    const completed = [
-      submitted("old", "before-restart"),
-      finished("old"),
-      record({ type: "terminal-coach-handoff-recorded", attemptId: "old", outcome: "ready", text: "Ready for Main Tutor review." }, 3),
-      record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "old", version: 1, kind: "terminal", summary: "Already accepted." }, 4),
-    ];
-    expect(projectTerminalAttempts(completed, reader(finalEvidence), "after-restart").get("block")).toEqual({ state: "complete", revision: 1, successMessage: "Already accepted." });
   });
 
   it("drops stale model output when a newer Bash command is current", () => {

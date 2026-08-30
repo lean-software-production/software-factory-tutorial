@@ -308,7 +308,7 @@ function block(state: any, id: string) { return state.progress.blocks.find((cand
 function authoredCourseBlocks(state: any): string[] { return state.timeline.filter((record: any) => record.type === "message" && record.source === "authored" && record.presentation === "course").map((record: any) => record.blockId); }
 async function timelineRecords(dir: string): Promise<WorkbookTimelineRecord[]> {
   const text = await readFile(tutorialStatePath(dir, "workbook", "events.jsonl"), "utf8");
-  return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as WorkbookTimelineRecord);
+  return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)).filter((record) => record.type !== "workbook-session-format") as WorkbookTimelineRecord[];
 }
 async function workAcceptedEvents(dir: string, blockId: string) {
   return (await timelineRecords(dir)).filter((record) => record.type === "work_accepted" && record.blockId === blockId);

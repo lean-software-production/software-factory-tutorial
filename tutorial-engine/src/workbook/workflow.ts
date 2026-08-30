@@ -109,7 +109,7 @@ function projectedTimelineRecords(loaded: LoadedWorkbook, source: readonly Workb
     return projected ? [projected] : [];
   });
 }
-/** Terminal commands, evidence references, review requests, failures, and legacy terminal-coach handoffs are internal lifecycle material.
+/** Terminal commands, evidence references, review requests, and failures are internal lifecycle material.
  * The Main Tutor receives only the labelled transient attempt, never the raw lifecycle log. */
 function mainTutorTimelineRecords(loaded: LoadedWorkbook, source: readonly WorkbookTimelineRecord[]): WorkbookTimelineRecord[] {
   return projectedTimelineRecords(loaded, source).filter((record) => !(
@@ -119,7 +119,6 @@ function mainTutorTimelineRecords(loaded: LoadedWorkbook, source: readonly Workb
     || record.type === "terminal-review-failed"
     || record.type === "terminal-transcript-snapshotted"
     || record.type === "terminal-feedback-recorded"
-    || record.type === "terminal-coach-handoff-recorded"
   ));
 }
 function publicTimelineRecord(record: WorkbookTimelineRecord, loaded?: LoadedWorkbook): PublicTimelineRecord | undefined {
@@ -177,7 +176,6 @@ function canonicalCompletedId(record: WorkbookTimelineRecord): BlockId | undefin
     if (record.lessonId) return declaredBlockId(record.lessonId, record.blockId);
   }
   if (record.type === "workbook_introduction_completed") return WORKBOOK_INTRODUCTION_BLOCK_ID;
-  if ((record.type === "block_continued" || record.type === "lesson_transitioned" || record.type === "reflection_completed" || record.type === "editor_practice_unlocked") && record.lessonId && record.blockId) return declaredBlockId(record.lessonId, record.blockId);
   return undefined;
 }
 
@@ -348,11 +346,11 @@ async function publicState(loaded: LoadedWorkbook, workspaceRootForLesson: (less
     const withCheckpoint = checkpoint ? { ...base, checkpoint } : base;
     if (authored.type === "terminal-practice") {
       const terminalAttempt = terminalAttempts.get(ordered.id);
-      // Terminal lifecycle rows supersede the legacy AttemptStore projection for this block. The
-      // lifecycle projection deliberately exposes only learner-facing state, never commands,
-      // evidence snapshots, or attempt identities.
+      // Terminal lifecycle rows supersede the AttemptStore projection for this block. The lifecycle
+      // projection deliberately exposes only learner-facing state, never commands, evidence
+      // snapshots, or attempt identities.
       // Terminal practice is projected only from Bash lifecycle records. In particular, an old
-      // AttemptStore checkpoint is never a browser fallback: unfinished legacy work reopens idle.
+      // AttemptStore checkpoint is never a browser fallback: unfinished work reopens idle.
       const terminal = terminalAttempt?.state === "running" ? { phase: "running" as const }
         : terminalAttempt?.state === "checking" ? { phase: "checking" as const }
           : terminalAttempt?.state === "feedback" && terminalAttempt.feedback ? { phase: "feedback" as const, message: terminalAttempt.feedback, ...(terminalAttempt.retryFailureId ? { retryFailureId: terminalAttempt.retryFailureId } : {}) }
@@ -641,8 +639,6 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       record.type === "attempt_accepted" && record.lessonId === active.lessonId && record.blockId === active.id && record.attemptId === pending.id && record.version === pending.version);
     if (commit && pending.status !== "accepted") current = await attempts.acceptCurrent(pending.id, commit.summary) ?? pending;
     if (current.status !== "accepted") return;
-    // This also repairs legacy sessions interrupted after AttemptStore accepted but before its
-    // timeline checkpoint was appended.
     await appendAcceptedCheckpoint(current, current.successMessage ?? commit?.summary ?? "Nice work — this attempt is accepted.");
     await recordWorkAccepted(active);
   };
@@ -974,7 +970,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
         : "";
       // This is intentionally written for every terminal acceptance, even when the command
       // produced no output or a process restart lost the live manager. It never includes the
-      // command, evidence reference, legacy terminal-coach handoff, rubric, private transcript, or later shell output.
+      // command, evidence reference, rubric, private transcript, or later shell output.
       await append({ type: "terminal-transcript-snapshotted", attemptId: request.attemptId, lessonId: request.lessonId, blockId: request.blockId, transcript });
       await appendTerminalAcceptedCheckpoint(request, result.message);
       await recordWorkAccepted(active);
@@ -1226,7 +1222,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       reloadGeneration += 1;
       loaded = candidate;
       stream = buildWorkbookBlockStream(loaded);
-      records = await timeline.read();
+      records = await timeline.readWithinRun();
       await recoverAcceptedActiveAttempt();
       await recoverAcceptedTerminalAttempt();
       await ensureActiveWorkAcceptance();

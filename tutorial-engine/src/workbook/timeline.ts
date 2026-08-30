@@ -1,19 +1,31 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { tutorialSessionStatePath, tutorialStatePath } from "./tutorial-state.js";
 import type { AttemptKind } from "./attempts.js";
 
 export type TimelineMetadata = { id: string; sequence: number; at: string };
 
-/** Historical terminal-coach handoff outcomes still parsed for old private session logs. */
-export type LegacyTerminalHandoffOutcome = "ready" | "interesting";
+export const CURRENT_WORKBOOK_SESSION_FORMAT_VERSION = 1;
+export const WORKBOOK_SESSION_FORMAT_RECORD_TYPE = "workbook-session-format";
+export type WorkbookSessionFormatRecord = { type: typeof WORKBOOK_SESSION_FORMAT_RECORD_TYPE; version: typeof CURRENT_WORKBOOK_SESSION_FORMAT_VERSION };
+
+export function workbookSessionFormatRecord(): WorkbookSessionFormatRecord {
+  return { type: WORKBOOK_SESSION_FORMAT_RECORD_TYPE, version: CURRENT_WORKBOOK_SESSION_FORMAT_VERSION };
+}
+
+export class UnsupportedWorkbookSessionError extends Error {
+  constructor(detail: string) {
+    super(`Unsupported workbook session format: ${detail}. Please start fresh with a new workbook session.`);
+    this.name = "UnsupportedWorkbookSessionError";
+  }
+}
 
 /**
- * The durable terminal lifecycle. Commands, evidence references, review requests/failures, and
- * legacy terminal-coach handoffs stay private. A bounded, sanitized terminal transcript is the sole
- * browser-safe terminal payload: it is written only when an attempt is accepted and is projected as
- * historical output for that authored block.
+ * The durable terminal lifecycle. Commands, evidence references, and review requests/failures stay
+ * private. A bounded, sanitized terminal transcript is the sole browser-safe terminal payload: it is
+ * written only when an attempt is accepted and is projected as historical output for that authored
+ * block.
  */
 export type TerminalReviewRequestMode = "automatic" | "manual";
 
@@ -25,8 +37,7 @@ export type TerminalLifecycleInput =
   | { type: "terminal-transcript-snapshotted"; attemptId: string; lessonId: string; blockId: string; transcript: string }
   | { type: "terminal-feedback-recorded"; attemptId: string; text: string };
 
-export type LegacyTerminalHandoffEvent = { type: "terminal-coach-handoff-recorded"; attemptId: string; outcome: LegacyTerminalHandoffOutcome; text: string } & TimelineMetadata;
-export type TerminalLifecycleEvent = (TerminalLifecycleInput & TimelineMetadata) | LegacyTerminalHandoffEvent;
+export type TerminalLifecycleEvent = TerminalLifecycleInput & TimelineMetadata;
 
 export type WorkbookWorkflowInput =
   | { type: "session_started" }
@@ -39,16 +50,7 @@ export type WorkbookWorkflowInput =
   | { type: "reflection_follow_up_submitted"; lessonId: string; blockId: string; response: string }
   | { type: "reflection_reply_recorded"; lessonId: string; blockId: string; response: string };
 
-/** Historical rows read from pre-stream sessions; new rows must not use these payloads. */
-export type LegacyWorkbookWorkflowInput =
-  | { type: "observation_acknowledged"; lessonId: string; blockId: string }
-  | { type: "observation_verified"; lessonId: string; blockId: string; source: "terminal_observer"; summary: string; terminalHtml: string }
-  | { type: "block_continued"; lessonId: string; blockId: string }
-  | { type: "reflection_completed"; lessonId: string; blockId: string }
-  | { type: "editor_practice_unlocked"; lessonId: string; blockId: string; revisionId: number; path: string }
-  | { type: "lesson_transitioned"; lessonId: string; blockId: string };
-
-export type WorkbookWorkflowEvent = (WorkbookWorkflowInput | LegacyWorkbookWorkflowInput) & TimelineMetadata;
+export type WorkbookWorkflowEvent = WorkbookWorkflowInput & TimelineMetadata;
 
 export type TimelineMessageSource = "authored" | "learner" | "main_tutor";
 export type MainTutorSource = Extract<TimelineMessageSource, "main_tutor">;
@@ -107,18 +109,70 @@ export type TimelineAppendInput =
   | Omit<TutorFailure, keyof TimelineMetadata>
   | Omit<WorkbookCompletionSummary, keyof TimelineMetadata>;
 
+const CURRENT_RECORD_TYPES = new Set<string>([
+  "session_started",
+  "lesson_jump_started",
+  "workbook_introduction_completed",
+  "attempt_accepted",
+  "work_accepted",
+  "block_completed",
+  "reflection_submitted",
+  "reflection_follow_up_submitted",
+  "reflection_reply_recorded",
+  "terminal-command-submitted",
+  "terminal-command-finished",
+  "terminal-review-requested",
+  "terminal-review-failed",
+  "terminal-transcript-snapshotted",
+  "terminal-feedback-recorded",
+  "message",
+  "block_summarized",
+  "lesson_summarized",
+  "tutor_failed",
+  "workbook_completion_summary",
+]);
+
+const LEGACY_RECORD_TYPES = new Set<string>([
+  "terminal-coach-handoff-recorded",
+  "observation_acknowledged",
+  "observation_verified",
+  "block_continued",
+  "reflection_completed",
+  "editor_practice_unlocked",
+  "lesson_transitioned",
+]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function unsupportedVersionDetail(version: unknown): string {
+  return typeof version === "number"
+    ? `format version ${version} is not supported by current version ${CURRENT_WORKBOOK_SESSION_FORMAT_VERSION}`
+    : `missing format version; current version is ${CURRENT_WORKBOOK_SESSION_FORMAT_VERSION}`;
+}
+
+function parseJsonLine(line: string, lineNumber: number): unknown {
+  try { return JSON.parse(line); }
+  catch { throw new Error(`Invalid workbook timeline record at line ${lineNumber}: invalid JSONL event`); }
+}
+
+function requireFormatRecord(value: unknown): void {
+  if (!isRecord(value) || value.type !== WORKBOOK_SESSION_FORMAT_RECORD_TYPE) throw new UnsupportedWorkbookSessionError(unsupportedVersionDetail(undefined));
+  if (value.version !== CURRENT_WORKBOOK_SESSION_FORMAT_VERSION) throw new UnsupportedWorkbookSessionError(unsupportedVersionDetail(value.version));
+}
+
 export function normalizeWorkbookTimelineRecord(value: unknown, line: number): WorkbookTimelineRecord {
   if (!isRecord(value) || typeof value.type !== "string") throw new Error(`Invalid workbook timeline record at line ${line}.`);
-  const id = typeof value.id === "string" ? value.id : `legacy:${line}`;
-  const sequence = Number.isInteger(value.sequence) && (value.sequence as number) > 0 ? value.sequence as number : line;
-  const at = typeof value.at === "string" ? value.at : new Date(0).toISOString();
-  const record: Record<string, unknown> & TimelineMetadata = { ...value, id, sequence, at };
-  if (record.type === "message" && record.source === "tutor") return { ...record, source: "main_tutor" } as WorkbookTimelineRecord;
-  return record as WorkbookTimelineRecord;
+  if (LEGACY_RECORD_TYPES.has(value.type)) throw new UnsupportedWorkbookSessionError(`record '${value.type}' belongs to an older workbook session format`);
+  if (!CURRENT_RECORD_TYPES.has(value.type)) throw new Error(`Invalid workbook timeline record at line ${line}: unknown record type '${value.type}'.`);
+  if (typeof value.id !== "string" || !value.id) throw new Error(`Invalid workbook timeline record at line ${line}: id is required.`);
+  if (!Number.isInteger(value.sequence) || (value.sequence as number) <= 0) throw new Error(`Invalid workbook timeline record at line ${line}: sequence is required.`);
+  if (typeof value.at !== "string" || !value.at) throw new Error(`Invalid workbook timeline record at line ${line}: at is required.`);
+  if (value.type === "message") {
+    if (value.source !== "authored" && value.source !== "learner" && value.source !== "main_tutor") throw new Error(`Invalid workbook timeline record at line ${line}: message source is invalid.`);
+  }
+  return value as WorkbookTimelineRecord;
 }
 
 /**
@@ -139,21 +193,52 @@ export class WorkbookTimeline {
     this.eventPath = tutorialSessionStatePath(stateRoot, "workbook", "events.jsonl");
   }
 
-  async read(): Promise<WorkbookTimelineRecord[]> {
+  read(): Promise<WorkbookTimelineRecord[]> {
+    return this.run(() => this.readWithinRun());
+  }
+
+  /** Read and, for a brand-new absent log only, initialize as one step of an operation already serialized through run(). */
+  async readWithinRun(): Promise<WorkbookTimelineRecord[]> {
     let contents: string;
     try {
       contents = await readFile(this.eventPath, "utf8");
     } catch (error: any) {
-      if (error?.code === "ENOENT") return [];
+      if (error?.code === "ENOENT") {
+        await this.initializeWithinRun();
+        return [];
+      }
       throw error;
     }
-    return contents.split(/\r?\n/).filter(Boolean).map((line, index) => {
+    const rawLines = contents.split(/\r?\n/);
+    while (rawLines.at(-1) === "") rawLines.pop();
+    if (rawLines.length === 0) throw new UnsupportedWorkbookSessionError(unsupportedVersionDetail(undefined));
+    let first: unknown;
+    try { first = parseJsonLine(rawLines[0]!, 1); }
+    catch { throw new UnsupportedWorkbookSessionError(unsupportedVersionDetail(undefined)); }
+    requireFormatRecord(first);
+    return rawLines.slice(1).filter(Boolean).map((line, index) => {
+      const lineNumber = index + 2;
       try {
-        return normalizeWorkbookTimelineRecord(JSON.parse(line), index + 1);
+        return normalizeWorkbookTimelineRecord(parseJsonLine(line, lineNumber), lineNumber);
       } catch (error) {
-        throw new Error(`${this.eventPath}:${index + 1}: ${error instanceof Error ? error.message : "invalid JSONL event"}`);
+        if (error instanceof UnsupportedWorkbookSessionError) throw error;
+        const message = error instanceof Error ? error.message : "invalid JSONL event";
+        throw new Error(`${this.eventPath}:${lineNumber}: ${message.includes("invalid JSONL event") ? "invalid JSONL event" : message}`);
       }
     });
+  }
+
+  initialize(): Promise<void> {
+    return this.run(() => this.initializeWithinRun());
+  }
+
+  async initializeWithinRun(): Promise<void> {
+    await mkdir(dirname(this.eventPath), { recursive: true });
+    try {
+      await writeFile(this.eventPath, `${JSON.stringify(workbookSessionFormatRecord())}\n`, { encoding: "utf8", flag: "wx" });
+    } catch (error: any) {
+      if (error?.code !== "EEXIST") throw error;
+    }
   }
 
   append(input: TimelineAppendInput): Promise<WorkbookTimelineRecord> {
@@ -171,7 +256,7 @@ export class WorkbookTimeline {
 
   /** Append as one step of an operation already serialized through run(). */
   async appendWithinRun(input: TimelineAppendInput): Promise<WorkbookTimelineRecord> {
-    const existing = await this.read();
+    const existing = await this.readWithinRun();
     const record = { ...input, id: randomUUID(), sequence: (existing.at(-1)?.sequence ?? 0) + 1, at: new Date().toISOString() } as WorkbookTimelineRecord;
     await mkdir(dirname(this.eventPath), { recursive: true });
     await appendFile(this.eventPath, `${JSON.stringify(record)}\n`, "utf8");
