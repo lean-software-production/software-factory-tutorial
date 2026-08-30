@@ -65,6 +65,19 @@ describe("Main Tutor workspace tools", () => {
     expect(later.details.entries.map((entry: any) => entry.name)).toEqual(['"file-001.txt"', '"file-002.txt"']);
   });
 
+  it("hides reserved top-level names from root listings regardless of case", async () => {
+    const workspace = await tempRoot("tutor-tools-reserved-");
+    await mkdir(resolve(workspace, ".Git"));
+    await mkdir(resolve(workspace, ".Tutorial"));
+    await writeFile(resolve(workspace, "visible.txt"), "visible\n", "utf8");
+
+    const result = await execute(await tool("list_files", workspace), { path: ".", limit: 20 });
+
+    expect(result.details.ok).toBe(true);
+    expect(result.content[0]!.text).not.toMatch(/\.git|\.tutorial/i);
+    expect(result.details.entries.map((entry: any) => entry.name).join("\n")).not.toMatch(/\.git|\.tutorial/i);
+  });
+
   it("reads bounded byte ranges with offsets and deterministic truncation", async () => {
     const { workspace } = await fixture();
     await writeFile(resolve(workspace, "long.txt"), "0123456789abcdefghijklmnopqrstuvwxyz", "utf8");

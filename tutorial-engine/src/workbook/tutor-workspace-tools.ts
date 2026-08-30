@@ -76,7 +76,7 @@ function quoteMetadata(value: string): string {
 }
 
 function visibleName(name: string): boolean {
-  return !RESERVED_TOP_LEVEL_NAMES.has(name);
+  return !RESERVED_TOP_LEVEL_NAMES.has(name.toLowerCase());
 }
 
 function kindFor(info: Awaited<ReturnType<WorkspaceBoundary["stat"]>>): EntryKind {

@@ -47,7 +47,14 @@ Production/test TypeScript: passed
 Repository race-primitive search: clean in live source/tests
 npm run --workspace=tutorial-engine test:fast:
   lint/typechecks/check:eval passed
-  55 files, 592 tests passed
+  55 files, 593 tests passed
   web build passed
   browser smoke passed
 ```
+
+## Review fix
+
+The first independent review found that direct reserved-path access was case-insensitive but root listing
+visibility was not. Root listings now lowercase names before applying the `.git`/`.tutorial` exclusion,
+and a focused test proves `.Git` and `.Tutorial` are absent from both learner-visible text and structured
+details. The post-fix engine gate passed 55 files/593 tests, build, and browser smoke.
