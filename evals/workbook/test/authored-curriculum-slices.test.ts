@@ -145,9 +145,15 @@ describe("authored curriculum slice materialization", () => {
       resolve(workspace.root, "lessons/tetris/blocks/write-worker-prompt.md"),
       "utf8"
     );
-    expect(workerPrompt).toMatch(/checks? must return on (?:their|its) own/i);
-    expect(workerPrompt).toMatch(/do not start the game/i);
-    expect(workerPrompt).toMatch(/non-interactive check/i);
+    assertTetrisPromptMechanism(workerPrompt);
+
+    const loopBlock = await readFile(
+      resolve(workspace.root, "lessons/tetris/blocks/write-the-loop.md"),
+      "utf8"
+    );
+    assertTetrisLoopContract(loopBlock);
+    expect(loopBlock).not.toMatch(/\bworker(?: agent)?\b/i);
+    expect(loopBlock).not.toMatch(/\bagent\b/i);
 
     const terminalBlock = await readFile(
       resolve(workspace.root, "lessons/tetris/blocks/run-the-factory.md"),
@@ -156,6 +162,8 @@ describe("authored curriculum slice materialization", () => {
     for (const marker of expectedTetrisPassMarkers()) expect(terminalBlock).toContain(marker);
     expect(terminalBlock).toMatch(/returned to the prompt/i);
     expect(terminalBlock).not.toMatch(/playable|perfect/i);
+    expect(workerPrompt).not.toMatch(/\bworker(?: agent)?\b/i);
+    expect(workerPrompt).not.toMatch(/\bagent\b/i);
 
     await workspace.close();
     await expect(stat(workspace.repositoryRoot)).rejects.toMatchObject({ code: "ENOENT" });
@@ -837,6 +845,51 @@ describe("authored curriculum slice materialization", () => {
     await expect(stat(workspace.repositoryRoot)).resolves.toBeDefined();
   });
 });
+
+function compact(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function assertTetrisPromptMechanism(text: string): void {
+  const normal = compact(text);
+  expect(normal).toMatch(/Without `?plan\.md`?/i);
+  expect(normal).toMatch(/create plan\.md with exactly four similarly sized, independently checkable tasks/i);
+  expect(normal).toMatch(/commit (?:that|the) `?plan`?[.,;]/i);
+  expect(normal).toMatch(/stop without implementing anything(?: in this first pass)?/i);
+  expect(normal).toMatch(/With `?plan\.md`?/i);
+  expect(normal).toMatch(/find the first (?:task that is not yet marked done|incomplete task)/i);
+  expect(normal).toMatch(/(?:do exactly that task and nothing more|Do only that task\. Nothing else\.)/i);
+  expect(normal).toMatch(/run a relevant check if one exists/i);
+  expect(normal).toMatch(/checks? must return on their own/i);
+  expect(normal).toMatch(/do not start the game/i);
+  expect(normal).toMatch(/interactive scaffolds, dev\/watch commands/i);
+  expect(normal).toMatch(/command(?:s)? that might wait for input or keep running(?: as a check)?/i);
+  expect(normal).toMatch(/choose a non-interactive check instead(?: when a command might wait)?/i);
+  expect(normal).toMatch(/mark the task done in `?plan\.md`? before committing/i);
+  expect(normal).toMatch(/commit(?: the)? useful task work and the `?plan\.md`? update together/i);
+  expect(normal).toMatch(/stop without starting another task/i);
+  expect(normal).toMatch(/If no incomplete task remains, (?:the pass should )?stop without an empty commit\./i);
+  expect(normal).toMatch(/If nothing has changed, do not create an empty commit\./i);
+  expect(normal).toMatch(/(?:The prompt must not|Do not) ask Pi to (?:start|run) the loop script, (?:(?:to )?complete all tasks in (?:one|a single) pass, or (?:to )?run forever|(?:to )?run forever, or (?:to )?complete all tasks in (?:one|a single) pass)\./i);
+}
+
+function assertTetrisLoopContract(text: string): void {
+  const normal = compact(text);
+  expect(normal).toMatch(/The script must run the exact .* unconfigured\/default command/i);
+  expect(normal).toMatch(/once in each of exactly five passes/i);
+  expect(normal).toMatch(/once in each of exactly five passes/i);
+  expect(normal).toContain("for pass in 1 2 3 4 5; do");
+  expect(normal).toContain('echo "Pass $pass/5: starting"');
+  expect(normal).toContain("pi -p < prompt.md");
+  expect(normal).toContain('echo "Pass $pass/5: done"');
+  expect(normal).toContain("Pass 1/5: starting, Pass 1/5: done, Pass 2/5: starting, Pass 2/5: done, Pass 3/5: starting, Pass 3/5: done, Pass 4/5: starting, Pass 4/5: done, Pass 5/5: starting, and Pass 5/5: done.");
+  expect(normal).toMatch(/reject `--no-session`, provider\/model options, (?:and )?other Pi flags/i);
+  expect(normal).toMatch(/hard-coded provider\/model/i);
+  expect(normal).toMatch(/(?:unbounded loops(?: such as `while :`)?|any other unbounded loop)/i);
+  expect(normal).toMatch(/(?:loops without a fixed upper bound|fixed limit)/i);
+  expect(normal).toMatch(/fewer or more than five (?:Pi )?passes/i);
+  expect(normal).toMatch(/fewer or more than five Pi invocations/i);
+}
 
 function expectedTetrisPassMarkers(): string[] {
   return [1, 2, 3, 4, 5].flatMap((pass) => [

@@ -18,9 +18,9 @@ tutor: |-
 
 ## Read your spec
 
-Your workspace already contains `spec.md` — the product specification the worker agent will build
+Your workspace already contains `spec.md` — the product specification the Pi passes will build
 toward. Open it and read it.
 
 You may leave it exactly as it is, or make small changes if you want to adjust the target. Keep it
-brief. The spec deliberately leaves architecture, controls, and visual style to the worker: that is
-what gives the agent room to make decisions.
+brief. The spec deliberately leaves architecture, controls, and visual style open: that is what
+gives Pi room to make decisions.

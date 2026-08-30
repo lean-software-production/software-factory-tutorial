@@ -73,31 +73,30 @@ describe("tetris primer lesson blocks", () => {
     expect(specBlock!.path).toBe("spec.md");
   });
 
-  it("has a worker-prompt editor-practice block describing the plan.md mechanism", async () => {
+  it("has a prompt editor-practice block protecting every plan.md branch clause", async () => {
     const blockContent = await readFile(
       resolve(TUTORIAL_ROOT, "lessons/tetris/blocks/write-worker-prompt.md"),
       "utf8"
     );
+    const sections = splitBlockContent(blockContent);
     expect(blockContent).toContain("type: editor-practice");
-    // Must describe two-branch plan.md mechanism: create plan or complete first task
-    expect(blockContent).toMatch(/plan\.md/);
-    expect(blockContent).toMatch(/four/i);
     expect(blockContent).not.toContain("calculator");
     expect(blockContent).not.toContain("two plus two");
+    assertPromptMechanism(sections.tutor);
+    assertPromptMechanism(sections.publicBody);
   });
 
-  it("has a loop block for ralph.sh with five passes and pi -p (no --no-session)", async () => {
+  it("has a loop block requiring the exact five-pass default Pi invocation", async () => {
     const blockContent = await readFile(
       resolve(TUTORIAL_ROOT, "lessons/tetris/blocks/write-the-loop.md"),
       "utf8"
     );
+    const sections = splitBlockContent(blockContent);
     expect(blockContent).toContain("type: editor-practice");
-    // Must mention exactly five passes
-    expect(blockContent).toMatch(/five/i);
-    expect(blockContent).toMatch(/pi -p/);
-    // Must NOT hard-code --no-session
-    expect(blockContent).not.toContain("--no-session");
-    // Must NOT prescribe exactly two passes
+    assertLoopContract(sections.tutor);
+    assertLoopContract(sections.publicBody);
+    // The sample script should use one loop body invocation rather than five copied commands.
+    expect(commandOccurrences(sections.publicBody)).toBe(2);
     expect(blockContent).not.toMatch(/exactly two/i);
   });
 
@@ -114,18 +113,17 @@ describe("tetris primer lesson blocks", () => {
     expect(blockContent).not.toMatch(/complete.*tetris|tetris.*complete/i);
   });
 
-  it("steers stuck workers away from interactive checks without speculating about stdin", async () => {
-    const blockContent = await readFile(
-      resolve(TUTORIAL_ROOT, "lessons/tetris/blocks/write-worker-prompt.md"),
-      "utf8"
-    );
-    expect(blockContent).toMatch(/checks? must return on (?:their|its) own/i);
-    expect(blockContent).toMatch(/do not start the game/i);
-    expect(blockContent).toMatch(/interactive scaffold/i);
-    expect(blockContent).toMatch(/dev\/watch|watch\/dev|dev or watch/i);
-    expect(blockContent).toMatch(/non-interactive check/i);
-    expect(blockContent).toMatch(/mark.*task.*done.*plan\.md.*before.*commit/is);
-    expect(blockContent).toMatch(/no incomplete task.*stop.*empty commit/is);
+  it("keeps primer prose within glossary vocabulary for this early lesson", async () => {
+    const lessonDir = resolve(TUTORIAL_ROOT, "lessons/tetris");
+    const files = [
+      resolve(lessonDir, "lesson.md"),
+      ...(await readdir(resolve(lessonDir, "blocks"))).map((file) => resolve(lessonDir, "blocks", file))
+    ];
+    for (const file of files) {
+      const content = (await readFile(file, "utf8")).replaceAll("write-worker-prompt", "");
+      expect(content, file).not.toMatch(/\bworker(?: agent)?\b/i);
+      expect(content, file).not.toMatch(/\bagent\b/i);
+    }
   });
 });
 
@@ -179,6 +177,69 @@ describe("Part 2 calculator preservation", () => {
 // ---------------------------------------------------------------------------
 
 type BlockFrontMatter = { type: string; path?: string };
+
+function splitBlockContent(text: string): { tutor: string; publicBody: string } {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  const closing = lines.indexOf("---", 1);
+  if (lines[0] !== "---" || closing < 0) throw new Error("test fixture expected front matter");
+
+  const frontMatter = lines.slice(1, closing).join("\n");
+  const tutorMatch = /(?:^|\n)tutor: \|-\n(?<tutor>(?:  .*\n|\n)*)/.exec(`${frontMatter}\n`);
+  return {
+    tutor: tutorMatch?.groups?.tutor?.replace(/^  /gm, "") ?? "",
+    publicBody: lines.slice(closing + 1).join("\n")
+  };
+}
+
+function compact(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function assertPromptMechanism(text: string): void {
+  const normal = compact(text);
+  expect(normal).toMatch(/Without `?plan\.md`?/i);
+  expect(normal).toMatch(/create `?plan\.md`? with exactly four similarly sized, independently checkable tasks/i);
+  expect(normal).toMatch(/commit (?:that|the) `?plan`?[.,;]/i);
+  expect(normal).toMatch(/stop without implementing anything(?: in this first pass)?/i);
+  expect(normal).toMatch(/With `?plan\.md`?/i);
+  expect(normal).toMatch(/find the first (?:task that is not yet marked done|incomplete task)/i);
+  expect(normal).toMatch(/(?:do exactly that task and nothing more|Do only that task\. Nothing else\.)/i);
+  expect(normal).toMatch(/run a relevant check if one exists/i);
+  expect(normal).toMatch(/checks? must return on their own/i);
+  expect(normal).toMatch(/do not start the game/i);
+  expect(normal).toMatch(/interactive scaffolds, dev\/watch commands/i);
+  expect(normal).toMatch(/command(?:s)? that might wait for input or keep running(?: as a check)?/i);
+  expect(normal).toMatch(/choose a non-interactive check instead(?: when a command might wait)?/i);
+  expect(normal).toMatch(/mark the task done in `?plan\.md`? before committing/i);
+  expect(normal).toMatch(/commit(?: the)? useful task work and the `?plan\.md`? update together/i);
+  expect(normal).toMatch(/stop without starting another task/i);
+  expect(normal).toMatch(/If no incomplete task remains, (?:the pass should )?stop without an empty commit\./i);
+  expect(normal).toMatch(/If nothing has changed, do not create an empty commit\./i);
+  expect(normal).toMatch(/(?:The prompt must not|Do not) ask Pi to (?:start|run) the loop script, (?:(?:to )?complete all tasks in (?:one|a single) pass, or (?:to )?run forever|(?:to )?run forever, or (?:to )?complete all tasks in (?:one|a single) pass)\./i);
+}
+
+function assertLoopContract(text: string): void {
+  const normal = compact(text);
+  expect(normal).toMatch(/The script must run the exact .* unconfigured\/default command/i);
+  expect(normal).toMatch(/once in each of exactly five passes/i);
+  expect(normal).toMatch(/once in each of exactly five passes/i);
+  expect(normal).toContain("for pass in 1 2 3 4 5; do");
+  expect(normal).toContain('echo "Pass $pass/5: starting"');
+  expect(normal).toContain("pi -p < prompt.md");
+  expect(normal).toContain('echo "Pass $pass/5: done"');
+  expect(normal).toContain("Pass 1/5: starting, Pass 1/5: done, Pass 2/5: starting, Pass 2/5: done, Pass 3/5: starting, Pass 3/5: done, Pass 4/5: starting, Pass 4/5: done, Pass 5/5: starting, and Pass 5/5: done.");
+  expect(normal).toMatch(/reject `--no-session`, provider\/model options, (?:and )?other Pi flags/i);
+  expect(normal).toMatch(/hard-coded provider\/model/i);
+  expect(normal).toMatch(/(?:unbounded loops(?: such as `while :`)?|any other unbounded loop)/i);
+  expect(normal).toMatch(/(?:loops without a fixed upper bound|fixed limit)/i);
+  expect(normal).toMatch(/fewer or more than five (?:Pi )?passes/i);
+  expect(normal).toMatch(/fewer or more than five Pi invocations/i);
+}
+
+function commandOccurrences(text: string): number {
+  return text.match(/pi -p < prompt\.md/g)?.length ?? 0;
+}
 
 async function findSpecEditorBlock(
   lessonDir: string,
