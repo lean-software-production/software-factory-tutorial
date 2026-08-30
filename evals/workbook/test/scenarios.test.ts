@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { TutorDecision } from "../../../tutorial-engine/src/workbook/tutor.js";
-import { RecordingMainTutor, type ReviewInput } from "../../../tutorial-engine/test/support/fake-tutors.js";
+import { RecordingMainTutor, RecordingPracticeCoach, type ReviewInput } from "../../../tutorial-engine/test/support/fake-tutors.js";
 import {
   AUTHORED_COMMAND_STUB_NAMESPACE,
   AUTHORED_COMMAND_STUB_OWNER,
@@ -30,7 +30,7 @@ import {
 import { AuthoredWorkbookDriver } from "../driver.js";
 import { readAuthoredWorkbookTimeline } from "../internal-timeline.js";
 import { createEmptyAuthoredWorkbookEvalSessionTrace, projectAuthoredWorkbookEvalTrace } from "../public-trace.js";
-import { dockerContainerUser } from "../../../tutorial-engine/src/workbook/terminal.js";
+import { dockerContainerUser, type TerminalPty, type TerminalPtyOptions } from "../../../tutorial-engine/src/workbook/terminal.js";
 import { buildAuthoredWorkbookJudgePrompt, copyAuthoredWorkbookEvalScenarioPublicDescriptor } from "../judge.js";
 import { createAuthoredCurriculumSliceWorkspace } from "../workspace.js";
 import { buildBoundedWorkspaceTar, dockerPopulateVolumeArguments, dockerVolumeCreateArguments, dockerVolumeRemoveArguments, dockerWorkspaceVolumeMount, WORKBOOK_TERMINAL_IMAGE } from "../preflight.js";
@@ -50,6 +50,83 @@ class PrimerWorkflowFakeTutor extends RecordingMainTutor {
       ? { outcome: "feedback", message: "The validation loop exists because you do not trust the model unchecked." }
       : { outcome: "accepted", message: "Accepted by deterministic fake tutor." };
   }
+}
+
+class Lessons003004WorkflowFakeTutor extends RecordingMainTutor {
+  protected override defaultReply = "Public fake tutor reply.";
+  protected override blockSummaryFor = (blockId: string): string => `Public summary for ${blockId}.`;
+  protected override lessonSummaryFor = (lessonId: string): string => `Public lesson summary for ${lessonId}.`;
+
+  protected override async decide(input: ReviewInput): Promise<TutorDecision> {
+    if (input.attempt.evidence.kind === "reflection") return { outcome: "accepted", message: "Accepted reflection." };
+    const command = terminalAttemptCommand(input) ?? "";
+    if (/cat refactor-validate\.md\s*\\\s*\|/.test(command) && !command.includes("refactor-quality-before.txt")) {
+      return { outcome: "feedback", message: "Carry the recorded quality baseline into the validator and tee findings for the next lesson." };
+    }
+    if (command.endsWith(lesson004WrongCommand) && !command.includes("cat > factory/refactor-validate.sh")) {
+      return { outcome: "feedback", message: "Do not rerun only the validator; append findings to the doer context while preserving the baseline." };
+    }
+    if (command.endsWith(lesson004MultiplyCommand)) {
+      return { outcome: "feedback", message: "Multiply has been repaired, but the divide branch still needs feedback before this can pass." };
+    }
+    return { outcome: "accepted", message: "Accepted by deterministic fake tutor." };
+  }
+}
+
+class HostBashTerminalPty implements TerminalPty {
+  #data?: (data: string) => void;
+  #exit?: (event: { exitCode: number; signal?: number }) => void;
+  #queue: Promise<void> = Promise.resolve();
+  #killed = false;
+
+  constructor(private readonly options: TerminalPtyOptions, private readonly env: NodeJS.ProcessEnv) {}
+
+  open(): void {}
+  resize(): void {}
+  onData(callback: (data: string) => void): void { this.#data = callback; }
+  onExit(callback: (event: { exitCode: number; signal?: number }) => void): void { this.#exit = callback; }
+  kill(): void { this.#killed = true; }
+
+  write(data: string): void {
+    const command = data.replace(/[\r\n]+$/, "");
+    this.#data?.(`${bashCommandMarker(command)}\r\n`);
+    this.#queue = this.#queue.then(async () => {
+      if (this.#killed) return;
+      const normalizedCommand = command.replace(/\r/g, "\n");
+      const path = this.env.STUBBED_PATH ?? this.env.PATH ?? "";
+      try {
+        const { stdout, stderr } = await execFileAsync("/bin/bash", ["-lc", `export PATH=${shellQuote(path)}; ${normalizedCommand}`], {
+          cwd: this.options.cwd,
+          env: this.env,
+          timeout: 60_000,
+          encoding: "utf8",
+          maxBuffer: 1024 * 1024
+        });
+        this.#data?.(`${stdout}${stderr}${bashFinishedMarker(0)}`);
+      } catch (error) {
+        const failed = error as { stdout?: string; stderr?: string; code?: unknown };
+        this.#data?.(`${failed.stdout ?? ""}${failed.stderr ?? ""}${bashFinishedMarker(typeof failed.code === "number" ? failed.code : 1)}`);
+      }
+    }).catch(() => this.#exit?.({ exitCode: 1 }));
+  }
+}
+
+function terminalAttemptCommand(input: ReviewInput): string | undefined {
+  if (input.attempt.evidence.kind !== "terminal") return undefined;
+  try {
+    const parsed = JSON.parse(input.attempt.evidence.transcript) as { command?: unknown };
+    return typeof parsed.command === "string" ? parsed.command.replace(/[\r\n]+$/, "") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function bashCommandMarker(command: string): string {
+  return `\x1b]633;workbook-command;${Buffer.from(command).toString("base64")}\x07`;
+}
+
+function bashFinishedMarker(exitStatus = 0): string {
+  return `\x1b]633;workbook-finished;${exitStatus}\x07`;
 }
 
 const lesson001SimpleCommand = `pi -p "What is the capital of France?"`;
@@ -430,6 +507,71 @@ describe("authored workbook scenario gates", () => {
       if (index >= 0) tempRoots.splice(index, 1);
     }
   }, 15_000);
+
+  it("drives Lessons 003-004 through the actual workbook workflow with deterministic local terminal stubs", async () => {
+    const scenario = authoredWorkbookScenarioById("lessons-003-004-evidence-feedback");
+    const workspace = await createAuthoredCurriculumSliceWorkspace({
+      selection: scenario.selection,
+      prerequisiteOverlays: [scenario.prerequisiteOverlay!]
+    });
+    tempRoots.push(workspace.repositoryRoot);
+    let server: { url: string; close(): Promise<void> } | undefined;
+    let handle: Awaited<ReturnType<typeof createAuthoredCommandStubs>> | undefined;
+    const originalApiKey = process.env.OPENCODE_API_KEY;
+    try {
+      process.env.OPENCODE_API_KEY = "test-opencode-key";
+      let terminalEnv: NodeJS.ProcessEnv | undefined;
+      server = await workspace.startServer({
+        embeddedTerminal: true,
+        terminalPtyFactory: (options) => new HostBashTerminalPty(options, terminalEnv ?? process.env),
+        mainTutor: new Lessons003004WorkflowFakeTutor(),
+        practiceCoach: new RecordingPracticeCoach()
+      });
+      const sessionWorkspace = workspace.latestSession().workspaceRoots["refactor-line"]!;
+      handle = await createAuthoredCommandStubs({ lessonNumber: scenario.stubLessonNumber!, workspaceRoot: sessionWorkspace, scenarioId: scenario.id });
+      const path = `${handle.hostBinDir}:${dirname(process.execPath)}:/usr/bin:/bin`;
+      terminalEnv = { ...process.env, ...handle.hostEnv, PATH: path, STUBBED_PATH: path };
+      const trace = createEmptyAuthoredWorkbookEvalSessionTrace(scenario.id);
+      const driver = new AuthoredWorkbookDriver({
+        serverUrl: server.url,
+        trace,
+        privateTerminalShellPrefix: hostCommandStubActivation(handle),
+        terminalTimeoutMs: 5_000,
+        terminalReviewTimeoutMs: 60_000,
+        editorReviewTimeoutMs: 10_000,
+        requestTimeoutMs: 10_000
+      });
+
+      const checkpoints = createAuthoredWorkbookScenarioGateCheckpointRecorder(scenario);
+      await scenario.drive({ driver, captureGateCheckpoint: (label) => checkpoints.captureGateCheckpoint(label) });
+
+      const rawEvents = await readAuthoredWorkbookTimeline(workspace.latestSession().sessionRoot);
+      const publicTrace = projectAuthoredWorkbookEvalTrace({ ...trace, internalEvents: rawEvents });
+      const inputs = publicTrace.terminalTranscript.filter((entry) => entry.direction === "input").map((entry) => entry.text.replace(/[\r\n]+$/, ""));
+      expect(inputs).toHaveLength(5);
+      expect(checkpoints.labels).toEqual(["lessons003004:after-multiply-only"]);
+      const feedbackMessages = publicTrace.publicStates.flatMap((entry) => entry.state.progress.blocks.flatMap((block) => block.terminal?.phase === "feedback" ? [block.terminal.message] : []));
+      expect(feedbackMessages).toEqual(expect.arrayContaining([
+        expect.stringMatching(/baseline|tee|findings/i),
+        expect.stringMatching(/validator|baseline|doer context/i),
+        expect.stringMatching(/divide branch/i)
+      ]));
+      expect(publicTrace.progressionEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "block_completed", blockId: "lesson--004-feed-the-findings-back" }),
+        expect.objectContaining({ type: "attempt_accepted", blockId: "lesson--004-feed-the-findings-back--implementation-order", kind: "terminal" }),
+        expect.objectContaining({ type: "block_completed", blockId: "lesson--004-feed-the-findings-back--checks" })
+      ]));
+      expect(JSON.stringify(publicTrace)).not.toMatch(/AUTHORED_EVAL_COMMAND_STUB_CONFIG|authored-eval-command-stubs\/container-config|\/var\/folders|\/private\/tmp/);
+    } finally {
+      if (originalApiKey === undefined) delete process.env.OPENCODE_API_KEY;
+      else process.env.OPENCODE_API_KEY = originalApiKey;
+      await server?.close().catch(() => undefined);
+      await handle?.close().catch(() => undefined);
+      await workspace.close().catch(() => undefined);
+      const index = tempRoots.indexOf(workspace.repositoryRoot);
+      if (index >= 0) tempRoots.splice(index, 1);
+    }
+  }, 90_000);
 
   it("requires the current conclusion completion while accepting the legacy reflection replay shape", async () => {
     const scenario = authoredWorkbookScenarioById("primer-validation-misconception");
@@ -1021,6 +1163,10 @@ async function liveScenarioHarness(id: AuthoredWorkbookScenarioId, stubOptions: 
 
 function stripActivation(command: string): string {
   return command.replace(/^export AUTHORED_EVAL_COMMAND_STUB_CONFIG=.*\n/, "").replace(/^export PATH=.*\n/, "");
+}
+
+function hostCommandStubActivation(handle: Awaited<ReturnType<typeof createAuthoredCommandStubs>>): string {
+  return `export AUTHORED_EVAL_COMMAND_STUB_CONFIG=${shellQuote(handle.hostConfigPath)}; export AUTHORED_EVAL_NO_NETWORK=1; export npm_config_offline=true; export npm_config_ignore_scripts=true; export npm_config_audit=false; export npm_config_fund=false; export npm_config_update_notifier=false; export npm_config_yes=false; export PATH=${shellQuote(handle.hostBinDir)}:"$PATH"`;
 }
 
 function stubbedShellEnv(handle: Awaited<ReturnType<typeof createAuthoredCommandStubs>>): NodeJS.ProcessEnv {

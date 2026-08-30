@@ -76,6 +76,30 @@ function stateAfterTerminalAdvanced(message = "Accepted."): PublicWorkbookState 
   };
 }
 
+function stateWithStructural(activeBlockId: string, completed = false): PublicWorkbookState {
+  const nextBlockId = "lesson--004-public-contract--key-concept";
+  return {
+    ...stateWithTerminal("running"),
+    progress: {
+      ...stateWithTerminal("running").progress,
+      activeLessonId: "004-public-contract",
+      activeBlockId: completed ? nextBlockId : activeBlockId,
+      canComplete: completed ? { blockId: nextBlockId, eligible: true } : { blockId: activeBlockId, eligible: true },
+      blocks: [
+        { id: activeBlockId, type: "lesson-preamble", ready: false, active: !completed, completed, verified: completed, emerged: true, workAccepted: true },
+        { id: nextBlockId, type: "narrative", ready: completed, active: completed, completed: false, verified: false, emerged: true, workAccepted: false }
+      ]
+    },
+    currentBlock: completed
+      ? { id: nextBlockId, anchorId: nextBlockId, origin: "lesson", kind: "narrative", title: "Key concept", lessonId: "004-public-contract", declaredId: "key-concept" }
+      : { id: activeBlockId, anchorId: activeBlockId, origin: "structural", kind: "lesson-preamble", title: "Lesson", lessonId: "004-public-contract" },
+    orderedBlocks: [
+      { id: activeBlockId, anchorId: activeBlockId, origin: "structural", kind: "lesson-preamble", title: "Lesson", lessonId: "004-public-contract" },
+      { id: nextBlockId, anchorId: nextBlockId, origin: "lesson", kind: "narrative", title: "Key concept", lessonId: "004-public-contract", declaredId: "key-concept" }
+    ]
+  };
+}
+
 function stateWithEditor(revision: number, status: "reviewing" | "feedback" | "accepted", feedback?: string): PublicWorkbookState {
   return {
     ...stateWithTerminal("running"),
@@ -301,6 +325,27 @@ describe("authored workbook public driver", () => {
     });
 
     await expect(driver.continueBlock("checks")).rejects.toThrow(/Ambiguous workbook block id 'checks'/);
+  });
+
+  it("continues active structural lesson preambles through the complete-block endpoint", async () => {
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("structural-lesson-preamble");
+    const structuralBlockId = "lesson--004-public-contract";
+    const posted: Array<{ path: string; body: unknown }> = [];
+    const states = [stateWithStructural(structuralBlockId), stateWithStructural(structuralBlockId, true)];
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      fetch: async (input, init) => {
+        if (init?.method === "POST") posted.push({ path: new URL(String(input)).pathname, body: JSON.parse(String(init.body)) });
+        return new Response(JSON.stringify(states.shift() ?? stateWithStructural(structuralBlockId, true)), { status: 200 });
+      }
+    });
+
+    const state = await driver.continueBlock(structuralBlockId, "lesson004:introduction");
+
+    expect(state.progress.activeBlockId).toBe("lesson--004-public-contract--key-concept");
+    expect(posted).toEqual([{ path: "/api/workbook/complete-block", body: { blockId: structuralBlockId } }]);
+    expect(trace.publicStates.map((entry) => entry.label)).toEqual(["lesson004:introduction:active", "lesson004:introduction"]);
   });
 
   it("parses public terminal frames, drops socket extras, and supports expected feedback followed by retry", async () => {

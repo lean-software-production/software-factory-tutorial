@@ -456,6 +456,7 @@ const authoredWorkbookScenarioCatalog = [
       await driver.submitReflection("lesson--003-build-a-validator--checks", "The terminal may announce validation before Pi runs. The captured findings file starts with a VERDICT line, uses read/grep/find/ls/bash but not edit or write, quotes real command evidence, writes through tee, and refuses if the baseline file is missing. That keeps checking separate from fixing.", "lesson003:checks");
       await driver.completeReflection("lesson--003-build-a-validator--checks", "lesson003:checks:complete");
       await driver.continueBlock("lesson--003-build-a-validator--pressure-test", "lesson003:pressure-test");
+      await driver.continueBlock("lesson--004-feed-the-findings-back", "lesson004:introduction");
       await driver.continueBlock("lesson--004-feed-the-findings-back--key-concept", "lesson004:key-concept");
       await driver.continueBlock("lesson--004-feed-the-findings-back--the-loop-you-just-ran", "lesson004:loop");
       await driver.submitTerminalCommand("lesson--004-feed-the-findings-back--implementation-order", lesson004WrongCommand, { label: "lesson004:wrong-rerun", expectedFeedback: feedbackAboutBaselineOverwrite });

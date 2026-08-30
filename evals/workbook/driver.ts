@@ -107,7 +107,18 @@ export class AuthoredWorkbookDriver {
   }
 
   async continueBlock(blockId: string, label = `continue:${blockId}`): Promise<WorkbookApiState> {
-    return this.submitWorkbookAction(await this.#canonicalBlockId(blockId), "continue", {}, label);
+    const canonicalBlockId = await this.#canonicalBlockId(blockId);
+    if (isStructuralWorkbookBlockId(canonicalBlockId)) {
+      const state = await this.readState(`${label}:active`);
+      if (state.currentBlock?.id === canonicalBlockId && state.currentBlock.origin !== "lesson") {
+        const canComplete = state.progress.canComplete;
+        if (canComplete?.blockId !== canonicalBlockId || canComplete.eligible !== true) throw new Error(`Workbook structural block '${canonicalBlockId}' is active but not eligible to continue.`);
+        const advanced = await this.#requestState("POST", "/api/workbook/complete-block", { blockId: canonicalBlockId }, label);
+        if (advanced.progress.activeBlockId !== canonicalBlockId || workbookBlockState(advanced, canonicalBlockId)?.completed === true) return advanced;
+        throw new Error(`Workbook structural block '${canonicalBlockId}' did not advance after continue.`);
+      }
+    }
+    return this.submitWorkbookAction(canonicalBlockId, "continue", {}, label);
   }
 
   async submitReflection(blockId: string, response: string, label = `reflection:${blockId}:submit`): Promise<WorkbookApiState> {
@@ -488,6 +499,10 @@ function terminalCompletionAlreadyApplied(state: WorkbookApiState, blockId: stri
     && block.verified === true
     && block.workAccepted === true
     && block.terminal?.phase === "complete";
+}
+
+function isStructuralWorkbookBlockId(blockId: string): boolean {
+  return blockId === "workbook--introduction" || blockId === "workbook--complete" || blockId.startsWith("part--") || (blockId.startsWith("lesson--") && blockId.split("--").length === 2);
 }
 
 function isHttpStatusError(error: unknown, method: "GET" | "POST", path: string, status: number): error is WorkbookHttpStatusError {
