@@ -27,6 +27,12 @@ describe("evaluator package scripts", () => {
     expect(packageJson.scripts["eval:release"]).toBe("npm run --workspace=tutorial-engine eval:release --");
     expect(packageJson.scripts.eval).toBe("npm run eval:engine --");
     expect(packageJson.scripts["eval:workbook"]).toBe("tsx evals/workbook/run.ts");
+    expect(packageJson.scripts.test).toBe("node scripts/run-local-tests.mjs test");
+    expect(packageJson.scripts["test:fast"]).toBe("node scripts/run-local-tests.mjs test:fast");
+    expect(packageJson.scripts["test:engine"]).toBe("node scripts/run-local-tests.mjs test:engine");
+    expect(packageJson.scripts["test:engine:fast"]).toBe("npm run --workspace=tutorial-engine test:fast --");
+    expect(packageJson.scripts["test:workbook"]).toBe("node scripts/run-local-tests.mjs test:workbook");
+    expect(packageJson.scripts["test:workbook:fast"]).toBe("node scripts/run-local-tests.mjs test:workbook:fast");
 
     expect(enginePackageJson.scripts["check:eval"]).toBe("tsc -p evals/tsconfig.json");
     // Asserted by property, not by exact string: the guarantees that matter are that this runs
@@ -38,18 +44,22 @@ describe("evaluator package scripts", () => {
     expect(testEval).not.toContain("evals/run.ts");
     expect(enginePackageJson.scripts.eval).toBe("npm run build && tsx evals/run.ts");
     expect(enginePackageJson.scripts["eval:release"]).toBe("npm run eval -- --release");
+    expect(enginePackageJson.scripts["test:fast"]).toBe("npm run lint && tsc --noEmit && tsc -p tsconfig.check.json && npm run check:eval && npm run test && npm run build:web:workbook && npm run browser:smoke");
 
     expect(tsconfig.include).toEqual(["run.ts", "v2/**/*.ts", "test/**/*.test.ts"]);
     expect(tsconfig.exclude).toEqual(expect.arrayContaining(["harness", "scenarios", "reports"]));
 
-    expect(enginePackageJson.scripts.check).toContain("npm run check:eval");
-    expect(enginePackageJson.scripts.check).toContain("npm run test");
+    expect(enginePackageJson.scripts.check).toBe("npm run test:fast && npm run check:workbook-terminal-image");
+    expect(enginePackageJson.scripts["test:fast"]).toContain("npm run check:eval");
+    expect(enginePackageJson.scripts["test:fast"]).toContain("npm run test");
+    expect(enginePackageJson.scripts.check).toContain("npm run check:workbook-terminal-image");
+    expect(enginePackageJson.scripts["test:fast"]).not.toContain("check:workbook-terminal-image");
     expect(enginePackageJson.scripts.check).not.toContain("npm run test:eval");
     expect(enginePackageJson.scripts.check).not.toContain("tsx evals/run.ts");
     expect(enginePackageJson.scripts.check).not.toContain("EVAL_JUDGE_MODEL");
 
-    expect(packageJson.scripts.check).toContain("npm run --workspace=tutorial-engine check");
-    expect(packageJson.scripts.check).toContain("npm run --workspace=tutorial/workspaces/refactor-line/calculator test");
+    expect(packageJson.scripts.check).toBe("npm run test:fast");
+    expect(packageJson.scripts["test:fast"]).toBe("node scripts/run-local-tests.mjs test:fast");
     expect(packageJson.scripts.check).not.toContain("--workspace=calculator");
     expect(packageJson.scripts.check).not.toContain("check:eval");
     expect(packageJson.scripts.check).not.toContain("test:eval");

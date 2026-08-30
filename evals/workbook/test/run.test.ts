@@ -3,6 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  authoredWorkbookReleaseBudget,
   createAuthoredWorkbookRunDependencies,
   createDefaultAuthoredWorkbookRunDependencies,
   defaultAuthoredWorkbookRunPrimitives,
@@ -16,7 +17,7 @@ import {
 import { AUTHORED_WORKBOOK_SCENARIOS, authoredWorkbookScenarioById } from "../scenarios.js";
 import { authoredWorkbookEvalStabilityPassed } from "../reports.js";
 import { createEmptyAuthoredWorkbookEvalSessionTrace, type AuthoredWorkbookEvalSessionTrace, type AuthoredWorkbookEvalTrace } from "../public-trace.js";
-import { createAuthoredWorkbookRunnerModelConfiguration, type AuthoredWorkbookEvalPreflightRequest, type AuthoredWorkbookEvalPublicSummary } from "../preflight.js";
+import { AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL, createAuthoredWorkbookRunnerModelConfiguration, type AuthoredWorkbookEvalPreflightRequest, type AuthoredWorkbookEvalPublicSummary } from "../preflight.js";
 import { DefaultMainWorkbookTutor } from "../../../tutorial-engine/src/workbook/tutor.js";
 import { FastPracticeCoach } from "../../../tutorial-engine/src/workbook/practice-coach.js";
 
@@ -203,6 +204,45 @@ describe("authored workbook eval orchestration", () => {
   it("uses catalog order for --release and --all selections", () => {
     expect(parseAuthoredWorkbookRunArgs(["--release", "--max-paid-model-calls", "99", "--max-estimated-tokens", "999999"]).scenarioIds).toEqual(AUTHORED_WORKBOOK_SCENARIOS.map((scenario) => scenario.id));
     expect(parseAuthoredWorkbookRunArgs(["--all", "--yes", "--repeat", "2", "--max-paid-model-calls", "99", "--max-estimated-tokens", "999999"]).repeat).toBe(2);
+  });
+
+  it("derives the bare --release budget from the authored catalog before preflight and without side effects", async () => {
+    const derived = authoredWorkbookReleaseBudget();
+    expect(Object.isFrozen(derived)).toBe(true);
+    expect(derived).toEqual({
+      maxPaidModelCalls: AUTHORED_WORKBOOK_SCENARIOS.reduce((total, scenario) => total + scenario.expectedModelCalls.total, 0) + 3,
+      maxEstimatedTokens: (AUTHORED_WORKBOOK_SCENARIOS.reduce((total, scenario) => total + scenario.expectedModelCalls.total, 0) + 3) * AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL
+    });
+
+    const events: string[] = [];
+    let validatedInput: any;
+    let preflightInput: any;
+    const fakes = makeDeps();
+    fakes.deps.validatePreflightRequest = (input) => { events.push("validate"); validatedInput = input; return request([...input.scenarioIds] as string[], input.repeat as 1); };
+    fakes.deps.preflight = async (input) => { events.push("preflight"); preflightInput = input; throw new Error("stop after injected preflight"); };
+    fakes.deps.createWorkspace = async () => { events.push("workspace"); throw new Error("no runner side effects in this test"); };
+
+    const code = await invokeAuthoredWorkbookCli({ argv: ["--release"], env, dependencies: fakes.deps, installSignalHandlers: false });
+    expect(code).toBe(1);
+    expect(events).toEqual(["validate", "preflight"]);
+    expect(validatedInput.costBudget).toEqual(derived);
+    expect(preflightInput.costBudget).toEqual(derived);
+    expect(validatedInput.scenarioIds).toEqual(AUTHORED_WORKBOOK_SCENARIOS.map((scenario) => scenario.id));
+  });
+
+  it("accepts only explicit --release budget overrides at or above the derived budget", async () => {
+    const derived = authoredWorkbookReleaseBudget();
+    const below = makeDeps();
+    below.deps.validatePreflightRequest = () => { throw new Error("validate must not run for too-low release budget"); };
+    below.deps.preflight = async () => { throw new Error("preflight must not run for too-low release budget"); };
+    await expect(invokeAuthoredWorkbookCli({ argv: ["--release", "--max-paid-model-calls", String(derived.maxPaidModelCalls - 1), "--max-estimated-tokens", String(derived.maxEstimatedTokens)], env, dependencies: below.deps, installSignalHandlers: false })).resolves.toBe(2);
+
+    let accepted: any;
+    const above = makeDeps();
+    above.deps.validatePreflightRequest = (input) => { accepted = input; return request([...input.scenarioIds] as string[], 1); };
+    above.deps.preflight = async () => { throw new Error("stop after validating explicit budget"); };
+    await expect(invokeAuthoredWorkbookCli({ argv: ["--release", "--max-paid-model-calls", String(derived.maxPaidModelCalls + 2), "--max-estimated-tokens", String((derived.maxPaidModelCalls + 2) * AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL)], env, dependencies: above.deps, installSignalHandlers: false })).resolves.toBe(1);
+    expect(accepted.costBudget).toEqual({ maxPaidModelCalls: derived.maxPaidModelCalls + 2, maxEstimatedTokens: (derived.maxPaidModelCalls + 2) * AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL });
   });
 
   it("creates no stubs for primer/L001 and creates current stubs plus checkpoint activation for post-L001", async () => {

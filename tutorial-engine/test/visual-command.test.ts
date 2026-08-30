@@ -42,10 +42,6 @@ function requiredScript(manifest: PackageJson, name: string): string {
   return script as string;
 }
 
-function shellSteps(script: string): string[] {
-  return script.split("&&").map((step) => step.trim());
-}
-
 describe("root visual package contract", () => {
   it("delegates root check:visual directly to the engine-owned canonical command", async () => {
     const manifest = await readJson(resolve(repoRoot, "package.json"));
@@ -57,13 +53,14 @@ describe("root visual package contract", () => {
     expect(checkVisual).not.toContain("approve:visual");
   });
 
-  it("keeps visual validation in root check while approval stays a separate deliberate command", async () => {
+  it("keeps visual validation in the full release profile while approval stays a separate deliberate command", async () => {
     const manifest = await readJson(resolve(repoRoot, "package.json"));
-    const checkSteps = shellSteps(requiredScript(manifest, "check"));
 
-    expect(checkSteps).toContain("npm run check:visual");
-    expect(checkSteps.some((step) => step.includes("approve:visual"))).toBe(false);
+    expect(requiredScript(manifest, "check")).toBe("npm run test:fast");
+    expect(requiredScript(manifest, "test")).toBe("node scripts/run-local-tests.mjs test");
+    expect(requiredScript(manifest, "test:engine")).toBe("node scripts/run-local-tests.mjs test:engine");
     expect(requiredScript(manifest, "approve:visual")).toBe("node scripts/approve-visual.mjs");
+    expect(Object.entries(manifest.scripts).filter(([name, value]) => (name === "check" || name.endsWith(":fast")) && value.includes("test:visual"))).toEqual([]);
   });
 
   it("removes the changed-file visual gate and its trigger tests", async () => {

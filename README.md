@@ -25,7 +25,9 @@ npm run tutorial:workbook
 npm start                         # alias for tutorial:workbook
 npm run tutorial:workbook -- --session <id>
 npm run --workspace=tutorial-engine check:workbook
-npm run check
+npm run check                    # deterministic fast local gate (alias for test:fast)
+npm run test:fast                # deterministic engine + authored-workbook + calculator gate
+npm run test                     # full paid/Docker release gate; aggregates fast, visual, and live eval reports
 npm run check:eval:workbook        # deterministic authored-workbook evaluator foundation type-check
 npm run test:eval:workbook         # deterministic authored-workbook evaluator foundation tests
 npm run --workspace=tutorial-engine check:eval  # deterministic synthetic engine evaluator type-check

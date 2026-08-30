@@ -23,6 +23,7 @@ function freezeStep({
   script,
   shell,
   report,
+  reportTarget,
   releaseArgs = [],
   forwardsArguments = false,
   implementation = "package-script",
@@ -37,6 +38,7 @@ function freezeStep({
     script,
     shell,
     report,
+    reportTarget,
     releaseArgs: Object.freeze([...releaseArgs]),
     forwardsArguments,
     implementation,
@@ -47,12 +49,13 @@ function freezeStep({
   });
 }
 
-const engineWorkspaceStep = ({ command, script, shell, report, releaseArgs = [], forwardsArguments = false, requiresDocker = false, requiresCanonicalDevcontainer = false, visual = false }) => freezeStep({
+const engineWorkspaceStep = ({ command, script, shell, report, reportTarget, releaseArgs = [], forwardsArguments = false, requiresDocker = false, requiresCanonicalDevcontainer = false, visual = false }) => freezeStep({
   command,
   workspace: ENGINE_WORKSPACE,
   script,
   shell,
   report,
+  reportTarget,
   releaseArgs,
   forwardsArguments,
   implementation: "workspace-package-script",
@@ -61,12 +64,13 @@ const engineWorkspaceStep = ({ command, script, shell, report, releaseArgs = [],
   visual
 });
 
-const rootStep = ({ command, script, shell, report, releaseArgs = [], forwardsArguments = false, requiresDocker = false, requiresCanonicalDevcontainer = false, visual = false }) => freezeStep({
+const rootStep = ({ command, script, shell, report, reportTarget, releaseArgs = [], forwardsArguments = false, requiresDocker = false, requiresCanonicalDevcontainer = false, visual = false }) => freezeStep({
   command,
   workspace: undefined,
   script,
   shell,
   report,
+  reportTarget,
   releaseArgs,
   forwardsArguments,
   implementation: "root-package-script",
@@ -75,12 +79,13 @@ const rootStep = ({ command, script, shell, report, releaseArgs = [], forwardsAr
   visual
 });
 
-const rootModuleStep = ({ command, module, shell, report, releaseArgs = [], forwardsArguments = false, requiresDocker = false }) => freezeStep({
+const rootModuleStep = ({ command, module, shell, report, reportTarget, releaseArgs = [], forwardsArguments = false, requiresDocker = false }) => freezeStep({
   command,
   workspace: undefined,
   script: undefined,
   shell,
   report,
+  reportTarget,
   releaseArgs,
   forwardsArguments,
   implementation: "root-module-command",
@@ -132,20 +137,19 @@ function commandContract({
 }
 
 const liveEvalCostNote = "Live eval costs spend model tokens for Main Tutor, Practice Coach, and Judge.";
-const notYetWiredNote = "Specified for a later package-script wiring task; current package manifests must not be treated as implementing this command yet.";
 
 export const PACKAGE_SCRIPT_WIRING_CONTRACT = Object.freeze([
-  packageScript({ script: "test", status: WIRING_PLANNED, notes: ["Will use an orchestrator so release lanes continue and aggregate independent reports instead of relying on &&."] }),
-  packageScript({ script: "test:fast", status: WIRING_PLANNED }),
-  packageScript({ script: "test:engine", status: WIRING_PLANNED }),
-  packageScript({ script: "test:engine:fast", status: WIRING_PLANNED, command: "npm run --workspace=tutorial-engine test:fast --" }),
-  packageScript({ script: "test:workbook", status: WIRING_PLANNED }),
-  packageScript({ script: "test:workbook:fast", status: WIRING_PLANNED }),
+  packageScript({ script: "test", status: WIRING_WIRED, command: "node scripts/run-local-tests.mjs test", notes: ["Uses the root orchestrator so release lanes continue and aggregate independent reports instead of relying on &&."] }),
+  packageScript({ script: "test:fast", status: WIRING_WIRED, command: "node scripts/run-local-tests.mjs test:fast" }),
+  packageScript({ script: "test:engine", status: WIRING_WIRED, command: "node scripts/run-local-tests.mjs test:engine" }),
+  packageScript({ script: "test:engine:fast", status: WIRING_WIRED, command: "npm run --workspace=tutorial-engine test:fast --" }),
+  packageScript({ script: "test:workbook", status: WIRING_WIRED, command: "node scripts/run-local-tests.mjs test:workbook" }),
+  packageScript({ script: "test:workbook:fast", status: WIRING_WIRED, command: "node scripts/run-local-tests.mjs test:workbook:fast" }),
   packageScript({ script: "check:eval:workbook", status: WIRING_WIRED, command: "tsc -p evals/workbook/tsconfig.json" }),
   packageScript({ script: "test:eval:workbook", status: WIRING_WIRED, command: "vitest run evals/workbook/test/*.test.ts" }),
   packageScript({ script: "eval:engine", status: WIRING_WIRED, command: "npm run --workspace=tutorial-engine eval --" }),
   packageScript({ script: "eval:workbook", status: WIRING_WIRED, command: `tsx ${WORKBOOK_EVAL_MODULE}` }),
-  packageScript({ packageName: "tutorial-engine", workspace: ENGINE_WORKSPACE, script: "test:fast", status: WIRING_PLANNED })
+  packageScript({ packageName: "tutorial-engine", workspace: ENGINE_WORKSPACE, script: "test:fast", status: WIRING_WIRED, command: "npm run lint && tsc --noEmit && tsc -p tsconfig.check.json && npm run check:eval && npm run test && npm run build:web:workbook && npm run browser:smoke" })
 ]);
 
 const packageScriptByKey = new Map(PACKAGE_SCRIPT_WIRING_CONTRACT.map((entry) => [`${entry.packageName}:${entry.script}`, entry]));
@@ -173,9 +177,9 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
       }),
       steps: [
         rootStep({ command: "test:fast", script: "test:fast", shell: "npm run test:fast", report: "deterministic-fast" }),
-        engineWorkspaceStep({ command: "test:visual", script: "test:visual", shell: "npm run --workspace=tutorial-engine test:visual", report: "canonical-visual", requiresDocker: true, requiresCanonicalDevcontainer: true, visual: true }),
-        rootStep({ command: "eval:engine", script: "eval:engine", shell: "npm run eval:engine -- --release", report: "live-engine-eval", releaseArgs: ["--release"], requiresDocker: true }),
-        rootStep({ command: "eval:workbook", script: "eval:workbook", shell: "npm run eval:workbook -- --release", report: "authored-workbook-eval", releaseArgs: ["--release"], requiresDocker: true })
+        engineWorkspaceStep({ command: "test:visual", script: "test:visual", shell: "npm run --workspace=tutorial-engine test:visual", report: "canonical-visual", reportTarget: "tutorial-engine/test/visual/*.received.png", requiresDocker: true, requiresCanonicalDevcontainer: true, visual: true }),
+        rootStep({ command: "eval:engine", script: "eval:engine", shell: "npm run eval:engine -- --release", report: "live-engine-eval", reportTarget: "tutorial-engine/evals/reports/latest.json", releaseArgs: ["--release"], requiresDocker: true }),
+        rootStep({ command: "eval:workbook", script: "eval:workbook", shell: "npm run eval:workbook -- --release", report: "authored-workbook-eval", reportTarget: "evals/workbook/reports/latest.json", releaseArgs: ["--release"], requiresDocker: true })
       ],
       notes: [
         "The visual lane is canonical, engine-owned, and requires the canonical repository devcontainer in addition to Docker.",
@@ -197,7 +201,7 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
         rootStep({ command: "test:engine:fast", script: "test:engine:fast", shell: "npm run test:engine:fast" }),
         rootStep({ command: "test:workbook:fast", script: "test:workbook:fast", shell: "npm run test:workbook:fast" })
       ],
-      notes: ["This command must stay deterministic, model-free, and Docker-free.", notYetWiredNote]
+      notes: ["This command must stay deterministic, model-free, and Docker-free."]
     }),
 
     "test:engine": commandContract({
@@ -212,10 +216,10 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
       packageScript: rootPackageScript("test:engine"),
       steps: [
         engineWorkspaceStep({ command: "test:fast", script: "test:fast", shell: "npm run --workspace=tutorial-engine test:fast", report: "engine-fast" }),
-        engineWorkspaceStep({ command: "test:visual", script: "test:visual", shell: "npm run --workspace=tutorial-engine test:visual", report: "canonical-visual", requiresDocker: true, requiresCanonicalDevcontainer: true, visual: true }),
-        engineWorkspaceStep({ command: "eval", script: "eval", shell: "npm run --workspace=tutorial-engine eval -- --release", report: "live-engine-eval", releaseArgs: ["--release"], requiresDocker: true })
+        engineWorkspaceStep({ command: "test:visual", script: "test:visual", shell: "npm run --workspace=tutorial-engine test:visual", report: "canonical-visual", reportTarget: "tutorial-engine/test/visual/*.received.png", requiresDocker: true, requiresCanonicalDevcontainer: true, visual: true }),
+        engineWorkspaceStep({ command: "eval", script: "eval", shell: "npm run --workspace=tutorial-engine eval -- --release", report: "live-engine-eval", reportTarget: "tutorial-engine/evals/reports/latest.json", releaseArgs: ["--release"], requiresDocker: true })
       ],
-      notes: [liveEvalCostNote, notYetWiredNote]
+      notes: [liveEvalCostNote]
     }),
 
     "test:engine:fast": commandContract({
@@ -230,7 +234,7 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
       steps: [
         engineWorkspaceStep({ command: "test:fast", script: "test:fast", shell: "npm run --workspace=tutorial-engine test:fast --", forwardsArguments: true })
       ],
-      notes: ["Root package wiring must use --workspace=tutorial-engine for this command.", "The target tutorial-engine test:fast script is specified but intentionally not wired yet."]
+      notes: ["Root package wiring must use --workspace=tutorial-engine for this command.", "The target tutorial-engine test:fast script is wired, deterministic, model-free, and Docker-free."]
     }),
 
     "test:workbook": commandContract({
@@ -244,9 +248,9 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
       packageScript: rootPackageScript("test:workbook"),
       steps: [
         rootStep({ command: "test:workbook:fast", script: "test:workbook:fast", shell: "npm run test:workbook:fast", report: "workbook-fast" }),
-        rootStep({ command: "eval:workbook", script: "eval:workbook", shell: "npm run eval:workbook -- --release", report: "authored-workbook-eval", releaseArgs: ["--release"], requiresDocker: true })
+        rootStep({ command: "eval:workbook", script: "eval:workbook", shell: "npm run eval:workbook -- --release", report: "authored-workbook-eval", reportTarget: "evals/workbook/reports/latest.json", releaseArgs: ["--release"], requiresDocker: true })
       ],
-      notes: [liveEvalCostNote, "This release lane requires Docker for the live authored-workbook eval but does not require the canonical visual devcontainer.", notYetWiredNote]
+      notes: [liveEvalCostNote, "This release lane requires Docker for the live authored-workbook eval but does not require the canonical visual devcontainer."]
     }),
 
     "test:workbook:fast": commandContract({
@@ -274,7 +278,7 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
           implementation: "workspace-package-script"
         })
       ],
-      notes: ["This command must stay deterministic, model-free, and Docker-free while covering all authored workbook and authored evaluator foundations.", notYetWiredNote]
+      notes: ["This command must stay deterministic, model-free, and Docker-free while covering all authored workbook and authored evaluator foundations."]
     }),
 
     "eval:engine": commandContract({
@@ -320,7 +324,7 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
       notes: Object.freeze([
         "Keep npm run check supported for existing docs and developer muscle memory.",
         "Do not add eval:engine, eval:workbook, tutor, or judge calls to npm run check.",
-        "After root test wiring lands, package.json should make check a direct alias of test:fast."
+        "package.json makes check a direct alias of test:fast."
       ])
     })
   })

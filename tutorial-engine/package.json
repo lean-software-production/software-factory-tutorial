@@ -30,7 +30,7 @@
     "browser:install:ci": "playwright install --with-deps chromium",
     "browser:smoke": "tsx test/browser-smoke.mts",
     "test:visual": "node scripts/test-visual.mjs",
-    "check": "npm run lint && tsc --noEmit && tsc -p tsconfig.check.json && npm run check:eval && npm run test && npm run build:web:workbook && npm run check:workbook-terminal-image && npm run browser:smoke",
+    "check": "npm run test:fast && npm run check:workbook-terminal-image",
     "postinstall": "node scripts/fix-node-pty-helper.mjs",
     "prepublishOnly": "npm run build && npm run check",
     "dev:workbook": "npm run build:web:workbook && tsx src/workbook/cli.ts",
@@ -40,7 +40,8 @@
     "check:workbook-terminal-image": "npm run build:workbook-terminal && bash scripts/check-workbook-terminal-image.sh",
     "lint": "eslint web-workbook/src",
     "format:css": "prettier --write 'web-workbook/src/**/*.css'",
-    "check:format": "prettier --check 'web-workbook/src/**/*.css'"
+    "check:format": "prettier --check 'web-workbook/src/**/*.css'",
+    "test:fast": "npm run lint && tsc --noEmit && tsc -p tsconfig.check.json && npm run check:eval && npm run test && npm run build:web:workbook && npm run browser:smoke"
   },
   "//rendering-pins": "The libraries below with exact versions are what draws the workbook: @xterm/* the terminal band, @codemirror/* the editor band, react/react-dom/react-markdown/remark-gfm the DOM, highlight.js and rehype-highlight the code colours, mermaid the diagrams, vite and @vitejs/plugin-react the bundle, and playwright the Chromium that screenshots it. A bump to any of them can move pixels in the approved screenshots, so they carry no range: deterministic approvals require reviewing those upgrades as deliberate edits to this file instead of letting rendering drift through package-lock.json alone.",
   "dependencies": {

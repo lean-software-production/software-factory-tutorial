@@ -34,6 +34,7 @@ import {
 import { AUTHORED_WORKBOOK_SCENARIOS, authoredWorkbookScenarioById, type AuthoredWorkbookScenarioDescriptor, type AuthoredWorkbookScenarioId } from "./scenarios.js";
 import { createEmptyAuthoredWorkbookEvalSessionTrace, type AuthoredWorkbookEvalSessionTrace, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
 import {
+  AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL,
   createAuthoredWorkbookRunnerModelConfiguration,
   runAuthoredWorkbookEvalPreflight,
   validateAuthoredWorkbookEvalPreflightRequest,
@@ -60,10 +61,10 @@ Options:
   --tutor-model <provider/model>           Main Tutor model identity.
   --practice-coach-model <provider/model>  Practice Coach model identity.
   --judge-model <provider/model>           Judge model identity.
-  --max-paid-model-calls <integer>         Required for live scopes.
-  --max-estimated-tokens <integer>         Required for live scopes.
+  --max-paid-model-calls <integer>         Required for scenario/all; release derives the exact catalog budget when omitted.
+  --max-estimated-tokens <integer>         Required for scenario/all; release derives at least 2000 tokens per call when omitted.
 
-Release runs the authored catalog once, in order. Live evals spend model tokens.`;
+Release runs the authored catalog once, in order. Explicit release budgets are accepted only when they meet or exceed the derived release budget. Live evals spend model tokens.`;
 
 const PREFLIGHT_VALUE_FLAGS = new Set(["--tutor-model", "--practice-coach-model", "--judge-model", "--max-paid-model-calls", "--max-estimated-tokens"]);
 const ALL_VALUE_FLAGS = new Set([...PREFLIGHT_VALUE_FLAGS, "--scenario", "--repeat"]);
@@ -263,6 +264,13 @@ export async function invokeAuthoredWorkbookCli(options: InvokeAuthoredWorkbookC
       return 0;
     }
     const preflightInput = preflightInputFromParsed(parsed, options.env ?? process.env);
+    let request: AuthoredWorkbookEvalPreflightRequest;
+    try {
+      request = dependencies.validatePreflightRequest(preflightInput);
+    } catch (error) {
+      dependencies.error(sanitizedRuntimeMessage(error));
+      return abort.signal.aborted ? signalState.code() : 1;
+    }
     let summary: AuthoredWorkbookEvalPublicSummary;
     try {
       summary = await dependencies.preflight(preflightInput, abort.signal);
@@ -271,7 +279,6 @@ export async function invokeAuthoredWorkbookCli(options: InvokeAuthoredWorkbookC
       dependencies.error(sanitizedRuntimeMessage(error));
       return 1;
     }
-    const request = dependencies.validatePreflightRequest(preflightInput);
     const invocation: AuthoredWorkbookRunInvocation = {
       scope: parsed.scope,
       scenarioIds: parsed.scenarioIds,
@@ -551,6 +558,15 @@ export function createDefaultAuthoredWorkbookRunDependencies(): AuthoredWorkbook
   return createAuthoredWorkbookRunDependencies(defaultAuthoredWorkbookRunPrimitives);
 }
 
+export function authoredWorkbookReleaseBudget(scenarios: readonly Pick<AuthoredWorkbookScenarioDescriptor, "expectedModelCalls">[] = AUTHORED_WORKBOOK_SCENARIOS): Readonly<AuthoredWorkbookEvalPreflightRequestInput["costBudget"]> {
+  const releaseCalls = scenarios.reduce((total, scenario) => total + scenario.expectedModelCalls.total, 0);
+  const maxPaidModelCalls = releaseCalls + 3;
+  return Object.freeze({
+    maxPaidModelCalls,
+    maxEstimatedTokens: maxPaidModelCalls * AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL
+  });
+}
+
 function preflightInputFromParsed(parsed: ParsedAuthoredWorkbookRunArgs, environment: NodeJS.ProcessEnv): AuthoredWorkbookEvalPreflightRequestInput {
   const models: Record<string, string> = {};
   const costBudget: Record<string, number> = {};
@@ -563,7 +579,17 @@ function preflightInputFromParsed(parsed: ParsedAuthoredWorkbookRunArgs, environ
     else if (flag === "--max-paid-model-calls") costBudget.maxPaidModelCalls = positiveInteger(value);
     else if (flag === "--max-estimated-tokens") costBudget.maxEstimatedTokens = positiveInteger(value);
   }
+  if (parsed.scope === "release") applyReleaseBudget(costBudget);
   return { scenarioIds: parsed.scenarioIds, repeat: parsed.repeat, models, costBudget: costBudget as unknown as AuthoredWorkbookEvalPreflightRequestInput["costBudget"], environment };
+}
+
+function applyReleaseBudget(costBudget: Record<string, number>): void {
+  const derived = authoredWorkbookReleaseBudget();
+  costBudget.maxPaidModelCalls ??= derived.maxPaidModelCalls;
+  costBudget.maxEstimatedTokens ??= Math.max(derived.maxEstimatedTokens, costBudget.maxPaidModelCalls * AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL);
+  if (costBudget.maxPaidModelCalls < derived.maxPaidModelCalls) throw cliValidationError();
+  if (costBudget.maxEstimatedTokens < derived.maxEstimatedTokens) throw cliValidationError();
+  if (costBudget.maxEstimatedTokens < costBudget.maxPaidModelCalls * AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL) throw cliValidationError();
 }
 
 function modelIdentitiesFromPreflight(request: AuthoredWorkbookEvalPreflightRequest, summary: AuthoredWorkbookEvalPublicSummary): AuthoredWorkbookEvalModelIdentities {
