@@ -894,8 +894,8 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   const recordTerminalAssessmentFailure = async (request: TerminalAssessmentRequest, options: { tutorFailure?: boolean } = {}): Promise<void> => {
     await transact(async () => {
       if (!terminalRequestIsCurrent(request)) return;
-      await append({ type: "terminal-feedback-recorded", attemptId: request.attemptId, text: TERMINAL_REVIEW_FAILURE_FEEDBACK });
       if (options.tutorFailure) await appendFailure({ lessonId: request.lessonId, blockId: request.blockId, requestId: request.attemptId, operation: "review", publicMessage: TERMINAL_REVIEW_FAILURE_FEEDBACK });
+      await append({ type: "terminal-feedback-recorded", attemptId: request.attemptId, text: TERMINAL_REVIEW_FAILURE_FEEDBACK });
       notifyStateChanged({ lessonId: request.lessonId, blockId: request.blockId, status: "feedback", terminalPhase: "feedback" });
     });
   };

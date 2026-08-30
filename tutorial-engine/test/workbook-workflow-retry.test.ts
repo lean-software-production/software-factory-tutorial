@@ -11,11 +11,61 @@ let dirs: string[] = [];
 
 const EDIT_LESSON_ID = "001-first";
 const EDIT_BLOCK_ID = "lesson--001-first--edit-answer";
+const TERMINAL_BLOCK_ID = "lesson--001-first--run-command";
 const WORKSPACE_ID = "refactor-line";
 
 afterEach(async () => { await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))); dirs = []; });
 
 describe("workbook workflow retry cancellation", () => {
+  it("does not expose tutor terminal-failure feedback before its public retry handle", async () => {
+    const dir = await fixture();
+    const timeline = new BlockingTerminalFailureTimeline(dir);
+    await seedActiveTerminalBlock(timeline);
+    const workflow = await createWorkbookWorkflow({
+      contentRoot: dir,
+      workspaceRootForId: (workspaceId) => workspaceId === WORKSPACE_ID ? resolve(dir, "workspaces", WORKSPACE_ID) : undefined,
+      timeline,
+      attempts: new AttemptStore(dir),
+      terminalEvidence: new TerminalEvidenceRepository(dir),
+      mainTutor: failingReviewTutor(),
+      practiceCoach: { assess: async () => ({ outcome: "ready" as const, text: "Ready for main review." }), dispose() {} },
+      log: { info() {}, error() {} }
+    });
+    try {
+      const stateEvents: unknown[] = [];
+      workflow.subscribeState((event) => stateEvents.push(event));
+      expect(workflow.activeObservedBlock()).toMatchObject({ lessonId: EDIT_LESSON_ID, blockId: TERMINAL_BLOCK_ID });
+      await workflow.observeTerminalFact({ type: "terminal-command-submitted", blockId: TERMINAL_BLOCK_ID, attemptId: "terminal-attempt-1", command: "npm test" });
+      await workflow.observeTerminalFact({
+        type: "terminal-command-finished",
+        blockId: TERMINAL_BLOCK_ID,
+        attemptId: "terminal-attempt-1",
+        evidence: { blockId: TERMINAL_BLOCK_ID, attemptId: "terminal-attempt-1", command: "npm test", interactions: [{ type: "terminal-output", data: "pass\n" }], exitStatus: 0 }
+      });
+      await waitUntil(() => timeline.terminalFailureFeedbackAppendReached);
+
+      const duringGap = await workflow.state();
+      const terminal = duringGap.progress.blocks.find((block: any) => block.id === TERMINAL_BLOCK_ID)?.terminal;
+      expect(terminal).toEqual({ phase: "checking" });
+      const publicFailure = workflow.timeline().find((record) => record.type === "tutor_failed" && record.operation === "review" && record.blockId === TERMINAL_BLOCK_ID);
+      expect(publicFailure).toMatchObject({ publicMessage: "Review is temporarily unavailable. Please run the command again in a moment." });
+      expect(stateEvents).not.toContainEqual(expect.objectContaining({ terminalPhase: "feedback" }));
+
+      timeline.releaseTerminalFailureFeedback.resolve(undefined);
+      await waitUntil(async () => (await timeline.read()).some((record) => record.type === "terminal-feedback-recorded"));
+      const failed = await workflow.state();
+      expect(failed.progress.blocks.find((block: any) => block.id === TERMINAL_BLOCK_ID)?.terminal).toEqual({
+        phase: "feedback",
+        message: "Review is temporarily unavailable. Please run the command again in a moment."
+      });
+      expect(workflow.timeline()).toContainEqual(expect.objectContaining({ type: "tutor_failed", failureId: (publicFailure as any).failureId, publicMessage: "Review is temporarily unavailable. Please run the command again in a moment." }));
+      expect(stateEvents).toContainEqual(expect.objectContaining({ terminalPhase: "feedback" }));
+    } finally {
+      timeline.releaseTerminalFailureFeedback.resolve(undefined);
+      await workflow.close().catch(() => undefined);
+    }
+  });
+
   it("does not write retry results or mutate attempts after close for any retry operation", async () => {
     for (const operation of ["reply", "restore", "review", "block_summary", "lesson_summary", "completion_summary"] as const) {
       for (const outcome of ["resolve", "reject"] as const) {
@@ -70,9 +120,10 @@ async function fixture() {
   await mkdir(resolve(dir, "lessons/001-first/blocks"), { recursive: true });
   await writeFile(resolve(dir, "workbook.md"), ["---", "parts:", "  - id: validation-loop", "    lessons:", "      - 001-first", "---", "# Demo workbook", "", "Welcome."].join("\n"));
   await writeFile(resolve(dir, "parts/validation-loop.md"), ["---", "---", "# Validation loop", "", "Part preamble."].join("\n"));
-  await writeFile(resolve(dir, "lessons/001-first/lesson.md"), ["---", "durationMinutes: 5", `workspace: ${WORKSPACE_ID}`, "blocks:", "  - orientation", "  - edit-answer", "  - finish", "---", "# Run an agent headlessly", "", "Lesson preamble."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/lesson.md"), ["---", "durationMinutes: 5", `workspace: ${WORKSPACE_ID}`, "blocks:", "  - orientation", "  - edit-answer", "  - run-command", "  - finish", "---", "# Run an agent headlessly", "", "Lesson preamble."].join("\n"));
   await writeFile(resolve(dir, "lessons/001-first/blocks/orientation.md"), ["---", "type: narrative", "---", "## Orientation", "", "Read this."].join("\n"));
   await writeFile(resolve(dir, "lessons/001-first/blocks/edit-answer.md"), ["---", "type: editor-practice", "outcome: Write a clear answer to the question.", "path: factory/answer.txt", "tutor: Accept any clear answer.", "---", "## Edit answer", "", "Write the answer."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/blocks/run-command.md"), ["---", "type: terminal-practice", "outcome: Run the verification command.", "tutor: Accept successful verification.", "---", "## Run command", "", "Run the command."].join("\n"));
   await writeFile(resolve(dir, "lessons/001-first/blocks/finish.md"), ["---", "type: narrative", "---", "## Finish", "", "Done."].join("\n"));
   await mkdir(resolve(dir, "workspaces", WORKSPACE_ID, "factory"), { recursive: true });
   await writeFile(resolve(dir, "workspaces", WORKSPACE_ID, "factory/answer.txt"), "");
@@ -87,6 +138,39 @@ async function seedActiveEditorFailure(timeline: WorkbookTimeline, operation: Tu
   await timeline.append({ type: "block_completed", lessonId: EDIT_LESSON_ID, blockId: "lesson--001-first--orientation" });
   await timeline.append({ type: "message", lessonId: EDIT_LESSON_ID, blockId: EDIT_BLOCK_ID, role: "user", source: "learner", presentation: "chat", text: "Can you review this?" });
   return await timeline.append({ type: "tutor_failed", lessonId: EDIT_LESSON_ID, blockId: EDIT_BLOCK_ID, requestId: "retry-request", operation, publicMessage: "The tutor is temporarily unavailable. Please retry." }) as TutorFailure;
+}
+
+async function seedActiveTerminalBlock(timeline: WorkbookTimeline): Promise<void> {
+  await timeline.append({ type: "session_started" });
+  await timeline.append({ type: "workbook_introduction_completed" });
+  await timeline.append({ type: "block_completed", blockId: "part--validation-loop" });
+  await timeline.append({ type: "block_completed", blockId: "lesson--001-first" });
+  await timeline.append({ type: "block_completed", lessonId: EDIT_LESSON_ID, blockId: "lesson--001-first--orientation" });
+  await timeline.append({ type: "block_completed", lessonId: EDIT_LESSON_ID, blockId: EDIT_BLOCK_ID });
+}
+
+class BlockingTerminalFailureTimeline extends WorkbookTimeline {
+  terminalFailureFeedbackAppendReached = false;
+  readonly releaseTerminalFailureFeedback = deferred<void>();
+
+  override async appendWithinRun(input: Parameters<WorkbookTimeline["appendWithinRun"]>[0]) {
+    if (input.type === "terminal-feedback-recorded" && input.text === "Review is temporarily unavailable. Please run the command again in a moment.") {
+      this.terminalFailureFeedbackAppendReached = true;
+      await this.releaseTerminalFailureFeedback.promise;
+    }
+    return await super.appendWithinRun(input);
+  }
+}
+
+function failingReviewTutor() {
+  return {
+    async restore() {},
+    async reply() { return "Tutor reply."; },
+    async review() { throw new Error("temporary provider outage"); },
+    async summarizeBlock() { return "Block summary."; },
+    async summarizeLesson() { return "Lesson summary."; },
+    dispose() {}
+  };
 }
 
 class RetryStallTutor {
@@ -142,12 +226,12 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(e
   return { promise, resolve: resolveDeferred, reject: rejectDeferred };
 }
 
-async function waitUntil(predicate: () => boolean) {
+async function waitUntil(predicate: () => boolean | Promise<boolean>) {
   for (let index = 0; index < 50; index += 1) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await sleep(20);
   }
-  throw new Error("Timed out waiting for retry to stall.");
+  throw new Error("Timed out waiting for workflow condition.");
 }
 
 function sleep(ms: number) { return new Promise((resolvePromise) => setTimeout(resolvePromise, ms)); }
