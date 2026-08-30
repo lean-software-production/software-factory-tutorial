@@ -44,8 +44,8 @@ npm run eval:workbook -- --release
 See [`docs/testing.md`](docs/testing.md) for the authoritative testing workflow, command matrix,
 live-eval prerequisites, report privacy rules, visual approval process, and current `test:fast`
 benchmark. In short: `check` aliases deterministic `test:fast`; `test` is the paid/Docker-backed
-release gate; `eval:workbook -- --list` has zero side effects. `npm run eval -- ...` is a temporary
-compatibility alias for `eval:engine`, not an authored eval.
+release gate; `eval:workbook -- --list` has zero side effects.
+`npm run eval -- ...` is a temporary compatibility alias for `eval:engine`, not an authored eval.
 
 `npm run tutorial:workbook` supplies the embedded terminal with one read-only runtime mount: root
 `node_modules/` at the active live workspace's `node_modules/`. A normal launch creates a new
