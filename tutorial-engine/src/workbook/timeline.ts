@@ -194,7 +194,7 @@ export class WorkbookTimeline {
   }
 
   read(): Promise<WorkbookTimelineRecord[]> {
-    return this.run(() => this.readWithinRun());
+    return this.readWithinRun();
   }
 
   /** Read and, for a brand-new absent log only, initialize as one step of an operation already serialized through run(). */

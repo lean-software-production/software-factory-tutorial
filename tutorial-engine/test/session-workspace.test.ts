@@ -11,6 +11,7 @@ import {
   validateSessionId,
   workspaceRootFor,
 } from "../src/session-workspace.js";
+import { CURRENT_WORKBOOK_SESSION_FORMAT_VERSION, WORKBOOK_SESSION_FORMAT_RECORD_TYPE } from "../src/workbook/timeline.js";
 
 const run = promisify(execFile);
 const roots: string[] = [];
@@ -126,7 +127,11 @@ describe("SessionWorkspaceManager", () => {
 
     const session = await manager.createSession({ id: "minimal" });
 
-    expect((await readdir(session.sessionRoot)).sort()).toEqual([SESSION_WORKSPACES_DIRECTORY].sort());
+    expect((await readdir(session.sessionRoot)).sort()).toEqual(["workbook", SESSION_WORKSPACES_DIRECTORY].sort());
+    expect(JSON.parse(await readFile(join(session.sessionRoot, "workbook/events.jsonl"), "utf8"))).toEqual({
+      type: WORKBOOK_SESSION_FORMAT_RECORD_TYPE,
+      version: CURRENT_WORKBOOK_SESSION_FORMAT_VERSION,
+    });
     expect(Object.keys(session.workspaceRoots).sort()).toEqual(["refactor-line", "tetris"]);
     const refactor = workspaceRootFor(session, "refactor-line");
     await expect(readdir(join(refactor, "calculator"))).resolves.not.toEqual(expect.arrayContaining(["node_modules", ".tmp", ".tutorial", ".git", ".DS_Store"]));
