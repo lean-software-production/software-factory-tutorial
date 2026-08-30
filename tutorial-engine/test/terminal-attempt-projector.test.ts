@@ -53,6 +53,25 @@ describe("projectTerminalAttempts", () => {
     expect(projectTerminalAttempts(retrying, "terminal-1").get("block")).toEqual({ state: "complete", revision: 1, successMessage: "Accepted after retry." });
   });
 
+  it("ignores failures without the matching latest review request", () => {
+    const finishedEvents: WorkbookTimelineRecord[] = [submitted(), finished()];
+    expect(projectTerminalAttempts([...finishedEvents, reviewFailed("orphan", "failure-1", 3)], "terminal-1").get("block"))
+      .toEqual({ state: "checking", revision: 1 });
+
+    expect(projectTerminalAttempts([
+      ...finishedEvents,
+      reviewRequested("request-1", 3),
+      reviewFailed("wrong-request", "failure-2", 4),
+    ], "terminal-1").get("block")).toEqual({ state: "checking", revision: 1 });
+
+    expect(projectTerminalAttempts([
+      ...finishedEvents,
+      reviewRequested("request-1", 3),
+      reviewRequested("request-2", 4),
+      reviewFailed("request-1", "stale-failure", 5),
+    ], "terminal-1").get("block")).toEqual({ state: "checking", revision: 1 });
+  });
+
   it("does not expose another retry entitlement after the one manual review-only call fails", () => {
     const exhaustedEvents: WorkbookTimelineRecord[] = [
       submitted(),

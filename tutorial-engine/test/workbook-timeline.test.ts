@@ -160,6 +160,26 @@ describe("WorkbookTimeline", () => {
     expect(await timeline.read()).toEqual([record]);
   });
 
+  it("rejects malformed or extra transcript and feedback lifecycle fields", async () => {
+    const malformedTranscript = new WorkbookTimeline(await workspace());
+    await writeCurrentTimelineLog(malformedTranscript, [
+      { type: "terminal-transcript-snapshotted", id: "snapshot", sequence: 1, at: "2026-08-21T00:00:00.000Z", attemptId: "attempt-1", lessonId: "lesson", blockId: "block", transcript: 42 },
+    ]);
+    await expect(malformedTranscript.read()).rejects.toThrow(/transcript is required/);
+
+    const extraTranscript = new WorkbookTimeline(await workspace());
+    await writeCurrentTimelineLog(extraTranscript, [
+      { type: "terminal-transcript-snapshotted", id: "snapshot", sequence: 1, at: "2026-08-21T00:00:00.000Z", attemptId: "attempt-1", lessonId: "lesson", blockId: "block", transcript: "safe", privateExtra: "secret" },
+    ]);
+    await expect(extraTranscript.read()).rejects.toThrow(/terminal-transcript-snapshotted fields are invalid/);
+
+    const malformedFeedback = new WorkbookTimeline(await workspace());
+    await writeCurrentTimelineLog(malformedFeedback, [
+      { type: "terminal-feedback-recorded", id: "feedback", sequence: 1, at: "2026-08-21T00:00:00.000Z", attemptId: "attempt-1", text: { secret: true } },
+    ]);
+    await expect(malformedFeedback.read()).rejects.toThrow(/text is required/);
+  });
+
   it("rejects an existing empty log before projecting", async () => {
     const timeline = new WorkbookTimeline(await workspace());
     await mkdir(resolve(timeline.eventPath, ".."), { recursive: true });

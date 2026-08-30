@@ -109,7 +109,7 @@ function projectedTimelineRecords(loaded: LoadedWorkbook, source: readonly Workb
     return projected ? [projected] : [];
   });
 }
-/** Terminal commands, evidence references, review requests, and failures are internal lifecycle material.
+/** Terminal commands, inline finished evidence, review requests, and failures are internal lifecycle material.
  * The Main Tutor receives only the labelled transient attempt, never the raw lifecycle log. */
 function mainTutorTimelineRecords(loaded: LoadedWorkbook, source: readonly WorkbookTimelineRecord[]): WorkbookTimelineRecord[] {
   return projectedTimelineRecords(loaded, source).filter((record) => !(
@@ -1099,6 +1099,18 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   const createTerminalReviewRetry = async (failureId: string): Promise<TerminalReviewRequest | undefined> => {
     const failure = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-review-failed" }> => record.type === "terminal-review-failed" && record.failureId === failureId);
     if (!failure) return undefined;
+    const matchingRequest = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-review-requested" }> =>
+      record.type === "terminal-review-requested"
+      && record.requestId === failure.requestId
+      && record.attemptId === failure.attemptId
+      && record.lessonId === failure.lessonId
+      && record.blockId === failure.blockId
+      && record.sequence < failure.sequence);
+    const latestRequestBeforeFailure = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-review-requested" }> =>
+      record.type === "terminal-review-requested" && record.attemptId === failure.attemptId && record.sequence < failure.sequence);
+    if (!matchingRequest || latestRequestBeforeFailure?.requestId !== failure.requestId) {
+      throw new WorkbookWorkflowCommandError(409, "The terminal review is no longer retryable.");
+    }
     const active = activeDeclaredBlock();
     if (!active || active.block.type !== "terminal-practice" || active.lessonId !== failure.lessonId || active.id !== failure.blockId) throw new WorkbookWorkflowCommandError(409, "The terminal review is no longer retryable.");
     const submission = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>

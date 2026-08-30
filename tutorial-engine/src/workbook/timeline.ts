@@ -226,8 +226,26 @@ function normalizeTerminalLifecycleRecord(value: Record<string, unknown>, line: 
         failureId: assertStringField(value, "failureId", line),
         publicMessage: assertStringField(value, "publicMessage", line),
       };
+    case "terminal-transcript-snapshotted":
+      assertExactKeys(value, line, ["type", "id", "sequence", "at", "attemptId", "lessonId", "blockId", "transcript"]);
+      return {
+        ...metadata,
+        type: "terminal-transcript-snapshotted",
+        attemptId: assertStringField(value, "attemptId", line),
+        lessonId: assertStringField(value, "lessonId", line),
+        blockId: assertStringField(value, "blockId", line),
+        transcript: assertStringField(value, "transcript", line),
+      };
+    case "terminal-feedback-recorded":
+      assertExactKeys(value, line, ["type", "id", "sequence", "at", "attemptId", "text"]);
+      return {
+        ...metadata,
+        type: "terminal-feedback-recorded",
+        attemptId: assertStringField(value, "attemptId", line),
+        text: assertStringField(value, "text", line),
+      };
     default:
-      return value as TerminalLifecycleEvent;
+      throw new Error(`Invalid workbook timeline record at line ${line}: unknown terminal lifecycle record type '${String(value.type)}'.`);
   }
 }
 

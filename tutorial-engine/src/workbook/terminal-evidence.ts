@@ -64,7 +64,13 @@ export function validateTerminalEvidence(value: unknown): TerminalEvidence {
     command: value.command,
     interactions: value.interactions.map((interaction) => ({ kind: interaction.kind, data: interaction.data })),
     exitStatus: value.exitStatus,
-    ...(value.transcriptSnapshot ? { transcriptSnapshot: { ...value.transcriptSnapshot } } : {}),
+    ...(value.transcriptSnapshot ? {
+      transcriptSnapshot: {
+        label: value.transcriptSnapshot.label,
+        transcript: value.transcriptSnapshot.transcript,
+        truncated: value.transcriptSnapshot.truncated,
+      },
+    } : {}),
   };
   if (Buffer.byteLength(JSON.stringify(evidence), "utf8") > MAX_TERMINAL_EVIDENCE_BYTES) {
     throw new Error("Terminal evidence exceeds the snapshot limit.");

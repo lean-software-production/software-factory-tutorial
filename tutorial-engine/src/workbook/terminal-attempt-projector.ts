@@ -87,7 +87,7 @@ export function projectTerminalAttempts(
       case "terminal-review-failed": {
         const attempt = attempts.get(record.attemptId);
         if (!attempt?.finished || attempt.lessonId !== record.lessonId || attempt.blockId !== record.blockId) break;
-        if (attempt.latestReviewRequestId && attempt.latestReviewRequestId !== record.requestId) break;
+        if (attempt.latestReviewRequestId !== record.requestId) break;
         const counts = terminalReviewCallCounts(attempt.reviewRequests, { attemptId: record.attemptId });
         attempt.reviewFailure = { message: record.publicMessage, ...(canStartManualTerminalReview(counts) ? { failureId: record.failureId } : {}) };
         break;

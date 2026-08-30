@@ -6,22 +6,28 @@ import {
   MAX_TERMINAL_INTERACTION_BYTES,
   MAX_TERMINAL_TRANSCRIPT_SNAPSHOT_BYTES,
   validateTerminalEvidence,
-  type TerminalEvidence,
 } from "../src/workbook/terminal-evidence.js";
 
 describe("validateTerminalEvidence", () => {
-  it("accepts a bounded finished snapshot and returns a deep copy", () => {
-    const input: TerminalEvidence = {
+  it("accepts a bounded finished snapshot, drops untrusted extras, and returns a deep copy", () => {
+    const input = {
       kind: "finished",
       command: "npm test",
-      interactions: [{ kind: "input", data: "npm test\r" }, { kind: "output", data: "PASS\n" }],
+      interactions: [{ kind: "input" as const, data: "npm test\r" }, { kind: "output" as const, data: "PASS\n" }],
       exitStatus: 0,
-      transcriptSnapshot: { label: "Command-local terminal transcript at command completion", transcript: "PASS\n", truncated: false },
+      transcriptSnapshot: {
+        label: "Command-local terminal transcript at command completion",
+        transcript: "PASS\n",
+        truncated: false,
+        evidenceRef: "must-not-survive",
+        nested: { secret: "must-not-survive" },
+      },
     };
 
     const validated = validateTerminalEvidence(input);
     input.interactions[0]!.data = "mutated";
-    input.transcriptSnapshot!.transcript = "mutated";
+    input.transcriptSnapshot.transcript = "mutated";
+    input.transcriptSnapshot.nested.secret = "mutated";
 
     expect(validated).toEqual({
       kind: "finished",
