@@ -108,8 +108,7 @@ function projectedTrace() {
   trace.editors.push({ blockId: "editor", revision: 1, status: "feedback", feedback: "Visible editor feedback.", at: "editor-at-secret" });
   trace.internalEvents.push(
     record({ type: "terminal-command-submitted", attemptId: "attempt-command-secret", lessonId, blockId: "terminal", command: "echo command-secret", terminalSessionId: "terminal-session-secret" }),
-    record({ type: "terminal-command-finished", attemptId: "attempt-finished-secret", evidence: privateFinishedEvidence() }),
-    record({ type: "terminal-review-requested", attemptId: "attempt-review-secret", lessonId, blockId: "terminal", requestId: "request-secret", mode: "automatic", callNumber: 1 }),
+    record({ type: "terminal-command-finished", attemptId: "attempt-command-secret", evidence: privateFinishedEvidence() }),
     record({ type: "terminal-feedback-recorded", attemptId: "attempt-feedback-secret", text: "private-feedback-secret" }),
     record({ type: "attempt_accepted", lessonId, blockId: "terminal", kind: "terminal", attemptId: "attempt-accepted-secret", summary: "private-summary-secret", path: "/tmp/private-session-path" }),
     record({ type: "future-private-event", text: "future-private-event-secret" })
@@ -146,7 +145,7 @@ function expectNoPrivate(value: unknown): void {
     "frontmatter-secret", "lesson-spec-secret", "private-rubric-secret", "prerequisite-internal-secret",
     "attempt-command-secret", "command-secret", "terminal-session-secret", "attempt-finished-secret", "finished-command-secret",
     "finished-interaction-input-secret", "finished-interaction-output-secret", "finished-transcript-label-secret", "finished-transcript-body-secret",
-    "attempt-review-secret", "request-secret", "attempt-feedback-secret", "private-feedback-secret",
+    "attempt-feedback-secret", "private-feedback-secret",
     "attempt-accepted-secret", "private-summary-secret", "future-private-event-secret",
     "raw-event-id-secret", "terminal-at-secret", "reflection-at-secret", "editor-at-secret", "private gate assertion name secret",
     "private gate assertion detail secret", "/tmp/private-session-path", "/tmp/private-gate-path", "OPENCODE_API_KEY", "sk-secret-token",

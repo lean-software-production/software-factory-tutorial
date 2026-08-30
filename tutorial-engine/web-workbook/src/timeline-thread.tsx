@@ -56,11 +56,15 @@ export function revealTutorReplyIfNeeded(replyElement: HTMLElement, composerDock
   return clampedDelta;
 }
 
-function isAuthoredCourseRecord(record: TimelineThreadRecord): record is TimelineMessageRecord {
-  return record.type === "message" && record.presentation === "course" && record.source === "authored";
+function isMessageRecord(record: TimelineThreadRecord): boolean {
+  return (record as { type?: unknown }).type === "message";
 }
 
-function isLessonFrameRecord(record: TimelineThreadRecord): record is TimelineMessageRecord {
+function isAuthoredCourseRecord(record: TimelineThreadRecord): boolean {
+  return isMessageRecord(record) && record.presentation === "course" && record.source === "authored";
+}
+
+function isLessonFrameRecord(record: TimelineThreadRecord): boolean {
   return isAuthoredCourseRecord(record) && (record.blockId === "__lesson_frame__" || /^lesson--[a-z0-9]+(?:-[a-z0-9]+)*$/.test(record.blockId));
 }
 
@@ -75,12 +79,11 @@ function resizeComposerTextarea(textarea: HTMLTextAreaElement) {
   textarea.style.overflowY = textarea.scrollHeight > composerMaxHeightPx ? "auto" : "hidden";
 }
 
-export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onRetry, onDoItForMe, renderContinuation, renderTerminalHistory, practiceSurface, practiceSurfaceBlockId, completionPanel, readyBlockIds = [], inputDisabled = false, activeReflectionReviewing = false }: {
+export function TimelineThread({ records, activeLessonId, activeBlockId, onSend, onDoItForMe, renderContinuation, renderTerminalHistory, practiceSurface, practiceSurfaceBlockId, completionPanel, readyBlockIds = [], inputDisabled = false, activeReflectionReviewing = false }: {
   records: readonly TimelineThreadRecord[];
   activeLessonId: string;
   activeBlockId: string;
   onSend(text: string): Promise<void>;
-  onRetry(failureId: string): Promise<void>;
   onDoItForMe?(): void;
   renderContinuation?(record: TimelineMessageRecord): React.ReactNode;
   /** A durable, static terminal transcript directly below its own authored record. */
@@ -101,9 +104,9 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   const responseEntryRefs = useRef(new Map<string, HTMLElement>());
   const knownResponseIds = useRef<Set<string> | null>(null);
   const recordMatchesActive = (record: { lessonId: string; blockId: string }) => record.blockId === activeBlockId && (record.lessonId === activeLessonId || activeBlockId.includes("--"));
-  const activeAuthoredRecordId = [...records].reverse().find((record) => record.type === "message" && record.presentation === "course" && record.source === "authored" && recordMatchesActive(record))?.id;
+  const activeAuthoredRecordId = [...records].reverse().find((record) => isAuthoredCourseRecord(record) && recordMatchesActive(record))?.id;
   const readyBlockIdSet = new Set(readyBlockIds);
-  const responseRecords = records.filter((record) => record.type === "tutor_failed" || (record.type === "message" && record.role === "assistant" && !isAuthoredCourseRecord(record)));
+  const responseRecords = records.filter((record) => isMessageRecord(record) && record.role === "assistant" && !isAuthoredCourseRecord(record));
   const latestResponseId = responseRecords.at(-1)?.id;
   const responseIdsKey = responseRecords.map((record) => record.id).join("\u0000");
   // `records` is a new array every render, so the set below is memoised on the ids it contains
@@ -166,8 +169,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     else responseEntryRefs.current.delete(recordId);
   };
   const renderConversationRecord = (record: TimelineThreadRecord) => {
-    if (record.type === "tutor_failed") return <aside key={record.id} ref={responseEntryRef(record.id)} className="timeline-message tutor failure" aria-live="polite"><b>Tutor unavailable</b><p>{record.publicMessage}</p><button className="button secondary" onClick={() => void onRetry(record.failureId)}>Retry</button></aside>;
-    if (record.type !== "message") return null;
+    if (!isMessageRecord(record)) return null;
     const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : ""}`;
     const trackResponse = record.role === "assistant" && !(record.source === "authored" && record.presentation === "course");
     return <article key={record.id} ref={trackResponse ? responseEntryRef(record.id) : undefined} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown source={record.source === "authored" && record.presentation === "course" ? "authored" : "generated"}>{record.text}</Markdown>}</article>;
@@ -179,18 +181,18 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     let renderedPracticeSurface = false;
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index];
-      if (!record) continue;
+      if (!record || !isMessageRecord(record)) continue;
       if (isAuthoredCourseRecord(record)) {
         // A ready successor is authored as soon as this block's work is accepted, while this
         // block remains active until the learner continues. Later conversation still belongs to
         // this block, so collect it by its lifecycle identity rather than by the next course row.
-        const following = records.filter((candidate) => !isAuthoredCourseRecord(candidate) && belongsToAuthoredBlock(candidate, record));
+        const following = records.filter((candidate) => isMessageRecord(candidate) && !isAuthoredCourseRecord(candidate) && belongsToAuthoredBlock(candidate, record));
         const active = recordMatchesActive(record);
         const transitionClass = record.blockId.startsWith("part--") || record.lessonId.startsWith("workbook:part:") && record.blockId === "__part__"
           ? " timeline-part-transition"
           : "";
         const canInsertCommand = Boolean(onDoItForMe && record.id === activeAuthoredRecordId);
-        const lastMessage = ([...following].reverse().find((candidate): candidate is TimelineMessageRecord => candidate.type === "message") ?? record);
+        const lastMessage = following.at(-1) ?? record;
         if (active) renderedActiveBlock = true;
         const placesPracticeSurface = !renderedPracticeSurface && record.blockId === practiceSurfaceBlockId;
         if (placesPracticeSurface) renderedPracticeSurface = true;

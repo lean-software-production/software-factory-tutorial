@@ -234,7 +234,7 @@ describe("authored workbook scenario descriptors", () => {
       expect(Object.isFrozen(scenario.criteria)).toBe(true);
       expect(Object.isFrozen(scenario.expectedModelCalls)).toBe(true);
       expect(Object.isFrozen(scenario.expectedModelCallDerivation)).toBe(true);
-      expect(scenario.expectedModelCallDerivation.join("\n")).toMatch(/Main Tutor upper bound|Main Tutor terminal-review paths|Judge/);
+      expect(scenario.expectedModelCallDerivation.join("\n")).toMatch(/Main Tutor upper bound|Main Tutor terminal assessment paths|Judge/);
       expect(scenario.expectedModelCalls.judge).toBe(1);
       expect(scenario.expectedModelCalls.total).toBe(scenario.expectedModelCalls.mainTutor + scenario.expectedModelCalls.judge);
       expect(scenario.expectedModelCalls.total).toBeGreaterThan(1);

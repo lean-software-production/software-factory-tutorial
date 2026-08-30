@@ -48,7 +48,6 @@ describe("workbook fixed conversation layout", () => {
         activeLessonId: "part/lesson",
         activeBlockId: editorBlock.id,
         onSend: vi.fn(async () => undefined),
-        onRetry: vi.fn(async () => undefined),
         records: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson", blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "Course note" }]
       })
     ));
@@ -192,7 +191,6 @@ describe("workbook fixed conversation layout", () => {
       activeLessonId: "part/lesson",
       activeBlockId: editorBlock.id,
       onSend: vi.fn(async () => undefined),
-      onRetry: vi.fn(async () => undefined),
       records: [
         { type: "message", id: "main", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson", blockId: editorBlock.id, role: "assistant", source: "main_tutor", presentation: "chat", text: "Main reply" },
         { type: "message", id: "hint", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson", blockId: editorBlock.id, role: "assistant", source: "main_tutor", presentation: "review", text: "Hint reply" },

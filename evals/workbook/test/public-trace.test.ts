@@ -199,8 +199,7 @@ describe("authored workbook public eval trace projection", () => {
     trace.publicStates.push({ label: "visible", state: browserPublicState() });
     trace.internalEvents.push(
       record({ type: "terminal-command-submitted", attemptId: "attempt-command-secret", lessonId, blockId: "terminal", command: "echo command-secret", terminalSessionId: "terminal-session-secret" }),
-      record({ type: "terminal-command-finished", attemptId: "attempt-finished-secret", evidence: privateFinishedEvidence() }),
-      record({ type: "terminal-review-requested", attemptId: "attempt-review-secret", lessonId, blockId: "terminal", requestId: "request-secret", mode: "automatic", callNumber: 1 }),
+      record({ type: "terminal-command-finished", attemptId: "attempt-command-secret", evidence: privateFinishedEvidence() }),
       record({ type: "terminal-feedback-recorded", attemptId: "attempt-feedback-secret", text: "private-feedback-secret" }),
       record({ type: "attempt_accepted", lessonId, blockId: "terminal", attemptId: "attempt-accepted-secret", version: 7, kind: "terminal", summary: "private-summary-secret", rubric: { private: "rubric-secret" }, path: "/private/session/path" }),
       record({ type: "block_completed", lessonId, blockId: "terminal", response: "private-response-secret" }),
@@ -209,7 +208,7 @@ describe("authored workbook public eval trace projection", () => {
 
     const projected = projectAuthoredWorkbookEvalTrace(trace);
 
-    expect(trace.internalEvents).toHaveLength(7);
+    expect(trace.internalEvents).toHaveLength(6);
     expect(projected).not.toHaveProperty("internalEvents");
     expect(projected).not.toHaveProperty("events");
     expect(projected.progressionEvents).toEqual([
@@ -217,7 +216,7 @@ describe("authored workbook public eval trace projection", () => {
       { type: "block_completed", lessonId, blockId: "terminal" }
     ]);
     const serialized = JSON.stringify({ projected });
-    for (const secret of ["attempt-command-secret", "command-secret", "terminal-session-secret", "attempt-finished-secret", "finished-command-secret", "finished-interaction-input-secret", "finished-interaction-output-secret", "finished-transcript-label-secret", "finished-transcript-body-secret", "attempt-review-secret", "request-secret", "attempt-feedback-secret", "private-feedback-secret", "attempt-accepted-secret", "private-summary-secret", "rubric-secret", "/private/session/path", "private-response-secret", "future-secret"]) {
+    for (const secret of ["attempt-command-secret", "command-secret", "terminal-session-secret", "finished-command-secret", "finished-interaction-input-secret", "finished-interaction-output-secret", "finished-transcript-label-secret", "finished-transcript-body-secret", "attempt-feedback-secret", "private-feedback-secret", "attempt-accepted-secret", "private-summary-secret", "rubric-secret", "/private/session/path", "private-response-secret", "future-secret"]) {
       expect(serialized).not.toContain(secret);
     }
   });

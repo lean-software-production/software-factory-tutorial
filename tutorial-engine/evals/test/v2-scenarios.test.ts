@@ -11,6 +11,19 @@ function event(event: Record<string, unknown>): WorkbookTimelineRecord {
   return { id: "fixture", sequence: 1, at: "2026-08-20T00:00:00.000Z", ...event } as WorkbookTimelineRecord;
 }
 
+function finishedEvidence(secret: string) {
+  return {
+    kind: "finished",
+    command: `echo command-${secret}`,
+    interactions: [
+      { kind: "input", data: `echo input-${secret}\r` },
+      { kind: "output", data: `output-${secret}\r\n` }
+    ],
+    exitStatus: 0,
+    transcriptSnapshot: { label: `snapshot-${secret}`, transcript: `transcript-${secret}`, truncated: false }
+  };
+}
+
 function baseTrace(scenarioId: string): V2SessionTrace {
   const trace = createEmptyV2SessionTrace(scenarioId);
   trace.publicStates.push({
@@ -153,7 +166,10 @@ describe("v2 live evaluator scenarios", () => {
 
   it("does not fail deterministic gates because private terminal lifecycle rows remain internal", () => {
     const trace = exactCommandTrace();
-    trace.events.push(event({ type: "terminal-review-requested", lessonId, blockId: "exact-command", attemptId: "private-attempt", requestId: "request-secret", mode: "automatic", callNumber: 1 }));
+    trace.events.push(
+      event({ type: "terminal-command-submitted", lessonId, blockId: "exact-command", attemptId: "private-attempt", command: "echo submitted-command-secret", terminalSessionId: "terminal-session-secret" }),
+      event({ type: "terminal-command-finished", attemptId: "private-attempt", evidence: finishedEvidence("finished-secret") })
+    );
 
     allGateAssertionsPass(trace);
   });
@@ -190,7 +206,7 @@ describe("v2 live evaluator scenarios", () => {
     expect(statusOnlyFailed.assertions.find((assertion) => assertion.name === "editor feedback visible")?.passed).toBe(false);
 
     const publicVocabulary = editorFeedbackTrace();
-    (publicVocabulary.publicStates[1]!.state as any).progress.blocks[0].checkpoint.feedback = "Private editor criterion can appear as public learner-visible prose; terminal-command-submitted and terminal-review-requested can too.";
+    (publicVocabulary.publicStates[1]!.state as any).progress.blocks[0].checkpoint.feedback = "Private editor criterion can appear as public learner-visible prose; terminal-command-submitted and terminal-command-finished can too.";
     const vocabularyGate = deterministicV2Gate(findV2Scenario(publicVocabulary.scenarioId), publicVocabulary);
     expect(vocabularyGate.assertions.find((assertion) => assertion.name === "checked trace uses projected judge structure")?.passed).toBe(true);
   });
@@ -232,7 +248,7 @@ describe("v2 live evaluator scenarios", () => {
     expect(wrongPathFailed.assertions.find((assertion) => assertion.name === "clue-only learner command")?.passed).toBe(false);
 
     const publicVocabulary = clueOnlyTrace();
-    (publicVocabulary.publicStates[2]!.state as any).chapters[0].lesson.blocks[0].markdown += "\nPublic prose may mention terminal-command-submitted, terminal review request, \"tutor\":, and unrelated shell-looking text such as printf 'hello\\n' > notes/example.txt && cat notes/example.txt.";
+    (publicVocabulary.publicStates[2]!.state as any).chapters[0].lesson.blocks[0].markdown += "\nPublic prose may mention terminal-command-submitted, terminal-command-finished, \"tutor\":, and unrelated shell-looking text such as printf 'hello\\n' > notes/example.txt && cat notes/example.txt.";
     const vocabularyGate = deterministicV2Gate(findV2Scenario(publicVocabulary.scenarioId), publicVocabulary);
     expect(vocabularyGate.assertions.find((assertion) => assertion.name === "clue-only public prompt")?.passed).toBe(true);
 

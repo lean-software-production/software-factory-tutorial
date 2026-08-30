@@ -17,7 +17,7 @@ function passingGate(): V2GateResult {
 }
 
 function failingGate(): V2GateResult {
-  return { passed: false, assertions: [{ name: "synthetic gate", passed: false, detail: "terminal-review-requested review-request-secret" }] };
+  return { passed: false, assertions: [{ name: "synthetic gate", passed: false, detail: "terminal-command-finished finished-output-secret" }] };
 }
 
 function fakeWorkspace(options: { startFails?: boolean; closeFails?: boolean } = {}): EvaluationWorkspace {
@@ -60,8 +60,9 @@ function serialize(value: unknown): string {
 
 function expectNoPrivateRawEvents(value: unknown): void {
   const text = typeof value === "string" ? value : serialize(value);
-  expect(text).not.toContain("review-request-secret");
-  expect(text).not.toContain("private-review-secret");
+  expect(text).not.toContain("feedback-text-secret");
+  expect(text).not.toContain("private-feedback-secret");
+  expect(text).not.toContain("submitted-command-secret");
   expect(text).not.toContain("attempt-secret");
   expect(text).not.toContain("terminal-session-secret");
   expect(text).not.toContain("finished-command-secret");
@@ -84,9 +85,9 @@ async function runWithTrace(reportsRoot: string, overrides: V2EvalRunnerDependen
       runV2ScenarioSession: async ({ trace }) => {
         trace.publicStates.push({ label: "public", state: { progress: { activeBlockId: "exact-command" } } });
         trace.events.push(
-          { id: "raw-id", sequence: 1, at: "2026-08-20T00:00:00.000Z", type: "terminal-review-requested", lessonId: "001-live-session", blockId: "exact-command", attemptId: "attempt-secret", requestId: "review-request-secret", mode: "automatic", callNumber: 1 } as V2SessionTrace["events"][number],
-          { id: "raw-id", sequence: 2, at: "2026-08-20T00:00:00.000Z", type: "terminal-command-submitted", lessonId: "001-live-session", blockId: "exact-command", command: "echo secret", attemptId: "attempt-secret", terminalSessionId: "terminal-session-secret" } as V2SessionTrace["events"][number],
-          { id: "raw-id", sequence: 3, at: "2026-08-20T00:00:00.000Z", type: "terminal-command-finished", attemptId: "attempt-secret", evidence: { kind: "finished", command: "echo finished-command-secret", interactions: [{ kind: "input", data: "finished-input-secret\r" }, { kind: "output", data: "finished-output-secret\r\n" }], exitStatus: 0, transcriptSnapshot: { label: "finished-snapshot-label", transcript: "finished-transcript-secret", truncated: false } } } as V2SessionTrace["events"][number],
+          { id: "raw-id", sequence: 1, at: "2026-08-20T00:00:00.000Z", type: "terminal-command-submitted", lessonId: "001-live-session", blockId: "exact-command", command: "echo submitted-command-secret", attemptId: "attempt-secret", terminalSessionId: "terminal-session-secret" } as V2SessionTrace["events"][number],
+          { id: "raw-id", sequence: 2, at: "2026-08-20T00:00:00.000Z", type: "terminal-command-finished", attemptId: "attempt-secret", evidence: { kind: "finished", command: "echo finished-command-secret", interactions: [{ kind: "input", data: "finished-input-secret\r" }, { kind: "output", data: "finished-output-secret\r\n" }], exitStatus: 0, transcriptSnapshot: { label: "finished-snapshot-label", transcript: "finished-transcript-secret", truncated: false } } } as V2SessionTrace["events"][number],
+          { id: "raw-id", sequence: 3, at: "2026-08-20T00:00:00.000Z", type: "terminal-feedback-recorded", attemptId: "attempt-secret", text: "feedback-text-secret" } as V2SessionTrace["events"][number],
           { id: "raw-id", sequence: 4, at: "2026-08-20T00:00:00.000Z", type: "block_completed", lessonId: "001-live-session", blockId: "exact-command" } as V2SessionTrace["events"][number]
         );
         return trace;
@@ -190,7 +191,7 @@ describe("v2 live eval report markers and metadata", () => {
   it("writes judge failure metadata with a sanitized public error summary", async () => {
     const reportsRoot = await tempReportsRoot();
     const result = await runWithTrace(reportsRoot, {
-      judgeV2TraceFromPrompt: async () => { throw new Error("judge saw terminal-review-requested review-request-secret attempt-secret"); }
+      judgeV2TraceFromPrompt: async () => { throw new Error("judge saw terminal-command-finished finished-output-secret attempt-secret"); }
     });
     const metadata = await readJson<Record<string, any>>(join(result.directory, "metadata.json"));
     const latest = createV2LatestReport([{ scenario: scenario.id, runs: [result] }]);
@@ -294,12 +295,12 @@ describe("v2 live eval report markers and metadata", () => {
       reflections: [],
       editors: [],
       events: [
-        { id: "raw-id", sequence: 1, at: "2026-08-20T00:00:00.000Z", type: "terminal-feedback-recorded", attemptId: "attempt-secret", text: "review-request-secret" } as V2SessionTrace["events"][number],
+        { id: "raw-id", sequence: 1, at: "2026-08-20T00:00:00.000Z", type: "terminal-feedback-recorded", attemptId: "attempt-secret", text: "feedback-text-secret" } as V2SessionTrace["events"][number],
         { id: "raw-id", sequence: 2, at: "2026-08-20T00:00:00.000Z", type: "block_completed", lessonId: "001-live-session", blockId: "exact-command" } as V2SessionTrace["events"][number]
       ],
       artifacts: []
     });
-    const gate: V2GateResult = { passed: true, assertions: [{ name: "raw assertion name secret", passed: true, detail: "terminal-review-requested review-request-secret" }] };
+    const gate: V2GateResult = { passed: true, assertions: [{ name: "raw assertion name secret", passed: true, detail: "terminal-command-finished finished-output-secret" }] };
     const judge = verifyV2JudgeResult({
       dimensions: {
         protocolUse: { score: 2, citations: [0], rationale: "public" },
@@ -311,10 +312,10 @@ describe("v2 live eval report markers and metadata", () => {
     const prompt = buildV2JudgePrompt(scenario, trace, gate);
     const unsafeJudge = {
       ...judge,
-      raw: "terminal-review-requested",
+      raw: "terminal-command-finished",
       dimensions: {
         ...judge.dimensions,
-        protocolUse: { ...judge.dimensions.protocolUse, extra: "review-request-secret" }
+        protocolUse: { ...judge.dimensions.protocolUse, extra: "finished-output-secret" }
       }
     };
     const report = createV2Report({ scenario, trace, gate, judgeInput: prompt, judge: unsafeJudge as typeof judge, tutorModel: "tutor", judgeModel: "judge" });

@@ -493,8 +493,7 @@ function maxTimelineSequence(state: WorkbookApiState): number {
 function hasRelevantTimelineAfter(state: WorkbookApiState, blockId: string, baselineSequence: number, terminalMessage: string): boolean {
   return state.timeline.some((record) => {
     if (record.sequence <= baselineSequence || record.blockId !== blockId && (!("blockInView" in record) || record.blockInView !== blockId)) return false;
-    if (record.type === "message") return record.text === terminalMessage;
-    return record.type === "tutor_failed" && record.publicMessage === terminalMessage;
+    return record.type === "message" && record.text === terminalMessage;
   });
 }
 

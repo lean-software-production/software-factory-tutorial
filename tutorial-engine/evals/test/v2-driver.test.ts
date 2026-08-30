@@ -263,8 +263,8 @@ describe("v2 workbook driver", () => {
     ]);
   });
 
-  it("uses a dedicated terminal review timeout for terminal submission and review", async () => {
-    const trace = createEmptyV2SessionTrace("terminal-review-timeout-test");
+  it("uses a dedicated terminal assessment timeout for terminal submission and checking", async () => {
+    const trace = createEmptyV2SessionTrace("terminal-assessment-timeout-test");
     let stateReads = 0;
     const reviewingState = { progress: { blocks: [{ id: "lesson--001-live-session--exact-command", terminal: { phase: "checking" } }] } };
     const acceptedState = { progress: { blocks: [{ id: "lesson--001-live-session--exact-command", terminal: { phase: "complete", message: "Review accepted after the terminal I/O timeout." } }] } };
@@ -373,7 +373,7 @@ describe("v2 workbook driver", () => {
     const driver = new V2WorkbookDriver({
       serverUrl: "http://workbook.invalid",
       trace,
-      fetch: async () => new Response(JSON.stringify({ workbook: { title: "Public prose" }, tutor: "A public field can say This is private tutor guidance, terminal-command-submitted, terminal review request, and \"tutor\":" }), {
+      fetch: async () => new Response(JSON.stringify({ workbook: { title: "Public prose" }, tutor: "A public field can say This is private tutor guidance, terminal-command-submitted, terminal-command-finished, and \"tutor\":" }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
       })
@@ -382,6 +382,6 @@ describe("v2 workbook driver", () => {
     const state = await driver.readState("public-prose");
 
     expect(state).toHaveProperty("tutor");
-    expect(JSON.stringify(trace.publicStates)).toContain("terminal review request");
+    expect(JSON.stringify(trace.publicStates)).toContain("terminal-command-finished");
   });
 });

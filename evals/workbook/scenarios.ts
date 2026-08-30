@@ -363,7 +363,7 @@ const authoredWorkbookScenarioCatalog = [
     expectedModelCalls: freezeExpectedCalls({ mainTutor: 14, judge: 1 }),
     expectedModelCallDerivation: freezeStrings([
       "Main Tutor upper bound: actual path includes introduction, four reflection reviews, evaluated reflection blocks, block summaries, lesson summary, and workbook summary; conservative margin 14.",
-      "Main Tutor terminal-review paths: zero terminal-review calls; primer contains reflection/structural blocks only.",
+      "Main Tutor terminal assessment paths: zero terminal command assessments; primer contains reflection/structural blocks only.",
       "Judge: exactly one stateless public-report judge call."
     ]),
     criteria: [

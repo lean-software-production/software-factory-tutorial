@@ -264,8 +264,8 @@ describe("authored workbook public driver", () => {
     await expect(driver.continueBlock("checks")).rejects.toThrow(/Ambiguous workbook block id 'checks'/);
   });
 
-  it("parses public terminal frames, drops socket extras, and supports expected feedback followed by retry", async () => {
-    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-feedback-retry");
+  it("parses public terminal frames, drops socket extras, and supports expected feedback followed by a corrected command", async () => {
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-feedback-correction");
     const states = [stateWithTerminal("complete", "At rest."), stateWithTerminal("checking"), stateWithTerminal("feedback", "Try again with the visible filename."), stateWithTerminal("feedback", "Try again with the visible filename."), stateWithTerminal("checking"), stateWithTerminal("complete", "Accepted.")];
     const driver = new AuthoredWorkbookDriver({
       serverUrl: "http://workbook.invalid",
@@ -280,7 +280,7 @@ describe("authored workbook public driver", () => {
     });
 
     const feedback = await driver.submitTerminalCommand(blockId, "bad command", { label: "terminal:bad", complete: false, expectedFeedback: /visible filename/ });
-    const completed = await driver.submitTerminalCommand(blockId, "good command", { label: "terminal:retry", complete: false });
+    const completed = await driver.submitTerminalCommand(blockId, "good command", { label: "terminal:corrected", complete: false });
 
     expect(feedback.progress.blocks[0]?.terminal).toEqual({ phase: "feedback", message: "Try again with the visible filename." });
     expect(completed.progress.blocks[0]?.terminal).toEqual({ phase: "complete", message: "Accepted." });
@@ -291,7 +291,7 @@ describe("authored workbook public driver", () => {
       { blockId, direction: "output", text: "visible output\r\n" }
     ]);
     expect(JSON.stringify(trace.terminalTranscript)).not.toContain("socket-extra-secret");
-    expect(trace.publicStates.map((entry) => entry.label)).toEqual(["terminal:bad:baseline", "terminal:bad:reviewed:1", "terminal:bad:reviewed:2", "terminal:retry:reviewed:1", "terminal:retry:reviewed:2"]);
+    expect(trace.publicStates.map((entry) => entry.label)).toEqual(["terminal:bad:baseline", "terminal:bad:reviewed:1", "terminal:bad:reviewed:2", "terminal:corrected:reviewed:1", "terminal:corrected:reviewed:2"]);
   });
 
   it("applies private terminal activation only to socket bytes and redacts it from trace/state", async () => {
@@ -494,7 +494,7 @@ describe("authored workbook public driver", () => {
       }
     });
 
-    const reviewed = await driver.submitTerminalCommand(blockId, "retry command", { complete: false, expectedFeedback: "visible command" });
+    const reviewed = await driver.submitTerminalCommand(blockId, "revised command", { complete: false, expectedFeedback: "visible command" });
 
     expect(reads).toBe(4);
     expect(reviewed.progress.blocks[0]?.terminal).toEqual({ phase: "feedback", message: "Run the visible command." });
@@ -758,7 +758,7 @@ describe("authored workbook public driver", () => {
       fetch: async () => new Response(JSON.stringify(states.shift() ?? repeatedFeedback), { status: 200 })
     });
 
-    const reviewed = await driver.submitTerminalCommand(blockId, "retry command", { complete: false, expectedFeedback: "visible filename" });
+    const reviewed = await driver.submitTerminalCommand(blockId, "revised command", { complete: false, expectedFeedback: "visible filename" });
 
     expect(reviewed.progress.blocks[0]?.terminal).toEqual({ phase: "feedback", message: "Use the visible filename." });
     expect(trace.publicStates.map((entry) => entry.label)).toEqual(["terminal:lesson--001-public-contract--terminal:baseline", "terminal:lesson--001-public-contract--terminal:reviewed:1", "terminal:lesson--001-public-contract--terminal:reviewed:2", "terminal:lesson--001-public-contract--terminal:reviewed:3"]);
@@ -855,17 +855,17 @@ describe("authored workbook public driver", () => {
 
   it("rejects unexpected terminal feedback with the public feedback message", async () => {
     const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-unexpected-feedback");
-    const states = [stateWithTerminal("complete", "At rest."), stateWithTerminal("checking"), stateWithTerminal("feedback", "Visible retry guidance.")];
+    const states = [stateWithTerminal("complete", "At rest."), stateWithTerminal("checking"), stateWithTerminal("feedback", "Visible correction guidance.")];
     const driver = new AuthoredWorkbookDriver({
       serverUrl: "http://workbook.invalid",
       trace,
       WebSocket: ReplayWebSocket as any,
       terminalTimeoutMs: 100,
       terminalReviewTimeoutMs: 1_000,
-      fetch: async () => new Response(JSON.stringify(states.shift() ?? stateWithTerminal("feedback", "Visible retry guidance.")), { status: 200 })
+      fetch: async () => new Response(JSON.stringify(states.shift() ?? stateWithTerminal("feedback", "Visible correction guidance.")), { status: 200 })
     });
 
-    await expect(driver.submitTerminalCommand(blockId, "bad command", { complete: false })).rejects.toThrow("Visible retry guidance.");
+    await expect(driver.submitTerminalCommand(blockId, "bad command", { complete: false })).rejects.toThrow("Visible correction guidance.");
   });
 
   it("fails closed when terminal socket sends non-JSON instead of a public frame", async () => {

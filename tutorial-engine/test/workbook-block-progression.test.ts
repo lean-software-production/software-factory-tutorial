@@ -203,11 +203,10 @@ describe("workbook block progression", () => {
       expect(records).toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
       expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId: "lesson--001-first--orientation" }));
       expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId: "lesson--001-first--finish" }));
-      expect(records).not.toContainEqual(expect.objectContaining({ type: "tutor_failed" }));
     } finally { await server.close(); }
   });
 
-  it("does not write late summaries or failures after closing during completion compaction", async () => {
+  it("does not write late summaries after closing during completion compaction", async () => {
     for (const [stall, outcome] of [
       ["block", "resolve"],
       ["block", "reject"],
@@ -252,8 +251,7 @@ describe("workbook block progression", () => {
         expect(await timelineRecords(dir)).toEqual(expect.not.arrayContaining([
           expect.objectContaining({ type: "block_summarized", text: "Late summary after close." }),
           expect.objectContaining({ type: "lesson_summarized", text: "Late summary after close." }),
-          expect.objectContaining({ type: "workbook_completion_summary" }),
-          expect.objectContaining({ type: "tutor_failed" })
+          expect.objectContaining({ type: "workbook_completion_summary" })
         ]));
       } finally {
         await server.close().catch(() => undefined);

@@ -1569,7 +1569,8 @@ p {
 .modal p {
   font: 1.05rem/1.55 var(--font-display);
 }
-.author-reload-notice {
+.author-reload-notice,
+.workbook-fatal-notice {
   position: fixed;
   z-index: 20;
   right: 24px;
@@ -1583,6 +1584,16 @@ p {
   box-shadow: 0 12px 30px rgb(28 33 38 / 0.16);
   font-size: 0.92rem;
   line-height: 1.4;
+}
+.workbook-fatal-notice {
+  top: 24px;
+  bottom: auto;
+  border-color: #bf6b5a;
+  background: #fff2ee;
+  color: #5e271b;
+}
+.workbook-fatal-notice p {
+  margin: 4px 0 0;
 }
 .current-activity-band {
   --activity-expand: 0;

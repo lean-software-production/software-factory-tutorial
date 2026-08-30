@@ -523,7 +523,6 @@ describe("workbook lesson UI", () => {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend,
-      onRetry: vi.fn(async () => undefined),
       records: []
     }));
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
@@ -542,7 +541,6 @@ describe("workbook lesson UI", () => {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend,
-      onRetry: vi.fn(async () => undefined),
       records: []
     }));
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
@@ -562,7 +560,6 @@ describe("workbook lesson UI", () => {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend: vi.fn(async () => undefined),
-      onRetry: vi.fn(async () => undefined),
       records: []
     }));
 
@@ -585,7 +582,6 @@ describe("workbook lesson UI", () => {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend: vi.fn(async () => undefined),
-      onRetry: vi.fn(async () => undefined),
       records: []
     }));
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
@@ -611,7 +607,6 @@ describe("workbook lesson UI", () => {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend: vi.fn(async () => undefined),
-      onRetry: vi.fn(async () => undefined),
       records: []
     }));
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
@@ -631,7 +626,6 @@ describe("workbook lesson UI", () => {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend,
-      onRetry: vi.fn(async () => undefined),
       records: []
     }));
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
@@ -663,7 +657,6 @@ describe("workbook lesson UI", () => {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend,
-      onRetry: vi.fn(async () => undefined),
       records: []
     }));
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea[name='message']")!;
@@ -699,7 +692,6 @@ describe("workbook lesson UI", () => {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend: vi.fn(async () => undefined),
-      onRetry: vi.fn(async () => undefined),
       records: [
         { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "assistant", source: "authored", presentation: "course", text: "## Orientation\n\nAuthored page prose." },
         { type: "message", id: "learner", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson-one", blockId: "orientation", role: "user", source: "learner", presentation: "chat", text: "Learner reply." },
@@ -734,7 +726,6 @@ describe("workbook lesson UI", () => {
       activeLessonId: "001-first",
       activeBlockId: secondId,
       onSend: vi.fn(async () => undefined),
-      onRetry: vi.fn(async () => undefined),
       records,
       renderTerminalHistory: (record) => record.blockId === firstId
         ? createElement(TerminalHistory, { state: firstTerminalState as any })
@@ -754,7 +745,7 @@ describe("workbook lesson UI", () => {
 
   it("renders Do it for me only for the active authored terminal record with an insertion callback", () => {
     const record = { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "part/lesson-one", blockId: "practice", role: "assistant", source: "authored", presentation: "course", text: "## Practice\n\nRun the command." } as const;
-    const sharedProps = { onSend: vi.fn(async () => undefined), onRetry: vi.fn(async () => undefined), records: [record] };
+    const sharedProps = { onSend: vi.fn(async () => undefined), records: [record] };
 
     const activeMarkup = html(createElement(TimelineThread, { ...sharedProps, activeLessonId: record.lessonId, activeBlockId: record.blockId, onDoItForMe: vi.fn() }));
     const inactiveMarkup = html(createElement(TimelineThread, { ...sharedProps, activeLessonId: record.lessonId, activeBlockId: "other", onDoItForMe: vi.fn() }));
@@ -770,7 +761,6 @@ describe("workbook lesson UI", () => {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend: vi.fn(async () => undefined),
-      onRetry: vi.fn(async () => undefined),
       records: [
         { type: "message", id: "part", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook:part:part-one", blockId: "__part__", role: "assistant", source: "authored", presentation: "course", text: "# Part One" },
         { type: "message", id: "frame", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "part/lesson-one", blockId: "__lesson_frame__", role: "assistant", source: "authored", presentation: "course", text: "# Lesson One" },
@@ -798,7 +788,6 @@ describe("workbook lesson UI", () => {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend: vi.fn(async () => undefined),
-      onRetry: vi.fn(async () => undefined),
       activeReflectionReviewing,
       records
     });
@@ -833,15 +822,6 @@ describe("workbook lesson UI", () => {
     expect(scrollIntoView).not.toHaveBeenCalled();
     expect(scrollTo).not.toHaveBeenCalled();
 
-    const withFailure = [
-      ...withReply,
-      { type: "tutor_failed", id: "failure-record", sequence: 5, at: "2026-08-21T00:00:04.000Z", lessonId: "part/lesson-one", blockId: "orientation", failureId: "failure", operation: "chat", publicMessage: "Please retry." }
-    ] as const;
-    await act(async () => { mountedRoot!.render(render(withFailure)); });
-
-    expect(container.querySelector(".timeline-message.tutor.failure")?.textContent).toContain("Please retry.");
-    expect(scrollIntoView).not.toHaveBeenCalled();
-    expect(scrollTo).not.toHaveBeenCalled();
   });
 
   it("shows one persisted learner bubble and keeps an already-visible persisted tutor reply stable", async () => {
@@ -856,7 +836,6 @@ describe("workbook lesson UI", () => {
       activeLessonId: "part/lesson-one",
       activeBlockId: "orientation",
       onSend,
-      onRetry: vi.fn(async () => undefined),
       records
     });
     const container = await mount(render([course]), (win) => {
@@ -1693,7 +1672,7 @@ describe("workbook lesson UI", () => {
     expect(withoutCommand).toContain("terminal-connection-status");
   });
 
-  it("uses the shared welded practice feedback bar for terminal running, checking, feedback, retry, and success states", () => {
+  it("uses the shared welded practice feedback bar for terminal running, checking, feedback, and success states", () => {
     const terminalBlock = lesson.blocks[1]!;
     const runningMarkup = html(createElement(BlockView, { block: terminalBlock, progress: activeBlockProgress(terminalBlock, { terminal: { phase: "running" } } as any), refresh: vi.fn() }));
     expect(runningMarkup).toContain("practice-feedback-bar is-status is-busy");
@@ -1705,11 +1684,10 @@ describe("workbook lesson UI", () => {
     expect(checkingMarkup).toContain("practice-feedback-bar is-status is-busy");
     expect(checkingMarkup).toContain("Checking…");
 
-    const retry = vi.fn(async () => undefined);
-    const retryMarkup = html(createElement(BlockView, { block: terminalBlock, progress: activeBlockProgress(terminalBlock, { terminal: { phase: "feedback", message: "Review is temporarily unavailable.", retryFailureId: "failure-1" } } as any), refresh: vi.fn(), onRetry: retry }));
-    expect(retryMarkup).toContain("practice-feedback-bar is-failure");
-    expect(retryMarkup).toContain("Review is temporarily unavailable.");
-    expect(retryMarkup).toContain("Retry review");
+    const feedbackMarkup = html(createElement(BlockView, { block: terminalBlock, progress: activeBlockProgress(terminalBlock, { terminal: { phase: "feedback", message: "Fix the command and run it again." } } as any), refresh: vi.fn() }));
+    expect(feedbackMarkup).toContain("practice-feedback-bar is-feedback");
+    expect(feedbackMarkup).toContain("Fix the command and run it again.");
+    expect(feedbackMarkup).not.toContain("Retry review");
 
     const successMarkup = html(createElement(TerminalHistory, {
       state: activeBlockProgress(terminalBlock, { terminal: { phase: "complete", message: "Terminal accepted." }, terminalSnapshot: { transcript: "$ npm test\nPASS" } } as any).blocks[0]
@@ -2578,7 +2556,6 @@ describe("workbook lesson UI", () => {
       activeLessonId: lesson.id,
       activeBlockId: current.activeBlockId,
       onSend: vi.fn(async () => undefined),
-      onRetry: vi.fn(async () => undefined),
       practiceSurfaceBlockId: terminalBlock.id,
       practiceSurface: createElement(ActivityBand, { lessonId: lesson.id, activeBlock: terminalBlock, progress: current, refresh: vi.fn(), onTerminalInsertionChange: insertion }),
     });
@@ -3057,8 +3034,7 @@ describe("workbook lesson UI", () => {
       progress,
       adapter: {},
       timeline: [
-        { type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nTimeline intro copy." },
-        { type: "tutor_failed", id: "failed", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", failureId: "failure-1", operation: "message", publicMessage: "The tutor is unavailable." }
+        { type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "authored", presentation: "course", text: "# Workbook\n\nTimeline intro copy." }
       ]
     } as any;
     FakeEventSource.reset();
@@ -3075,15 +3051,12 @@ describe("workbook lesson UI", () => {
     const sendButton = container.querySelector<HTMLButtonElement>("button[aria-label='Send message']")!;
     await act(async () => { sendButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
-    const retryButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
-    await act(async () => { retryButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
-
     const continueButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Ready to continue")!;
     await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
     const urls = fetchMock.mock.calls.map(([url]) => String(url));
     expect(urls.filter((url) => url.startsWith("/"))).toEqual([]);
-    expect(new Set(urls)).toEqual(new Set(["api/workbook/state", "api/workbook/messages", "api/workbook/retry", "api/workbook/complete-block"]));
+    expect(new Set(urls)).toEqual(new Set(["api/workbook/state", "api/workbook/messages", "api/workbook/complete-block"]));
     expect(FakeEventSource.instances[0]!.url).toBe("api/workbook/timeline");
   });
 

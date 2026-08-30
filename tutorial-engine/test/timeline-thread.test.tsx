@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { TimelineThread, computeTutorReplyRevealScrollDelta } from "../web-workbook/src/timeline-thread.js";
 
 const noopSend = vi.fn(async () => undefined);
-const noopRetry = vi.fn(async () => undefined);
 
 describe("TimelineThread", () => {
   it("distinguishes authored, tutor, learner, and review messages in chronological order", () => {
@@ -12,7 +11,6 @@ describe("TimelineThread", () => {
       activeLessonId: "lesson",
       activeBlockId: "write",
       onSend: noopSend,
-      onRetry: noopRetry,
       records: [
         { type: "message", id: "1", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "authored", presentation: "course", text: "## Course note\n\nWrite the file." },
         { type: "message", id: "2", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "write", role: "user", source: "learner", presentation: "chat", text: "Which directory?" },
@@ -33,7 +31,6 @@ describe("TimelineThread", () => {
       activeLessonId: "lesson",
       activeBlockId: "write",
       onSend: noopSend,
-      onRetry: noopRetry,
       records: [
         { type: "block_tutor_briefed", id: "brief", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson", blockId: "write", text: "Private briefing", coveredThroughId: "course" },
         { type: "block_tutor_readiness", id: "ready", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "write", attemptId: "attempt", readiness: "likely_ready", text: "Private readiness" },
@@ -56,7 +53,6 @@ describe("TimelineThread", () => {
       activeLessonId: "lesson",
       activeBlockId: "orientation",
       onSend: noopSend,
-      onRetry: noopRetry,
       practiceSurfaceBlockId: "practice",
       practiceSurface: createElement("output", { "aria-label": "Ready terminal canvas" }, "terminal canvas"),
       records: [
@@ -79,7 +75,6 @@ describe("TimelineThread", () => {
       activeLessonId: "lesson",
       activeBlockId: "write",
       onSend: noopSend,
-      onRetry: noopRetry,
       records: [
         { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "authored", presentation: "course", text: diagram },
         { type: "message", id: "tutor", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "main_tutor", presentation: "chat", text: diagram },
@@ -97,7 +92,6 @@ describe("TimelineThread", () => {
       activeLessonId: "lesson",
       activeBlockId: "lesson--lesson",
       onSend: noopSend,
-      onRetry: noopRetry,
       records: [
         { type: "message", id: "frame", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson--lesson", blockId: "lesson--lesson", role: "assistant", source: "authored", presentation: "course", text: lessonFrame },
         { type: "message", id: "block", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson--lesson", blockId: "lesson--lesson--note", role: "assistant", source: "authored", presentation: "course", text: lessonFrame },
@@ -114,7 +108,6 @@ describe("TimelineThread", () => {
       activeLessonId: "lesson",
       activeBlockId: "write",
       onSend: noopSend,
-      onRetry: noopRetry,
       records: [
         { type: "message", id: "chat", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "main_tutor", presentation: "chat", text: "Run `git status` and **check** the diff." },
         { type: "message", id: "hint", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "main_tutor", presentation: "review", text: "Try *this* next." },
@@ -141,7 +134,6 @@ describe("TimelineThread", () => {
       activeLessonId: "lesson",
       activeBlockId: "reflect",
       onSend: noopSend,
-      onRetry: noopRetry,
       activeReflectionReviewing: true,
       records
     }));
@@ -149,7 +141,6 @@ describe("TimelineThread", () => {
       activeLessonId: "lesson",
       activeBlockId: "reflect",
       onSend: noopSend,
-      onRetry: noopRetry,
       activeReflectionReviewing: false,
       records: [...records, { type: "message", id: "review", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "lesson", blockId: "reflect", role: "assistant", source: "main_tutor", presentation: "review", text: "Accepted." }]
     }));

@@ -107,14 +107,11 @@ export function projectPublicProgressionEvent(record: unknown): V2PublicProgress
       return hasReflectionEvent(record) ? { type: "reflection_reply_recorded", lessonId: record.lessonId, blockId: record.blockId } : undefined;
     case "terminal-command-submitted":
     case "terminal-command-finished":
-    case "terminal-review-requested":
-    case "terminal-review-failed":
     case "terminal-transcript-snapshotted":
     case "terminal-feedback-recorded":
     case "message":
     case "block_summarized":
     case "lesson_summarized":
-    case "tutor_failed":
     case "workbook_completion_summary":
       return undefined;
     default:

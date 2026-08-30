@@ -232,7 +232,10 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
       return;
     }
     if (request.method === "GET" && isRoute(url.pathname, "state")) return sendJson(response, 200, await workflow.state());
-    if (request.method === "POST" && isRoute(url.pathname, "introduction")) return sendJson(response, 202, (await workflow.completeBlock("workbook--introduction")).state);
+    if (request.method === "POST" && isRoute(url.pathname, "introduction")) {
+      try { return sendJson(response, 202, (await workflow.completeBlock("workbook--introduction")).state); }
+      catch (error) { return sendJson(response, errorStatus(error), { error: errorMessage(error) }); }
+    }
     if (request.method === "POST" && (isRoute(url.pathname, "complete-block") || isRoute(url.pathname, "completeBlock") || url.pathname.endsWith("/api/workbook/blocks/complete"))) {
       try {
         const body = await readJson(request);

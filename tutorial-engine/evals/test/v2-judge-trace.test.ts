@@ -131,11 +131,9 @@ describe("v2 public judge trace projection", () => {
     trace.publicStates.push({ label: "public", state: { progress: { activeBlockId: "exact-command" } } });
     trace.events.push(
       record({ type: "terminal-command-submitted", attemptId: "attempt-command-secret", lessonId, blockId: "exact-command", command: "echo command-secret", terminalSessionId: "terminal-session-secret" }),
-      record({ type: "terminal-command-finished", attemptId: "attempt-finished-secret", evidence: finishedEvidence("finished-secret") }),
+      record({ type: "terminal-command-finished", attemptId: "attempt-command-secret", evidence: finishedEvidence("finished-secret") }),
       record({ type: "terminal-transcript-snapshotted", attemptId: "attempt-transcript-secret", lessonId, blockId: "exact-command", transcript: "transcript-secret" }),
       record({ type: "terminal-feedback-recorded", attemptId: "attempt-feedback-secret", text: "feedback-secret" }),
-      record({ type: "terminal-review-requested", attemptId: "attempt-review-request-secret", lessonId, blockId: "exact-command", requestId: "review-request-secret", mode: "automatic", callNumber: 1 }),
-      record({ type: "terminal-review-failed", attemptId: "attempt-review-failed-secret", lessonId, blockId: "exact-command", requestId: "failed-request-secret", failureId: "failure-id-secret", publicMessage: "failure-public-message-secret" }),
       record({ type: "attempt_accepted", lessonId, blockId: "exact-command", attemptId: "attempt-accepted-secret", version: 1, kind: "terminal", summary: "accepted-summary-secret" })
     );
     trace.artifacts.push({ path: "factory/.tmp/evaluator-command.txt", content: "public artifact\n" });
@@ -164,14 +162,10 @@ describe("v2 public judge trace projection", () => {
       expect(serialized).not.toContain("terminal-command-finished");
       expect(serialized).not.toContain("terminal-transcript-snapshotted");
       expect(serialized).not.toContain("terminal-feedback-recorded");
-      expect(serialized).not.toContain("terminal-review-requested");
-      expect(serialized).not.toContain("terminal-review-failed");
       expect(serialized).not.toContain("attempt-command-secret");
       expect(serialized).not.toContain("attempt-finished-secret");
       expect(serialized).not.toContain("attempt-transcript-secret");
       expect(serialized).not.toContain("attempt-feedback-secret");
-      expect(serialized).not.toContain("attempt-review-request-secret");
-      expect(serialized).not.toContain("attempt-review-failed-secret");
       expect(serialized).not.toContain("attempt-accepted-secret");
       expect(serialized).not.toContain("terminal-session-secret");
       expect(serialized).not.toContain("command-finished-secret");
@@ -179,12 +173,8 @@ describe("v2 public judge trace projection", () => {
       expect(serialized).not.toContain("output-finished-secret");
       expect(serialized).not.toContain("snapshot-finished-secret");
       expect(serialized).not.toContain("transcript-snapshot-finished-secret");
-      expect(serialized).not.toContain("failed-request-secret");
-      expect(serialized).not.toContain("failure-id-secret");
-      expect(serialized).not.toContain("failure-public-message-secret");
       expect(serialized).not.toContain("transcript-secret");
       expect(serialized).not.toContain("feedback-secret");
-      expect(serialized).not.toContain("review-request-secret");
       expect(serialized).not.toContain("accepted-summary-secret");
       expect(serialized).not.toContain("review mode");
     }
@@ -234,7 +224,6 @@ describe("v2 public judge trace projection", () => {
       record({ type: "reflection_submitted", lessonId, blockId: ["array-block-secret"], response: "response-secret" }) as WorkbookTimelineRecord,
       record({ type: "lesson_jump_started", lessonId: ["array-lesson-secret"] }) as WorkbookTimelineRecord,
       record({ type: "message", lessonId, blockId: "exact-command", text: "message-secret", role: "assistant", source: "main_tutor", presentation: "chat" }),
-      record({ type: "tutor_failed", lessonId, blockId: "exact-command", requestId: "request-secret", operation: "reply", publicMessage: "failure-secret" }),
       record({ type: "block_summarized", lessonId, blockId: "exact-command", text: "block-summary-secret", coveredThroughId: "covered-block-secret" }),
       record({ type: "lesson_summarized", lessonId, text: "lesson-summary-secret", coveredThroughId: "covered-lesson-secret" }),
       record({ type: "workbook_completion_summary", text: "completion-secret" })
@@ -266,8 +255,6 @@ describe("v2 public judge trace projection", () => {
       expect(serialized).not.toContain("array-block-secret");
       expect(serialized).not.toContain("array-lesson-secret");
       expect(serialized).not.toContain("message-secret");
-      expect(serialized).not.toContain("request-secret");
-      expect(serialized).not.toContain("failure-secret");
       expect(serialized).not.toContain("block-summary-secret");
       expect(serialized).not.toContain("covered-block-secret");
       expect(serialized).not.toContain("lesson-summary-secret");
@@ -357,7 +344,7 @@ describe("v2 public judge trace projection", () => {
       state: {
         arbitraryPublicField: { nested: ["kept"] },
         timeline: [{ type: "message", id: "public-id", at: "public-at", text: "public tutor failure shown to learner" }],
-        tutor: { text: "Public state can mention This is private tutor guidance, Do not reveal an exact command, Follow up until the learner, Private editor criterion, terminal-command-submitted, terminal review request, and JSON-looking \"tutor\":" }
+        tutor: { text: "Public state can mention This is private tutor guidance, Do not reveal an exact command, Follow up until the learner, Private editor criterion, terminal-command-submitted, terminal-command-finished, and JSON-looking \"tutor\":" }
       }
     });
 
@@ -366,22 +353,22 @@ describe("v2 public judge trace projection", () => {
     expect(judgeTrace.publicStates[0]?.state).toEqual({
       arbitraryPublicField: { nested: ["kept"] },
       timeline: [{ type: "message", id: "public-id", at: "public-at", text: "public tutor failure shown to learner" }],
-      tutor: { text: "Public state can mention This is private tutor guidance, Do not reveal an exact command, Follow up until the learner, Private editor criterion, terminal-command-submitted, terminal review request, and JSON-looking \"tutor\":" }
+      tutor: { text: "Public state can mention This is private tutor guidance, Do not reveal an exact command, Follow up until the learner, Private editor criterion, terminal-command-submitted, terminal-command-finished, and JSON-looking \"tutor\":" }
     });
-    expect(JSON.stringify(judgeTrace)).toContain("terminal review request");
+    expect(JSON.stringify(judgeTrace)).toContain("terminal-command-finished");
     expect(JSON.stringify(judgeTrace)).toContain('"tutor"');
   });
 
-  it("allows public text to discuss terminal review requests and raw event labels while still dropping undeclared structure", () => {
+  it("allows public text to discuss terminal lifecycle labels while still dropping undeclared structure", () => {
     const trace = createEmptyV2SessionTrace("v2-exact-command-success");
-    trace.publicStates.push({ label: "public", state: { note: "The learner says no terminal review request was exposed and terminal-command-submitted is only a label they learned about." } });
-    trace.terminalTranscript.push({ blockId: "exact-command", direction: "observer", text: "Public observer text can mention terminal-review-requested as vocabulary." });
-    trace.artifacts.push({ path: "factory/.tmp/public-vocabulary.txt", content: "No terminal review request was exposed; terminal-command-submitted stayed internal.\n" });
-    trace.events.push(record({ type: "terminal-review-failed", lessonId, blockId: "exact-command", attemptId: "attempt-secret", requestId: "private-request-secret", failureId: "private-failure-secret", publicMessage: "private-review-secret" }));
+    trace.publicStates.push({ label: "public", state: { note: "The learner says no terminal feedback text was exposed and terminal-command-submitted is only a label they learned about." } });
+    trace.terminalTranscript.push({ blockId: "exact-command", direction: "observer", text: "Public observer text can mention terminal-command-finished as vocabulary." });
+    trace.artifacts.push({ path: "factory/.tmp/public-vocabulary.txt", content: "No terminal feedback text was exposed; terminal-command-submitted stayed internal.\n" });
+    trace.events.push(record({ type: "terminal-feedback-recorded", attemptId: "attempt-secret", text: "private-feedback-secret" }));
     const judgeTrace = projectV2JudgeTrace(trace);
     const unsafeTrace = {
       ...judgeTrace,
-      events: [{ type: "terminal-review-requested", text: "injected-raw-event-secret" }],
+      events: [{ type: "terminal-command-submitted", text: "injected-raw-event-secret" }],
       terminalTranscript: judgeTrace.terminalTranscript.map((entry) => ({ ...entry, attemptId: "injected-attempt-secret" })),
       artifacts: judgeTrace.artifacts.map((artifact) => ({ ...artifact, rawEvent: { type: "terminal-command-submitted", text: "injected-artifact-secret" } }))
     } as unknown as typeof judgeTrace;
@@ -390,20 +377,20 @@ describe("v2 public judge trace projection", () => {
     const prompt = buildV2JudgePrompt(scenario, unsafeTrace, gate);
     const judge = verifyV2JudgeResult({
       dimensions: {
-        protocolUse: { score: 2, citations: [0], rationale: "No terminal review request was exposed in the public trace; the phrase This is private tutor guidance is only discussed as public prose." },
-        tutorQuality: { score: 2, citations: [1], rationale: "terminal-command-submitted was discussed only as public vocabulary, as were Do not reveal an exact command and \"tutor\":." },
-        criteriaFit: { score: 2, citations: [2], rationale: "The artifact says no terminal review request was exposed and can mention Private editor criterion." }
+        protocolUse: { score: 2, citations: [0], rationale: "No terminal feedback text was exposed in the public trace; the phrase This is private tutor guidance is only discussed as public prose." },
+        tutorQuality: { score: 2, citations: [1], rationale: "terminal-command-submitted and terminal-command-finished were discussed only as public vocabulary, as were Do not reveal an exact command and \"tutor\":." },
+        criteriaFit: { score: 2, citations: [2], rationale: "The artifact says no terminal feedback text was exposed and can mention Private editor criterion." }
       },
-      summary: "The judge may mention terminal review request, terminal-command-submitted, Follow up until the learner, and JSON-looking \"tutor\": as public prose."
+      summary: "The judge may mention terminal feedback text, terminal-command-submitted, Follow up until the learner, and JSON-looking \"tutor\": as public prose."
     }, unsafeTrace);
     const report = createV2Report({ scenario, trace: unsafeTrace, gate, judgeInput: prompt, judge, tutorModel: "tutor", judgeModel: "judge" });
 
-    expect(prompt).toContain("No terminal review request was exposed");
+    expect(prompt).toContain("No terminal feedback text was exposed");
     expect(prompt).toContain("terminal-command-submitted");
-    expect(report.judge.summary).toContain("terminal review request");
+    expect(report.judge.summary).toContain("terminal feedback text");
     expect(JSON.stringify(report)).toContain("terminal-command-submitted");
     for (const serialized of [prompt, JSON.stringify(report)]) {
-      expect(serialized).not.toContain("private-review-secret");
+      expect(serialized).not.toContain("private-feedback-secret");
       expect(serialized).not.toContain("injected-raw-event-secret");
       expect(serialized).not.toContain("injected-attempt-secret");
       expect(serialized).not.toContain("injected-artifact-secret");
@@ -419,7 +406,7 @@ describe("v2 public judge trace projection", () => {
       record({ type: "terminal-command-submitted", attemptId: "attempt-secret", lessonId, blockId: "exact-command", command: "echo secret", terminalSessionId: "session-secret" }),
       record({ type: "terminal-command-finished", attemptId: "attempt-secret", evidence: finishedEvidence("citation-secret") }),
       record({ type: "terminal-feedback-recorded", attemptId: "attempt-secret", text: "feedback-secret" }),
-      record({ type: "terminal-review-requested", lessonId, blockId: "exact-command", attemptId: "attempt-secret", requestId: "review-secret", mode: "automatic", callNumber: 1 }),
+      record({ type: "terminal-transcript-snapshotted", attemptId: "attempt-secret", lessonId, blockId: "exact-command", transcript: "transcript-secret" }),
       record({ type: "block_completed", lessonId, blockId: "exact-command" })
     );
     const judgeTrace = projectV2JudgeTrace(trace);
@@ -445,8 +432,8 @@ describe("v2 public judge trace projection", () => {
     }, judgeTrace)).toThrow(/unknown trace citation/i);
     expect(verifyV2JudgeResult({
       dimensions: {
-        protocolUse: { score: 2, citations: [0], rationale: "terminal-review-requested is safe as public vocabulary" },
-        tutorQuality: { score: 2, citations: [1], rationale: "No terminal review request was exposed." },
+        protocolUse: { score: 2, citations: [0], rationale: "terminal-command-finished is safe as public vocabulary" },
+        tutorQuality: { score: 2, citations: [1], rationale: "No terminal feedback text was exposed." },
         criteriaFit: { score: 2, citations: [0], rationale: "public state" }
       },
       summary: "The judge can say terminal-command-submitted was not exposed."

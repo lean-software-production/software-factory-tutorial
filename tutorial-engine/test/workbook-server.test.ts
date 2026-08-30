@@ -16,6 +16,7 @@ import type { TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.j
 import type { Attempt } from "../src/workbook/attempts.js";
 import { DefaultMainWorkbookTutor, type TutorDecision, type WorkbookTutorSessionFactoryRequest } from "../src/workbook/tutor.js";
 import { createResilientTutorSession, type PiTutorSessionEvent } from "../src/workbook/pi-tutor-session.js";
+import { TUTOR_INFRASTRUCTURE_FATAL_MESSAGE } from "../src/workbook/tutor-infrastructure.js";
 import { UnsupportedWorkbookSessionError, WorkbookTimeline, workbookSessionFormatRecord, type TimelineMessage, type WorkbookTimelineRecord } from "../src/workbook/timeline.js";
 import { QueuedMainTutor as FakeMainTutor } from "./support/fake-tutors.js";
 
@@ -206,10 +207,6 @@ async function postHint(serverUrl: string, body: unknown) {
   return fetch(`${serverUrl}/api/workbook/hints`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
-async function postRetry(serverUrl: string, body: unknown) {
-  return fetch(`${serverUrl}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-}
-
 async function state(serverUrl: string) { return fetch(`${serverUrl}/api/workbook/state`).then((r) => r.json() as any); }
 async function timelineSnapshot(serverUrl: string): Promise<any[]> {
   const controller = new AbortController();
@@ -331,6 +328,16 @@ async function waitForPrivateTimeline(workspaceOrSessionRoot: string, predicate:
   throw new Error(`Timed out waiting for ${description}. Last records: ${JSON.stringify(latest)}`);
 }
 function block(state: any, blockId: string) { return state.progress.blocks.find((candidate: any) => candidate.id === blockId || candidate.declaredId === blockId || candidate.id.endsWith(`--${blockId}`)); }
+function expectFatalState(value: any) { expect(value.fatal).toEqual({ kind: "tutor-infrastructure", message: TUTOR_INFRASTRUCTURE_FATAL_MESSAGE }); }
+function expectNoLegacyFailureRecords(records: readonly { type: string }[]) {
+  expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-review-requested" }));
+  expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-review-failed" }));
+  expect(records).not.toContainEqual(expect.objectContaining({ type: "tutor_failed" }));
+}
+function expectNoTerminalReviewRows(records: readonly { type: string }[]) {
+  expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-review-requested" }));
+  expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-review-failed" }));
+}
 
 async function acceptEditor(serverUrl: string, tutor: FakeMainTutor, text = "factory acceptance marker") {
   if (!tutor.queue.some((entry) => !(entry instanceof Error) && typeof entry === "object" && "message" in entry && entry.message === "Editor accepted.")) tutor.queue.unshift({ outcome: "accepted", message: "Editor accepted." });
@@ -728,11 +735,10 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("retains prior editor feedback while a newer review is pending and when that provider fails", async () => {
+  it("latches safe fatal state when an exhausted editor review fails and blocks later mutations", async () => {
     const { dir, session } = await sessionFixture();
     const providerFailure = deferred<TutorDecision>();
-    const nextPendingReview = deferred<TutorDecision>();
-    const tutor = new FakeMainTutor({ outcome: "feedback", message: "Mention the factory acceptance marker." }, providerFailure.promise, nextPendingReview.promise);
+    const tutor = new FakeMainTutor({ outcome: "feedback", message: "Mention the factory acceptance marker." }, providerFailure.promise);
     const server = await startWorkbookServer({ target: dir, session, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: tutor });
     try {
       await introduceAndOpenEditor(server.url);
@@ -746,17 +752,15 @@ describe("workbook browser API", () => {
       expect(block(reviewing, "edit-answer")?.checkpoint?.reviewNotice).toMatch(/updating feedback/i);
 
       providerFailure.reject(new Error("provider down"));
-      const failed = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.reviewNotice?.match(/temporarily unavailable/i), "failed editor review retaining feedback");
-      expect(block(failed, "edit-answer")?.checkpoint?.feedback).toBe("Mention the factory acceptance marker.");
-      expect(block(failed, "edit-answer")?.checkpoint?.status).toBe("feedback");
-      expect(block(failed, "edit-answer")?.checkpoint?.reviewNotice).toMatch(/try another attempt/i);
+      const failed = await waitForWorkbookState(server.url, (next) => Boolean(next.fatal), "fatal editor review failure");
+      expectFatalState(failed);
+      expect(JSON.stringify(failed)).not.toContain("provider down");
+      expectNoLegacyFailureRecords(failed.timeline);
+      const beforeRecords = await privateTimeline(session.sessionRoot);
 
-      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", revision: 3, text: "third draft" })).status).toBe(202);
-      const pendingAfterFailure = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.revision === 3 && block(next, "edit-answer")?.checkpoint?.status === "reviewing", "third editor review pending after failure");
-      expect(block(pendingAfterFailure, "edit-answer")?.checkpoint?.feedback).toBe("Mention the factory acceptance marker.");
-      expect(block(pendingAfterFailure, "edit-answer")?.checkpoint?.reviewNotice).toMatch(/updating feedback/i);
-      expect(block(pendingAfterFailure, "edit-answer")?.checkpoint?.feedback).not.toMatch(/temporarily unavailable/i);
-      nextPendingReview.resolve({ outcome: "feedback", message: "Now mention the marker and batch size." });
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", revision: 3, text: "third draft" })).status).toBe(409);
+      expect((await postMessage(server.url, { blockId: "lesson--001-first--edit-answer", text: "Can I keep going?" })).status).toBe(409);
+      expect(await privateTimeline(session.sessionRoot)).toEqual(beforeRecords);
     } finally { await server.close(); }
   });
 
@@ -1003,7 +1007,6 @@ describe("workbook browser API", () => {
   it("opens the introduction as durable tutor conversation before any real block is active", async () => {
     const dir = await fixture();
     const firstTutor = new FakeMainTutor();
-    firstTutor.replyQueue.push(new Error("intro provider secret"));
     const firstServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: firstTutor });
     let persistedTimeline: any[];
     try {
@@ -1029,15 +1032,9 @@ describe("workbook browser API", () => {
       expect(firstTutor.replies[0]).toMatchObject({ activeContext: undefined, learnerMessage: { lessonId: "workbook--introduction", blockId: "workbook--introduction", text: "Can I ask before we start?" } });
       expect(chatted.timeline.slice(-2)).toEqual([
         expect.objectContaining({ lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "user", source: "learner", presentation: "chat", text: "Can I ask before we start?" }),
-        expect.objectContaining({ lessonId: "workbook--introduction", blockId: "workbook--introduction", type: "tutor_failed", operation: "reply" }),
+        expect.objectContaining({ lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "main_tutor", presentation: "chat", text: "Try the workspace-relative path." }),
       ]);
-      expect(JSON.stringify(chatted.timeline)).not.toContain("intro provider secret");
-      const retryFailure = chatted.timeline.at(-1);
-      const retried = await fetch(`${firstServer.url}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId: retryFailure.failureId }) }).then((retry) => retry.json() as any);
-      expect(firstTutor.replies).toHaveLength(2);
-      expect(firstTutor.replies[1]).toMatchObject({ activeContext: undefined, learnerMessage: { lessonId: "workbook--introduction", blockId: "workbook--introduction", text: "Can I ask before we start?" } });
-      expect(retried.timeline.at(-1)).toMatchObject({ lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "assistant", source: "main_tutor", presentation: "chat", text: "Try the workspace-relative path." });
-      persistedTimeline = retried.timeline;
+      persistedTimeline = chatted.timeline;
     } finally { await firstServer.close(); }
 
     const secondTutor = new FakeMainTutor();
@@ -1075,7 +1072,6 @@ describe("workbook browser API", () => {
         activeLessonId: "workbook--introduction",
         activeBlockId: "workbook--introduction",
         onSend: async () => undefined,
-        onRetry: async () => undefined,
         renderContinuation: (record) => { continuationRecordIds.push(record.id); return null; },
       }));
 
@@ -1088,25 +1084,27 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("retries a failed intro reply without adopting the newly active block context after continue", async () => {
+  it("latches safe fatal state after an exhausted reply, blocks mutations, and leaves retry gone", async () => {
     const dir = await fixture();
     const tutor = new FakeMainTutor();
-    tutor.replyQueue.push(new Error("intro provider failed once"));
+    tutor.replyQueue.push(new Error("intro provider exhausted secret"));
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: tutor });
     try {
-      const failed = await postMessage(server.url, { blockId: "workbook--introduction", text: "Question before the first lesson." }).then((response) => response.json() as any);
-      const failure = failed.timeline.at(-1);
-      expect(failure).toMatchObject({ type: "tutor_failed", lessonId: "workbook--introduction", blockId: "workbook--introduction", operation: "reply" });
-
-      const opened = await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" }).then((response) => response.json() as any);
-      expect(opened.progress.activeBlockId).toBe("part--loop");
-      expect((await fetch(`${server.url}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId: failure.failureId }) })).status).toBe(202);
-
-      expect(tutor.replies).toHaveLength(2);
+      const response = await postMessage(server.url, { blockId: "workbook--introduction", text: "Question before the first lesson." });
+      expect(response.status).toBe(202);
+      const failed = await response.json() as any;
+      expectFatalState(failed);
+      expect(tutor.replies).toHaveLength(1);
       expect(tutor.replies[0]).toMatchObject({ activeContext: undefined, learnerMessage: { lessonId: "workbook--introduction", blockId: "workbook--introduction" } });
-      expect(tutor.replies[1]).toMatchObject({ activeContext: undefined, learnerMessage: { lessonId: "workbook--introduction", blockId: "workbook--introduction" } });
-      const retriedTimeline = (await state(server.url)).timeline;
-      expect(retriedTimeline.at(-1)).toMatchObject({ type: "message", lessonId: "workbook--introduction", blockId: "workbook--introduction", source: "main_tutor", text: "Try the workspace-relative path." });
+      expect(failed.timeline.at(-1)).toMatchObject({ lessonId: "workbook--introduction", blockId: "workbook--introduction", role: "user", source: "learner", presentation: "chat", text: "Question before the first lesson." });
+      expectNoLegacyFailureRecords(failed.timeline);
+      expect(JSON.stringify(failed)).not.toContain("intro provider exhausted secret");
+
+      const beforeRecords = await privateTimeline(dir);
+      expect((await fetch(`${server.url}/api/workbook/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ failureId: "obsolete" }) })).status).toBe(405);
+      expect((await fetch(`${server.url}/api/workbook/introduction`, { method: "POST" })).status).toBe(409);
+      expect((await postMessage(server.url, { blockId: "workbook--introduction", text: "Still there?" })).status).toBe(409);
+      expect(await privateTimeline(dir)).toEqual(beforeRecords);
     } finally { await server.close(); }
   });
 
@@ -1562,12 +1560,12 @@ describe("workbook browser API", () => {
       const records = await privateTimeline(dir);
       const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished");
       expect(finished).toMatchObject({ type: "terminal-command-finished", attemptId: expect.any(String), evidence: { kind: "finished", command, exitStatus: 0, transcriptSnapshot: expect.any(Object) } });
+      expect(records.filter((record) => record.type === "terminal-command-finished")).toHaveLength(1);
       expect(finished).not.toHaveProperty("exitStatus");
       expect(finished).not.toHaveProperty(LEGACY_EVIDENCE_REFERENCE_KEY);
-      expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ type: "terminal-review-requested", attemptId: finished!.attemptId })]));
-      expect(records.find((record) => record.type === "terminal-review-requested")).not.toHaveProperty(LEGACY_EVIDENCE_REFERENCE_KEY);
       await expect(access(tutorialStatePath(dir, "workbook", "terminal-evidence"))).rejects.toThrow();
       expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-coach-handoff-recorded" }));
+      expectNoTerminalReviewRows(records);
       expect(JSON.stringify(feedback)).not.toMatch(/cat -n|output for|attemptId|Observe run result/);
     } finally { await server.close(); }
   });
@@ -1640,8 +1638,10 @@ describe("workbook browser API", () => {
       expect(snapshot.transcript).not.toMatch(/workbook-command|workbook-finished|attemptId|Observe run result/);
       expect((await timelineSnapshot(server.url)).some((record) => record.type === "terminal-transcript-snapshotted")).toBe(false);
       const records = await privateTimeline(dir);
+      expect(records.filter((record) => record.type === "terminal-command-finished")).toHaveLength(1);
       expect(records).toContainEqual(expect.objectContaining({ type: "terminal-transcript-snapshotted", lessonId: "001-first", blockId, transcript: snapshot.transcript }));
       expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-coach-handoff-recorded" }));
+      expectNoTerminalReviewRows(records);
 
       await completeBlock(server.url, blockId);
       expect(ptys[0]!.killed).toBe(true);
@@ -1655,39 +1655,40 @@ describe("workbook browser API", () => {
     } finally { await reloaded.close(); }
   });
 
-  it("automatically retries a transient Main Tutor terminal-review failure once against the same evidence", async () => {
+  it("latches safe fatal state after exhausted terminal review without failure events", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty(false);
     const tutor = new FakeMainTutor(
       { outcome: "accepted", message: "Editor accepted." },
       new Error("provider detail that must stay private"),
-      { outcome: "feedback", message: "Recovered direct feedback." },
     );
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: tutor });
     try {
       await introduceAndOpenEditor(server.url);
       await acceptEditor(server.url, tutor);
-      pty.data?.(bashCommandMarker("run"));
-      pty.data?.(`done\r\n${bashFinishedMarker()}`);
-      const recovered = await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.terminal?.message === "Recovered direct feedback.", "automatic terminal review retry");
+      pty.data?.(bashCommandMarker("secret command"));
+      pty.data?.(`secret output
+${bashFinishedMarker()}`);
+      const failed = await waitForWorkbookState(server.url, (next) => Boolean(next.fatal), "fatal terminal review");
+      expectFatalState(failed);
+      expect(block(failed, "run-supplied-command")?.terminal).toEqual({ phase: "checking" });
+      expect(JSON.stringify(failed)).not.toMatch(/provider detail|secret command|secret output|Observe run result/);
 
       const terminalReviews = tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal");
-      expect(terminalReviews).toHaveLength(2);
-      expect(terminalReviewTranscript(terminalReviews[0]!)).toBe(terminalReviewTranscript(terminalReviews[1]!));
+      expect(terminalReviews).toHaveLength(1);
       const records = await privateTimeline(dir);
-      const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished")!;
-      expect(terminalReviewCommandEvidence(terminalReviews[0]!)).toEqual(commandEvidenceFromFinished(finished));
-      expect(terminalReviewCommandEvidence(terminalReviews[1]!)).toEqual(commandEvidenceFromFinished(finished));
-      const requests = records.filter((record) => record.type === "terminal-review-requested");
-      expect(requests).toHaveLength(2);
-      expect(new Set(requests.map((record) => record.attemptId)).size).toBe(1);
-      expect(requests.every((record) => !(LEGACY_EVIDENCE_REFERENCE_KEY in record))).toBe(true);
-      expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-review-failed" }));
-      expect(JSON.stringify(recovered)).not.toContain("provider detail");
+      expect(records.filter((record) => record.type === "terminal-command-submitted")).toHaveLength(1);
+      expect(records.filter((record) => record.type === "terminal-command-finished")).toHaveLength(1);
+      expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-feedback-recorded" }));
+      expectNoLegacyFailureRecords(records);
+
+      const beforeRecords = await privateTimeline(dir);
+      expect((await postEvent(server.url, { blockId: "lesson--001-first--run-supplied-command", action: "continue" })).status).toBe(409);
+      expect(await privateTimeline(dir)).toEqual(beforeRecords);
     } finally { await server.close(); }
   });
 
-  it("limits the Default Main Tutor to one low-level provider prompt per durable terminal review request and logs failures generically", async () => {
+  it("runs exactly three low-level Default Main Tutor attempts for one terminal review and records no request rows", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty(false);
     const logLines: string[] = [];
@@ -1733,147 +1734,30 @@ describe("workbook browser API", () => {
       expect((await completeBlock(server.url, "lesson--001-first--edit-answer")).status).toBe(202);
 
       pty.data?.(bashCommandMarker("terminal-secret"));
-      pty.data?.(`terminal-secret-output\r\n${bashFinishedMarker()}`);
-      await waitForWorkbookState(server.url, (next) => Boolean(block(next, "run-supplied-command")?.terminal?.retryFailureId), "default tutor terminal failure");
+      pty.data?.(`terminal-secret-output
+${bashFinishedMarker()}`);
+      const failed = await waitForWorkbookState(server.url, (next) => Boolean(next.fatal), "default tutor terminal fatal");
+      expectFatalState(failed);
 
       const records = await privateTimeline(dir);
-      const requests = records.filter((record) => record.type === "terminal-review-requested");
       const terminalPrompts = lowLevelPrompts.filter((prompt) => prompt.includes("finished-terminal-review-evidence"));
-      expect(requests).toHaveLength(2);
-      expect(terminalPrompts).toHaveLength(requests.length);
+      expect(terminalPrompts).toHaveLength(3);
+      expect(records.filter((record) => record.type === "terminal-command-finished")).toHaveLength(1);
+      expectNoLegacyFailureRecords(records);
+      expect(logLines.join("\n")).toMatch(/attempt 3\/3|exhausted/);
       expect(logLines.join("\n")).not.toMatch(/CodexProvider|secret-model|provider-error|terminal-secret|terminal-secret-output|Observe run result|\/tmp\/private/);
     } finally { await server.close(); }
-  });
-
-  it("exposes durable terminal-local Retry review after automatic calls exhaust and succeeds after restart without another command", async () => {
-    const dir = await fixture();
-    const firstPty = new ServerFakePty(false);
-    const logLines: string[] = [];
-    const logger = { info: (message: string) => { logLines.push(message); }, error: (message: string, error?: unknown) => { logLines.push(`${message} ${String(error ?? "")}`); } };
-    const tutor = new FakeMainTutor(
-      { outcome: "accepted", message: "Editor accepted." },
-      new Error("Codex provider leaked secret-command Observe run result secret-output /tmp/private"),
-      new Error("second provider detail secret-command secret-output"),
-    );
-    const first = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, logger, terminalPtyFactory: () => firstPty, mainTutor: tutor });
-    let failureId = "";
-    let originalCommandEvidence: unknown;
-    try {
-      await introduceAndOpenEditor(first.url);
-      await acceptEditor(first.url, tutor);
-      firstPty.data?.(bashCommandMarker("secret-command"));
-      firstPty.data?.(`secret-output\r\n${bashFinishedMarker()}`);
-      const failed = await waitForWorkbookState(first.url, (next) => Boolean(block(next, "run-supplied-command")?.terminal?.retryFailureId), "retryable terminal review failure");
-      const terminal = block(failed, "run-supplied-command")!.terminal;
-      expect(terminal).toMatchObject({ phase: "feedback", message: expect.stringMatching(/Review is temporarily unavailable.*retry the review/i), retryFailureId: expect.any(String) });
-      failureId = terminal.retryFailureId;
-      expect(failed.timeline.filter((record: any) => record.type === "tutor_failed")).toEqual([]);
-      expect(JSON.stringify(failed)).not.toMatch(/secret-command|secret-output|Observe run result|Codex|provider|\/tmp\/private/);
-
-      const records = await privateTimeline(dir);
-      const requests = records.filter((record) => record.type === "terminal-review-requested") as any[];
-      const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished")!;
-      originalCommandEvidence = commandEvidenceFromFinished(finished);
-      expect(requests).toHaveLength(2);
-      expect(new Set(requests.map((record) => record.attemptId))).toEqual(new Set([finished.attemptId]));
-      expect(requests.every((record) => !(LEGACY_EVIDENCE_REFERENCE_KEY in record))).toBe(true);
-      expect(tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal").map((review) => terminalReviewCommandEvidence(review))).toEqual([originalCommandEvidence, originalCommandEvidence]);
-      expect(records).toContainEqual(expect.objectContaining({ type: "terminal-review-failed", failureId, attemptId: finished.attemptId, requestId: requests[1]!.requestId }));
-      expect(records.find((record) => record.type === "terminal-review-failed")).not.toHaveProperty(LEGACY_EVIDENCE_REFERENCE_KEY);
-      expect(records.filter((record) => record.type === "terminal-command-submitted")).toHaveLength(1);
-      expect(records.filter((record) => record.type === "terminal-command-finished")).toHaveLength(1);
-      expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-coach-handoff-recorded" }));
-
-      const logText = logLines.join("\n");
-      expect(logText).toMatch(/Terminal direct review/);
-      expect(logText).toMatch(/durationMs=\d+/);
-      expect(logText).toMatch(/outcome=infrastructure_failure|outcome=retryable_failure/);
-      expect(logText).not.toMatch(/secret-command|secret-output|Observe run result|Codex|provider|\/tmp\/private/);
-    } finally { await first.close(); }
-
-    const retryTutor = new FakeMainTutor({ outcome: "accepted", message: "Accepted after Retry review." });
-    const second = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: retryTutor });
-    try {
-      const restoredFailure = await state(second.url);
-      expect(block(restoredFailure, "run-supplied-command")?.terminal?.retryFailureId).toBe(failureId);
-      expect(retryTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(0);
-
-      const response = await postRetry(second.url, { failureId });
-      expect(response.status).toBe(202);
-      const retrying = await response.json() as any;
-      expect(block(retrying, "run-supplied-command")?.terminal).toEqual({ phase: "checking" });
-      const accepted = await waitForWorkbookState(second.url, (next) => block(next, "run-supplied-command")?.terminal?.phase === "complete", "manual retry accepted");
-      expect(block(accepted, "run-supplied-command")?.terminal).toEqual({ phase: "complete", message: "Accepted after Retry review." });
-
-      const recordsAfterRetry = await privateTimeline(dir);
-      expect(recordsAfterRetry.filter((record) => record.type === "terminal-command-submitted")).toHaveLength(1);
-      expect(recordsAfterRetry.filter((record) => record.type === "terminal-command-finished")).toHaveLength(1);
-      const requestsAfterRetry = recordsAfterRetry.filter((record) => record.type === "terminal-review-requested") as any[];
-      expect(requestsAfterRetry).toHaveLength(3);
-      expect(new Set(requestsAfterRetry.map((record) => record.attemptId))).toEqual(new Set([requestsAfterRetry[0]!.attemptId]));
-      expect(requestsAfterRetry.every((record) => !(LEGACY_EVIDENCE_REFERENCE_KEY in record))).toBe(true);
-      expect(terminalReviewCommandEvidence(retryTutor.reviews.find((review) => review.attempt.evidence.kind === "terminal")!)).toEqual(originalCommandEvidence);
-    } finally { await second.close(); }
-  });
-
-  it("does not start a new automatic-call budget when manual terminal retry fails", async () => {
-    const dir = await fixture();
-    const pty = new ServerFakePty(false);
-    const firstTutor = new FakeMainTutor(
-      { outcome: "accepted", message: "Editor accepted." },
-      new Error("first automatic provider secret"),
-      new Error("second automatic provider secret"),
-    );
-    const first = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: firstTutor });
-    let firstFailureId = "";
-    try {
-      await introduceAndOpenEditor(first.url);
-      await acceptEditor(first.url, firstTutor);
-      pty.data?.(bashCommandMarker("manual-failure-secret"));
-      pty.data?.(`done\r\n${bashFinishedMarker()}`);
-      const failed = await waitForWorkbookState(first.url, (next) => Boolean(block(next, "run-supplied-command")?.terminal?.retryFailureId), "initial terminal review failure");
-      firstFailureId = block(failed, "run-supplied-command")!.terminal!.retryFailureId!;
-    } finally { await first.close(); }
-
-    const retryTutor = new FakeMainTutor(new Error("manual retry provider secret"));
-    const second = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: retryTutor });
-    try {
-      const response = await postRetry(second.url, { failureId: firstFailureId });
-      expect(response.status).toBe(202);
-      const failedAgain = await waitForWorkbookState(second.url, (next) => {
-        const terminal = block(next, "run-supplied-command")?.terminal;
-        return terminal?.phase === "feedback" && terminal.retryFailureId === undefined;
-      }, "manual terminal retry failure without another entitlement");
-      expect(block(failedAgain, "run-supplied-command")?.terminal?.message).toMatch(/Review is temporarily unavailable/i);
-      expect(JSON.stringify(failedAgain)).not.toMatch(/manual-failure-secret|provider secret/);
-      expect(retryTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(1);
-      const records = await privateTimeline(dir);
-      expect(records.filter((record) => record.type === "terminal-command-submitted")).toHaveLength(1);
-      expect(records.filter((record) => record.type === "terminal-command-finished")).toHaveLength(1);
-      const requests = records.filter((record) => record.type === "terminal-review-requested") as any[];
-      expect(requests).toHaveLength(3);
-      expect(requests.map((record) => record.callNumber)).toEqual([1, 2, 3]);
-      expect(requests.filter((record) => record.mode === "automatic")).toHaveLength(2);
-      expect(requests.filter((record) => record.mode === "manual")).toHaveLength(1);
-      const failures = records.filter((record) => record.type === "terminal-review-failed") as any[];
-      expect(failures).toHaveLength(2);
-      const hiddenFinalFailureId = failures.at(-1)!.failureId;
-      const secondRetry = await postRetry(second.url, { failureId: hiddenFinalFailureId });
-      expect(secondRetry.status).toBe(409);
-      expect((await privateTimeline(dir)).filter((record) => record.type === "terminal-review-requested")).toHaveLength(3);
-    } finally { await second.close(); }
   });
 
   for (const scenario of [
     { name: "empty accepted text", decision: { outcome: "accepted" as const, message: "" } },
     { name: "empty feedback text", decision: { outcome: "feedback" as const, message: "" } },
   ]) {
-    it(`classifies ${scenario.name} from terminal review as infrastructure failure, not learner feedback`, async () => {
+    it(`latches terminal fatal state for ${scenario.name} instead of learner feedback`, async () => {
       const dir = await fixture();
       const pty = new ServerFakePty(false);
       const tutor = new FakeMainTutor(
         { outcome: "accepted", message: "Editor accepted." },
-        scenario.decision,
         scenario.decision,
       );
       const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: tutor });
@@ -1881,18 +1765,19 @@ describe("workbook browser API", () => {
         await introduceAndOpenEditor(server.url);
         await acceptEditor(server.url, tutor);
         pty.data?.(bashCommandMarker("run"));
-        pty.data?.(`done\r\n${bashFinishedMarker()}`);
-        const failed = await waitForWorkbookState(server.url, (next) => Boolean(block(next, "run-supplied-command")?.terminal?.retryFailureId), `${scenario.name} retryable failure`);
-        expect(block(failed, "run-supplied-command")?.terminal).toMatchObject({ phase: "feedback", message: expect.stringMatching(/Review is temporarily unavailable/) });
+        pty.data?.(`done
+${bashFinishedMarker()}`);
+        const failed = await waitForWorkbookState(server.url, (next) => Boolean(next.fatal), `${scenario.name} fatal`);
+        expectFatalState(failed);
         const records = await privateTimeline(dir);
-        expect(records).toContainEqual(expect.objectContaining({ type: "terminal-review-failed" }));
+        expectNoLegacyFailureRecords(records);
         expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-feedback-recorded", text: "" }));
         expect(records).not.toContainEqual(expect.objectContaining({ type: "attempt_accepted", summary: "" }));
       } finally { await server.close(); }
     });
   }
 
-  it("bounds a hung Main Tutor terminal review and ignores the late result after timeout", async () => {
+  it("bounds a hung Main Tutor terminal review, latches fatal state, and ignores the late result", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty(false);
     const scheduler = new FakeTerminalAssessmentScheduler();
@@ -1900,24 +1785,25 @@ describe("workbook browser API", () => {
     const tutor = new FakeMainTutor(
       { outcome: "accepted", message: "Editor accepted." },
       hung.promise,
-      new Error("second call also unavailable"),
     );
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, terminalAssessmentScheduler: scheduler, mainTutor: tutor });
     try {
       await introduceAndOpenEditor(server.url);
       await acceptEditor(server.url, tutor);
       pty.data?.(bashCommandMarker("run"));
-      pty.data?.(`done\r\n${bashFinishedMarker()}`);
+      pty.data?.(`done
+${bashFinishedMarker()}`);
       await waitForWorkbookState(server.url, (next) => block(next, "run-supplied-command")?.terminal?.phase === "checking" && tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal").length === 1 && scheduler.pending === 1, "hung Main Tutor timeout pending");
       scheduler.runNext();
-      const failed = await waitForWorkbookState(server.url, (next) => Boolean(block(next, "run-supplied-command")?.terminal?.retryFailureId), "hung Main Tutor timeout feedback");
-      expect(block(failed, "run-supplied-command")?.terminal?.message).toMatch(/Review is temporarily unavailable.*retry the review/i);
-      expect(tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(2);
+      const failed = await waitForWorkbookState(server.url, (next) => Boolean(next.fatal), "hung Main Tutor fatal");
+      expectFatalState(failed);
+      expect(tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(1);
       expect(scheduler.pending).toBe(0);
 
       hung.resolve({ outcome: "feedback", message: "Late feedback must not replace the timeout." });
       await waitMs(30);
-      expect(block(await state(server.url), "run-supplied-command")?.terminal?.message).toMatch(/Review is temporarily unavailable/i);
+      const latest = await state(server.url);
+      expectFatalState(latest);
       expect(await privateTimeline(dir)).not.toContainEqual(expect.objectContaining({ type: "terminal-feedback-recorded", text: "Late feedback must not replace the timeout." }));
     } finally { await server.close(); }
   });
@@ -1935,19 +1821,22 @@ describe("workbook browser API", () => {
       await introduceAndOpenEditor(server.url);
       await acceptEditor(server.url, tutor);
       pty.data?.(bashCommandMarker("old"));
-      pty.data?.(`old output\r\n${bashFinishedMarker()}`);
-      await waitForWorkbookState(server.url, () => tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal").length === 1, "old direct terminal review request");
+      pty.data?.(`old output
+${bashFinishedMarker()}`);
+      await waitForWorkbookState(server.url, () => tutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal").length === 1, "old terminal review to start");
       pty.data?.(bashCommandMarker("new"));
       oldReview.resolve({ outcome: "feedback", message: "Old result must never appear." });
       await waitMs(30);
       const publicState = await state(server.url);
       expect(block(publicState, "run-supplied-command")?.terminal).toEqual({ phase: "running" });
       expect(JSON.stringify(publicState)).not.toContain("Old result must never appear.");
-      expect(await privateTimeline(dir)).not.toContainEqual(expect.objectContaining({ type: "terminal-feedback-recorded", text: "Old result must never appear." }));
+      const records = await privateTimeline(dir);
+      expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-feedback-recorded", text: "Old result must never appear." }));
+      expectNoTerminalReviewRows(records);
     } finally { await server.close(); }
   });
 
-  it("recovers a pending direct terminal review from durable request and evidence after restart", async () => {
+  it("does not resume a finished checking terminal attempt after restart", async () => {
     const dir = await fixture();
     const firstPty = new ServerFakePty(false);
     const waitingReview = deferred<TutorDecision>();
@@ -1956,75 +1845,54 @@ describe("workbook browser API", () => {
       waitingReview.promise,
     );
     const first = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => firstPty, mainTutor: firstTutor });
-    let originalCommandEvidence: unknown;
     try {
       await introduceAndOpenEditor(first.url);
       await acceptEditor(first.url, firstTutor);
       firstPty.data?.(bashCommandMarker("finished"));
-      firstPty.data?.(`done\r\n${bashFinishedMarker()}`);
-      const records = await waitForPrivateTimeline(dir, (latest) => latest.some((record) => record.type === "terminal-review-requested"), "first direct terminal review request");
-      const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished")!;
-      originalCommandEvidence = commandEvidenceFromFinished(finished);
-      expect(firstTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(1);
-      expect(terminalReviewCommandEvidence(firstTutor.reviews.find((review) => review.attempt.evidence.kind === "terminal")!)).toEqual(originalCommandEvidence);
+      firstPty.data?.(`done
+${bashFinishedMarker()}`);
+      await waitForWorkbookState(first.url, () => firstTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal").length === 1, "first terminal review to start");
     } finally { await first.close(); }
 
-    const secondTutor = new FakeMainTutor({ outcome: "feedback", message: "Recovered feedback." });
+    const secondTutor = new FakeMainTutor({ outcome: "feedback", message: "Should not resume." });
     const second = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => new ServerFakePty(false), mainTutor: secondTutor });
     try {
-      const recovered = await waitForWorkbookState(second.url, (next) => block(next, "run-supplied-command")?.terminal?.message === "Recovered feedback.", "recovered direct terminal review");
-      expect(block(recovered, "run-supplied-command")?.terminal).toEqual({ phase: "feedback", message: "Recovered feedback." });
-      const terminalReview = secondTutor.reviews.find((review) => review.attempt.evidence.kind === "terminal")!;
-      expect(terminalReviewCommandEvidence(terminalReview)).toEqual(originalCommandEvidence);
-      const requests = (await privateTimeline(dir)).filter((record) => record.type === "terminal-review-requested") as any[];
-      expect(requests).toHaveLength(2);
-      expect(requests.map((record) => record.callNumber)).toEqual([1, 2]);
-      expect(requests.map((record) => record.mode)).toEqual(["automatic", "automatic"]);
-      expect(new Set(requests.map((record) => record.attemptId))).toEqual(new Set([requests[0]!.attemptId]));
-      expect(requests.every((record) => !(LEGACY_EVIDENCE_REFERENCE_KEY in record))).toBe(true);
-      expect(requests[1]!.requestId).not.toBe(requests[0]!.requestId);
+      const restored = await state(second.url);
+      expect(restored.fatal).toBeUndefined();
+      expect(block(restored, "run-supplied-command")?.terminal).toEqual({ phase: "checking" });
+      expect(secondTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(0);
+      const records = await privateTimeline(dir);
+      expect(records.filter((record) => record.type === "terminal-command-finished")).toHaveLength(1);
+      expectNoTerminalReviewRows(records);
     } finally { await second.close(); }
   });
 
-  it("turns a pending terminal review into a generic retryable failure on restart when the automatic budget is already consumed", async () => {
+  it("latches safe fatal state after an exhausted summary and blocks later mutations", async () => {
     const dir = await fixture();
-    const firstPty = new ServerFakePty(false);
-    const pendingSecondReview = deferred<TutorDecision>();
-    const firstTutor = new FakeMainTutor(
-      { outcome: "accepted", message: "Editor accepted." },
-      new Error("first automatic provider failure"),
-      pendingSecondReview.promise,
-    );
-    const first = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => firstPty, mainTutor: firstTutor });
-    let originalCommandEvidence: unknown;
+    const tutor = new class extends FakeMainTutor {
+      override async summarizeBlock(input: Parameters<FakeMainTutor["summarizeBlock"]>[0]): Promise<string> {
+        this.blockSummaries.push(input);
+        throw new Error("summary provider exhausted secret");
+      }
+    }({ outcome: "accepted", message: "Editor accepted." });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: tutor });
     try {
-      await introduceAndOpenEditor(first.url);
-      await acceptEditor(first.url, firstTutor);
-      firstPty.data?.(bashCommandMarker("restart-budget-secret"));
-      firstPty.data?.(`done\r\n${bashFinishedMarker()}`);
-      const records = await waitForPrivateTimeline(dir, (latest) => latest.filter((record) => record.type === "terminal-review-requested").length === 2, "second automatic direct terminal review request");
-      const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished")!;
-      originalCommandEvidence = commandEvidenceFromFinished(finished);
-      expect(firstTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(2);
-      expect(firstTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal").map((review) => terminalReviewCommandEvidence(review))).toEqual([originalCommandEvidence, originalCommandEvidence]);
-    } finally { await first.close(); }
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "factory acceptance marker" })).status).toBe(202);
+      await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "accepted", "editor accepted before summary failure");
+      const response = await completeBlock(server.url, "lesson--001-first--edit-answer");
+      expect(response.status).toBe(202);
+      const failed = await waitForWorkbookState(server.url, (next) => Boolean(next.fatal), "fatal block summary");
+      expectFatalState(failed);
+      expect(tutor.blockSummaries).toHaveLength(1);
+      expect(JSON.stringify(failed)).not.toContain("summary provider exhausted secret");
+      expectNoLegacyFailureRecords(failed.timeline);
 
-    const secondTutor = new FakeMainTutor({ outcome: "feedback", message: "Should not replay beyond budget." });
-    const second = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => new ServerFakePty(false), mainTutor: secondTutor });
-    try {
-      const failed = await waitForWorkbookState(second.url, (next) => Boolean(block(next, "run-supplied-command")?.terminal?.retryFailureId), "restart automatic budget exhausted failure");
-      expect(block(failed, "run-supplied-command")?.terminal).toMatchObject({ phase: "feedback", message: expect.stringMatching(/Review is temporarily unavailable.*retry the review/i), retryFailureId: expect.any(String) });
-      expect(JSON.stringify(failed)).not.toMatch(/restart-budget-secret|provider failure/);
-      expect(secondTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(0);
-      const records = await privateTimeline(dir);
-      const requests = records.filter((record) => record.type === "terminal-review-requested") as any[];
-      expect(requests).toHaveLength(2);
-      expect(requests.map((record) => record.callNumber)).toEqual([1, 2]);
-      expect(new Set(requests.map((record) => record.attemptId))).toEqual(new Set([requests[0]!.attemptId]));
-      expect(requests.every((record) => !(LEGACY_EVIDENCE_REFERENCE_KEY in record))).toBe(true);
-      expect(records).toContainEqual(expect.objectContaining({ type: "terminal-review-failed", requestId: requests[1]!.requestId, attemptId: requests[1]!.attemptId }));
-      expect(records.find((record) => record.type === "terminal-review-failed")).not.toHaveProperty(LEGACY_EVIDENCE_REFERENCE_KEY);
-    } finally { await second.close(); }
+      const beforeRecords = await privateTimeline(dir);
+      expect((await postMessage(server.url, { blockId: "lesson--001-first--run-supplied-command", text: "Can I continue?" })).status).toBe(409);
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "late draft" })).status).toBe(409);
+      expect(await privateTimeline(dir)).toEqual(beforeRecords);
+    } finally { await server.close(); }
   });
 
   it("rejects sessions containing old Practice Coach handoff events instead of replaying them", async () => {

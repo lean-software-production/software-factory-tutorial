@@ -59,9 +59,10 @@ export interface AuthoredWorkbookEvalArtifactSnapshot {
  * In-memory trace for authored-workbook deterministic gates.
  *
  * `internalEvents` may contain raw workbook timeline rows, including private attempt IDs, inline
- * terminal evidence, private tutor lifecycle details, paths, and future fields. Do not
- * serialize this type into judge prompts, public reports, or durable eval artifacts. First project it
- * with `projectAuthoredWorkbookEvalTrace`, which rebuilds the public trace from allowlisted fields.
+ * terminal evidence, fixed internal Tutor-attempt lifecycle rows, paths, and future fields. Do not
+ * serialize this type into judge prompts, public reports, or
+ * durable eval artifacts. First project it with `projectAuthoredWorkbookEvalTrace`, which rebuilds
+ * the public trace from allowlisted fields.
  */
 export interface AuthoredWorkbookEvalSessionTrace {
   scenarioId: string;

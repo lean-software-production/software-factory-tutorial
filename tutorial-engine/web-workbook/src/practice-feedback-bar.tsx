@@ -3,7 +3,7 @@ import { Markdown } from "./markdown.js";
 
 export type PracticeFeedbackTone = "status" | "feedback" | "updating" | "failure" | "success";
 
-export function PracticeFeedbackBar({ tone, markdown, status, label, title, busy = false, className = "", retry }: { tone: PracticeFeedbackTone; markdown?: string; status?: string; label?: string; title?: string; busy?: boolean; className?: string; retry?: { label: string; onClick(): void } }) {
+export function PracticeFeedbackBar({ tone, markdown, status, label, title, busy = false, className = "" }: { tone: PracticeFeedbackTone; markdown?: string; status?: string; label?: string; title?: string; busy?: boolean; className?: string }) {
   const classes = [`practice-feedback-bar is-${tone}`, busy ? "is-busy" : "", className].filter(Boolean).join(" ");
   return <aside className={classes} aria-live="polite" aria-atomic="true" role="status">
     {tone === "success" && <span className="success-check" aria-hidden="true">✓</span>}
@@ -13,6 +13,5 @@ export function PracticeFeedbackBar({ tone, markdown, status, label, title, busy
       {markdown && <Markdown source="generated">{markdown}</Markdown>}
       {status && <p className="practice-feedback-status">{busy && <span className="practice-feedback-spinner" aria-hidden="true" />}{status}</p>}
     </div>
-    {retry && <button className="button secondary" onClick={retry.onClick}>{retry.label}</button>}
   </aside>;
 }
