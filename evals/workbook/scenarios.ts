@@ -276,8 +276,7 @@ const lesson004CurrentEvidenceAndValidationCommand = String.raw`{
 } > factory/.tmp/refactor-current-evidence.txt
 cat factory/refactor-validate.md factory/.tmp/refactor-current-evidence.txt \
   | (cd calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
-  | tee factory/.tmp/refactor-validate-findings.txt
-rm factory/.tmp/refactor-current-evidence.txt`;
+  | tee factory/.tmp/refactor-validate-findings.txt`;
 const lesson004MultiplyCommand = String.raw`node <<'NODE'
 const { readFileSync, writeFileSync } = require('node:fs');
 const path = 'calculator/src/index.ts';

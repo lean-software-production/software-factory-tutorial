@@ -158,8 +158,7 @@ const lesson004CurrentEvidenceAndValidationCommand = String.raw`{
 } > factory/.tmp/refactor-current-evidence.txt
 cat factory/refactor-validate.md factory/.tmp/refactor-current-evidence.txt \
   | (cd calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
-  | tee factory/.tmp/refactor-validate-findings.txt
-rm factory/.tmp/refactor-current-evidence.txt`;
+  | tee factory/.tmp/refactor-validate-findings.txt`;
 const lesson004MultiplyCommand = String.raw`node <<'NODE'
 const { readFileSync, writeFileSync } = require('node:fs');
 const path = 'calculator/src/index.ts';
@@ -400,7 +399,7 @@ describe("authored workbook scenario descriptors", () => {
     await authoredWorkbookScenarioById("lessons-003-004-evidence-feedback").drive({ driver: stubbed });
     const commands = stubbed.calls.filter((call) => call.method === "submitTerminalCommand").map((call) => call.command ?? "");
     expect(commands[1]).not.toContain("sed -n '1,120p' factory/refactor-validate.sh");
-    expect(commands[1]).toContain("./factory/refactor-validate.sh\nprintf");
+    expect(commands[1]).toContain("./factory/refactor-validate.sh\ncat factory/.tmp/refactor-validate-findings.txt; printf");
     expect(commands[1]).toContain("grep -nF 'if [ ! -f .tmp/refactor-quality-before.txt ]; then' factory/refactor-validate.sh");
     expect(commands[1]).toContain("grep -oF -- '--tools read,grep,find,ls,bash -p' factory/refactor-validate.sh");
     expect(commands.some((command) => command.endsWith(lesson004WrongCommand))).toBe(true);
@@ -572,7 +571,7 @@ describe("authored workbook scenario gates", () => {
       const inputs = publicTrace.terminalTranscript.filter((entry) => entry.direction === "input").map((entry) => entry.text.replace(/[\r\n]+$/, ""));
       expect(inputs).toHaveLength(5);
       expect(inputs[1]).not.toContain("sed -n '1,120p' factory/refactor-validate.sh");
-      expect(inputs[1]).toContain("./factory/refactor-validate.sh\nprintf");
+      expect(inputs[1]).toContain("./factory/refactor-validate.sh\ncat factory/.tmp/refactor-validate-findings.txt; printf");
       const visibleOutput = publicTrace.terminalTranscript.filter((entry) => entry.direction === "output").map((entry) => entry.text).join("\n");
       const verdictIndex = visibleOutput.indexOf("VERDICT: FAIL");
       const mechanicsIndex = visibleOutput.indexOf("=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ===");
