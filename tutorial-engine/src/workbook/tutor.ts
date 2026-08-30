@@ -42,7 +42,7 @@ export interface MainWorkbookTutor {
 }
 
 export interface WorkbookTutorSession {
-  prompt(prompt: string, options?: { failureLog?: "detailed" | "generic" }): Promise<string>;
+  prompt(prompt: string): Promise<string>;
   compact(instruction: string): Promise<{ summary: string }>;
   dispose(): void;
 }
@@ -390,7 +390,7 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
 
       try {
         return await this.#withFreshSession(input, [accept], async (session) => {
-          const text = await session.prompt(reviewPrompt(input), input.attempt.evidence.kind === "terminal" ? { failureLog: "generic" } : undefined);
+          const text = await session.prompt(reviewPrompt(input));
           if (acceptedAttemptId === boundAttemptId) return { outcome: "accepted", message: acceptedText(text) };
           return { outcome: "feedback", message: publicText(text) };
         });

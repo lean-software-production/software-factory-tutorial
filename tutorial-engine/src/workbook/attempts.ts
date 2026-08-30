@@ -20,10 +20,8 @@ export interface Attempt {
   evidence: AttemptEvidence;
   status: AttemptStatus;
   feedback?: string;
-  /** Last actionable feedback kept visible while a replacement review is pending or retryable. */
+  /** Last actionable feedback kept visible while a replacement editor review is pending. */
   retainedFeedback?: string;
-  /** The visible feedback is a retryable transport/provider notice, not actionable tutor feedback. */
-  reviewUnavailable?: boolean;
   /** Historical terminal-only quick-feedback state; excluded from Main Tutor context and timeline. */
   privateQuickFeedback?: boolean;
   successMessage?: string;
@@ -103,8 +101,8 @@ export class AttemptStore {
     const previousVersion = previous?.version ?? 0;
     const requestedVersion = input.version;
     if (requestedVersion !== undefined && (!Number.isSafeInteger(requestedVersion) || requestedVersion <= previousVersion)) throw new Error("Attempt revision is stale.");
-    const retainedFeedback = previous?.evidence.kind === "editor" && input.evidence.kind === "editor" ? previous.retainedFeedback ?? (previous.status === "feedback" && !previous.reviewUnavailable ? previous.feedback : undefined) : undefined;
-    if (previous && previous.status !== "superseded") await this.#write({ ...previous, status: "superseded", feedback: undefined, retainedFeedback: undefined, reviewUnavailable: undefined, successMessage: undefined });
+    const retainedFeedback = previous?.evidence.kind === "editor" && input.evidence.kind === "editor" ? previous.retainedFeedback ?? (previous.status === "feedback" ? previous.feedback : undefined) : undefined;
+    if (previous && previous.status !== "superseded") await this.#write({ ...previous, status: "superseded", feedback: undefined, retainedFeedback: undefined, successMessage: undefined });
     const attempt: Attempt = { id: randomUUID(), lessonId: input.lessonId, blockId: input.blockId, version: requestedVersion ?? previousVersion + 1, evidence: input.evidence, status: "working", ...(retainedFeedback ? { retainedFeedback } : {}) };
     await this.#write(attempt);
     await writeJson(this.#currentPath(attempt.lessonId, attempt.blockId), this.#pointer(attempt));
@@ -155,17 +153,17 @@ export class AttemptStore {
 
   async markFeedback(id: string, message: string): Promise<Attempt | undefined> {
     const feedback = message.trim().slice(0, 1_000) || "The tutor is ready to check your next attempt.";
-    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback, retainedFeedback: undefined, reviewUnavailable: undefined, privateQuickFeedback: undefined }));
+    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback, retainedFeedback: undefined, privateQuickFeedback: undefined }));
   }
 
   async markQuickFeedback(id: string, message: string): Promise<Attempt | undefined> {
     const feedback = message.trim().slice(0, 1_000) || "Check the terminal output and try again.";
-    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback, retainedFeedback: undefined, reviewUnavailable: undefined, privateQuickFeedback: true }));
+    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback, retainedFeedback: undefined, privateQuickFeedback: true }));
   }
 
   async acceptCurrent(id: string, successMessage: string): Promise<Attempt | undefined> {
     const message = successMessage.trim().slice(0, 1_000) || "Nice work — this attempt is accepted.";
-    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "accepted", feedback: undefined, retainedFeedback: undefined, reviewUnavailable: undefined, privateQuickFeedback: undefined, successMessage: message }));
+    return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "accepted", feedback: undefined, retainedFeedback: undefined, privateQuickFeedback: undefined, successMessage: message }));
   }
 
   async resetPresentationState(): Promise<void> {

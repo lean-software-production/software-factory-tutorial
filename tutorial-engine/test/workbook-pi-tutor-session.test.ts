@@ -1,5 +1,6 @@
 import { expect, test, vi } from "vitest";
 import {
+  compactWithTutorRetries,
   createResilientTutorSession,
   type PiTutorSession,
   type PiTutorSessionEvent
@@ -65,9 +66,9 @@ test("retries an assistant terminal provider error twice, then returns its next 
 
   expect(session.prompts).toEqual(["private learner prompt", "private learner prompt", "private learner prompt"]);
   expect(waits).toEqual([250, 500]);
-  expect(logs.errors[0]).toMatch(/Workbook tutor prompt failed \(attempt 1\/3; durationMs=\d+; anthropic\/claude\): fetch failed/);
+  expect(logs.errors[0]).toMatch(/Workbook tutor prompt failed \(attempt 1\/3; durationMs=\d+; outcome=attempt_failure\)\./);
   expect(logs.infos).toContainEqual(expect.stringMatching(/Workbook tutor prompt completed \(attempt 3\/3; durationMs=\d+; outcome=success\)\./));
-  expect(logs.errors.join("\n")).not.toContain("private learner prompt");
+  expect(logs.errors.join("\n")).not.toMatch(/anthropic|claude|fetch failed|private learner prompt/);
 });
 
 test("recovers when the first provider attempt fails", async () => {
@@ -97,7 +98,7 @@ test("rejects with a typed infrastructure error after the third failed attempt",
   expect(logs.errors).toContainEqual(expect.stringMatching(/Workbook tutor prompt exhausted \(attempts=3; durationMs=\d+; outcome=infrastructure_failure\)\./));
 });
 
-test("uses exactly three attempts for privacy-sensitive generic logging", async () => {
+test("uses exactly three attempts and privacy-safe logging for every prompt", async () => {
   const session = fakeSession([
     assistantError("usage limit for private terminal transcript"),
     assistantError("usage limit for private terminal transcript"),
@@ -106,20 +107,20 @@ test("uses exactly three attempts for privacy-sensitive generic logging", async 
   const logs = logger();
   const wait = vi.fn(async () => {});
 
-  await expect(createResilientTutorSession(session, logs.log, "Workbook tutor", { wait }).prompt("private terminal transcript", { failureLog: "generic" }))
+  await expect(createResilientTutorSession(session, logs.log, "Workbook tutor", { wait }).prompt("private terminal transcript"))
     .rejects.toBeInstanceOf(TutorInfrastructureError);
 
   expect(session.prompts).toEqual(["private terminal transcript", "private terminal transcript", "private terminal transcript"]);
   expect(wait).toHaveBeenCalledTimes(2);
   expect(logs.errors.slice(0, 3)).toEqual([
-    expect.stringMatching(/Workbook tutor prompt failed \(attempt 1\/3; durationMs=\d+\)\./),
-    expect.stringMatching(/Workbook tutor prompt failed \(attempt 2\/3; durationMs=\d+\)\./),
-    expect.stringMatching(/Workbook tutor prompt failed \(attempt 3\/3; durationMs=\d+\)\./),
+    expect.stringMatching(/Workbook tutor prompt failed \(attempt 1\/3; durationMs=\d+; outcome=attempt_failure\)\./),
+    expect.stringMatching(/Workbook tutor prompt failed \(attempt 2\/3; durationMs=\d+; outcome=attempt_failure\)\./),
+    expect.stringMatching(/Workbook tutor prompt failed \(attempt 3\/3; durationMs=\d+; outcome=attempt_failure\)\./),
   ]);
   expect(logs.errors.join("\n")).not.toMatch(/anthropic|claude|usage limit|private terminal transcript/);
 });
 
-test("redacts a learner prompt echoed by rejected provider errors from logs but preserves it in the final error", async () => {
+test("omits provider errors that echo learner prompts from logs but preserves the final private cause", async () => {
   const privatePrompt = "private learner prompt: My salary is $123,456";
   const providerReason = `transport down while sending: ${privatePrompt}`;
   const session = fakeSession([
@@ -133,6 +134,27 @@ test("redacts a learner prompt echoed by rejected provider errors from logs but 
     .rejects.toMatchObject({ name: "TutorInfrastructureError", cause: providerReason });
   expect(session.prompts).toHaveLength(3);
   expect(logs.errors.join("\n")).not.toContain(privatePrompt);
+  expect(logs.errors.join("\n")).not.toContain(providerReason);
+});
+
+test("uses three privacy-safe compaction attempts without logging provider details", async () => {
+  const privateReason = "provider rejected private compacted history";
+  const compact = vi.fn(async () => { throw new Error(privateReason); });
+  const logs = logger();
+  const wait = vi.fn(async () => {});
+
+  await expect(compactWithTutorRetries(compact, logs.log, "Workbook tutor", { wait }))
+    .rejects.toMatchObject({ name: "TutorInfrastructureError", cause: expect.objectContaining({ message: privateReason }) });
+
+  expect(compact).toHaveBeenCalledTimes(3);
+  expect(wait).toHaveBeenCalledTimes(2);
+  expect(logs.errors.slice(0, 3)).toEqual([
+    expect.stringMatching(/Workbook tutor compact failed \(attempt 1\/3; durationMs=\d+; outcome=attempt_failure\)\./),
+    expect.stringMatching(/Workbook tutor compact failed \(attempt 2\/3; durationMs=\d+; outcome=attempt_failure\)\./),
+    expect.stringMatching(/Workbook tutor compact failed \(attempt 3\/3; durationMs=\d+; outcome=attempt_failure\)\./),
+  ]);
+  expect(logs.errors).toContainEqual(expect.stringMatching(/Workbook tutor compact exhausted \(attempts=3; durationMs=\d+; outcome=infrastructure_failure\)\./));
+  expect(logs.errors.join("\n")).not.toMatch(/provider rejected|private compacted history/);
 });
 
 test("returns an empty assistant terminal message so tool-only review turns can be interpreted by callers", async () => {

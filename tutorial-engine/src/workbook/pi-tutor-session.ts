@@ -19,19 +19,12 @@ export interface PiTutorSession<Event = PiTutorSessionEvent> {
   dispose(): void;
 }
 
-export type ResilientTutorFailureLog = "detailed" | "generic";
-
-export interface ResilientTutorPromptOptions {
-  failureLog?: ResilientTutorFailureLog;
-}
-
 export interface ResilientTutorSession {
-  prompt(prompt: string, options?: ResilientTutorPromptOptions): Promise<string>;
+  prompt(prompt: string): Promise<string>;
   dispose(): void;
 }
 
 export interface ResilientTutorSessionOptions {
-  failureLog?: ResilientTutorFailureLog;
   wait?: (milliseconds: number) => Promise<void>;
 }
 
@@ -62,23 +55,8 @@ function terminalResult(event: unknown): { text: string; errorMessage?: string }
   return { text, errorMessage: typeof message.errorMessage === "string" ? message.errorMessage : undefined };
 }
 
-function errorReason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function redactPromptFromLog(reason: string, prompt: string): string {
-  return prompt ? reason.replaceAll(prompt, "[redacted learner prompt]") : reason;
-}
-
-function logPromptFailure<Event>(input: { session: PiTutorSession<Event>; log: TutorialLogger; label: string; prompt: string; error: unknown; attempt: number; durationMs: number; failureLog: ResilientTutorFailureLog }): string {
-  const reason = errorReason(input.error);
-  if (input.failureLog === "generic") {
-    input.log.error(`${input.label} prompt failed (attempt ${input.attempt}/${TUTOR_PROVIDER_ATTEMPTS}; durationMs=${input.durationMs}).`);
-    return reason;
-  }
-  const logReason = redactPromptFromLog(reason, input.prompt);
-  input.log.error(`${input.label} prompt failed (attempt ${input.attempt}/${TUTOR_PROVIDER_ATTEMPTS}; durationMs=${input.durationMs}; ${input.session.state.model.provider}/${input.session.state.model.id}): ${logReason}`);
-  return reason;
+function logPromptFailure(log: TutorialLogger, label: string, attempt: number, durationMs: number): void {
+  log.error(`${label} prompt failed (attempt ${attempt}/${TUTOR_PROVIDER_ATTEMPTS}; durationMs=${durationMs}; outcome=attempt_failure).`);
 }
 
 function logPromptSuccess(log: TutorialLogger, label: string, attempt: number, durationMs: number): void {
@@ -109,10 +87,8 @@ export function createResilientTutorSession<Event>(
   options: ResilientTutorSessionOptions = {}
 ): ResilientTutorSession {
   const wait = options.wait ?? defaultWait;
-  const defaultFailureLog = options.failureLog ?? "detailed";
   return {
-    async prompt(prompt: string, promptOptions?: ResilientTutorPromptOptions): Promise<string> {
-      const failureLog = promptOptions?.failureLog ?? defaultFailureLog;
+    async prompt(prompt: string): Promise<string> {
       const operationStartedAtMs = Date.now();
       let finalError: unknown;
       for (let attempt = 1; attempt <= TUTOR_PROVIDER_ATTEMPTS; attempt += 1) {
@@ -123,7 +99,7 @@ export function createResilientTutorSession<Event>(
           return text;
         } catch (error) {
           finalError = error;
-          logPromptFailure({ session, log, label, prompt, error, attempt, durationMs: durationMs(attemptStartedAtMs), failureLog });
+          logPromptFailure(log, label, attempt, durationMs(attemptStartedAtMs));
           if (attempt < TUTOR_PROVIDER_ATTEMPTS) await wait(attempt * 250);
         }
       }
@@ -152,7 +128,7 @@ export async function compactWithTutorRetries<T>(
     } catch (error) {
       if (options.isExpectedNoop?.(error)) throw error;
       finalError = error;
-      log.error(`${label} compact failed (attempt ${attempt}/${TUTOR_PROVIDER_ATTEMPTS}; durationMs=${durationMs(attemptStartedAtMs)}): ${errorReason(error)}`);
+      log.error(`${label} compact failed (attempt ${attempt}/${TUTOR_PROVIDER_ATTEMPTS}; durationMs=${durationMs(attemptStartedAtMs)}; outcome=attempt_failure).`);
       if (attempt < TUTOR_PROVIDER_ATTEMPTS) await wait(attempt * 250);
     }
   }

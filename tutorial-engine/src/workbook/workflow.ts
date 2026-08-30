@@ -17,7 +17,6 @@ import type { EditorPracticeBlock, WorkbookBlock, WorkbookLesson } from "./contr
 import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTerminal, PublicTerminalSnapshot, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookLesson, PublicWorkbookOrderedBlock, PublicWorkbookState } from "./public-contract.js";
 import { TUTOR_INFRASTRUCTURE_FATAL_MESSAGE, publicTutorInfrastructureFatalState, type PublicTutorInfrastructureFatalState } from "./tutor-infrastructure.js";
 
-const REVIEW_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please try another attempt in a moment.";
 const TERMINAL_ASSESSMENT_TIMEOUT_MS = 30_000;
 const WORKFLOW_CLOSE_GRACE_MS = 250;
 const MAX_PUBLIC_TERMINAL_SNAPSHOT_BYTES = 16_000;
@@ -80,7 +79,6 @@ function publicCheckpoint(attempt: Attempt | undefined, projected: AcceptedCheck
     const evidence = publicAttemptEvidence(attempt);
     if (attempt.status === "accepted") return projected ? { status: "accepted", successMessage: attempt.successMessage ?? projected.summary, evidence } : { status: "reviewing", evidence };
     if (attempt.evidence.kind === "editor" && attempt.status === "reviewing" && attempt.retainedFeedback) return { status: "reviewing", feedback: attempt.retainedFeedback, reviewNotice: "Updating feedback…", evidence };
-    if (attempt.evidence.kind === "editor" && attempt.status === "feedback" && attempt.retainedFeedback && attempt.reviewUnavailable) return { status: "feedback", feedback: attempt.retainedFeedback, reviewNotice: attempt.feedback ?? REVIEW_FAILURE_FEEDBACK, evidence };
     return { status: attempt.status, feedback: attempt.status === "feedback" ? attempt.feedback : undefined, evidence };
   }
   return projected ? { status: "accepted", successMessage: projected.summary, evidence: { kind: projected.kind } } : undefined;
