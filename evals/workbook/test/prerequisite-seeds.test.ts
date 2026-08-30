@@ -194,7 +194,11 @@ describe("workbook evaluator prerequisite seeds", () => {
 
     expect(readme).toContain("Linux workbook terminal/Docker runtime");
     expect(readme).toContain("fixed in-workspace line path `factory/refactor`");
-    expect(runScript).toContain("sleep infinity > control &");
+    expect(runScript).toContain("mkfifo control .tmp/rpc-input");
+    expect(runScript).toContain('createReadStream("control").pipe(process.stdout, { end: false });');
+    expect(runScript).toContain('setInterval(() => {}, 2 ** 30);');
+    expect(runScript).toContain('wait "$producer"');
+    expect(runScript).toContain("< .tmp/rpc-input");
     expect(watchScript).toContain('line="${1:?usage: watch.sh <line>}"');
     expect(askScript).toContain('line="${1:?usage: ask.sh <line> <question>}"');
     expect(steerScript).toContain('line="${1:?usage: steer.sh <line> <message>}"');

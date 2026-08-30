@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
-import { AUTHORED_COMMAND_STUB_NAMESPACE, AUTHORED_COMMAND_STUB_OWNER, AUTHORED_COMMAND_STUB_SCHEMA_VERSION, type AuthoredCommandInvocationEvidence } from "../command-stubs.js";
+import { AUTHORED_COMMAND_STUB_NAMESPACE, AUTHORED_COMMAND_STUB_OWNER, AUTHORED_COMMAND_STUB_SCHEMA_VERSION, type AuthoredCommandInvocationEvidence, type AuthoredEventClass } from "../command-stubs.js";
 import {
   AUTHORED_GATE_EVIDENCE_ABORTED_PUBLIC_ERROR,
   AUTHORED_GATE_EVIDENCE_CLEANUP_PUBLIC_ERROR,
@@ -15,6 +15,8 @@ import {
   DockerAuthoredGateEvidenceProbe,
   createAuthoredWorkbookScenarioGateEvidenceCollector,
   dockerProbeCreateArguments,
+  dockerProbePopulateVolumeArguments,
+  dockerProbeVolumeCreateArguments,
   type AuthoredGateEvidenceCommandResult,
   type AuthoredGateEvidenceDockerRunner,
   type AuthoredGateEvidenceProbe
@@ -28,6 +30,7 @@ const tempRoots: string[] = [];
 const RUN_ID = "123e4567-e89b-42d3-a456-426614174000";
 const sourceRoot = resolve(import.meta.dirname, "../../../tutorial/workspaces/refactor-line");
 const prerequisitesRoot = resolve(import.meta.dirname, "../prerequisites");
+const lesson013RpcEventClasses: AuthoredEventClass[] = ["response", "queue_update", "tool_execution_start", "message_update", "message_end", "agent_end"];
 
 afterEach(async () => {
   await Promise.all(tempRoots.map((root) => rm(root, { recursive: true, force: true })));
@@ -57,6 +60,51 @@ describe("authored workbook gate evidence", () => {
     mutated.facts.calculatorBehaviorTimeline![0]!.sourceSha256 = mutated.facts.calculatorBehaviorProjection!.sourceSha256;
     expect(scenario.gate(mutated).passed).toBe(false);
   }, 20_000);
+
+  it("allows private raw event files and only necessary ancestor dirs in the mutation manifest without public capture", async () => {
+    const scenario = authoredWorkbookScenarioById("lesson-013-operator-judgement");
+    const workspace = await tempWorkspace();
+    await rm(join(workspace.root, "factory/refactor/.tmp"), { recursive: true, force: true });
+    const trace = lesson013Trace();
+    const session = sessionFor(workspace.root);
+    await writeSessionEvents(session.sessionRoot, trace.internalEvents);
+    const collector = createAuthoredWorkbookScenarioGateEvidenceCollector({ scenario, workspace: fakeGuardedWorkspace(), session, trace, commandStubHandle: { hostEvidencePath: workspace.evidencePath, runId: RUN_ID }, probe: fakeProbe() });
+    await collector.captureBaseline();
+    await writeLesson013Final(workspace.root, {});
+    await mkdir(join(workspace.root, "factory/refactor/.tmp/events"), { recursive: true });
+    await writeFile(join(workspace.root, "factory/refactor/.tmp/events/1-do.jsonl"), JSON.stringify({ type: "agent_end" }) + "\n");
+    await writeFile(workspace.evidencePath, lesson013Evidence().map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+
+    const input = await collector.collectGateInput();
+    expect(input.facts.learnerWorkspaceChangedOutsideAllowlist).toEqual([]);
+    expect(input.artifactSnapshots.map((entry) => entry.path)).not.toContain("factory/refactor/.tmp/events/1-do.jsonl");
+    expect(JSON.stringify(input.trace)).not.toContain("1-do.jsonl");
+    expect(scenario.gate(input).passed).toBe(true);
+
+    await writeFile(join(workspace.root, "factory/refactor/.tmp/unlisted-sibling.txt"), "not allowlisted\n");
+    const sibling = await collector.collectGateInput();
+    expect(sibling.facts.learnerWorkspaceChangedOutsideAllowlist).toContain("factory/refactor/.tmp/unlisted-sibling.txt");
+  }, 30_000);
+
+  it("derives Lesson 013 Git expectations with real Git tree directory/file byte ordering", async () => {
+    const scenario = authoredWorkbookScenarioById("lesson-013-operator-judgement");
+    const workspace = await tempWorkspace();
+    await writeFile(join(workspace.root, "calculator-peer"), "root file sorts before calculator tree under Git's tree comparator\n");
+    await git(workspace.root, "add", "calculator-peer");
+    await git(workspace.root, "commit", "-qm", "Add Git tree ordering regression fixture");
+    const trace = lesson013Trace();
+    const session = sessionFor(workspace.root);
+    await writeSessionEvents(session.sessionRoot, trace.internalEvents);
+    const collector = createAuthoredWorkbookScenarioGateEvidenceCollector({ scenario, workspace: fakeGuardedWorkspace(), session, trace, commandStubHandle: { hostEvidencePath: workspace.evidencePath, runId: RUN_ID }, probe: fakeProbe() });
+    await collector.captureBaseline();
+    await writeLesson013Final(workspace.root, {});
+    await writeFile(workspace.evidencePath, lesson013Evidence().map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+
+    const input = await collector.collectGateInput();
+    expect(input.facts.calculatorTopCommitTree).toBe(input.facts.calculatorExpectedTopCommitTree);
+    expect(input.facts.calculatorTopCommit).toBe(input.facts.calculatorExpectedTopCommit);
+    expect(scenario.gate(input).passed).toBe(true);
+  }, 30_000);
 
   it("derives Lesson 013 Git expectations instead of accepting actual top commit as expected", async () => {
     const scenario = authoredWorkbookScenarioById("lesson-013-operator-judgement");
@@ -156,7 +204,8 @@ describe("authored workbook gate evidence", () => {
     };
     const probe = new DockerAuthoredGateEvidenceProbe({ dockerRunner: runner, repositoryRoot: resolve(import.meta.dirname, "../../..") });
     await expect(probe.probeCalculator({ workspaceRoot: workspace.root, label: "final" })).rejects.toMatchObject({ message: AUTHORED_GATE_EVIDENCE_CLEANUP_PUBLIC_ERROR });
-    expect(calls.at(-1)).toEqual(expect.arrayContaining(["rm", "-f"]));
+    expect(calls.some((call) => call[0] === "rm" && call[1] === "-f")).toBe(true);
+    expect(calls.some((call) => call[0] === "volume" && call[1] === "rm" && call[2] === "-f")).toBe(true);
 
     const aborted = new AbortController();
     const abortCalls: string[][] = [];
@@ -167,7 +216,7 @@ describe("authored workbook gate evidence", () => {
     };
     const abortProbe = new DockerAuthoredGateEvidenceProbe({ dockerRunner: abortRunner, repositoryRoot: resolve(import.meta.dirname, "../../..") });
     await expect(abortProbe.probeCalculator({ workspaceRoot: workspace.root, label: "final", signal: aborted.signal })).rejects.toMatchObject({ message: AUTHORED_GATE_EVIDENCE_ABORTED_PUBLIC_ERROR });
-    expect(abortCalls.some((call) => call[0] === "rm" && call[1] === "-f")).toBe(true);
+    expect(abortCalls.some((call) => call[0] === "volume" && call[1] === "rm" && call[2] === "-f")).toBe(true);
   }, 20_000);
 
   it("bounds Docker probe timeout and supplies a fresh independent cleanup signal", async () => {
@@ -175,7 +224,8 @@ describe("authored workbook gate evidence", () => {
     let cleanupSignal: AbortSignal | undefined;
     const controller = new AbortController();
     const runner: AuthoredGateEvidenceDockerRunner = async (request) => {
-      if (request.args[0] === "rm") {
+      if (request.args[0] === "volume" && request.args[1] === "create") return { status: 0, stdout: "", stderr: "" };
+      if (request.args[0] === "volume" && request.args[1] === "rm") {
         cleanupSignal = request.signal;
         expect(request.signal).not.toBe(controller.signal);
         expect(request.timeoutMs).toBe(10_000);
@@ -242,12 +292,23 @@ describe("authored workbook gate evidence", () => {
   }, 20_000);
 
   it("uses hardened Docker probe argv and keeps public Docker errors sanitized", async () => {
-    const args = dockerProbeCreateArguments({ name: "probe-test", probeWorkspace: "/tmp/disposable-secret-workspace", nodeModules: "/tmp/root-node_modules" });
+    const args = dockerProbeCreateArguments({ name: "probe-test", volume: "probe-volume-test" });
+    const volumeArgs = dockerProbeVolumeCreateArguments("probe-volume-test");
+    const populateArgs = dockerProbePopulateVolumeArguments("probe-volume-test");
     expect(args).toContain("--network=none");
     expect(args).toContain("--read-only");
     expect(args).toContain(AUTHORED_GATE_EVIDENCE_DOCKER_IMAGE);
     expect(args).not.toContain("OPENCODE_API_KEY");
-    expect(args.join(" ")).toContain("/workspace/calculator/node_modules,readonly");
+    expect(args.join(" ")).toContain("type=volume,src=probe-volume-test,dst=/workspace/calculator");
+    expect(args.join(" ")).not.toContain("node_modules");
+    expect([...volumeArgs, ...populateArgs, ...args].join(" ")).not.toContain("/tmp/disposable-secret-workspace");
+    expect(populateArgs).toContain("-i");
+    expect(populateArgs.join(" ")).toContain("type=volume,src=probe-volume-test,dst=/workspace/calculator");
+    const script = args.at(-1) ?? "";
+    expect(script).toContain("npm test >/tmp/test.out");
+    expect(script).toContain("node scripts/quality.mjs");
+    expect(script).toContain("import('./dist/index.js')");
+    expect(script).not.toContain("import('./src/index.ts')");
 
     const workspace = await tempWorkspace();
     const calls: string[][] = [];
@@ -259,8 +320,26 @@ describe("authored workbook gate evidence", () => {
     const probe = new DockerAuthoredGateEvidenceProbe({ dockerRunner: runner, repositoryRoot: resolve(import.meta.dirname, "../../..") });
     await expect(probe.probeCalculator({ workspaceRoot: workspace.root, label: "final" })).rejects.toMatchObject({ message: AUTHORED_GATE_EVIDENCE_PUBLIC_ERROR });
     await expect(probe.probeCalculator({ workspaceRoot: workspace.root, label: "final" })).rejects.not.toThrow(/disposable-secret|OPENCODE|\/tmp\/authored/);
-    expect(calls.some((call) => call[0] === "rm" && call[1] === "-f")).toBe(true);
+    expect(calls.some((call) => call[0] === "volume" && call[1] === "rm" && call[2] === "-f")).toBe(true);
+    expect(calls.some((call) => call.join(" ").includes("disposable-secret-workspace"))).toBe(false);
   }, 20_000);
+
+  it.runIf(process.env.AUTHORED_WORKBOOK_REAL_DOCKER === "1")("fails a canonical refactor source with an unused variable through the real trusted Docker probe", async () => {
+    const workspace = await tempWorkspace();
+    const sourcePath = join(workspace.root, "calculator/src/index.ts");
+    const counterexample = `${completeSource(await readFile(sourcePath, "utf8"))}\nconst unusedTrustedProbeCounterexample = 1;\n`;
+    await writeFile(sourcePath, counterexample);
+
+    const probe = new DockerAuthoredGateEvidenceProbe({ repositoryRoot: resolve(import.meta.dirname, "../../.."), timeoutMs: 60_000 });
+    const projection = await probe.probeCalculator({ workspaceRoot: workspace.root, label: "counterexample" });
+
+    expect(projection.sourceSha256).toBe(sha256Text(counterexample));
+    expect(projection.cases).toEqual([{ input: "multiply 6 by 7", output: 42 }, { input: "divide 84 by 2", output: 42 }]);
+    expect(projection.testStatus).toBe("failed");
+    expect(projection.qualityStatus).toBe("failed");
+    expect(projection.qualityOutput).toMatch(/Findings reported by:|could not run|not installed|quality command produced no output/);
+    expect(projection.qualityOutput).not.toMatch(/\/private\/var\/|\/var\/folders\/|\/workspace\/calculator/);
+  }, 90_000);
 
   it("rejects oversized, alias, raw-event, dirty, jump, and source/disposable mutations before Judge", async () => {
     const scenario = authoredWorkbookScenarioById("lessons-003-004-evidence-feedback");
@@ -276,7 +355,7 @@ describe("authored workbook gate evidence", () => {
     const rawPublic = authoredWorkbookScenarioById("lesson-013-operator-judgement");
     const root = await tempWorkspace();
     await writeFile(join(root.root, "factory/refactor/.tmp/events/extra.jsonl"), "{}\n");
-    await expect(async () => dockerProbeCreateArguments({ name: "x", probeWorkspace: root.root, nodeModules: root.root })).not.toThrow();
+    await expect(async () => dockerProbeCreateArguments({ name: "x", volume: "safe-probe-volume" })).not.toThrow();
 
     const aliasRoot = await tempWorkspace();
     await rm(join(aliasRoot.root, "calculator/src/index.ts"));
@@ -376,7 +455,7 @@ function fakeProbe(): AuthoredGateEvidenceProbe {
     const cases = [] as Array<{ input: string; output: number }>;
     if (source.includes('if (word === "multiply") {\n      const first = readFirstOperand("by");')) cases.push({ input: "multiply 6 by 7", output: 42 });
     if (source.includes('if (word === "divide") {\n      const first = readFirstOperand("by");')) cases.push({ input: "divide 84 by 2", output: 42 });
-    return { label, sourceSha256: sha256Text(source), testStatus: "passed", qualityStatus: cases.length === 2 ? "passed" : "failed", ...(cases.length === 2 ? { qualityOutput: "All quality checks passed." } : {}), cases };
+    return { label, sourceSha256: sha256Text(source), testStatus: "passed", qualityStatus: "failed", qualityOutput: "Findings reported by: eslint, knip.", cases };
   } };
 }
 
@@ -469,12 +548,39 @@ async function writeLessons003004Final(root: string, options: { extraArtifact?: 
   if (options.extraArtifact) await writeFile(join(root, "factory/.tmp/unexpected.txt"), "extra");
 }
 
+function helperOnlyCompleteEvidence(testOutput: string): string {
+  return `=== QUALITY BEFORE (recorded before the doer ran) ===
+Findings reported by: eslint.
+- calculator/src/index.ts duplicated operator branch parser
+
+=== QUALITY NOW ===
+Findings reported by: eslint, knip.
+
+=== TESTS ===
+${testOutput}
+=== WORKING DIFF ===
++    const readFirstOperand = (separator: "and" | "from" | "by"): number => {
++      const first = readFirstOperand("and");
++      const first = readFirstOperand("from");
++      const first = readFirstOperand("by");
++      const first = readFirstOperand("by");
+-      const first = read();
+-      const first = read();
+-      const first = read();
+-      const first = read();
+-      if (pieces[place++] !== "and") fail();
+-      if (pieces[place++] !== "from") fail();
+-      if (pieces[place++] !== "by") fail();
+-      if (pieces[place++] !== "by") fail();
+`;
+}
+
 async function writeLesson013Final(root: string, options: { dirtyAfterCommit?: boolean; wrongCommitIdentity?: boolean; committerMismatch?: boolean; extraCommittedIgnoredFile?: boolean; alternateCommittedSource?: boolean }) {
   await writeFile(join(root, ".tmp/refactor-run.log"), "Starting doer\nStarting validation\nStarting commit\nLine finished\n");
   await writeFile(join(root, ".tmp/refactor-watch.log"), "→ read\nauthored-eval accepted early steer\n→ edit\n");
   await mkdir(join(root, "factory/refactor/.tmp"), { recursive: true });
   await writeFile(join(root, "factory/refactor/.tmp/quality-before.txt"), "Findings reported by: eslint.\n");
-  await writeFile(join(root, "factory/refactor/.tmp/evidence.txt"), "=== QUALITY BEFORE (recorded before the doer ran) ===\nFindings reported by: eslint.\n\n=== QUALITY NOW ===\nAll quality checks passed.\n\n=== TESTS ===\nTests: PASS\n\n=== WORKING DIFF ===\n+    const readFirstOperand = (separator: \"and\" | \"from\" | \"by\"): number => {\n+      const first = readFirstOperand(\"by\");\n");
+  await writeFile(join(root, "factory/refactor/.tmp/evidence.txt"), helperOnlyCompleteEvidence("Tests: PASS\n"));
   await writeFile(join(root, "factory/refactor/.tmp/validate-findings.txt"), "VERDICT: PASS\n");
   await writeFile(join(root, "factory/refactor/.tmp/commit-message.txt"), "Refactor calculator operand parsing\n\nUse a shared operand reader across prefix operator branches.");
   await writeFile(join(root, "calculator/src/index.ts"), completeSource(await readFile(join(root, "calculator/src/index.ts"), "utf8")));
@@ -496,12 +602,12 @@ function lessons003004Evidence(): AuthoredCommandInvocationEvidence[] {
 }
 
 function lesson013Evidence(): AuthoredCommandInvocationEvidence[] {
-  return [stub("doer", { mode: "rpc", mutation: "complete-refactor", rpc: { commandCount: 2, earlySteerCount: 1, lateSteerCount: 0, steerSha256: sha256Text(sha256Text("Finish multiply and divide independently before validation.")) } }), stub("validator", { mode: "json", verdict: "PASS", mutation: "none" }), stub("commit", { mode: "json", mutation: "none" }), stub("ask", { mode: "text", tools: "none", mutation: "none" })];
+  return [stub("doer", { mode: "rpc", mutation: "complete-refactor", rpc: { commandCount: 2, earlySteerCount: 1, lateSteerCount: 0, steerBytes: Buffer.byteLength("Finish multiply and divide independently before validation.", "utf8"), steerSha256: sha256Text(sha256Text("Finish multiply and divide independently before validation.")) } }), stub("validator", { mode: "json", verdict: "PASS", mutation: "none" }), stub("commit", { mode: "json", mutation: "none" }), stub("ask", { mode: "text", tools: "none", mutation: "none" })];
 }
 
 function stub(station: AuthoredCommandInvocationEvidence["station"], options: { runId?: string; mode?: "text" | "json" | "rpc"; tools?: AuthoredCommandInvocationEvidence["tools"]; verdict?: "PASS" | "FAIL"; mutation?: AuthoredCommandInvocationEvidence["mutation"]; rpc?: Partial<NonNullable<AuthoredCommandInvocationEvidence["rpc"]>> } = {}): AuthoredCommandInvocationEvidence {
   const mode = options.mode ?? "text";
-  return { namespace: AUTHORED_COMMAND_STUB_NAMESPACE, owner: AUTHORED_COMMAND_STUB_OWNER, schemaVersion: AUTHORED_COMMAND_STUB_SCHEMA_VERSION, runId: options.runId ?? RUN_ID, kind: "pi", accepted: true, cwd: station === "ask" ? "factory" : "calculator", mode, tools: options.tools ?? (station === "validator" ? "read,grep,find,ls" : station === "ask" ? "none" : "read,edit,write,grep,find,ls"), station, ...(options.verdict ? { verdict: options.verdict } : {}), mutation: options.mutation ?? "none", ...(mode === "rpc" ? { rpc: { commandCount: 1, promptBytes: 10, promptSha256: "a".repeat(64), earlySteerCount: 0, lateSteerCount: 0, steerBytes: 0, steerSha256: "b".repeat(64), ...(options.rpc ?? {}) } } : { prompt: { bytes: 10, sha256: "a".repeat(64), signals: [] } }), output: { bytes: 10, sha256: "c".repeat(64), eventClasses: mode === "rpc" ? ["response", "agent_end"] : mode === "json" ? ["message_end", "agent_end"] : ["text"] } };
+  return { namespace: AUTHORED_COMMAND_STUB_NAMESPACE, owner: AUTHORED_COMMAND_STUB_OWNER, schemaVersion: AUTHORED_COMMAND_STUB_SCHEMA_VERSION, runId: options.runId ?? RUN_ID, kind: "pi", accepted: true, cwd: station === "ask" ? "factory" : "calculator", mode, tools: options.tools ?? (station === "validator" ? "read,grep,find,ls" : station === "ask" ? "none" : "read,edit,write,grep,find,ls"), station, ...(options.verdict ? { verdict: options.verdict } : {}), mutation: options.mutation ?? "none", ...(mode === "rpc" ? { rpc: { commandCount: 1, promptBytes: 10, promptSha256: "a".repeat(64), earlySteerCount: 0, lateSteerCount: 0, steerBytes: 0, steerSha256: "b".repeat(64), ...(options.rpc ?? {}) } } : { prompt: { bytes: 10, sha256: "a".repeat(64), signals: [] } }), output: { bytes: 10, sha256: "c".repeat(64), eventClasses: mode === "rpc" ? [...lesson013RpcEventClasses] : mode === "json" ? ["message_end", "agent_end"] : ["text"] } };
 }
 
 function lesson004CurrentEvidenceAndValidationCommand(): string { return String.raw`{

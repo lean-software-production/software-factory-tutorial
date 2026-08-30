@@ -31,4 +31,17 @@ if [[ ! -f "$temporary_directory/git" || ! -x "$temporary_directory/git" ]]; the
   exit 1
 fi
 
-printf 'Verified Git and isolated Git environment in %s without starting a container.\n' "$image"
+if [[ "$(docker run --rm --network none "$image" sh -lc 'readlink /workspace/node_modules')" != "/opt/workbook/node_modules" ]]; then
+  printf 'Expected /workspace/node_modules to point at baked /opt/workbook/node_modules\n' >&2
+  exit 1
+fi
+
+docker run --rm --network none "$image" sh -lc '
+  test -x /opt/workbook/node_modules/.bin/vitest
+  test -x /opt/workbook/node_modules/.bin/eslint
+  test -x /opt/workbook/node_modules/.bin/knip
+  find /opt/workbook/node_modules/@rollup -maxdepth 2 -path "*/rollup-linux-*/package.json" -type f | grep -q .
+  find /opt/workbook/node_modules/@oxc-parser -maxdepth 2 -path "*/binding-linux-*/package.json" -type f | grep -q .
+'
+
+printf 'Verified Git, isolated Git environment, lockfile-installed Linux calculator deps, and /workspace/node_modules symlink in %s.\n' "$image"

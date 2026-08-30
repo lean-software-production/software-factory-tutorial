@@ -3,23 +3,38 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-quality_now() {
-  if (cd ../../calculator && node scripts/quality.mjs); then
-    return
-  fi
-  if grep -q 'const readFirstOperand = (separator: "and" | "from" | "by"): number =>' ../../calculator/src/index.ts \
-    && [ "$(grep -c 'const first = readFirstOperand("by");' ../../calculator/src/index.ts)" -eq 2 ] \
-    && ! grep -q 'if (pieces\[place++\] !== "by") fail();' ../../calculator/src/index.ts; then
-    echo "All quality checks passed."
-  fi
+sanitize_calculator_cwd() {
+  local calculator_cwd calculator_physical_cwd sed_script escaped_cwd
+  sed_script=""
+  calculator_cwd="$(cd ../../calculator && pwd)"
+  calculator_physical_cwd="$(cd ../../calculator && pwd -P)"
+  for candidate in "$calculator_cwd" "$calculator_physical_cwd"; do
+    escaped_cwd="${candidate//\\/\\\\}"
+    escaped_cwd="${escaped_cwd//\//\\/}"
+    escaped_cwd="${escaped_cwd//&/\\&}"
+    sed_script="${sed_script}s/${escaped_cwd}/<calculator>/g;"
+  done
+  sed "$sed_script"
 }
 
-holder=""
+quality_now() {
+  (cd ../../calculator && node scripts/quality.mjs) 2>&1 | sanitize_calculator_cwd
+  return "${PIPESTATUS[0]}"
+}
+
+producer=""
 doer=""
-cleanup() {
-  [ -n "${holder:-}" ] && kill "$holder" 2>/dev/null || true
+stop_rpc() {
+  [ -n "${producer:-}" ] && kill "$producer" 2>/dev/null || true
   [ -n "${doer:-}" ] && kill "$doer" 2>/dev/null || true
-  rm -f control
+  [ -n "${producer:-}" ] && wait "$producer" 2>/dev/null || true
+  [ -n "${doer:-}" ] && wait "$doer" 2>/dev/null || true
+  producer=""
+  doer=""
+}
+cleanup() {
+  stop_rpc
+  rm -f control .tmp/rpc-input .tmp/rpc-prompt.json
 }
 trap cleanup EXIT
 
@@ -39,26 +54,31 @@ while [ "$iteration" -lt "$max_iterations" ]; do
   iteration=$((iteration + 1))
   echo "=== Iteration $iteration of $max_iterations ==="
   echo "Recording quality baseline..."
-  (cd ../../calculator && node scripts/quality.mjs) > .tmp/quality-before.txt || true
+  quality_now > .tmp/quality-before.txt || true
 
   echo "Starting doer..."
-  rm -f control
-  mkfifo control
+  rm -f control .tmp/rpc-input .tmp/rpc-prompt.json
+  mkfifo control .tmp/rpc-input
+  jq -cn --arg m "$(cat refactor.md success.md)" '{type:"prompt",message:$m}' > .tmp/rpc-prompt.json
+  # One tracked Node process owns RPC stdin: it writes the prepared prompt,
+  # forwards the operator's FIFO command without closing stdout, and then stays
+  # alive until stop_rpc reaps it. No wrapper shell or child can be orphaned.
+  node --input-type=module -e '
+    import { createReadStream, readFileSync } from "node:fs";
+    process.stdout.write(readFileSync(".tmp/rpc-prompt.json"));
+    createReadStream("control").pipe(process.stdout, { end: false });
+    setInterval(() => {}, 2 ** 30);
+  ' > .tmp/rpc-input &
+  producer=$!
   (cd ../../calculator && pi --no-session --mode rpc \
       --tools read,edit,write,grep,find,ls) \
-    < control > ".tmp/events/$iteration-do.jsonl" &
+    < .tmp/rpc-input > ".tmp/events/$iteration-do.jsonl" &
   doer=$!
-  sleep infinity > control &
-  holder=$!
-
-  jq -cn --arg m "$(cat refactor.md success.md)" '{type:"prompt",message:$m}' > control
 
   until grep -q '"type":"agent_end"' ".tmp/events/$iteration-do.jsonl"; do sleep 1; done
 
-  kill "$holder" "$doer" 2>/dev/null || true
-  holder=""
-  doer=""
-  rm -f control
+  stop_rpc
+  rm -f control .tmp/rpc-input .tmp/rpc-prompt.json
 
   echo "Gathering evidence..."
   {

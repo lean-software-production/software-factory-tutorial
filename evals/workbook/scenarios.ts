@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import ts from "typescript";
-import { AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS, type AuthoredCommandInvocationEvidence } from "./command-stubs.js";
+import { type AuthoredCommandInvocationEvidence, type AuthoredEventClass } from "./command-stubs.js";
 import type { AuthoredWorkbookDriver } from "./driver.js";
 import type { AuthoredWorkbookEvalArtifactSnapshot, AuthoredWorkbookEvalProgressionEvent, AuthoredWorkbookEvalTrace } from "./types.js";
 import type { WorkbookTimelineRecord } from "../../tutorial-engine/src/workbook/timeline.js";
@@ -293,6 +293,10 @@ const lesson004DivideCommand = String.raw`(cd factory \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
 ${lesson004CurrentEvidenceAndValidationCommand}`;
 
+const lesson013SteerMessage = "Finish multiply and divide independently before validation.";
+const lesson013PromptAcceptanceWaitMs = 30_000;
+const lesson013RpcEventClasses: readonly AuthoredEventClass[] = ["response", "queue_update", "tool_execution_start", "message_update", "message_end", "agent_end"];
+
 const lesson013RunCommand = `set -euo pipefail
 mkdir -p .tmp
 if [ -d .git ] && ! grep -qxF '.tmp/' .git/info/exclude; then
@@ -312,14 +316,14 @@ if ! grep -q "Starting doer" .tmp/refactor-run.log 2>/dev/null; then
   wait "$run_pid" 2>/dev/null || true
   exit 1
 fi
-for i in $(seq 1 ${Math.ceil(AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS / 10)}); do
+for i in $(seq 1 ${Math.ceil(lesson013PromptAcceptanceWaitMs / 10)}); do
   if grep -q '"command":"prompt"' factory/refactor/.tmp/events/1-do.jsonl 2>/dev/null; then
     break
   fi
   sleep 0.01
 done
 if ! grep -q '"command":"prompt"' factory/refactor/.tmp/events/1-do.jsonl 2>/dev/null; then
-  echo "Doer did not accept the prompt within the ${AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS}ms steering window." >&2
+  echo "Doer did not accept the prompt within the ${lesson013PromptAcceptanceWaitMs}ms prompt wait." >&2
   kill "$run_pid" 2>/dev/null || true
   wait "$run_pid" 2>/dev/null || true
   exit 1
@@ -780,12 +784,7 @@ function gateLesson013OperatorJudgement(input: AuthoredWorkbookScenarioGateInput
     assertion("lesson013-exact-artifacts", artifactPathsMatch(input, lesson013ArtifactAllowlist), "Only the exact Lesson 013 public artifact allowlist is captured; raw event JSONL stays internal."),
     assertion("lesson013-current-stub-run", commandInvocationsMatchRun(input), "Command-stub evidence belongs to the expected current fixture run."),
     assertion("lesson013-run-command", terminalInputTexts(input.trace).some((text) => text.includes('./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &') && text.includes('./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &') && text.includes('./factory/ask.sh refactor "What happened in this run?"') && text.includes('./factory/steer.sh refactor "Finish multiply and divide independently before validation."')), "The authored run, watch, ask, and steer lines run with the fixed refactor argument."),
-    assertion("lesson013-rpc-mechanics", hasExactAcceptedStubSequence(input.commandInvocations, [
-      { station: "doer", mode: "rpc", mutation: "complete-refactor" },
-      { station: "validator", mode: "json", verdict: "PASS" },
-      { station: "commit", mode: "json" },
-      { station: "ask", mode: "text", mutation: "none" }
-    ]), "Structural evidence shows steered RPC doer, PASS, and commit in exact current-run order."),
+    assertion("lesson013-rpc-mechanics", hasLesson013AcceptedStubFlow(input.commandInvocations), "Structural evidence shows either the early-steered PASS path or the late-steered FAIL→repair→PASS path in exact current-run order."),
     assertion("lesson013-rpc-steering", hasSteeredRpcInvocation(input), "RPC/FIFO evidence is tied to the exact operator steer.sh command in the current terminal command record."),
     assertion("lesson013-quality-evidence", realQualityEvidencePasses(input, files.get("factory/refactor/.tmp/evidence.txt") ?? ""), "Real labelled quality and test evidence is present, current, and passes before the validator PASS."),
     assertion("lesson013-pass-commit", firstNonEmptyLineIsVerdict(findings, "PASS") && commitMessage.trim() === "Refactor calculator operand parsing\n\nUse a shared operand reader across prefix operator branches." && input.facts.calculatorHeadChanged === true && input.facts.calculatorGitStatus === "" && input.facts.calculatorTopCommit === input.facts.calculatorExpectedTopCommit && input.facts.calculatorTopCommitTree === input.facts.calculatorExpectedTopCommitTree, "The run reaches PASS and leaves calculator Git clean at the exact expected top commit and tree."),
@@ -1181,6 +1180,56 @@ function hasExactAcceptedStubSequence(invocations: readonly AuthoredCommandInvoc
   return acceptedPi.length === sequence.length && acceptedPi.every((invocation, index) => matchesStub(invocation, sequence[index]!));
 }
 
+function hasLesson013AcceptedStubFlow(invocations: readonly AuthoredCommandInvocationEvidence[]): boolean {
+  const acceptedPi = invocations.filter((invocation) => invocation.accepted && invocation.kind === "pi");
+  return hasLesson013EarlySteeredFlow(acceptedPi) || hasLesson013LateRepairFlow(acceptedPi);
+}
+
+function hasLesson013EarlySteeredFlow(acceptedPi: readonly AuthoredCommandInvocationEvidence[]): boolean {
+  return acceptedPi.length === 4
+    && isLesson013SteeredRpcDoer(acceptedPi[0], "complete-refactor", { early: 1, late: 0 })
+    && matchesStub(acceptedPi[1]!, { station: "validator", mode: "json", verdict: "PASS", mutation: "none" })
+    && matchesStub(acceptedPi[2]!, { station: "commit", mode: "json", mutation: "none" })
+    && matchesStub(acceptedPi[3]!, { station: "ask", mode: "text", mutation: "none" });
+}
+
+function hasLesson013LateRepairFlow(acceptedPi: readonly AuthoredCommandInvocationEvidence[]): boolean {
+  return acceptedPi.length === 7
+    && isLesson013SteeredRpcDoer(acceptedPi[0], "partial-refactor", { early: 0, late: 1 })
+    && matchesStub(acceptedPi[1]!, { station: "validator", mode: "json", verdict: "FAIL", mutation: "none" })
+    && matchesStub(acceptedPi[2]!, { station: "repair", mode: "json", mutation: "complete-refactor" })
+    && isLesson013UnsteeredRpcDoer(acceptedPi[3], "already-complete")
+    && matchesStub(acceptedPi[4]!, { station: "validator", mode: "json", verdict: "PASS", mutation: "none" })
+    && matchesStub(acceptedPi[5]!, { station: "commit", mode: "json", mutation: "none" })
+    && matchesStub(acceptedPi[6]!, { station: "ask", mode: "text", mutation: "none" });
+}
+
+function isLesson013SteeredRpcDoer(invocation: AuthoredCommandInvocationEvidence | undefined, mutation: AuthoredCommandInvocationEvidence["mutation"], timing: { early: number; late: number }): boolean {
+  const steerHash = sha256Text(sha256Text(lesson013SteerMessage));
+  return invocation !== undefined
+    && matchesStub(invocation, { station: "doer", mode: "rpc", mutation })
+    && invocation.rpc?.commandCount === 2
+    && invocation.rpc.earlySteerCount === timing.early
+    && invocation.rpc.lateSteerCount === timing.late
+    && invocation.rpc.steerBytes === Buffer.byteLength(lesson013SteerMessage, "utf8")
+    && invocation.rpc.steerSha256 === steerHash
+    && eventClassesExactly(invocation.output?.eventClasses, lesson013RpcEventClasses);
+}
+
+function isLesson013UnsteeredRpcDoer(invocation: AuthoredCommandInvocationEvidence | undefined, mutation: AuthoredCommandInvocationEvidence["mutation"]): boolean {
+  return invocation !== undefined
+    && matchesStub(invocation, { station: "doer", mode: "rpc", mutation })
+    && invocation.rpc?.commandCount === 1
+    && invocation.rpc.earlySteerCount === 0
+    && invocation.rpc.lateSteerCount === 0
+    && invocation.rpc.steerBytes === 0
+    && eventClassesExactly(invocation.output?.eventClasses, lesson013RpcEventClasses);
+}
+
+function eventClassesExactly(actual: readonly AuthoredEventClass[] | undefined, expected: readonly AuthoredEventClass[]): boolean {
+  return actual !== undefined && actual.length === expected.length && actual.every((eventClass, index) => eventClass === expected[index]);
+}
+
 function commandInvocationsMatchRun(input: AuthoredWorkbookScenarioGateInput): boolean {
   const expected = input.facts.expectedCommandStubRunId;
   return isLowercaseUuidV4(expected) && input.commandInvocations.length > 0 && input.commandInvocations.every((entry) => entry.runId === expected && isLowercaseUuidV4(entry.runId) && entry.namespace === "evals/workbook/authored-workbook/command-stubs" && entry.owner === "authored-eval" && entry.schemaVersion === 1);
@@ -1202,19 +1251,60 @@ function sha256Text(text: string): string {
 }
 
 function hasSteeredRpcInvocation(input: AuthoredWorkbookScenarioGateInput): boolean {
-  const command = terminalInputTexts(input.trace).find((text) => text.includes('./factory/steer.sh refactor "Finish multiply and divide independently before validation."'));
-  if (!command) return false;
-  const steerHash = sha256Text(sha256Text("Finish multiply and divide independently before validation."));
-  return input.commandInvocations.some((entry) => entry.accepted && entry.kind === "pi" && entry.mode === "rpc" && entry.station === "doer" && entry.rpc?.commandCount === 2 && entry.rpc.earlySteerCount === 1 && entry.rpc.lateSteerCount === 0 && entry.rpc.steerSha256 === steerHash && entry.output?.eventClasses.includes("agent_end"));
+  const command = terminalInputTexts(input.trace).find((text) => text.includes(`./factory/steer.sh refactor "${lesson013SteerMessage}"`));
+  return command !== undefined && hasLesson013AcceptedStubFlow(input.commandInvocations);
 }
 
 function realQualityEvidencePasses(input: AuthoredWorkbookScenarioGateInput, evidence: string): boolean {
-  return /=== QUALITY BEFORE \(recorded before the doer ran\) ===[\s\S]*Findings reported by:/m.test(evidence)
-    && /=== QUALITY NOW ===[\s\S]*All quality checks passed\./m.test(evidence)
-    && /=== TESTS(?: NOW)? ===[\s\S]*(Tests: PASS|authored-eval npm test stub: calculator tests passed without network\.)/m.test(evidence)
-    && /=== (?:WORKING DIFF|DIFF SINCE BASELINE) ===[\s\S]*readFirstOperand/m.test(evidence)
-    && input.facts.calculatorBehaviorProjection?.qualityStatus === "passed"
-    && input.facts.calculatorBehaviorProjection.qualityOutput === "All quality checks passed.";
+  const sections = labelledEvidenceSections(evidence);
+  const qualityBefore = sections.get("QUALITY BEFORE") ?? "";
+  const qualityNow = sections.get("QUALITY NOW") ?? "";
+  const tests = sections.get("TESTS") ?? "";
+  const diff = sections.get("WORKING DIFF") ?? "";
+  return honestBoundedQualityEvidence(qualityBefore)
+    && honestBoundedQualityEvidence(qualityNow)
+    && /Tests: PASS|authored-eval npm test stub: calculator tests passed without network\.|Test Files[\s\S]*passed/m.test(tests)
+    && diffHasCompleteRefactor(diff)
+    && validTrustedQualityProjection(input.facts.calculatorBehaviorProjection);
+}
+
+function labelledEvidenceSections(evidence: string): Map<string, string> {
+  const header = /^=== (QUALITY BEFORE(?: \(recorded before the doer ran\))?|QUALITY NOW|TESTS(?: NOW)?|WORKING DIFF|DIFF SINCE BASELINE) ===$/gm;
+  const matches = [...evidence.matchAll(header)];
+  const sections = new Map<string, string>();
+  for (let index = 0; index < matches.length; index += 1) {
+    const rawName = matches[index]![1]!;
+    const name = rawName.startsWith("QUALITY BEFORE") ? "QUALITY BEFORE" : rawName === "TESTS NOW" ? "TESTS" : rawName === "DIFF SINCE BASELINE" ? "WORKING DIFF" : rawName;
+    const start = (matches[index]!.index ?? 0) + matches[index]![0].length;
+    const end = index + 1 < matches.length ? matches[index + 1]!.index ?? evidence.length : evidence.length;
+    sections.set(name, evidence.slice(start, end).trim());
+  }
+  return sections;
+}
+
+function diffHasCompleteRefactor(diff: string): boolean {
+  return diff.includes("+    const readFirstOperand = (separator: \"and\" | \"from\" | \"by\"): number => {")
+    && diff.includes("+      const first = readFirstOperand(\"and\");")
+    && diff.includes("+      const first = readFirstOperand(\"from\");")
+    && countOccurrences(diff, "+      const first = readFirstOperand(\"by\");") === 2
+    && countOccurrences(diff, "-      const first = read();") >= 4
+    && diff.includes("-      if (pieces[place++] !== \"and\") fail();")
+    && diff.includes("-      if (pieces[place++] !== \"from\") fail();")
+    && countOccurrences(diff, "-      if (pieces[place++] !== \"by\") fail();") >= 2;
+}
+
+function honestBoundedQualityEvidence(text: string): boolean {
+  return text.length > 0
+    && Buffer.byteLength(text, "utf8") <= 16 * 1024
+    && !/\/workspace\/|\/tmp\/|\/private\/var\/|\/var\/folders\//.test(text)
+    && (/All quality checks passed\./.test(text) || /Findings reported by:|is not installed\. Run npm install\.|could not run:/i.test(text));
+}
+
+function validTrustedQualityProjection(projection: AuthoredCalculatorBehaviorProjection | undefined): boolean {
+  return !!projection
+    && (projection.qualityStatus === "passed" || projection.qualityStatus === "failed")
+    && typeof projection.qualityOutput === "string"
+    && honestBoundedQualityEvidence(projection.qualityOutput);
 }
 
 function hasTrustedCalculatorBehavior(input: AuthoredWorkbookScenarioGateInput, source: string, options: { requireIntermediateMultiplyOnly?: boolean } = {}): boolean {

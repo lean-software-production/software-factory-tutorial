@@ -3,15 +3,23 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+sanitize_calculator_cwd() {
+  local calculator_cwd calculator_physical_cwd sed_script escaped_cwd
+  sed_script=""
+  calculator_cwd="$(cd ../../calculator && pwd)"
+  calculator_physical_cwd="$(cd ../../calculator && pwd -P)"
+  for candidate in "$calculator_cwd" "$calculator_physical_cwd"; do
+    escaped_cwd="${candidate//\\/\\\\}"
+    escaped_cwd="${escaped_cwd//\//\\/}"
+    escaped_cwd="${escaped_cwd//&/\\&}"
+    sed_script="${sed_script}s/${escaped_cwd}/<calculator>/g;"
+  done
+  sed "$sed_script"
+}
+
 quality_now() {
-  if (cd ../../calculator && node scripts/quality.mjs); then
-    return
-  fi
-  if grep -q 'const readFirstOperand = (separator: "and" | "from" | "by"): number =>' ../../calculator/src/index.ts \
-    && [ "$(grep -c 'const first = readFirstOperand("by");' ../../calculator/src/index.ts)" -eq 2 ] \
-    && ! grep -q 'if (pieces\[place++\] !== "by") fail();' ../../calculator/src/index.ts; then
-    echo "All quality checks passed."
-  fi
+  (cd ../../calculator && node scripts/quality.mjs) 2>&1 | sanitize_calculator_cwd
+  return "${PIPESTATUS[0]}"
 }
 
 mkdir -p .tmp

@@ -276,6 +276,22 @@ describe("authored workbook eval orchestration", () => {
     expect(bad.writes[0]).toMatchObject({ kind: "failure", status: "gate" });
   });
 
+  it("writes a private failure diagnostic when gate evidence collection throws before gate.json exists", async () => {
+    const fakes = makeDeps();
+    fakes.deps.createGateEvidenceCollector = () => ({
+      captureBaseline: async () => { fakes.events.push("baseline"); return {}; },
+      captureGateCheckpoint: async () => undefined,
+      collectGateInput: async () => { fakes.events.push("gate-input"); throw new Error("private collector detail /tmp/secret-workspace"); }
+    } as any);
+
+    const code = await runAuthoredWorkbookEvalBatch(invocation(), { dependencies: fakes.deps });
+    expect(code).toBe(1);
+    expect(fakes.writes[0]).toMatchObject({ kind: "failure", status: "gate" });
+    expect(fakes.events).toContain("failure-diagnostic");
+    expect(fakes.events).not.toContain("gate-diagnostic");
+    expect(fakes.judgeCalls).toBe(0);
+  });
+
   it("cleans up in strict order, lets cleanup override only success, and warns privately for keep-workspace", async () => {
     const kept = makeDeps();
     const inv = { ...invocation(), keepWorkspace: true };

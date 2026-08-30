@@ -14,9 +14,10 @@ import {
   AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS,
   createAuthoredCommandStubs,
   readAuthoredCommandStubEvidence,
-  type AuthoredCommandInvocationEvidence
+  type AuthoredCommandInvocationEvidence,
+  type AuthoredEventClass
 } from "../command-stubs.js";
-import type { AuthoredWorkbookEvalArtifactSnapshot, AuthoredWorkbookEvalTrace } from "../types.js";
+import type { AuthoredWorkbookEvalArtifactSnapshot, AuthoredWorkbookEvalSessionTrace, AuthoredWorkbookEvalTrace } from "../types.js";
 import {
   AUTHORED_WORKBOOK_GATE_CHECKPOINT_LABELS,
   AUTHORED_WORKBOOK_PREREQUISITE_SEED_FILES,
@@ -32,12 +33,14 @@ import { readAuthoredWorkbookTimeline } from "../internal-timeline.js";
 import { createEmptyAuthoredWorkbookEvalSessionTrace, projectAuthoredWorkbookEvalTrace } from "../public-trace.js";
 import { dockerContainerUser, type TerminalPty, type TerminalPtyOptions } from "../../../tutorial-engine/src/workbook/terminal.js";
 import { buildAuthoredWorkbookJudgePrompt, copyAuthoredWorkbookEvalScenarioPublicDescriptor } from "../judge.js";
+import { createAuthoredWorkbookScenarioGateEvidenceCollector } from "../gate-evidence.js";
 import { createAuthoredCurriculumSliceWorkspace } from "../workspace.js";
 import { buildBoundedWorkspaceTar, dockerPopulateVolumeArguments, dockerVolumeCreateArguments, dockerVolumeRemoveArguments, dockerWorkspaceVolumeMount, WORKBOOK_TERMINAL_IMAGE } from "../preflight.js";
 import type { AuthoredCurriculumSliceSessionCapability } from "../workspace.js";
 const execFileAsync = promisify(execFile);
 const tempRoots: string[] = [];
 const realPrerequisitesRoot = resolve(import.meta.dirname, "../prerequisites");
+const lesson013RpcEventClasses: AuthoredEventClass[] = ["response", "queue_update", "tool_execution_start", "message_update", "message_end", "agent_end"];
 
 class PrimerWorkflowFakeTutor extends RecordingMainTutor {
   protected override defaultReply = "Public fake tutor reply.";
@@ -683,17 +686,45 @@ describe("authored workbook scenario gates", () => {
     ]);
   });
 
+  it("accepts Lesson 013's exact late-steered partial→FAIL→repair→PASS path", async () => {
+    const scenario = authoredWorkbookScenarioById("lesson-013-operator-judgement");
+    const input = cloneInput(await passingFixture("lesson-013-operator-judgement"));
+    const steerSha256 = sha256Text(sha256Text("Finish multiply and divide independently before validation."));
+    input.commandInvocations = [
+      stub("doer", { mode: "rpc", mutation: "partial-refactor", rpc: true, rpcOverrides: { commandCount: 2, earlySteerCount: 0, lateSteerCount: 1, steerBytes: Buffer.byteLength("Finish multiply and divide independently before validation.", "utf8"), steerSha256 } }),
+      stub("validator", { mode: "json", verdict: "FAIL", mutation: "none" }),
+      stub("repair", { mode: "json", mutation: "complete-refactor" }),
+      stub("doer", { mode: "rpc", mutation: "already-complete", rpc: true }),
+      stub("validator", { mode: "json", verdict: "PASS", mutation: "none" }),
+      stub("commit", { mode: "json", mutation: "none" }),
+      stub("ask", { mode: "text", tools: "none", mutation: "none" })
+    ];
+    mutateSnapshot(input, ".tmp/refactor-run.log", (text) => text.replace("Starting validation\nStarting commit", "Starting validation\nStarting repair\n=== Iteration 2 of 5 ===\nStarting doer\nStarting validation\nStarting commit"));
+    expect(scenario.gate(input).passed).toBe(true);
+
+    const swappedTiming = cloneInput(input);
+    swappedTiming.commandInvocations[0]!.rpc!.earlySteerCount = 1;
+    swappedTiming.commandInvocations[0]!.rpc!.lateSteerCount = 0;
+    expect(scenario.gate(swappedTiming).passed).toBe(false);
+  });
+
   it("mutation-tests Lesson 013 gate assertions", async () => {
     await expectMutationsFail("lesson-013-operator-judgement", [
       ["remove run command", (input) => { input.trace.terminalTranscript[0]!.text = "./factory/refactor/run.sh"; }],
       ["add unexpected artifact", (input) => { input.artifactSnapshots = [...input.artifactSnapshots, { path: "factory/refactor/.tmp/events/extra.jsonl", content: "{}" }]; }],
       ["remove rpc evidence", (input) => { input.commandInvocations = input.commandInvocations.map((entry) => entry.mode === "rpc" ? { ...entry, rpc: undefined } : entry); }],
       ["remove steer evidence", (input) => { input.commandInvocations = input.commandInvocations.map((entry) => entry.mode === "rpc" && entry.rpc ? { ...entry, rpc: { ...entry.rpc, earlySteerCount: 0, commandCount: 1 } } : entry); }],
+      ["swap early steer into late timing", (input) => { input.commandInvocations = input.commandInvocations.map((entry) => entry.mode === "rpc" && entry.rpc ? { ...entry, rpc: { ...entry.rpc, earlySteerCount: 0, lateSteerCount: 1 } } : entry); }],
+      ["rpc event classes agent-end only", (input) => { input.commandInvocations = input.commandInvocations.map((entry) => entry.mode === "rpc" && entry.output ? { ...entry, output: { ...entry.output, eventClasses: ["agent_end"] } } : entry); }],
+      ["rpc event classes missing class", (input) => { input.commandInvocations = input.commandInvocations.map((entry) => entry.mode === "rpc" && entry.output ? { ...entry, output: { ...entry.output, eventClasses: lesson013RpcEventClasses.filter((eventClass) => eventClass !== "message_update") } } : entry); }],
+      ["rpc event classes extra class", (input) => { input.commandInvocations = input.commandInvocations.map((entry) => entry.mode === "rpc" && entry.output ? { ...entry, output: { ...entry.output, eventClasses: [...lesson013RpcEventClasses, "agent_end"] } } : entry); }],
+      ["rpc event classes reordered", (input) => { input.commandInvocations = input.commandInvocations.map((entry) => entry.mode === "rpc" && entry.output ? { ...entry, output: { ...entry.output, eventClasses: [...lesson013RpcEventClasses].reverse() } } : entry); }],
+      ["steering attached to wrong doer", (input) => { input.commandInvocations = [stub("doer", { mode: "rpc", mutation: "complete-refactor", rpc: true }), stub("repair", { mode: "rpc", mutation: "complete-refactor", rpc: true, rpcOverrides: { commandCount: 2, earlySteerCount: 1, lateSteerCount: 0, steerBytes: Buffer.byteLength("Finish multiply and divide independently before validation.", "utf8"), steerSha256: sha256Text(sha256Text("Finish multiply and divide independently before validation.")) } }), stub("validator", { mode: "json", verdict: "PASS", mutation: "none" }), stub("commit", { mode: "json", mutation: "none" }), stub("ask", { mode: "text", tools: "none", mutation: "none" })]; }],
       ["raw event artifact copied public", (input) => { input.artifactSnapshots = [...input.artifactSnapshots, { path: "factory/refactor/.tmp/events/extra.jsonl", content: "{}" }]; input.trace.artifacts = input.artifactSnapshots.map((snapshot) => ({ ...snapshot })); input.workspaceFileSnapshots = input.artifactSnapshots.map((snapshot) => ({ ...snapshot })); }],
       ["remove commit", (input) => { input.facts.calculatorHeadChanged = false; }],
       ["prefix findings with terminal announcement", (input) => { mutateSnapshot(input, "factory/refactor/.tmp/validate-findings.txt", (text) => `Starting validation...\n${text}`); }],
       ["remove source completion", (input) => { mutateSnapshot(input, "calculator/src/index.ts", (text) => text.replace('const first = readFirstOperand("by");', 'const first = read();')); }],
-      ["failed quality status", (input) => { input.facts.calculatorBehaviorProjection!.qualityStatus = "failed"; }],
+      ["missing trusted quality summary", (input) => { delete input.facts.calculatorBehaviorProjection!.qualityOutput; }],
       ["stale git top", (input) => { input.facts.calculatorTopCommitTree = "stale-tree"; }],
       ["remove run log", (input) => { mutateSnapshot(input, ".tmp/refactor-run.log", () => "Line finished"); }],
       ["remove visible terminal output", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => entry.direction !== "output"); }],
@@ -791,6 +822,38 @@ describe("authored scenario shell commands", () => {
       tempRoots.splice(tempRoots.indexOf(workspace.repositoryRoot), 1);
     }
   }, 60_000);
+
+  it.runIf(process.env.AUTHORED_WORKBOOK_REAL_DOCKER === "1")("runs Lesson 013 in real Docker, then gates the host workspace end-to-end without raw public events", async () => {
+    const scenario = authoredWorkbookScenarioById("lesson-013-operator-judgement");
+    const { workspace, sessionWorkspace, handle, commands } = await liveScenarioHarness(scenario.id, { rpcEarlySteerWindowMs: AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS, rpcLateSteerWindowMs: 20 });
+    try {
+      expect(commands).toHaveLength(1);
+      const command = stripActivation(commands[0]!);
+      const trace = lesson013RunTrace(command, "");
+      const collector = createAuthoredWorkbookScenarioGateEvidenceCollector({ scenario, workspace, session: workspace.latestSession(), trace, commandStubHandle: { hostEvidencePath: handle.hostEvidencePath, runId: handle.runId } });
+      await collector.captureBaseline();
+      const output = await execDockerWithPrivateInput([
+        "run", "--rm", "-i", "--user", dockerContainerUser(), "--network", "none", "--mount", `type=bind,src=${sessionWorkspace},dst=/workspace`,
+        "--workdir", "/workspace", WORKBOOK_TERMINAL_IMAGE, "bash"
+      ], Buffer.from(`${handle.containerShellActivation}\nset -euo pipefail\n${command}\n`, "utf8"), 60_000);
+      expectLesson013VisibleOutput(output);
+      trace.terminalTranscript = lesson013RunTrace(command, output).terminalTranscript;
+      const input = await collector.collectGateInput();
+      const gate = scenario.gate(input);
+      expect(gate.passed).toBe(true);
+      expect(input.artifactSnapshots.some((artifact) => artifact.path.includes("/events/") || artifact.path.endsWith("events.jsonl"))).toBe(false);
+      expect(input.trace.artifacts.some((artifact) => artifact.path.includes("/events/") || artifact.path.endsWith("events.jsonl"))).toBe(false);
+      const publicDescriptor = copyAuthoredWorkbookEvalScenarioPublicDescriptor(scenario);
+      const judgePrompt = buildAuthoredWorkbookJudgePrompt(publicDescriptor, input.trace, { passed: gate.passed, assertions: gate.assertions.map((assertion) => ({ name: assertion.id, passed: assertion.passed, detail: assertion.message })) });
+      expect(judgePrompt).not.toMatch(/"kind": "artifact"[\s\S]{0,200}"path": "factory\/refactor\/\.tmp\/events\//);
+      expect(judgePrompt).not.toContain('{"type":"agent_end"');
+      await expectLesson013StubbedResult(sessionWorkspace, handle.hostEvidencePath);
+    } finally {
+      await handle.close().catch(() => undefined);
+      await workspace.close().catch(() => undefined);
+      tempRoots.splice(tempRoots.indexOf(workspace.repositoryRoot), 1);
+    }
+  }, 90_000);
 });
 
 describe("authored workbook prerequisite seed overlays", () => {
@@ -986,6 +1049,33 @@ async function lessons003004Fixture(input: AuthoredWorkbookScenarioGateInput): P
   return input;
 }
 
+function helperOnlyCompleteEvidence(testOutput: string): string {
+  return `=== QUALITY BEFORE (recorded before the doer ran) ===
+Findings reported by: eslint.
+- calculator/src/index.ts duplicated operator branch parser
+
+=== QUALITY NOW ===
+Findings reported by: eslint, knip.
+
+=== TESTS ===
+${testOutput}
+=== WORKING DIFF ===
++    const readFirstOperand = (separator: "and" | "from" | "by"): number => {
++      const first = readFirstOperand("and");
++      const first = readFirstOperand("from");
++      const first = readFirstOperand("by");
++      const first = readFirstOperand("by");
+-      const first = read();
+-      const first = read();
+-      const first = read();
+-      const first = read();
+-      if (pieces[place++] !== "and") fail();
+-      if (pieces[place++] !== "from") fail();
+-      if (pieces[place++] !== "by") fail();
+-      if (pieces[place++] !== "by") fail();
+`;
+}
+
 function lesson013Fixture(input: AuthoredWorkbookScenarioGateInput): AuthoredWorkbookScenarioGateInput {
   input.facts.expectedCommandStubRunId = "123e4567-e89b-42d3-a456-426614174000";
   input.facts.calculatorHeadChanged = true;
@@ -1000,8 +1090,8 @@ function lesson013Fixture(input: AuthoredWorkbookScenarioGateInput): AuthoredWor
     sourceSha256: sha256Text(completedSource),
     gitTree: "tree-lesson013-current",
     testStatus: "passed",
-    qualityStatus: "passed",
-    qualityOutput: "All quality checks passed.",
+    qualityStatus: "failed",
+    qualityOutput: "Findings reported by: eslint, knip.",
     cases: [{ input: "multiply 6 by 7", output: 42 }, { input: "divide 84 by 2", output: 42 }]
   };
   input.trace.progressionEvents = [
@@ -1024,8 +1114,8 @@ function lesson013Fixture(input: AuthoredWorkbookScenarioGateInput): AuthoredWor
     ".tmp/refactor-run.log": "Starting doer\nStarting validation\nStarting commit\nLine finished after 1 iterations.\n",
     ".tmp/refactor-watch.log": "→ read\nauthored-eval accepted early steer\n→ edit\n",
     "factory/refactor/.tmp/quality-before.txt": "Findings reported by: eslint.\n",
-    "factory/refactor/.tmp/evidence.txt": "=== QUALITY BEFORE (recorded before the doer ran) ===\nFindings reported by: eslint.\n\n=== QUALITY NOW ===\nAll quality checks passed.\n\n=== TESTS ===\nTests: PASS\nauthored-eval npm test stub: calculator tests passed without network.\n\n=== WORKING DIFF ===\n+    const readFirstOperand = (separator: \"and\" | \"from\" | \"by\"): number => {\n+      const first = readFirstOperand(\"by\");\n+      const first = readFirstOperand(\"by\");\n-      const first = read();\n-      if (pieces[place++] !== \"by\") fail();\n",
-    "factory/refactor/.tmp/validate-findings.txt": "VERDICT: PASS\n\nFINDINGS:\n- [PASS] tests and quality passed before this verdict.\n",
+    "factory/refactor/.tmp/evidence.txt": helperOnlyCompleteEvidence("Tests: PASS\nauthored-eval npm test stub: calculator tests passed without network.\n"),
+    "factory/refactor/.tmp/validate-findings.txt": "VERDICT: PASS\n\nFINDINGS:\n- [PASS] tests passed, quality evidence was present, and the diff demonstrated the fewest-elements refactor.\n",
     "factory/refactor/.tmp/commit-message.txt": "Refactor calculator operand parsing\n\nUse a shared operand reader across prefix operator branches.",
     "calculator/src/index.ts": completedSource
   });
@@ -1126,7 +1216,7 @@ function stub(station: AuthoredCommandInvocationEvidence["station"], options: { 
     ...(options.verdict === undefined ? {} : { verdict: options.verdict }),
     mutation: options.mutation ?? "none",
     ...(mode === "rpc" || options.rpc ? { rpc: { commandCount: 1, promptBytes: 10, promptSha256: "a".repeat(64), earlySteerCount: 0, lateSteerCount: 0, steerBytes: 0, steerSha256: "b".repeat(64), ...(options.rpcOverrides ?? {}) } } : { prompt: { bytes: 10, sha256: "a".repeat(64), signals: [] } }),
-    output: { bytes: 10, sha256: "c".repeat(64), eventClasses: mode === "rpc" ? ["response", "agent_end"] : mode === "json" ? ["message_end", "agent_end"] : ["text"] }
+    output: { bytes: 10, sha256: "c".repeat(64), eventClasses: mode === "rpc" ? [...lesson013RpcEventClasses] : mode === "json" ? ["message_end", "agent_end"] : ["text"] }
   };
 }
 
@@ -1182,6 +1272,16 @@ async function execShell(command: string, cwd: string, env: NodeJS.ProcessEnv, t
   return output;
 }
 
+function lesson013RunTrace(command: string, output: string): AuthoredWorkbookEvalSessionTrace {
+  const trace = createEmptyAuthoredWorkbookEvalSessionTrace("lesson-013-operator-judgement");
+  trace.terminalTranscript = [
+    { blockId: "lesson--013-oversee-the-orchestrator--implementation-order", direction: "input", text: command },
+    { blockId: "lesson--013-oversee-the-orchestrator--implementation-order", direction: "output", text: output }
+  ];
+  trace.reflections = [{ blockId: "lesson--013-oversee-the-orchestrator--checks", role: "learner", text: "The factory is factory/. The line is refactor/. The orchestrator is run.sh: it starts the line, hands inputs to stations, branches on VERDICT, handles failures with repair, and stops by counters. Prompt/script pairs are stations. ask.sh is no-tools because the record is supplied. I am the operator. Repeated FAIL can mean an unmet criterion or missing/unreachable evidence. Cost, regressions, and whether the result is worth it are still operator judgement." }];
+  return trace;
+}
+
 function expectLesson013VisibleOutput(output: string): void {
   expect(output).toContain("=== RUN LOG (tail) ===");
   expect(output).toContain("Starting doer");
@@ -1207,8 +1307,9 @@ async function expectLesson013StubbedResult(sessionWorkspace: string, evidencePa
   ]);
   const doer = evidence.find((entry) => entry.station === "doer" && entry.mode === "rpc");
   expect(doer?.rpc).toMatchObject({ commandCount: 2, earlySteerCount: 1, lateSteerCount: 0 });
+  expect(doer?.output?.eventClasses).toEqual(lesson013RpcEventClasses);
   expect(await readFile(join(sessionWorkspace, "factory/refactor/.tmp/validate-findings.txt"), "utf8")).toMatch(/^VERDICT: PASS/m);
-  expect(await readFile(join(sessionWorkspace, "factory/refactor/.tmp/evidence.txt"), "utf8")).toMatch(/=== QUALITY NOW ===[\s\S]*All quality checks passed\./m);
+  expect(await readFile(join(sessionWorkspace, "factory/refactor/.tmp/evidence.txt"), "utf8")).toMatch(/=== QUALITY NOW ===[\s\S]*(Findings reported by:|is not installed\. Run npm install\.|could not run:|All quality checks passed\.)/m);
   const status = (await execFileAsync("git", ["-C", join(sessionWorkspace, "calculator"), "status", "--porcelain"], { encoding: "utf8" })).stdout;
   const subject = (await execFileAsync("git", ["-C", join(sessionWorkspace, "calculator"), "log", "-1", "--pretty=%s"], { encoding: "utf8" })).stdout.trim();
   expect(status).toBe("");
@@ -1256,6 +1357,8 @@ const expected = [['doer', 'rpc', 'complete-refactor'], ['validator', 'json', 'P
 if (JSON.stringify(sequence) !== JSON.stringify(expected)) fail('bad sequence ' + JSON.stringify(sequence));
 const doer = pi.find((entry) => entry.station === 'doer' && entry.mode === 'rpc');
 if (!doer?.rpc || doer.rpc.commandCount !== 2 || doer.rpc.earlySteerCount !== 1 || doer.rpc.lateSteerCount !== 0) fail('bad rpc ' + JSON.stringify(doer?.rpc));
+const rpcClasses = ['response', 'queue_update', 'tool_execution_start', 'message_update', 'message_end', 'agent_end'];
+if (JSON.stringify(doer.output?.eventClasses) !== JSON.stringify(rpcClasses)) fail('bad rpc classes ' + JSON.stringify(doer.output?.eventClasses));
 const npm = lines.filter((entry) => entry.kind === 'npm' && entry.accepted);
 if (npm.length !== 1 || !readFileSync('/workspace/factory/refactor/.tmp/evidence.txt', 'utf8').includes('authored-eval npm test stub')) fail('bad npm ' + npm.length);
 if (!readFileSync('/workspace/factory/refactor/.tmp/validate-findings.txt', 'utf8').startsWith('VERDICT: PASS\n')) fail('bad findings');
