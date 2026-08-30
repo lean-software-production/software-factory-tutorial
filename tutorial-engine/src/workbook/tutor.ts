@@ -260,35 +260,44 @@ async function createPiWorkbookTutorSession(workspace: string, request: Workbook
     sessionManager,
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } })
   });
-  const selectedModel = session.state.model ?? choice.model;
-  for (const summary of request.history.summaries) {
-    sessionManager.appendCustomMessageEntry(summaryCustomType(summary), summaryContextText(summary), false, {
-      sourceEventId: summary.sourceEventId,
-      scope: summary.scope,
-      lessonId: summary.lessonId,
-      blockId: summary.blockId,
-      coveredThroughId: summary.coveredThroughId,
-      timestamp: summary.timestamp
-    });
-  }
-  for (const turn of request.history.turns) {
-    sessionManager.appendMessage(piMessageForTurn(turn, selectedModel));
-  }
-  if (request.history.activeContext) {
-    sessionManager.appendCustomMessageEntry(request.history.activeContext.name, request.history.activeContext.text, false, {
-      sourceEventIds: request.history.activeContext.sourceEventIds
-    });
-  }
-  session.agent.state.messages = sessionManager.buildSessionContext().messages;
-  const resilient = createResilientTutorSession(session, log, "Workbook tutor");
-  return {
-    ...resilient,
-    async compact(instruction: string): Promise<{ summary: string }> {
-      log.info("Compacting workbook tutor context after accepted checkpoint continuation.");
-      const result = await session.compact(instruction);
-      return { summary: result.summary };
+  try {
+    const selectedModel = session.state.model ?? choice.model;
+    for (const summary of request.history.summaries) {
+      sessionManager.appendCustomMessageEntry(summaryCustomType(summary), summaryContextText(summary), false, {
+        sourceEventId: summary.sourceEventId,
+        scope: summary.scope,
+        lessonId: summary.lessonId,
+        blockId: summary.blockId,
+        coveredThroughId: summary.coveredThroughId,
+        timestamp: summary.timestamp
+      });
     }
-  };
+    for (const turn of request.history.turns) {
+      sessionManager.appendMessage(piMessageForTurn(turn, selectedModel));
+    }
+    if (request.history.activeContext) {
+      sessionManager.appendCustomMessageEntry(request.history.activeContext.name, request.history.activeContext.text, false, {
+        sourceEventIds: request.history.activeContext.sourceEventIds
+      });
+    }
+    session.agent.state.messages = sessionManager.buildSessionContext().messages;
+    const resilient = createResilientTutorSession(session, log, "Workbook tutor");
+    return {
+      ...resilient,
+      async compact(instruction: string): Promise<{ summary: string }> {
+        log.info("Compacting workbook tutor context after accepted checkpoint continuation.");
+        const result = await session.compact(instruction);
+        return { summary: result.summary };
+      }
+    };
+  } catch (error) {
+    try {
+      session.dispose();
+    } catch (disposeError) {
+      log.error("Workbook tutor session disposal failed after reconstruction error.", disposeError);
+    }
+    throw error;
+  }
 }
 
 export interface MainWorkbookTutorOptions {
@@ -309,15 +318,9 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
   readonly #log: TutorialLogger;
   readonly #sessionFactory: WorkbookTutorSessionFactory;
   readonly #environment: WorkbookModelEnvironment;
-  #session?: WorkbookTutorSession;
-  #history: MainTutorHistoryProjection = { summaries: [], turns: [] };
-  #historySignature = historySignature(this.#history);
-  #activeAttemptId: string | undefined;
-  #acceptedAttemptId: string | undefined;
-  #completionBlockId: string | undefined;
+  #activeSession?: WorkbookTutorSession;
   #tail: Promise<unknown> = Promise.resolve();
   #disposed = false;
-  #sessionGeneration = 0;
 
   constructor(options: MainWorkbookTutorOptions) {
     this.workspace = options.workspace;
@@ -328,21 +331,37 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
 
   restore(input: MainTutorContext): Promise<void> {
     return this.#enqueue(async () => {
-      this.#setHistory(input);
+      await this.#withFreshSession(input, [], async () => undefined);
     });
   }
 
   reply(input: MainTutorContext & { learnerMessage: TimelineMessage }): Promise<TutorReplyResult> {
     return this.#enqueue(async () => {
-      const context = input;
-      const session = await this.#ensureSession(context);
-      this.#completionBlockId = undefined;
+      const completionBlockId = input.completionTool?.blockId;
+      let completedBlockId: string | undefined;
+      let toolBound = true;
+      const completeBlock = completionBlockId ? defineTool({
+        name: COMPLETE_BLOCK_TOOL_NAME,
+        label: "Complete workbook block",
+        description: "Complete the exact active workbook block after explicit learner intent to move on.",
+        parameters: Type.Object({ blockId: Type.Literal(completionBlockId) }, { additionalProperties: false }),
+        async execute(_callId: string, args: { blockId: string }) {
+          if (!toolBound) return { content: [{ type: "text", text: "Rejected: this completion tool is no longer bound to an active tutor operation." }], details: { completed: false, blockId: args.blockId } };
+          if (args.blockId !== completionBlockId) return { content: [{ type: "text", text: "Rejected: this tool is constrained to the current block." }], details: { completed: false, blockId: args.blockId } };
+          completedBlockId = args.blockId;
+          return { content: [{ type: "text", text: `Requested completion for ${args.blockId}.` }], details: { completed: true, blockId: args.blockId } };
+        }
+      }) : undefined;
+
       try {
-        const text = await session.prompt(replyPrompt({ ...input, completionTool: context.completionTool }));
-        if (this.#completionBlockId) return { outcome: "complete-block", blockId: this.#completionBlockId };
-        return requiredText(text, "ordinary reply");
+        const operationTools = completeBlock ? [completeBlock] : [];
+        return await this.#withFreshSession(input, operationTools, async (session) => {
+          const text = await session.prompt(replyPrompt({ ...input, completionTool: input.completionTool }));
+          if (completionBlockId && completedBlockId === completionBlockId) return { outcome: "complete-block", blockId: completedBlockId };
+          return requiredText(text, "ordinary reply");
+        });
       } finally {
-        this.#completionBlockId = undefined;
+        toolBound = false;
       }
     });
   }
@@ -350,27 +369,40 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
 
   review(input: MainTutorContext & TutorReview): Promise<TutorDecision> {
     return this.#enqueue(async () => {
-      const context = input;
-      const session = await this.#ensureSession(context);
-      this.#activeAttemptId = input.attempt.id;
-      this.#acceptedAttemptId = undefined;
+      const boundAttemptId = input.attempt.id;
+      let acceptedAttemptId: string | undefined;
+      let toolBound = true;
+      const accept = defineTool({
+        name: ACCEPT_TOOL_NAME,
+        label: "Accept current attempt",
+        description: "Accept the exact workbook attempt currently under review. Takes no arguments.",
+        parameters: Type.Object({}, { additionalProperties: false }),
+        async execute() {
+          if (!toolBound) {
+            return { content: [{ type: "text", text: "No workbook attempt is currently bound for acceptance." }], details: { accepted: false, attemptId: boundAttemptId } };
+          }
+          acceptedAttemptId = boundAttemptId;
+          return { content: [{ type: "text", text: "Accepted the current workbook attempt." }], details: { accepted: true, attemptId: boundAttemptId } };
+        }
+      });
+
       try {
-        const promptOptions: ResilientTutorPromptOptions | undefined = input.attempt.evidence.kind === "terminal"
-          ? { attempts: 1, failureLog: "generic" }
-          : undefined;
-        const text = await session.prompt(reviewPrompt(input), promptOptions);
-        if (this.#acceptedAttemptId === input.attempt.id) return { outcome: "accepted", message: acceptedText(text) };
-        return { outcome: "feedback", message: publicText(text) };
+        return await this.#withFreshSession(input, [accept], async (session) => {
+          const promptOptions: ResilientTutorPromptOptions | undefined = input.attempt.evidence.kind === "terminal"
+            ? { attempts: 1, failureLog: "generic" }
+            : undefined;
+          const text = await session.prompt(reviewPrompt(input), promptOptions);
+          if (acceptedAttemptId === boundAttemptId) return { outcome: "accepted", message: acceptedText(text) };
+          return { outcome: "feedback", message: publicText(text) };
+        });
       } finally {
-        this.#activeAttemptId = undefined;
-        this.#acceptedAttemptId = undefined;
+        toolBound = false;
       }
     });
   }
 
   summarizeBlock(input: MainTutorContext & { lessonId: string; blockId: string; coveredThroughId: string }): Promise<string> {
-    return this.#enqueue(async () => {
-      const session = await this.#ensureSession(input);
+    return this.#enqueue(async () => this.#withFreshSession(input, [], async (session) => {
       try {
         const result = await session.compact(`Summarize only completed workbook block ${input.lessonId}/${input.blockId} through ${input.coveredThroughId}. Retain its goal, displayed course idea, accepted evidence in concise form, and material learner feedback. Do not claim filesystem, shell, network, or workspace observations.`);
         return result.summary;
@@ -378,12 +410,11 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
         if (isNothingToCompactError(error)) return shortContextBlockSummary(input);
         throw error;
       }
-    });
+    }));
   }
 
   summarizeLesson(input: MainTutorContext & { lessonId: string; coveredThroughId: string }): Promise<string> {
-    return this.#enqueue(async () => {
-      const session = await this.#ensureSession(input);
+    return this.#enqueue(async () => this.#withFreshSession(input, [], async (session) => {
       try {
         const result = await session.compact(`Summarize only completed workbook lesson ${input.lessonId} through ${input.coveredThroughId}. Retain completed block goals, accepted evidence in concise form, and material learner context. Do not claim filesystem, shell, network, or workspace observations.`);
         return result.summary;
@@ -391,109 +422,62 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
         if (isNothingToCompactError(error)) return shortContextLessonSummary(input);
         throw error;
       }
-    });
+    }));
   }
 
   dispose(): void {
     this.#disposed = true;
-    this.#sessionGeneration += 1;
-    this.#session?.dispose();
-    this.#session = undefined;
+    const session = this.#activeSession;
+    this.#activeSession = undefined;
+    if (session) this.#safeDisposeSession(session);
   }
 
-  async #ensureSession(input?: MainTutorContext): Promise<WorkbookTutorSession> {
-    if (this.#disposed) throw new Error("Workbook tutor is disposed.");
-    if (input) this.#setHistory(input);
-    if (this.#session) return this.#session;
-    const generation = this.#sessionGeneration;
-    const owner = this;
-    const accept = defineTool({
-      name: ACCEPT_TOOL_NAME,
-      label: "Accept current attempt",
-      description: "Accept the exact workbook attempt currently under review. Takes no arguments.",
-      parameters: Type.Object({}, { additionalProperties: false }),
-      async execute() {
-        if (!owner.#activeAttemptId) {
-          return { content: [{ type: "text", text: "No workbook attempt is currently bound for acceptance." }], details: { accepted: false } };
-        }
-        owner.#acceptedAttemptId = owner.#activeAttemptId;
-        return { content: [{ type: "text", text: "Accepted the current workbook attempt." }], details: { accepted: true } };
-      }
-    });
-    const completionBlockId = input?.completionTool?.blockId;
-    const completeBlock = completionBlockId ? defineTool({
-      name: COMPLETE_BLOCK_TOOL_NAME,
-      label: "Complete workbook block",
-      description: "Complete the exact active workbook block after explicit learner intent to move on.",
-      parameters: Type.Object({ blockId: Type.Literal(completionBlockId) }, { additionalProperties: false }),
-      async execute(_callId: string, args: { blockId: string }) {
-        if (args.blockId !== completionBlockId) return { content: [{ type: "text", text: "Rejected: this tool is constrained to the current block." }], details: { completed: false, blockId: args.blockId } };
-        owner.#completionBlockId = args.blockId;
-        return { content: [{ type: "text", text: `Requested completion for ${args.blockId}.` }], details: { completed: true, blockId: args.blockId } };
-      }
-    }) : undefined;
-    const workspaceTools = input?.activeWorkspaceRoot ? await createTutorWorkspaceTools(input.activeWorkspaceRoot) : [];
-    const reviewTools = [accept];
-    const blockTools = completeBlock ? [completeBlock] : [];
-    const customTools = [...reviewTools, ...blockTools, ...workspaceTools];
-    const tools = customTools.map((tool) => tool.name);
-    const session = await this.#sessionFactory({ systemPrompt: systemPrompt(), customTools, tools, history: this.#history });
-    if (this.#disposed || generation !== this.#sessionGeneration) {
+  async #withFreshSession<T>(input: MainTutorContext, operationTools: readonly ToolDefinition[], operation: (session: WorkbookTutorSession) => Promise<T>): Promise<T> {
+    this.#throwIfDisposed();
+    const history = projectMainTutorHistory(input.records, input.activeContext);
+    const workspaceTools = input.activeWorkspaceRoot ? await createTutorWorkspaceTools(input.activeWorkspaceRoot) : [];
+    this.#throwIfDisposed();
+    const customTools = [...operationTools, ...workspaceTools];
+    const session = await this.#sessionFactory({ systemPrompt: systemPrompt(), customTools, tools: customTools.map((tool) => tool.name), history });
+    if (this.#disposed) {
+      this.#safeDisposeSession(session);
+      throw this.#disposedError();
+    }
+    this.#activeSession = session;
+    try {
+      this.#throwIfDisposed();
+      const result = await operation(session);
+      this.#throwIfDisposed();
+      return result;
+    } finally {
+      if (this.#activeSession === session) this.#activeSession = undefined;
+      this.#safeDisposeSession(session);
+    }
+  }
+
+  #safeDisposeSession(session: WorkbookTutorSession): void {
+    try {
       session.dispose();
-      throw new Error("Workbook tutor is disposed.");
+    } catch (error) {
+      this.#log.error("Workbook tutor session disposal failed.", error);
     }
-    this.#session = session;
-    return this.#session;
   }
 
-  #setHistory(input: MainTutorContext): void {
-    const next = projectMainTutorHistory(input.records, input.activeContext);
-    const nextSignature = historySignature(next, input.completionTool?.blockId, input.activeWorkspaceRoot);
-    this.#history = next;
-    if (nextSignature !== this.#historySignature) {
-      this.#historySignature = nextSignature;
-      this.#sessionGeneration += 1;
-      this.#session?.dispose();
-      this.#session = undefined;
-    }
+  #throwIfDisposed(): void {
+    if (this.#disposed) throw this.#disposedError();
+  }
+
+  #disposedError(): Error {
+    return new Error("Workbook tutor is disposed.");
   }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.#disposed) return Promise.reject(new Error("Workbook tutor is disposed."));
+    if (this.#disposed) return Promise.reject(this.#disposedError());
     const run = this.#tail.catch(() => undefined).then(() => {
-      if (this.#disposed) throw new Error("Workbook tutor is disposed.");
+      this.#throwIfDisposed();
       return operation();
     });
     this.#tail = run.catch(() => undefined);
     return run;
-  }
-}
-
-function historySignature(history: MainTutorHistoryProjection, completionBlockId?: string, activeWorkspaceRoot?: string): string {
-  return JSON.stringify({
-    summaries: history.summaries.map((summary) => ({
-      sourceEventId: summary.sourceEventId,
-      coveredThroughId: summary.coveredThroughId,
-      text: summary.text
-    })),
-    turns: history.turns.map((turn) => ({ sourceEventId: turn.sourceEventId, text: turn.text })),
-    active: history.activeContext
-      ? {
-          sourceEventIds: history.activeContext.sourceEventIds,
-          text: history.activeContext.text,
-          attemptIds: activeAttemptIds(history.activeContext.text)
-        }
-      : undefined,
-    completionBlockId,
-    activeWorkspaceRoot
-  });
-}
-
-function activeAttemptIds(serializedContext: string): string[] {
-  try {
-    const parsed = JSON.parse(serializedContext) as { attempts?: Array<{ id?: unknown }> };
-    return parsed.attempts?.map((attempt) => typeof attempt.id === "string" ? attempt.id : "").filter(Boolean) ?? [];
-  } catch {
-    return [];
   }
 }

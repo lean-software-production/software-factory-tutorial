@@ -123,6 +123,47 @@ describe("workbook Pi history", () => {
     ]);
   });
 
+  it("keeps ADR 0006 boundaries: authored turns, completed summaries, active detail, and private active context", () => {
+    const activeContext: ActiveBlockContext = {
+      lessonId: "lesson-two",
+      blockId: "active",
+      title: "Active practice",
+      markdown: "Use the bounded workspace tools only if needed.",
+      authorGuidance: "Private acceptance rubric.",
+      attempts: [
+        { id: "attempt-active", lessonId: "lesson-two", blockId: "active", version: 1, status: "reviewing", evidence: { kind: "terminal", transcript: "npm test\nPASS", terminalHtml: "<pre>npm test</pre>" } }
+      ],
+      terminal: { transcript: "bounded terminal transcript" }
+    };
+    const history = projectMainTutorHistory([
+      record("lesson-one-authored", 1, { type: "message", lessonId: "lesson-one", blockId: "narrative", role: "assistant", source: "authored", presentation: "course", text: "Completed lesson authored content." }),
+      record("lesson-one-summary", 2, { type: "lesson_summarized", lessonId: "lesson-one", text: "Lesson one retained summary.", coveredThroughId: "lesson-one-authored" }),
+      record("block-old-authored", 3, { type: "message", lessonId: "lesson-two", blockId: "old", role: "assistant", source: "authored", presentation: "course", text: "Old block authored detail." }),
+      record("block-old-learner", 4, { type: "message", lessonId: "lesson-two", blockId: "old", role: "user", source: "learner", presentation: "chat", text: "Old block learner detail." }),
+      record("block-old-summary", 5, { type: "block_summarized", lessonId: "lesson-two", blockId: "old", text: "Old block retained summary.", coveredThroughId: "block-old-learner" }),
+      record("active-authored", 6, { type: "message", lessonId: "lesson-two", blockId: "active", role: "assistant", source: "authored", presentation: "course", text: "## Active practice\n\nVisible course text." }),
+      record("active-learner", 7, { type: "message", lessonId: "lesson-two", blockId: "active", role: "user", source: "learner", presentation: "chat", text: "I tried it." }),
+      record("active-tutor", 8, { type: "message", lessonId: "lesson-two", blockId: "active", role: "assistant", source: "main_tutor", presentation: "review", text: "Show the exact command output." }),
+    ], activeContext);
+
+    expect(history.summaries).toEqual([
+      expect.objectContaining({ sourceEventId: "lesson-one-summary", scope: "lesson", lessonId: "lesson-one", text: "Lesson one retained summary." }),
+      expect.objectContaining({ sourceEventId: "block-old-summary", scope: "block", lessonId: "lesson-two", blockId: "old", text: "Old block retained summary." }),
+    ]);
+    expect(history.turns).toEqual([
+      { sourceEventId: "active-authored", role: "assistant", text: "## Active practice\n\nVisible course text.", timestamp: Date.parse("2026-08-21T00:00:06.000Z") },
+      { sourceEventId: "active-learner", role: "user", text: "I tried it.", timestamp: Date.parse("2026-08-21T00:00:07.000Z") },
+      { sourceEventId: "active-tutor", role: "assistant", text: "Show the exact command output.", timestamp: Date.parse("2026-08-21T00:00:08.000Z") },
+    ]);
+    expect(JSON.stringify(history.turns)).not.toContain("Private acceptance rubric");
+    expect(history.activeContext).toMatchObject({ name: "workbook-active-block", sourceEventIds: ["active-authored", "active-learner", "active-tutor"] });
+    expect(JSON.parse(history.activeContext?.text ?? "{}")).toMatchObject({
+      authorGuidance: "Private acceptance rubric.",
+      attempts: [{ id: "attempt-active", evidence: { transcript: "npm test\nPASS" } }],
+      terminal: { transcript: "bounded terminal transcript" }
+    });
+  });
+
   it("formats the title and markdown the learner sees for authored history", () => {
     expect(authoredBlockText({ title: "Write it", markdown: "Use `.tmp`." }))
       .toBe("## Write it\n\nUse `.tmp`.");
