@@ -529,6 +529,10 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
 
   process.env.OPENCODE_API_KEY ??= "workbook-ux-no-model-key";
   const mainTutor = new QueuedMainTutor(
+    // The authored workspace seeds a non-empty draft, so opening the editor deliberately triggers
+    // one review before the three recorded learner revisions. Keep that review explicit so it
+    // cannot consume the first named checkpoint decision while retained feedback is visible.
+    { outcome: "feedback", message: "The seeded draft is ready for the learner's first revision." } satisfies TutorDecision,
     { outcome: "feedback", message: EDITOR_FEEDBACK.small } satisfies TutorDecision,
     { outcome: "feedback", message: EDITOR_FEEDBACK.mid } satisfies TutorDecision,
     { outcome: "feedback", message: EDITOR_FEEDBACK.full } satisfies TutorDecision,
@@ -644,7 +648,7 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
     for (const stepId of REQUIRED_STATE_CHECKPOINT_STEP_IDS) if (!seenStateSteps.has(stepId)) walkthrough.semanticFailures.push(`Missing semantic checkpoint for marker step ${stepId}.`);
     for (const stepId of SCROLL_CHECKPOINT_STEP_IDS) if (!seenStateSteps.has(stepId)) walkthrough.semanticFailures.push(`Missing scroll checkpoint for marker step ${stepId}.`);
     for (const stepId of REQUIRED_MOTION_STEP_IDS) if (!seenStateSteps.has(stepId)) walkthrough.semanticFailures.push(`Missing required-motion checkpoint for marker step ${stepId}.`);
-    if (mainTutor.reviews.length < 7) walkthrough.semanticFailures.push(`Expected at least seven Main Tutor reviews (four editor, three terminal), saw ${mainTutor.reviews.length}.`);
+    if (mainTutor.reviews.length < 8) walkthrough.semanticFailures.push(`Expected at least eight Main Tutor reviews (one seeded editor draft, four editor revisions, three terminal attempts), saw ${mainTutor.reviews.length}.`);
     if (fakePty.commandCount < 3) walkthrough.semanticFailures.push(`Expected three fake PTY commands, saw ${fakePty.commandCount}.`);
 
     walkthrough.fake = { mainTutorReviews: mainTutor.reviews.length, ptyCommands: fakePty.commands };
