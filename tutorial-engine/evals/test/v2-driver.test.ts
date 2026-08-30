@@ -373,7 +373,7 @@ describe("v2 workbook driver", () => {
     const driver = new V2WorkbookDriver({
       serverUrl: "http://workbook.invalid",
       trace,
-      fetch: async () => new Response(JSON.stringify({ workbook: { title: "Public prose" }, tutor: "A public field can say This is private tutor guidance, terminal-command-submitted, Coach handoff, and \"tutor\":" }), {
+      fetch: async () => new Response(JSON.stringify({ workbook: { title: "Public prose" }, tutor: "A public field can say This is private tutor guidance, terminal-command-submitted, terminal review request, and \"tutor\":" }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
       })
@@ -382,6 +382,6 @@ describe("v2 workbook driver", () => {
     const state = await driver.readState("public-prose");
 
     expect(state).toHaveProperty("tutor");
-    expect(JSON.stringify(trace.publicStates)).toContain("Coach handoff");
+    expect(JSON.stringify(trace.publicStates)).toContain("terminal review request");
   });
 });

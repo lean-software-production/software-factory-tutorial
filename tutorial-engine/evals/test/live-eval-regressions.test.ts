@@ -57,8 +57,8 @@ function auditableTrace(): V2SessionTrace {
     { blockId: "reflection", role: "tutor", text: "That is visible learner-facing guidance." }
   );
   trace.events.push(
-    event({ type: "editor_practice_unlocked", lessonId, blockId: "editor-practice", revisionId: 1, path: "editor-artifacts/evaluator-editor.txt" }),
-    event({ type: "observation_verified", lessonId, blockId: "exact-command", source: "terminal_observer", summary: "created and printed the command artifact", terminalHtml: "command block complete" }),
+    event({ type: "attempt_accepted", lessonId, blockId: "editor-practice", attemptId: "editor-attempt", version: 1, kind: "editor", summary: "Editor accepted." }),
+    event({ type: "attempt_accepted", lessonId, blockId: "exact-command", attemptId: "terminal-attempt", version: 1, kind: "terminal", summary: "created and printed the command artifact" }),
     event({ type: "block_completed", lessonId, blockId: "exact-command" })
   );
   trace.artifacts.push(

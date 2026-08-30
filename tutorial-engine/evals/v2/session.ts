@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
-import { normalizeWorkbookTimelineRecord, type WorkbookTimelineRecord } from "../../src/workbook/timeline.js";
+import { CURRENT_WORKBOOK_SESSION_FORMAT_VERSION, normalizeWorkbookTimelineRecord, WORKBOOK_SESSION_FORMAT_RECORD_TYPE, type WorkbookTimelineRecord } from "../../src/workbook/timeline.js";
 import type { PublicWorkbookState, V2ArtifactSnapshot, V2EditorEntry, V2JudgeTrace, V2PublicProgressionEvent, V2RecordedPublicState, V2ReflectionEntry, V2SessionTrace, V2TerminalTranscriptEntry } from "./types.js";
 
 const DEFAULT_ARTIFACT_ROOTS = ["factory/.tmp", "editor-artifacts"];
@@ -41,9 +41,16 @@ export async function readWorkbookTimeline(sessionRoot: string): Promise<Workboo
   let text: string;
   try { text = await readFile(eventPath, "utf8"); }
   catch (error: any) { if (error?.code === "ENOENT") return []; throw error; }
-  return text.split(/\r?\n/).filter(Boolean).map((line, index) => {
-    try { return normalizeWorkbookTimelineRecord(JSON.parse(line), index + 1); }
-    catch (error) { throw new Error(`${eventPath}:${index + 1}: invalid JSONL event`); }
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  if (lines.length === 0) throw new Error(`${eventPath}: missing workbook session format header`);
+  let header: unknown;
+  try { header = JSON.parse(lines[0]!); }
+  catch { throw new Error(`${eventPath}: invalid workbook session format header`); }
+  if (!isPlainRecord(header) || header.type !== WORKBOOK_SESSION_FORMAT_RECORD_TYPE || header.version !== CURRENT_WORKBOOK_SESSION_FORMAT_VERSION) throw new Error(`${eventPath}: unsupported workbook session format`);
+  return lines.slice(1).map((line, index) => {
+    const lineNumber = index + 2;
+    try { return normalizeWorkbookTimelineRecord(JSON.parse(line), lineNumber); }
+    catch (error) { throw new Error(`${eventPath}:${lineNumber}: invalid JSONL event`); }
   });
 }
 
@@ -67,7 +74,7 @@ export function copyV2JudgeTrace(value: unknown): V2JudgeTrace {
     terminalTranscript: value.terminalTranscript.map(copyTerminalTranscriptEntry).filter((entry): entry is V2JudgeTrace["terminalTranscript"][number] => entry !== undefined),
     reflections: value.reflections.map(copyReflectionEntry).filter((entry): entry is V2JudgeTrace["reflections"][number] => entry !== undefined),
     editors: value.editors.map(copyEditorEntry).filter((entry): entry is V2JudgeTrace["editors"][number] => entry !== undefined),
-    progressionEvents: value.progressionEvents.map(projectPublicProgressionEvent).filter((entry): entry is V2PublicProgressionEvent => entry !== undefined),
+    progressionEvents: value.progressionEvents.map(copyPublicProgressionEvent).filter((entry): entry is V2PublicProgressionEvent => entry !== undefined),
     artifacts: value.artifacts.map(copyArtifactSnapshot).filter((entry): entry is V2ArtifactSnapshot => entry !== undefined)
   };
   return judgeTrace;
@@ -83,7 +90,7 @@ export function projectPublicProgressionEvent(record: unknown): V2PublicProgress
     case "workbook_introduction_completed":
       return { type: "workbook_introduction_completed" };
     case "attempt_accepted":
-      return typeof record.lessonId === "string" && typeof record.blockId === "string" && isAttemptKind(record.kind) ? { type: "attempt_accepted", lessonId: record.lessonId, blockId: record.blockId, kind: record.kind } : undefined;
+      return typeof record.lessonId === "string" && typeof record.blockId === "string" && typeof record.attemptId === "string" && Number.isInteger(record.version) && isAttemptKind(record.kind) && typeof record.summary === "string" ? { type: "attempt_accepted", lessonId: record.lessonId, blockId: record.blockId, kind: record.kind } : undefined;
     case "work_accepted":
       return typeof record.blockId === "string" ? { type: "work_accepted", blockId: record.blockId } : undefined;
     case "block_completed": {
@@ -93,28 +100,17 @@ export function projectPublicProgressionEvent(record: unknown): V2PublicProgress
       return typeof lessonId === "string" ? { type: "block_completed", lessonId, blockId: record.blockId } : { type: "block_completed", blockId: record.blockId };
     }
     case "reflection_submitted":
-      return hasLessonBlock(record) ? { type: "reflection_submitted", lessonId: record.lessonId, blockId: record.blockId } : undefined;
+      return hasReflectionEvent(record) ? { type: "reflection_submitted", lessonId: record.lessonId, blockId: record.blockId } : undefined;
     case "reflection_follow_up_submitted":
-      return hasLessonBlock(record) ? { type: "reflection_follow_up_submitted", lessonId: record.lessonId, blockId: record.blockId } : undefined;
+      return hasReflectionEvent(record) ? { type: "reflection_follow_up_submitted", lessonId: record.lessonId, blockId: record.blockId } : undefined;
     case "reflection_reply_recorded":
-      return hasLessonBlock(record) ? { type: "reflection_reply_recorded", lessonId: record.lessonId, blockId: record.blockId } : undefined;
-    case "observation_acknowledged":
-      return typeof record.lessonId === "string" && typeof record.blockId === "string" ? { type: "observation_acknowledged", lessonId: record.lessonId, blockId: record.blockId, kind: "terminal" } : undefined;
-    case "observation_verified":
-      return typeof record.lessonId === "string" && typeof record.blockId === "string" ? { type: "observation_verified", lessonId: record.lessonId, blockId: record.blockId, kind: "terminal" } : undefined;
-    case "block_continued":
-      return hasLessonBlock(record) ? { type: "block_continued", lessonId: record.lessonId, blockId: record.blockId } : undefined;
-    case "reflection_completed":
-      return hasLessonBlock(record) ? { type: "reflection_completed", lessonId: record.lessonId, blockId: record.blockId } : undefined;
-    case "editor_practice_unlocked":
-      return typeof record.lessonId === "string" && typeof record.blockId === "string" ? { type: "editor_practice_unlocked", lessonId: record.lessonId, blockId: record.blockId, kind: "editor" } : undefined;
-    case "lesson_transitioned":
-      return hasLessonBlock(record) ? { type: "lesson_transitioned", lessonId: record.lessonId, blockId: record.blockId } : undefined;
+      return hasReflectionEvent(record) ? { type: "reflection_reply_recorded", lessonId: record.lessonId, blockId: record.blockId } : undefined;
     case "terminal-command-submitted":
     case "terminal-command-finished":
+    case "terminal-review-requested":
+    case "terminal-review-failed":
     case "terminal-transcript-snapshotted":
     case "terminal-feedback-recorded":
-    case "terminal-coach-handoff-recorded":
     case "message":
     case "block_summarized":
     case "lesson_summarized":
@@ -140,6 +136,40 @@ function isAttemptKind(value: unknown): value is "editor" | "terminal" | "reflec
 
 function hasLessonBlock(record: Record<string, unknown>): record is Record<string, unknown> & { lessonId: string; blockId: string } {
   return typeof record.lessonId === "string" && typeof record.blockId === "string";
+}
+
+function hasReflectionEvent(record: Record<string, unknown>): record is Record<string, unknown> & { lessonId: string; blockId: string; response: string } {
+  return hasLessonBlock(record) && typeof record.response === "string";
+}
+
+function copyPublicProgressionEvent(record: unknown): V2PublicProgressionEvent | undefined {
+  if (!isPlainRecord(record) || typeof record.type !== "string") return undefined;
+  switch (record.type) {
+    case "session_started":
+      return { type: "session_started" };
+    case "lesson_jump_started":
+      return typeof record.lessonId === "string" ? { type: "lesson_jump_started", lessonId: record.lessonId } : undefined;
+    case "workbook_introduction_completed":
+      return { type: "workbook_introduction_completed" };
+    case "attempt_accepted":
+      return typeof record.lessonId === "string" && typeof record.blockId === "string" && isAttemptKind(record.kind) ? { type: "attempt_accepted", lessonId: record.lessonId, blockId: record.blockId, kind: record.kind } : undefined;
+    case "work_accepted":
+      return typeof record.blockId === "string" ? { type: "work_accepted", blockId: record.blockId } : undefined;
+    case "block_completed": {
+      if (typeof record.blockId !== "string") return undefined;
+      const lessonId = record.lessonId;
+      if ("lessonId" in record && typeof lessonId !== "string") return undefined;
+      return typeof lessonId === "string" ? { type: "block_completed", lessonId, blockId: record.blockId } : { type: "block_completed", blockId: record.blockId };
+    }
+    case "reflection_submitted":
+      return hasLessonBlock(record) ? { type: "reflection_submitted", lessonId: record.lessonId, blockId: record.blockId } : undefined;
+    case "reflection_follow_up_submitted":
+      return hasLessonBlock(record) ? { type: "reflection_follow_up_submitted", lessonId: record.lessonId, blockId: record.blockId } : undefined;
+    case "reflection_reply_recorded":
+      return hasLessonBlock(record) ? { type: "reflection_reply_recorded", lessonId: record.lessonId, blockId: record.blockId } : undefined;
+    default:
+      return undefined;
+  }
 }
 
 function copyRecordedPublicState(value: unknown): V2RecordedPublicState | undefined {

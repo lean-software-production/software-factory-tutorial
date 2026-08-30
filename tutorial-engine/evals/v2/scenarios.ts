@@ -213,7 +213,7 @@ function gateReflectionFollowUp(trace: V2SessionTrace): V2GateResult {
   const turns = trace.reflections.filter((entry) => matchBlockId(entry.blockId, "reflection"));
   const roles = turns.map((entry) => entry.role).join(",");
   const followUpEvent = trace.events.some((event) => event.type === "reflection_follow_up_submitted" && matchBlockId(event.blockId, "reflection"));
-  const completed = trace.events.some((event) => (event.type === "reflection_completed" || event.type === "block_completed") && matchBlockId(event.blockId, "reflection"));
+  const completed = trace.events.some((event) => event.type === "block_completed" && matchBlockId(event.blockId, "reflection"));
   return collectAssertions([
     publicStateClean(trace),
     {
@@ -230,7 +230,7 @@ function gateReflectionFollowUp(trace: V2SessionTrace): V2GateResult {
 }
 
 function gateTransitionCompletion(trace: V2SessionTrace): V2GateResult {
-  const transitionEvent = trace.events.some((event) => (event.type === "block_continued" || event.type === "lesson_transitioned" || event.type === "block_completed") && matchBlockId(event.blockId, "transition"));
+  const transitionEvent = trace.events.some((event) => event.type === "block_completed" && matchBlockId(event.blockId, "transition"));
   const completedProjection = trace.publicStates.some((state) => stateIncludesCompletedLesson(state.state));
   return collectAssertions([
     publicStateClean(trace),
@@ -279,20 +279,18 @@ function editorStillActive(trace: V2SessionTrace): V2GateAssertion {
 }
 
 function editorNotUnlocked(trace: V2SessionTrace): V2GateAssertion {
-  const unlocked = trace.events.some((event) => (event.type === "editor_practice_unlocked" || (event.type === "attempt_accepted" && event.kind === "editor")) && matchBlockId(event.blockId, "editor-practice"));
+  const unlocked = trace.events.some((event) => event.type === "attempt_accepted" && event.kind === "editor" && matchBlockId(event.blockId, "editor-practice"));
   return { name: "editor not unlocked", passed: !unlocked, detail: unlocked ? "Editor-practice unlocked after insufficient feedback." : "No unlock event was recorded." };
 }
 
 function editorUnlocked(trace: V2SessionTrace): V2GateAssertion {
-  const legacyUnlock = trace.events.find((candidate): candidate is Extract<V2SessionTrace["events"][number], { type: "editor_practice_unlocked" }> => candidate.type === "editor_practice_unlocked" && matchBlockId(candidate.blockId, "editor-practice"));
   const acceptedAttempt = trace.events.find((candidate) => candidate.type === "attempt_accepted" && candidate.kind === "editor" && matchBlockId(candidate.blockId, "editor-practice"));
+  const accepted = validAcceptedAttempt(acceptedAttempt, "editor");
   const completed = trace.publicStates.some((state) => stateContainsCompletedBlock(state.state, "editor-practice"));
   const recordedUnlockedRevision = trace.editors.some((entry) => matchBlockId(entry.blockId, "editor-practice") && entry.revision === 1 && entry.status === "unlocked");
   const promotedArtifact = trace.artifacts.some((item) => item.path === "editor-artifacts/evaluator-editor.txt");
-  const legacyPassed = legacyUnlock?.revisionId === 1 && legacyUnlock.path === "editor-artifacts/evaluator-editor.txt";
-  const attemptPassed = Boolean(acceptedAttempt && recordedUnlockedRevision && promotedArtifact);
-  const passed = completed && (legacyPassed || attemptPassed);
-  const detail = legacyUnlock ? `legacyUnlock=${Boolean(legacyUnlock)}, expectedRevision=${legacyUnlock.revisionId === 1}, expectedPath=${legacyUnlock.path === "editor-artifacts/evaluator-editor.txt"}, completed=${completed}` : `accepted=${Boolean(acceptedAttempt)}, revision=${recordedUnlockedRevision}, artifact=${promotedArtifact}, completed=${completed}`;
+  const passed = accepted.valid && completed && recordedUnlockedRevision && promotedArtifact;
+  const detail = `accepted=${Boolean(acceptedAttempt)}, attemptId=${accepted.hasAttemptId}, version=${accepted.hasVersion}, summary=${accepted.hasSummary}, revision=${recordedUnlockedRevision}, artifact=${promotedArtifact}, completed=${completed}`;
   return { name: "editor unlocked", passed, detail };
 }
 
@@ -354,9 +352,17 @@ function terminalOutput(blockId: string, expected: string, trace: V2SessionTrace
 }
 
 function observedAndCompleted(blockId: string, trace: V2SessionTrace): V2GateAssertion {
-  const verified = trace.events.some((event) => (event.type === "observation_verified" || (event.type === "attempt_accepted" && event.kind === "terminal")) && matchBlockId(event.blockId, blockId));
+  const acceptedAttempt = trace.events.find((event) => event.type === "attempt_accepted" && event.kind === "terminal" && matchBlockId(event.blockId, blockId));
+  const accepted = validAcceptedAttempt(acceptedAttempt, "terminal");
   const completed = trace.events.some((event) => event.type === "block_completed" && matchBlockId(event.blockId, blockId));
-  return { name: `${blockId} verified completion`, passed: verified && completed, detail: `verified=${verified}, completed=${completed}` };
+  return { name: `${blockId} verified completion`, passed: accepted.valid && completed, detail: `accepted=${Boolean(acceptedAttempt)}, attemptId=${accepted.hasAttemptId}, version=${accepted.hasVersion}, summary=${accepted.hasSummary}, completed=${completed}` };
+}
+
+function validAcceptedAttempt(event: V2SessionTrace["events"][number] | undefined, kind: "editor" | "terminal"): { valid: boolean; hasAttemptId: boolean; hasVersion: boolean; hasSummary: boolean } {
+  const hasAttemptId = event?.type === "attempt_accepted" && typeof event.attemptId === "string" && event.attemptId.length > 0;
+  const hasVersion = event?.type === "attempt_accepted" && Number.isInteger(event.version) && event.version > 0;
+  const hasSummary = event?.type === "attempt_accepted" && typeof event.summary === "string" && event.summary.trim().length > 0;
+  return { valid: Boolean(event?.type === "attempt_accepted" && event.kind === kind && hasAttemptId && hasVersion && hasSummary), hasAttemptId, hasVersion, hasSummary };
 }
 
 function artifactEquals(path: string, content: string, trace: V2SessionTrace): V2GateAssertion {

@@ -17,7 +17,7 @@ function passingGate(): V2GateResult {
 }
 
 function failingGate(): V2GateResult {
-  return { passed: false, assertions: [{ name: "synthetic gate", passed: false, detail: "terminal-coach-handoff-recorded coach-handoff-text-secret" }] };
+  return { passed: false, assertions: [{ name: "synthetic gate", passed: false, detail: "terminal-review-requested review-request-secret" }] };
 }
 
 function fakeWorkspace(options: { startFails?: boolean; closeFails?: boolean } = {}): EvaluationWorkspace {
@@ -60,8 +60,8 @@ function serialize(value: unknown): string {
 
 function expectNoPrivateRawEvents(value: unknown): void {
   const text = typeof value === "string" ? value : serialize(value);
-  expect(text).not.toContain("coach-handoff-text-secret");
-  expect(text).not.toContain("private-handoff-secret");
+  expect(text).not.toContain("review-request-secret");
+  expect(text).not.toContain("private-review-secret");
   expect(text).not.toContain("attempt-secret");
   expect(text).not.toContain("evidence-secret");
   expect(text).not.toContain("terminal-session-secret");
@@ -81,8 +81,8 @@ async function runWithTrace(reportsRoot: string, overrides: V2EvalRunnerDependen
       runV2ScenarioSession: async ({ trace }) => {
         trace.publicStates.push({ label: "public", state: { progress: { activeBlockId: "exact-command" } } });
         trace.events.push(
-          { id: "raw-id", sequence: 1, at: "2026-08-20T00:00:00.000Z", type: "terminal-coach-handoff-recorded", attemptId: "attempt-secret", text: "coach-handoff-text-secret" } as V2SessionTrace["events"][number],
-          { id: "raw-id", sequence: 2, at: "2026-08-20T00:00:00.000Z", type: "terminal-command-submitted", lessonId: "001-live-session", blockId: "exact-command", command: "echo secret", attemptId: "attempt-secret", evidenceRef: "evidence-secret", terminalSessionId: "terminal-session-secret" } as V2SessionTrace["events"][number],
+          { id: "raw-id", sequence: 1, at: "2026-08-20T00:00:00.000Z", type: "terminal-review-requested", lessonId: "001-live-session", blockId: "exact-command", attemptId: "attempt-secret", evidenceRef: "evidence-secret", requestId: "review-request-secret", mode: "automatic", callNumber: 1 } as V2SessionTrace["events"][number],
+          { id: "raw-id", sequence: 2, at: "2026-08-20T00:00:00.000Z", type: "terminal-command-submitted", lessonId: "001-live-session", blockId: "exact-command", command: "echo secret", attemptId: "attempt-secret", terminalSessionId: "terminal-session-secret" } as V2SessionTrace["events"][number],
           { id: "raw-id", sequence: 3, at: "2026-08-20T00:00:00.000Z", type: "block_completed", lessonId: "001-live-session", blockId: "exact-command" } as V2SessionTrace["events"][number]
         );
         return trace;
@@ -186,7 +186,7 @@ describe("v2 live eval report markers and metadata", () => {
   it("writes judge failure metadata with a sanitized public error summary", async () => {
     const reportsRoot = await tempReportsRoot();
     const result = await runWithTrace(reportsRoot, {
-      judgeV2TraceFromPrompt: async () => { throw new Error("judge saw terminal-coach-handoff-recorded coach-handoff-text-secret attempt-secret"); }
+      judgeV2TraceFromPrompt: async () => { throw new Error("judge saw terminal-review-requested review-request-secret attempt-secret"); }
     });
     const metadata = await readJson<Record<string, any>>(join(result.directory, "metadata.json"));
     const latest = createV2LatestReport([{ scenario: scenario.id, runs: [result] }]);
@@ -290,12 +290,12 @@ describe("v2 live eval report markers and metadata", () => {
       reflections: [],
       editors: [],
       events: [
-        { id: "raw-id", sequence: 1, at: "2026-08-20T00:00:00.000Z", type: "terminal-coach-handoff-recorded", attemptId: "attempt-secret", text: "coach-handoff-text-secret" } as V2SessionTrace["events"][number],
+        { id: "raw-id", sequence: 1, at: "2026-08-20T00:00:00.000Z", type: "terminal-feedback-recorded", attemptId: "attempt-secret", text: "review-request-secret" } as V2SessionTrace["events"][number],
         { id: "raw-id", sequence: 2, at: "2026-08-20T00:00:00.000Z", type: "block_completed", lessonId: "001-live-session", blockId: "exact-command" } as V2SessionTrace["events"][number]
       ],
       artifacts: []
     });
-    const gate: V2GateResult = { passed: true, assertions: [{ name: "raw assertion name secret", passed: true, detail: "terminal-coach-handoff-recorded coach-handoff-text-secret" }] };
+    const gate: V2GateResult = { passed: true, assertions: [{ name: "raw assertion name secret", passed: true, detail: "terminal-review-requested review-request-secret" }] };
     const judge = verifyV2JudgeResult({
       dimensions: {
         protocolUse: { score: 2, citations: [0], rationale: "public" },
@@ -307,10 +307,10 @@ describe("v2 live eval report markers and metadata", () => {
     const prompt = buildV2JudgePrompt(scenario, trace, gate);
     const unsafeJudge = {
       ...judge,
-      raw: "terminal-coach-handoff-recorded",
+      raw: "terminal-review-requested",
       dimensions: {
         ...judge.dimensions,
-        protocolUse: { ...judge.dimensions.protocolUse, extra: "coach-handoff-text-secret" }
+        protocolUse: { ...judge.dimensions.protocolUse, extra: "review-request-secret" }
       }
     };
     const report = createV2Report({ scenario, trace, gate, judgeInput: prompt, judge: unsafeJudge as typeof judge, tutorModel: "tutor", judgeModel: "judge" });

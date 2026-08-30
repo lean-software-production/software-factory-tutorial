@@ -17,7 +17,7 @@ function baseTrace(scenarioId: string): V2SessionTrace {
     label: "initial",
     state: { workbook: { title: "V2 Live Evaluator Workbook" }, progress: { activeLessonId: lessonId, activeBlockId: "orientation", completedLessons: [], blocks: [] }, chapters: [] }
   });
-  trace.events.push(event({ type: "session_started" }), event({ type: "workbook_introduction_completed" }), event({ type: "block_continued", lessonId, blockId: "orientation" }));
+  trace.events.push(event({ type: "session_started" }), event({ type: "workbook_introduction_completed" }), event({ type: "block_completed", lessonId, blockId: "orientation" }));
   return trace;
 }
 
@@ -40,7 +40,7 @@ function editorFeedbackTrace(): V2SessionTrace {
 
 function editorUnlockedTrace(scenarioId = "v2-editor-unlocked"): V2SessionTrace {
   const trace = baseTrace(scenarioId);
-  trace.events.push(event({ type: "editor_practice_unlocked", lessonId, blockId: "editor-practice", revisionId: 1, path: "editor-artifacts/evaluator-editor.txt" }));
+  trace.events.push(event({ type: "attempt_accepted", lessonId, blockId: "editor-practice", attemptId: "editor-attempt", version: 1, kind: "editor", summary: "Editor accepted." }));
   trace.publicStates.push({
     label: "editor-practice:unlocked",
     state: {
@@ -55,6 +55,7 @@ function editorUnlockedTrace(scenarioId = "v2-editor-unlocked"): V2SessionTrace 
       }
     }
   });
+  trace.editors.push({ blockId: "editor-practice", revision: 1, status: "unlocked" });
   trace.artifacts.push({ path: "editor-artifacts/evaluator-editor.txt", content: satisfactoryEditorDraft });
   return trace;
 }
@@ -67,7 +68,7 @@ function exactCommandTrace(scenarioId = "v2-exact-command-success"): V2SessionTr
     { blockId: "exact-command", direction: "observer", text: "created and printed the command artifact" }
   );
   trace.events.push(
-    event({ type: "observation_verified", lessonId, blockId: "exact-command", source: "terminal_observer", summary: "created and printed the command artifact", terminalHtml: "command block complete" }),
+    event({ type: "attempt_accepted", lessonId, blockId: "exact-command", attemptId: "terminal-attempt", version: 1, kind: "terminal", summary: "created and printed the command artifact" }),
     event({ type: "block_completed", lessonId, blockId: "exact-command" })
   );
   trace.artifacts.push({ path: "factory/.tmp/evaluator-command.txt", content: "command block complete\n" });
@@ -89,7 +90,7 @@ function clueOnlyTrace(): V2SessionTrace {
     { blockId: "clue-only", direction: "observer", text: "created and printed the clue artifact" }
   );
   trace.events.push(
-    event({ type: "observation_verified", lessonId, blockId: "clue-only", source: "terminal_observer", summary: "created and printed the clue artifact", terminalHtml: "clue block complete" }),
+    event({ type: "attempt_accepted", lessonId, blockId: "clue-only", attemptId: "clue-terminal-attempt", version: 1, kind: "terminal", summary: "created and printed the clue artifact" }),
     event({ type: "block_completed", lessonId, blockId: "clue-only" })
   );
   trace.artifacts.push({ path: "factory/.tmp/evaluator-clue.txt", content: "clue block complete\n" });
@@ -141,7 +142,7 @@ describe("v2 live evaluator scenarios", () => {
 
   it("accepts canonical live attempt-accepted events in the exact command gate", () => {
     const trace = exactCommandTrace();
-    trace.events = trace.events.filter((entry) => entry.type !== "editor_practice_unlocked" && entry.type !== "observation_verified");
+    trace.events = trace.events.filter((entry) => entry.type !== "attempt_accepted");
     trace.events.unshift(event({ type: "attempt_accepted", lessonId, blockId: "lesson--001-live-session--editor-practice", attemptId: "editor-attempt", version: 1, kind: "editor", summary: "Editor accepted." }));
     trace.events.unshift(event({ type: "attempt_accepted", lessonId, blockId: "lesson--001-live-session--exact-command", attemptId: "terminal-attempt", version: 1, kind: "terminal", summary: "Terminal accepted." }));
     trace.editors.push({ blockId: "lesson--001-live-session--editor-practice", revision: 1, status: "unlocked" });
@@ -152,7 +153,7 @@ describe("v2 live evaluator scenarios", () => {
 
   it("does not fail deterministic gates because private terminal lifecycle rows remain internal", () => {
     const trace = exactCommandTrace();
-    trace.events.push(event({ type: "terminal-coach-handoff-recorded", attemptId: "private-attempt", outcome: "ready", text: "This is private tutor guidance in a gate-only terminal lifecycle row." }));
+    trace.events.push(event({ type: "terminal-review-requested", lessonId, blockId: "exact-command", attemptId: "private-attempt", evidenceRef: "evidence-secret", requestId: "request-secret", mode: "automatic", callNumber: 1 }));
 
     allGateAssertionsPass(trace);
   });
@@ -189,7 +190,7 @@ describe("v2 live evaluator scenarios", () => {
     expect(statusOnlyFailed.assertions.find((assertion) => assertion.name === "editor feedback visible")?.passed).toBe(false);
 
     const publicVocabulary = editorFeedbackTrace();
-    (publicVocabulary.publicStates[1]!.state as any).progress.blocks[0].checkpoint.feedback = "Private editor criterion can appear as public learner-visible prose; terminal-command-submitted and Coach handoff can too.";
+    (publicVocabulary.publicStates[1]!.state as any).progress.blocks[0].checkpoint.feedback = "Private editor criterion can appear as public learner-visible prose; terminal-command-submitted and terminal-review-requested can too.";
     const vocabularyGate = deterministicV2Gate(findV2Scenario(publicVocabulary.scenarioId), publicVocabulary);
     expect(vocabularyGate.assertions.find((assertion) => assertion.name === "checked trace uses projected judge structure")?.passed).toBe(true);
   });
@@ -204,19 +205,19 @@ describe("v2 live evaluator scenarios", () => {
     expect(failed.assertions.find((assertion) => assertion.name === "editor-artifacts/evaluator-editor.txt artifact")?.passed).toBe(false);
   });
 
-  it("keeps raw timeline fields out of deterministic gate details", () => {
+  it("keeps raw acceptance fields out of deterministic gate details", () => {
     const trace = editorUnlockedTrace();
-    const unlock = trace.events.find((item) => item.type === "editor_practice_unlocked") as any;
-    unlock.path = "path-secret-from-raw-event";
-    unlock.revisionId = 99;
+    const accepted = trace.events.find((item) => item.type === "attempt_accepted" && item.kind === "editor") as any;
+    accepted.attemptId = "attempt-id-secret-from-raw-event";
+    accepted.summary = "summary-secret-from-raw-event";
+    accepted.version = 0;
 
     const failed = deterministicV2Gate(findV2Scenario(trace.scenarioId), trace);
     const detail = failed.assertions.find((assertion) => assertion.name === "editor unlocked")?.detail ?? "";
 
-    expect(detail).toContain("expectedPath=false");
-    expect(detail).toContain("expectedRevision=false");
-    expect(detail).not.toContain("path-secret-from-raw-event");
-    expect(detail).not.toContain("revision=99");
+    expect(detail).toContain("version=false");
+    expect(detail).not.toContain("attempt-id-secret-from-raw-event");
+    expect(detail).not.toContain("summary-secret-from-raw-event");
   });
 
   it("gates a clue-only task on public clues, learner-chosen command, output, completion, and artifact", () => {
@@ -231,7 +232,7 @@ describe("v2 live evaluator scenarios", () => {
     expect(wrongPathFailed.assertions.find((assertion) => assertion.name === "clue-only learner command")?.passed).toBe(false);
 
     const publicVocabulary = clueOnlyTrace();
-    (publicVocabulary.publicStates[2]!.state as any).chapters[0].lesson.blocks[0].markdown += "\nPublic prose may mention terminal-command-submitted, Coach handoff, \"tutor\":, and unrelated shell-looking text such as printf 'hello\\n' > notes/example.txt && cat notes/example.txt.";
+    (publicVocabulary.publicStates[2]!.state as any).chapters[0].lesson.blocks[0].markdown += "\nPublic prose may mention terminal-command-submitted, terminal review request, \"tutor\":, and unrelated shell-looking text such as printf 'hello\\n' > notes/example.txt && cat notes/example.txt.";
     const vocabularyGate = deterministicV2Gate(findV2Scenario(publicVocabulary.scenarioId), publicVocabulary);
     expect(vocabularyGate.assertions.find((assertion) => assertion.name === "clue-only public prompt")?.passed).toBe(true);
 
@@ -257,7 +258,7 @@ describe("v2 live evaluator scenarios", () => {
       event({ type: "reflection_reply_recorded", lessonId, blockId: "reflection", response: trace.reflections[1]!.text }),
       event({ type: "reflection_follow_up_submitted", lessonId, blockId: "reflection", response: trace.reflections[2]!.text }),
       event({ type: "reflection_reply_recorded", lessonId, blockId: "reflection", response: trace.reflections[3]!.text }),
-      event({ type: "reflection_completed", lessonId, blockId: "reflection" })
+      event({ type: "block_completed", lessonId, blockId: "reflection" })
     );
 
     allGateAssertionsPass(trace);
@@ -277,8 +278,8 @@ describe("v2 live evaluator scenarios", () => {
     trace.events.push(
       event({ type: "reflection_submitted", lessonId, blockId: "reflection", response: trace.reflections[0]!.text }),
       event({ type: "reflection_reply_recorded", lessonId, blockId: "reflection", response: trace.reflections[1]!.text }),
-      event({ type: "reflection_completed", lessonId, blockId: "reflection" }),
-      event({ type: "block_continued", lessonId, blockId: "transition" })
+      event({ type: "block_completed", lessonId, blockId: "reflection" }),
+      event({ type: "block_completed", lessonId, blockId: "transition" })
     );
     trace.publicStates.push({
       label: "transition-complete",

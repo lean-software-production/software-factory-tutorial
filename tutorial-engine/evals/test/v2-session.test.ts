@@ -2,6 +2,7 @@ import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkbook } from "../../src/workbook/load.js";
+import { workbookSessionFormatRecord } from "../../src/workbook/timeline.js";
 import type { WorkbookServerOptions } from "../../src/workbook/server.js";
 import type { TutorDecision } from "../../src/workbook/tutor.js";
 import { RecordingMainTutor } from "../../test/support/fake-tutors.js";
@@ -99,10 +100,10 @@ describe("v2 public session trace", () => {
       expect(serialized).toContain('"source":"authored"');
 
       const arbitrary = recordPublicState(trace, "public-prose", {
-        tutor: "Public prose may contain a tutor key, This is private tutor guidance, Do not reveal an exact command, Follow up until the learner, Private editor criterion, terminal-command-submitted, Coach handoff, and JSON-looking text like \"tutor\":."
+        tutor: "Public prose may contain a tutor key, This is private tutor guidance, Do not reveal an exact command, Follow up until the learner, Private editor criterion, terminal-command-submitted, terminal review request, and JSON-looking text like \"tutor\":."
       });
       expect(arbitrary.state).toHaveProperty("tutor");
-      expect(JSON.stringify(arbitrary)).toContain("Coach handoff");
+      expect(JSON.stringify(arbitrary)).toContain("terminal review request");
     } finally {
       await server.close();
       await workspace.close();
@@ -117,14 +118,18 @@ describe("v2 public session trace", () => {
     await server.close();
     const { sessionRoot } = workspace.latestSession();
     await mkdir(resolve(sessionRoot, "workbook"), { recursive: true });
-    await writeFile(resolve(sessionRoot, "workbook/events.jsonl"), `${JSON.stringify({
-      type: "terminal-coach-handoff-recorded",
+    await writeFile(resolve(sessionRoot, "workbook/events.jsonl"), `${JSON.stringify(workbookSessionFormatRecord())}\n${JSON.stringify({
+      type: "terminal-review-requested",
       id: "raw-id-secret",
       sequence: 42,
       at: "2026-08-20T00:00:00.000Z",
+      lessonId: "001-live-session",
+      blockId: "exact-command",
       attemptId: "attempt-secret",
-      outcome: "ready",
-      text: "private-handoff-secret-for-gate-only-event"
+      evidenceRef: "evidence-secret",
+      requestId: "private-review-request-secret-for-gate-only-event",
+      mode: "automatic",
+      callNumber: 1
     })}\n${JSON.stringify({
       type: "attempt_accepted",
       id: "raw-accepted-secret",
@@ -146,7 +151,7 @@ describe("v2 public session trace", () => {
     const projected = projectV2JudgeTrace(trace);
     expect(projected.progressionEvents).toEqual([{ type: "attempt_accepted", lessonId: "001-live-session", blockId: "exact-command", kind: "terminal" }]);
     expect(JSON.stringify(projected)).not.toContain("attempt-secret");
-    expect(JSON.stringify(projected)).not.toContain("terminal-coach-handoff-recorded");
+    expect(JSON.stringify(projected)).not.toContain("terminal-review-requested");
 
     await workspace.close();
     tempRoots.length = 0;
@@ -170,7 +175,7 @@ describe("v2 public session trace", () => {
       { path: "editor-artifacts/evaluator-editor.txt", content: "editor draft complete\n" },
       { path: "factory/.tmp/evaluator-command.txt", content: "command block complete\n" }
     ]);
-    expect(JSON.stringify(trace)).not.toContain("private-handoff-secret-for-gate-only-event");
+    expect(JSON.stringify(trace)).not.toContain("private-review-request-secret-for-gate-only-event");
 
     await workspace.close();
     tempRoots.length = 0;
