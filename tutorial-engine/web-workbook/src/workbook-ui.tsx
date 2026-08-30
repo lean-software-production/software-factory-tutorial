@@ -5,6 +5,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { Markdown } from "./markdown.js";
+import { PracticeFeedbackBar, type PracticeFeedbackTone } from "./practice-feedback-bar.js";
 import { lessonElementId } from "../../src/workbook/lesson-links.js";
 import { ActivityBand } from "./activity-band.js";
 import { TimelineThread } from "./timeline-thread.js";
@@ -288,22 +289,6 @@ function CompletionMarker({ completedAt }: { completedAt?: string }) {
     return () => clearInterval(timer);
   }, []);
   return <span className="continuation-completed">✓ <time dateTime={completedAt}>{completionAgeLabel(completedAt, now)}</time></span>;
-}
-
-type PracticeFeedbackTone = "status" | "feedback" | "updating" | "failure" | "success";
-
-function PracticeFeedbackBar({ tone, markdown, status, label, title, busy = false, className = "", retry }: { tone: PracticeFeedbackTone; markdown?: string; status?: string; label?: string; title?: string; busy?: boolean; className?: string; retry?: { label: string; onClick(): void } }) {
-  const classes = [`practice-feedback-bar is-${tone}`, busy ? "is-busy" : "", className].filter(Boolean).join(" ");
-  return <aside className={classes} aria-live="polite" aria-atomic="true" role="status">
-    {tone === "success" && <span className="success-check" aria-hidden="true">✓</span>}
-    <div className="practice-feedback-content">
-      {label && <p className="section-label">{label}</p>}
-      {title && <h3>{title}</h3>}
-      {markdown && <Markdown source="generated">{markdown}</Markdown>}
-      {status && <p className="practice-feedback-status">{busy && <span className="practice-feedback-spinner" aria-hidden="true" />}{status}</p>}
-    </div>
-    {retry && <button className="button secondary" onClick={retry.onClick}>{retry.label}</button>}
-  </aside>;
 }
 
 export function ContinuationPageBreak({ completedAt }: { completedAt?: string }) {

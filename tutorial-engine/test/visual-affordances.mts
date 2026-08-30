@@ -21,8 +21,11 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import React, { createElement, type ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { startWorkbookServer } from "../src/workbook/server.js";
 import type { TerminalPty } from "../src/workbook/terminal.js";
+import type { PracticeFeedbackTone } from "../web-workbook/src/practice-feedback-bar.js";
 import { QueuedMainTutor } from "./support/fake-tutors.js";
 
 const webRoot = resolve(import.meta.dirname, "../dist/web-workbook");
@@ -46,6 +49,256 @@ class EchoPty implements TerminalPty {
   onData(callback: (data: string) => void): void { this.#data = callback; }
   onExit(): void {}
 }
+
+type FeedbackSurface = "editor" | "terminal";
+type FeedbackViewport = { name: "desktop" | "narrow"; width: number; height: number };
+
+const FEEDBACK_VIEWPORTS: readonly FeedbackViewport[] = [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "narrow", width: 390, height: 900 },
+];
+const FEEDBACK_SURFACES: readonly FeedbackSurface[] = ["editor", "terminal"];
+const EXPECTED_FEEDBACK_STATES: Record<FeedbackSurface, readonly string[]> = {
+  editor: ["editor-reviewing", "editor-updating", "editor-feedback", "editor-temporary-failure", "editor-success"],
+  terminal: ["terminal-running", "terminal-checking", "terminal-feedback", "terminal-retryable-failure", "terminal-success"],
+};
+const EDITOR_RETAINED_FEEDBACK = "Add the acceptance marker and explain why that proves the change is complete.";
+const EDITOR_TEMPORARY_FAILURE = "Review is temporarily unavailable. Please retry after your connection recovers.";
+const TERMINAL_FEEDBACK = "Run the command again after fixing the failing assertion.";
+const TERMINAL_RETRYABLE_FAILURE = "Review is temporarily unavailable. You can retry the review without rerunning the command.";
+const VISUAL_EDITOR_PATH = "factory/answer.md";
+const TERMINAL_TRANSCRIPT = "$ npm test -- --runInBand\nPASS visual fixture\n";
+
+const noop = () => undefined;
+type PracticeFeedbackBarComponent = typeof import("../web-workbook/src/practice-feedback-bar.js").PracticeFeedbackBar;
+let practiceFeedbackBarComponent: PracticeFeedbackBarComponent | undefined;
+
+function feedbackBar(tone: PracticeFeedbackTone, options: { markdown?: string; status?: string; label?: string; title?: string; busy?: boolean; className: string; retry?: { label: string; onClick(): void } }): ReactNode {
+  if (!practiceFeedbackBarComponent) throw new Error("PracticeFeedbackBar was not loaded before rendering the visual state gallery.");
+  return createElement(practiceFeedbackBarComponent, { tone, ...options });
+}
+
+function editorTarget(): ReactNode {
+  return createElement("div", { className: "editor-target" }, createElement("span", null, "Target file"), createElement("code", null, VISUAL_EDITOR_PATH));
+}
+
+function editorSurface(): ReactNode {
+  return createElement("div", { className: "editor-surface", "aria-label": `Editor for ${VISUAL_EDITOR_PATH}` });
+}
+
+function editorLiveVisual(tone: PracticeFeedbackTone, options: { markdown?: string; status?: string; busy?: boolean }): ReactNode {
+  return createElement("div", { className: "work-block editor-practice is-active" },
+    editorTarget(),
+    createElement("div", { className: "editor-live-surface has-feedback" },
+      editorSurface(),
+      feedbackBar(tone, { ...options, className: "live-block-feedback editor-feedback-overlay" }),
+    ),
+  );
+}
+
+function editorSuccessVisual(): ReactNode {
+  return createElement("div", { className: "work-block editor-practice" },
+    editorTarget(),
+    feedbackBar("success", {
+      label: "Unlocked",
+      title: "Accepted revision unlocked the next step.",
+      markdown: "The latest accepted editor draft was written to the target file.",
+      className: "success-checkpoint editor-unlocked",
+    }),
+  );
+}
+
+function embeddedTerminalPanel(): ReactNode {
+  return createElement("div", { className: "embedded-terminal-panel" },
+    createElement("span", { className: "terminal-connection-status connected", "aria-label": "Terminal connected" }),
+    createElement("div", { className: "embedded-terminal", "aria-label": "Embedded terminal" }),
+  );
+}
+
+function terminalLiveVisual(tone: PracticeFeedbackTone, options: { markdown?: string; status?: string; busy?: boolean; retry?: { label: string; onClick(): void } }): ReactNode {
+  return createElement("div", { className: "work-block terminal is-active" },
+    createElement("div", { className: "terminal-live-surface has-feedback" },
+      embeddedTerminalPanel(),
+      feedbackBar(tone, { ...options, className: "live-block-feedback terminal-feedback-overlay" }),
+    ),
+  );
+}
+
+function frozenTerminal(): ReactNode {
+  return createElement("div", { className: "frozen-terminal", "aria-label": "Frozen terminal session" },
+    createElement("pre", { className: "frozen-terminal-output" }, TERMINAL_TRANSCRIPT),
+  );
+}
+
+function terminalSuccessVisual(): ReactNode {
+  return createElement("div", { className: "terminal-history", "aria-label": "Completed terminal output" },
+    createElement("div", { className: "terminal-completion-surface has-feedback" },
+      frozenTerminal(),
+      feedbackBar("success", { markdown: "Terminal accepted — the transcript proves the command passed.", className: "terminal-feedback-overlay terminal-history-complete" }),
+    ),
+  );
+}
+
+function feedbackCard(state: string, label: string, visual: ReactNode, welded = true): ReactNode {
+  return createElement("section", { key: state, className: "visual-feedback-card", "data-feedback-state": state, "data-feedback-welded": welded ? "true" : "false" },
+    createElement("p", { className: "visual-feedback-state-label" }, label),
+    visual,
+  );
+}
+
+function editorFeedbackCards(): ReactNode[] {
+  return [
+    feedbackCard("editor-reviewing", "Editor — reviewing latest revision", editorLiveVisual("status", { busy: true, status: "Reviewing your latest revision…" })),
+    feedbackCard("editor-updating", "Editor — retained feedback while updating", editorLiveVisual("updating", { busy: true, markdown: EDITOR_RETAINED_FEEDBACK, status: "Updating feedback…" })),
+    feedbackCard("editor-feedback", "Editor — actionable feedback", editorLiveVisual("feedback", { markdown: EDITOR_RETAINED_FEEDBACK })),
+    feedbackCard("editor-temporary-failure", "Editor — temporary review failure", editorLiveVisual("failure", { markdown: EDITOR_RETAINED_FEEDBACK, status: EDITOR_TEMPORARY_FAILURE })),
+    feedbackCard("editor-success", "Editor — accepted success", editorSuccessVisual(), false),
+  ];
+}
+
+function terminalFeedbackCards(): ReactNode[] {
+  return [
+    feedbackCard("terminal-running", "Terminal — command running", terminalLiveVisual("status", { busy: true, status: "Running…" })),
+    feedbackCard("terminal-checking", "Terminal — transcript checking", terminalLiveVisual("status", { busy: true, status: "Checking…" })),
+    feedbackCard("terminal-feedback", "Terminal — actionable feedback", terminalLiveVisual("feedback", { markdown: TERMINAL_FEEDBACK })),
+    feedbackCard("terminal-retryable-failure", "Terminal — retryable temporary failure", terminalLiveVisual("failure", { markdown: TERMINAL_RETRYABLE_FAILURE, retry: { label: "Retry review", onClick: noop } })),
+    feedbackCard("terminal-success", "Terminal — accepted success", terminalSuccessVisual()),
+  ];
+}
+
+function renderFeedbackGallery(surface: FeedbackSurface): string {
+  const cards = surface === "editor" ? editorFeedbackCards() : terminalFeedbackCards();
+  return renderToStaticMarkup(createElement("div", { className: "shell visual-feedback-gallery-shell" },
+    createElement("main", null,
+      createElement("article", { className: "page visual-feedback-gallery", "data-feedback-surface": surface },
+        createElement("header", null,
+          createElement("p", { className: "section-label" }, "Canonical visual state matrix"),
+          createElement("h1", null, `${surface === "editor" ? "Editor" : "Terminal"} welded feedback bars`),
+          createElement("p", { className: "visual-feedback-gallery-subtitle" }, "Bars are photographed directly; no feedback bar is masked."),
+        ),
+        createElement("div", { className: "visual-feedback-state-grid" }, cards),
+      ),
+    ),
+  ));
+}
+
+const FEEDBACK_GALLERY_STYLE = `
+body.visual-feedback-gallery-body {
+  background: var(--ground);
+}
+.visual-feedback-gallery-shell {
+  display: block;
+  max-width: none;
+  min-height: auto;
+  margin: 0;
+}
+.visual-feedback-gallery-shell main {
+  min-height: auto;
+  padding: 24px;
+  background-image: none;
+}
+.visual-feedback-gallery {
+  width: min(1040px, calc(100vw - 48px));
+  margin: 0 auto;
+  padding: 0;
+}
+.visual-feedback-gallery header {
+  margin-bottom: 16px;
+}
+.visual-feedback-gallery h1 {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font: 600 1.45rem/1.2 var(--font-display);
+}
+.visual-feedback-gallery-subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+.visual-feedback-state-grid {
+  display: grid;
+  gap: 16px;
+}
+@media (min-width: 900px) {
+  .visual-feedback-state-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.visual-feedback-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+}
+.visual-feedback-state-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+.visual-feedback-card .work-block {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+.visual-feedback-card .editor-target {
+  margin: 0 0 10px;
+}
+.visual-feedback-card .editor-surface {
+  min-height: 112px;
+  margin-top: 0;
+}
+.visual-feedback-card .editor-surface::before {
+  display: block;
+  padding: 14px;
+  color: var(--muted);
+  font: 0.82rem/1.55 var(--font-mono);
+  white-space: pre-wrap;
+  content: "A deterministic answer draft names the acceptance marker.";
+}
+.visual-feedback-card .embedded-terminal {
+  height: 112px;
+  min-height: 112px;
+}
+.visual-feedback-card .embedded-terminal::before {
+  display: block;
+  padding: 8px 10px;
+  color: #dbe9fb;
+  font: 0.82rem/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  content: "$ npm test\\A PASS visual fixture";
+}
+.visual-feedback-card .frozen-terminal-output {
+  min-height: 112px;
+}
+.visual-feedback-card .terminal-live-surface .practice-feedback-bar,
+.visual-feedback-card .terminal-completion-surface .practice-feedback-bar,
+.visual-feedback-card .editor-live-surface .practice-feedback-bar {
+  margin-bottom: 0;
+}
+.visual-feedback-card .editor-unlocked {
+  margin: 0;
+}
+@media (max-width: 840px) {
+  .visual-feedback-gallery-shell main {
+    padding: 18px;
+  }
+  .visual-feedback-gallery {
+    width: 100%;
+  }
+  .visual-feedback-card {
+    padding: 12px;
+  }
+}
+`;
 
 const failures: string[] = [];
 function check(condition: boolean, description: string): void {
@@ -109,6 +362,69 @@ async function approve(page: any, name: string, shot: Buffer): Promise<void> {
   else await accept();
 }
 
+async function showFeedbackGallery(page: any, surface: FeedbackSurface, viewport: FeedbackViewport): Promise<void> {
+  await page.setViewportSize({ width: viewport.width, height: viewport.height });
+  await page.evaluate((markup: string) => {
+    document.body.className = "visual-feedback-gallery-body";
+    document.body.innerHTML = markup;
+    window.scrollTo(0, 0);
+  }, renderFeedbackGallery(surface));
+  await page.evaluate(async () => { await document.fonts.ready; });
+  await page.waitForTimeout(80);
+}
+
+async function assertFeedbackGalleryCoverage(page: any, surface: FeedbackSurface, viewport: FeedbackViewport): Promise<void> {
+  const expectedStates = EXPECTED_FEEDBACK_STATES[surface];
+  const result = await page.evaluate(() => {
+    const details = [...document.querySelectorAll<HTMLElement>(".visual-feedback-card")].map((card) => {
+      const bar = card.querySelector<HTMLElement>(".practice-feedback-bar");
+      const workSurface = card.querySelector<HTMLElement>(".editor-surface, .embedded-terminal-panel, .frozen-terminal");
+      const barRect = bar?.getBoundingClientRect();
+      const surfaceRect = workSurface?.getBoundingClientRect();
+      return {
+        state: card.dataset.feedbackState ?? "",
+        welded: card.dataset.feedbackWelded !== "false",
+        hasBar: Boolean(bar && barRect && barRect.width > 0 && barRect.height > 0),
+        text: bar?.innerText.trim() ?? "",
+        gap: barRect && surfaceRect ? Math.round(barRect.top - surfaceRect.bottom) : null,
+        widthDelta: barRect && surfaceRect ? Math.round(barRect.width - surfaceRect.width) : null,
+        leftDelta: barRect && surfaceRect ? Math.round(barRect.left - surfaceRect.left) : null,
+      };
+    });
+    return { states: details.map((detail) => detail.state), details, viewportWidth: window.innerWidth };
+  });
+
+  expectClose(result.viewportWidth, viewport.width, 0, `${surface} feedback gallery ${viewport.name}: viewport width`);
+  for (const expected of expectedStates) {
+    check(result.states.includes(expected), `${surface} feedback gallery ${viewport.name}: missing state ${expected}`);
+  }
+  for (const detail of result.details) {
+    check(detail.hasBar, `${surface} feedback gallery ${viewport.name}/${detail.state}: feedback bar is not visible`);
+    check(detail.text.length > 0, `${surface} feedback gallery ${viewport.name}/${detail.state}: feedback bar has no learner-visible text`);
+    if (detail.welded) {
+      if (detail.gap === null || detail.widthDelta === null || detail.leftDelta === null) {
+        failures.push(`${surface} feedback gallery ${viewport.name}/${detail.state}: could not compare feedback bar with work surface`);
+      } else {
+        expectClose(detail.gap, 0, 1, `${surface} feedback gallery ${viewport.name}/${detail.state}: weld gap`);
+        expectClose(detail.widthDelta, 0, 1, `${surface} feedback gallery ${viewport.name}/${detail.state}: bar width versus surface`);
+        expectClose(detail.leftDelta, 0, 1, `${surface} feedback gallery ${viewport.name}/${detail.state}: bar left edge versus surface`);
+      }
+    }
+  }
+}
+
+async function validatePracticeFeedbackVisuals(page: any): Promise<void> {
+  await page.addStyleTag({ content: FEEDBACK_GALLERY_STYLE });
+  for (const viewport of FEEDBACK_VIEWPORTS) {
+    for (const surface of FEEDBACK_SURFACES) {
+      await showFeedbackGallery(page, surface, viewport);
+      await assertFeedbackGalleryCoverage(page, surface, viewport);
+      const gallery = page.locator(`.visual-feedback-gallery[data-feedback-surface="${surface}"]`);
+      await approve(page, `practice-feedback-${surface}-${viewport.name}`, await gallery.screenshot());
+    }
+  }
+}
+
 async function main(): Promise<void> {
   try { await readFile(resolve(webRoot, "index.html")); }
   catch { throw new Error("Build the workbook UI first: npm run --workspace=tutorial-engine build:web:workbook"); }
@@ -116,6 +432,13 @@ async function main(): Promise<void> {
   let playwright: { chromium: { launch(options?: unknown): Promise<any> } };
   try { playwright = await import(moduleName) as typeof playwright; }
   catch { throw new Error("Visual validation needs Playwright. Install it with `npm install --no-save -D playwright`, then `npx playwright install chromium`."); }
+
+  // The TSX runtime used by this Node-side visual harness compiles browser components with the
+  // classic React JSX global, while the production Vite build uses the automatic JSX runtime.
+  // Load the feedback component after installing that global so its Markdown dependency can render
+  // server-side without importing the terminal/editor packages that need a browser bundler.
+  (globalThis as typeof globalThis & { React: typeof React }).React = React;
+  practiceFeedbackBarComponent = (await import("../web-workbook/src/practice-feedback-bar.js")).PracticeFeedbackBar;
 
   // The embedded terminal refuses to start without a key. Nothing here reaches a model — the
   // tutors are fakes and the pty only echoes — so a placeholder is what the engine's own server
@@ -365,6 +688,13 @@ async function main(): Promise<void> {
       check(oneLine.overflowY !== "auto", `composer: expected no scrollbar at one line, measured overflowY ${oneLine.overflowY}`);
     }
     await approve(page, "composer-capped", await composer.screenshot());
+
+    // ---- Task 6 canonical states: the shared feedback bars themselves ------------------------
+    // These screenshots are intentionally separate from the band shots above: the old band
+    // approvals use masks for xterm/CodeMirror volatility and only captured two scroll positions.
+    // The gallery below photographs every relevant editor/terminal feedback state at desktop and
+    // narrow widths without masking the bars under test.
+    await validatePracticeFeedbackVisuals(page);
   } finally {
     await browser.close();
     await server.close();
@@ -377,7 +707,7 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  console.log("Visual affordance validation passed: reading-line promotion, activity band expansion, composer auto-resize.");
+  console.log("Visual affordance validation passed: reading-line promotion, activity band expansion, composer auto-resize, practice feedback bar states.");
 }
 
 main().catch((error) => { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; });
