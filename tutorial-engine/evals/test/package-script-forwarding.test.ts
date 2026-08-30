@@ -101,7 +101,7 @@ describe("evaluator package ownership", () => {
 
     expect(rootReadme).toContain("tutorial-engine/evals/reports/");
     expect(rootReadme).toContain("evals/workbook/reports/");
-    expect(rootReadme).toContain("temporary compatibility alias for eval:engine, not authored eval");
+    expect(rootReadme).toContain("temporary compatibility alias for `eval:engine`, not an authored eval");
     expect(rootReadme).toContain("`eval:workbook` is the authored-curriculum live runner");
 
     expect(rootEvalsReadme).toContain("[`../tutorial-engine/evals/`](../tutorial-engine/evals/) | `tutorial-engine` | Synthetic engine-mechanics live evals");
