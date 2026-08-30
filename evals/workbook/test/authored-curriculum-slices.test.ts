@@ -22,6 +22,27 @@ const twoLessonKeyConceptSlice: AuthoredCurriculumSliceSelection = {
   }]
 };
 
+const tetrisPrimerSlice: AuthoredCurriculumSliceSelection = {
+  parts: [{
+    id: "what-is-a-factory",
+    lessons: [{ id: "tetris" }]
+  }]
+};
+
+const exactTetrisSpec = `# Tetris
+
+Build a game of Tetris that runs in the terminal.
+
+Start it with:
+
+    npm start
+
+Keep the complete game display within 24 terminal rows, including the board, score, controls,
+borders, and game-over messages.
+
+You may install packages if they help you render or control the terminal display.
+`;
+
 class AuthoredSliceFakeTutor extends RecordingMainTutor {
   protected override defaultReply = "Public fake tutor reply.";
   protected override blockSummaryFor = (blockId: string) => `Public summary for ${blockId}.`;
@@ -88,6 +109,59 @@ function provenanceEntryFor(entries: readonly AuthoredSliceProvenanceEntry[], ki
 }
 
 describe("authored curriculum slice materialization", () => {
+  it("materializes the Tetris primer with its exact workspace fixture and practice blocks", async () => {
+    const workspace = await createAuthoredCurriculumSliceWorkspace({
+      tempParent: tmpdir(),
+      selection: tetrisPrimerSlice
+    });
+    tempRoots.push(workspace.repositoryRoot);
+
+    const loaded = await loadWorkbook(workspace.root);
+    expect(loaded.chapters.map((chapter) => chapter.id)).toEqual(["tetris"]);
+    expect(loaded.chapters[0]?.lesson.workspace).toBe("tetris");
+    expect(loaded.chapters[0]?.lesson.blocks.map((block) => ({
+      id: block.id,
+      type: block.type,
+      path: "path" in block ? block.path : undefined
+    }))).toEqual([
+      { id: "read-the-spec", type: "editor-practice", path: "spec.md" },
+      { id: "write-worker-prompt", type: "editor-practice", path: "prompt.md" },
+      { id: "write-the-loop", type: "editor-practice", path: "ralph.sh" },
+      { id: "run-the-factory", type: "terminal-practice", path: undefined }
+    ]);
+
+    expect(await readFile(resolve(workspace.root, "workspaces/tetris/spec.md"), "utf8"))
+      .toBe(exactTetrisSpec);
+    expect((await materializedCurriculumEntries(workspace.root))
+      .filter((entry) => entry.relativePath === "workspaces/tetris" || entry.relativePath.startsWith("workspaces/tetris/")))
+      .toEqual([
+        { kind: "directory", relativePath: "workspaces/tetris" },
+        { kind: "file", relativePath: "workspaces/tetris/spec.md" }
+      ]);
+    expect(workspace.provenance.files.find((entry) => entry.materializedRelativePath === "workspaces/tetris/spec.md"))
+      .toMatchObject({ exact: true, sourceRelativePath: "workspaces/tetris/spec.md" });
+
+    const workerPrompt = await readFile(
+      resolve(workspace.root, "lessons/tetris/blocks/write-worker-prompt.md"),
+      "utf8"
+    );
+    expect(workerPrompt).toMatch(/checks? must return on (?:their|its) own/i);
+    expect(workerPrompt).toMatch(/do not start the game/i);
+    expect(workerPrompt).toMatch(/non-interactive check/i);
+
+    const terminalBlock = await readFile(
+      resolve(workspace.root, "lessons/tetris/blocks/run-the-factory.md"),
+      "utf8"
+    );
+    for (const marker of expectedTetrisPassMarkers()) expect(terminalBlock).toContain(marker);
+    expect(terminalBlock).toMatch(/returned to the prompt/i);
+    expect(terminalBlock).not.toMatch(/playable|perfect/i);
+
+    await workspace.close();
+    await expect(stat(workspace.repositoryRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    tempRoots.length = 0;
+  });
+
   it("keeps authored-workbook evaluator ownership at the repository root without a public runner yet", async () => {
     const packageJson = JSON.parse(await readFile(resolve(import.meta.dirname, "../../../package.json"), "utf8")) as { scripts: Record<string, string> };
     const engineTsconfig = JSON.parse(await readFile(resolve(import.meta.dirname, "../../../tutorial-engine/evals/tsconfig.json"), "utf8")) as { include: string[] };
@@ -763,3 +837,10 @@ describe("authored curriculum slice materialization", () => {
     await expect(stat(workspace.repositoryRoot)).resolves.toBeDefined();
   });
 });
+
+function expectedTetrisPassMarkers(): string[] {
+  return [1, 2, 3, 4, 5].flatMap((pass) => [
+    `Pass ${pass}/5: starting`,
+    `Pass ${pass}/5: done`
+  ]);
+}

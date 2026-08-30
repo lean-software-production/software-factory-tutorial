@@ -12,7 +12,7 @@
  * - Part 2 refactor-line workspace and calculator are untouched
  */
 
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -49,13 +49,9 @@ describe("tetris primer workspace", () => {
     expect(content).toBe(EXACT_SPEC);
   });
 
-  it("has a clean fixture with only spec.md (no extra authored files)", async () => {
+  it("has a clean fixture with only spec.md (no hidden files or nested directories)", async () => {
     const fixturePath = resolve(TUTORIAL_ROOT, "workspaces/tetris");
-    const entries = await readdir(fixturePath, { withFileTypes: true });
-    const authoredFiles = entries
-      .filter((e) => e.isFile() && !e.name.startsWith("."))
-      .map((e) => e.name);
-    expect(authoredFiles).toEqual(["spec.md"]);
+    await expect(relativeFixtureEntries(fixturePath)).resolves.toEqual(["spec.md"]);
   });
 
   it("removes the your-first-factory workspace directory", async () => {
@@ -105,27 +101,31 @@ describe("tetris primer lesson blocks", () => {
     expect(blockContent).not.toMatch(/exactly two/i);
   });
 
-  it("has a terminal-practice block that accepts five-pass completion without requiring a playable game", async () => {
+  it("has a terminal-practice block that accepts bounded completion, not a playable game", async () => {
     const blockContent = await readFile(
       resolve(TUTORIAL_ROOT, "lessons/tetris/blocks/run-the-factory.md"),
       "utf8"
     );
     expect(blockContent).toContain("type: terminal-practice");
-    // Must check five passes ran
-    expect(blockContent).toMatch(/five|Pass 5\/5|Pass N\/5/i);
-    // Must not claim the game is complete/playable
-    expect(blockContent).not.toMatch(/playable/i);
-    // Must not require a complete Tetris implementation
+    for (const marker of expectedPassMarkers()) expect(blockContent).toContain(marker);
+    expect(blockContent).toMatch(/returned to the prompt/i);
+    // Must not require a playable or perfect Tetris implementation.
+    expect(blockContent).not.toMatch(/playable|perfect/i);
     expect(blockContent).not.toMatch(/complete.*tetris|tetris.*complete/i);
   });
 
-  it("has ralph.sh tutor guidance that checks Pass N/5 boundaries ran", async () => {
+  it("steers stuck workers away from interactive checks without speculating about stdin", async () => {
     const blockContent = await readFile(
-      resolve(TUTORIAL_ROOT, "lessons/tetris/blocks/run-the-factory.md"),
+      resolve(TUTORIAL_ROOT, "lessons/tetris/blocks/write-worker-prompt.md"),
       "utf8"
     );
-    // Tutor should accept when evidence shows all five passes ran and script returned
-    expect(blockContent).toMatch(/Pass.*5|five.*pass/i);
+    expect(blockContent).toMatch(/checks? must return on (?:their|its) own/i);
+    expect(blockContent).toMatch(/do not start the game/i);
+    expect(blockContent).toMatch(/interactive scaffold/i);
+    expect(blockContent).toMatch(/dev\/watch|watch\/dev|dev or watch/i);
+    expect(blockContent).toMatch(/non-interactive check/i);
+    expect(blockContent).toMatch(/mark.*task.*done.*plan\.md.*before.*commit/is);
+    expect(blockContent).toMatch(/no incomplete task.*stop.*empty commit/is);
   });
 });
 
@@ -137,9 +137,14 @@ describe("tetris lesson lesson.md", () => {
     expect(content).not.toContain("calculator");
   });
 
-  it("honestly states five-pass time and cost in the lesson body", async () => {
+  it("opens as a Tetris first-factory primer with honest time and cost", async () => {
     const content = await readFile(resolve(TUTORIAL_ROOT, "lessons/tetris/lesson.md"), "utf8");
+    expect(content).toMatch(/^# .*Tetris.*factory/im);
+    expect(content).not.toContain("# Your first factory");
+    expect(content).toMatch(/first taste|feel the loop/i);
     expect(content).toMatch(/five/i);
+    expect(content).toMatch(/ten to thirty minutes/i);
+    expect(content).toMatch(/costs? real money|few cents/i);
   });
 });
 
@@ -201,4 +206,24 @@ function parseFrontMatter(text: string): BlockFrontMatter | null {
     if (m) result[m[1]!] = m[2]!.trim();
   }
   return result as BlockFrontMatter;
+}
+
+async function relativeFixtureEntries(root: string): Promise<string[]> {
+  const found: string[] = [];
+  async function visit(directory: string, prefix = ""): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const relativePath = `${prefix}${entry.name}`;
+      found.push(entry.isDirectory() ? `${relativePath}/` : relativePath);
+      if (entry.isDirectory()) await visit(resolve(directory, entry.name), `${relativePath}/`);
+    }
+  }
+  await visit(root);
+  return found.sort();
+}
+
+function expectedPassMarkers(): string[] {
+  return [1, 2, 3, 4, 5].flatMap((pass) => [
+    `Pass ${pass}/5: starting`,
+    `Pass ${pass}/5: done`
+  ]);
 }
