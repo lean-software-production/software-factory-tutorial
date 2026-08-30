@@ -157,7 +157,16 @@ describe("WorkbookTimeline", () => {
 
     expect(record).toMatchObject({ type: "terminal-transcript-snapshotted", lessonId: "lesson-1", blockId: "lesson-1--terminal", transcript: "sanitized learner-visible output\n" });
     expect(JSON.stringify(record)).not.toMatch(/command|evidence|rubric|handoff|secret/i);
-    expect(await timeline.read()).toEqual([record]);
+
+    const emptyRecord = await timeline.append({
+      type: "terminal-transcript-snapshotted",
+      attemptId: "attempt-2",
+      lessonId: "lesson-1",
+      blockId: "lesson-1--terminal",
+      transcript: "",
+    });
+    expect(emptyRecord).toMatchObject({ type: "terminal-transcript-snapshotted", transcript: "" });
+    expect(await timeline.read()).toEqual([record, emptyRecord]);
   });
 
   it("rejects malformed or extra transcript and feedback lifecycle fields", async () => {

@@ -145,7 +145,7 @@ function terminalKey(block: ActiveObservedTerminalBlock): string { return `${blo
 /**
  * Browser terminal frames can include escape sequences and control bytes. Historical output is
  * rendered in a `<pre>`, not replayed into xterm, so retain only printable text and basic layout.
- * Commands, protocol markers, evidence references, and private tutor context are never included.
+ * Commands, protocol markers, inline private evidence, and private tutor context are never included.
  */
 export function publicTerminalTranscript(output: string): string {
   return output

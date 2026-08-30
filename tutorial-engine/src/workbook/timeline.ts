@@ -226,16 +226,18 @@ function normalizeTerminalLifecycleRecord(value: Record<string, unknown>, line: 
         failureId: assertStringField(value, "failureId", line),
         publicMessage: assertStringField(value, "publicMessage", line),
       };
-    case "terminal-transcript-snapshotted":
+    case "terminal-transcript-snapshotted": {
       assertExactKeys(value, line, ["type", "id", "sequence", "at", "attemptId", "lessonId", "blockId", "transcript"]);
+      if (typeof value.transcript !== "string") throw new Error(`Invalid workbook timeline record at line ${line}: transcript is required.`);
       return {
         ...metadata,
         type: "terminal-transcript-snapshotted",
         attemptId: assertStringField(value, "attemptId", line),
         lessonId: assertStringField(value, "lessonId", line),
         blockId: assertStringField(value, "blockId", line),
-        transcript: assertStringField(value, "transcript", line),
+        transcript: value.transcript,
       };
+    }
     case "terminal-feedback-recorded":
       assertExactKeys(value, line, ["type", "id", "sequence", "at", "attemptId", "text"]);
       return {
