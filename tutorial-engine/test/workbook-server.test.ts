@@ -699,6 +699,28 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("exposes a fresh seeded spec.md and accepts unchanged content through one review", async () => {
+    const dir = await fixture({ editorPath: "spec.md", firstLessonWorkspace: "scoped-lesson" });
+    const seededText = "seeded spec.md draft";
+    await writeFile(resolve(dir, "workspaces/scoped-lesson/spec.md"), seededText, "utf8");
+    const tutor = new FakeMainTutor({ outcome: "accepted", message: "Accepted editor answer." });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: tutor, practiceCoach: new FakePracticeCoach() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      const opened = await state(server.url);
+      expect(block(opened, "edit-answer")).toMatchObject({ revision: 0, draftText: seededText });
+
+      const draft = await postEditor(server.url, { blockId: "edit-answer", text: seededText });
+      expect(draft.status).toBe(202);
+      const accepted = await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "accepted", "seeded editor acceptance");
+      expect(tutor.reviews).toHaveLength(1);
+      expect(tutor.reviews[0]!.attempt.evidence).toMatchObject({ kind: "editor", text: seededText });
+      expect(await readFile(resolve(dir, "workspaces/scoped-lesson/spec.md"), "utf8")).toBe(seededText);
+      expect(block(accepted, "edit-answer")).toMatchObject({ revision: 1 });
+      await waitForPrivateTimeline(dir, (records) => records.filter((record) => record.type === "message" && record.blockId === "lesson--001-first--edit-answer" && record.presentation === "review" && record.text === "Accepted editor answer.").length === 1, "the seeded editor review record");
+    } finally { await server.close(); }
+  });
+
   it("starts a scoped terminal block in its lesson workspace", async () => {
     const dir = await fixture({ firstLessonWorkspace: "scoped-lesson" });
     await mkdir(resolve(dir, "workspaces/scoped-lesson"), { recursive: true });

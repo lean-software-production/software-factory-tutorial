@@ -119,20 +119,20 @@ describe("SessionWorkspaceManager", () => {
 
   it("materializes every declared workspace and skips generated/session/dependency/VCS state without copying authored workbook content", async () => {
     const contentRoot = await contentFixture();
-    await declareWorkspaceLesson(contentRoot, "002", "your-first-factory");
-    await write(join(contentRoot, "workspaces/your-first-factory/spec.md"), "starter spec\n");
+    await declareWorkspaceLesson(contentRoot, "002", "tetris");
+    await write(join(contentRoot, "workspaces/tetris/spec.md"), "starter spec\n");
     await write(join(contentRoot, "workspaces/unreferenced/file.txt"), "not copied\n");
     const manager = await SessionWorkspaceManager.create(contentRoot);
 
     const session = await manager.createSession({ id: "minimal" });
 
     expect((await readdir(session.sessionRoot)).sort()).toEqual([SESSION_WORKSPACES_DIRECTORY].sort());
-    expect(Object.keys(session.workspaceRoots).sort()).toEqual(["refactor-line", "your-first-factory"]);
+    expect(Object.keys(session.workspaceRoots).sort()).toEqual(["refactor-line", "tetris"]);
     const refactor = workspaceRootFor(session, "refactor-line");
     await expect(readdir(join(refactor, "calculator"))).resolves.not.toEqual(expect.arrayContaining(["node_modules", ".tmp", ".tutorial", ".git", ".DS_Store"]));
     await expect(readFile(join(refactor, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
     await expect(readFile(join(refactor, "factory/refactor.md"), "utf8")).resolves.toBe("factory seed\n");
-    await expect(readFile(join(workspaceRootFor(session, "your-first-factory"), "spec.md"), "utf8")).resolves.toBe("starter spec\n");
+    await expect(readFile(join(workspaceRootFor(session, "tetris"), "spec.md"), "utf8")).resolves.toBe("starter spec\n");
     await expect(lstat(join(session.workspacesRoot, "unreferenced"))).rejects.toThrow();
     for (const missing of ["README.md", "workbook.md", "docs", "lessons"]) {
       await expect(lstat(join(refactor, missing))).rejects.toThrow();
@@ -191,14 +191,14 @@ describe("SessionWorkspaceManager", () => {
 
   it("materializes declared workspace templates as independent clean Git repositories", async () => {
     const contentRoot = await contentFixture();
-    await declareWorkspaceLesson(contentRoot, "002", "your-first-factory");
-    await write(join(contentRoot, "workspaces/your-first-factory/spec.md"), "template spec\n");
+    await declareWorkspaceLesson(contentRoot, "002", "tetris");
+    await write(join(contentRoot, "workspaces/tetris/spec.md"), "template spec\n");
 
     const session = await (await SessionWorkspaceManager.create(contentRoot)).createSession({ id: "git-ready" });
     const refactor = workspaceRootFor(session, "refactor-line");
-    const firstFactory = workspaceRootFor(session, "your-first-factory");
+    const tetrisWorkspace = workspaceRootFor(session, "tetris");
 
-    for (const [id, root] of [["refactor-line", refactor], ["your-first-factory", firstFactory]] as const) {
+    for (const [id, root] of [["refactor-line", refactor], ["tetris", tetrisWorkspace]] as const) {
       expect(await git(root, "rev-parse", "--show-toplevel")).toBe(root);
       expect(await git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
       expect(await git(root, "log", "--oneline", "-1")).toMatch(new RegExp(`Materialize tutorial workspace ${id}`));
@@ -358,8 +358,8 @@ describe("SessionWorkspaceManager", () => {
 
   it("materializes trusted runtime provision mount targets as empty ignored directories in each live workspace", async () => {
     const contentRoot = await contentFixture();
-    await declareWorkspaceLesson(contentRoot, "002", "your-first-factory");
-    await mkdir(join(contentRoot, "workspaces/your-first-factory"), { recursive: true });
+    await declareWorkspaceLesson(contentRoot, "002", "tetris");
+    await mkdir(join(contentRoot, "workspaces/tetris"), { recursive: true });
     const runtimeSource = await mkdtemp(join(tmpdir(), "session-runtime-source-")); roots.push(runtimeSource);
     await write(join(runtimeSource, "tool.txt"), "host runtime source\n");
 
