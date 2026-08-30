@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { StrictMode, act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -79,6 +80,8 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
 import { AcceptanceConfetti, App, BlockView, ContinuationPageBreak, LessonRail, TerminalHistory, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
+
+const stylesCss = readFileSync(new URL("../web-workbook/src/styles.css", import.meta.url), "utf8");
 
 const progress: Progress = {
   activeLessonId: "part/lesson-one",
@@ -876,6 +879,52 @@ describe("workbook lesson UI", () => {
     expect(markup).not.toContain("Review");
   });
 
+  it("uses the shared welded practice feedback bar for editor running, feedback, update, failure, and success states", async () => {
+    const reviewingMarkup = html(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ editorStatus: "reviewing", checkpoint: { status: "reviewing", evidence: { kind: "editor", text: "draft" } } } as any),
+      refresh: vi.fn()
+    }));
+    expect(reviewingMarkup).toContain("practice-feedback-bar is-status is-busy");
+    expect(reviewingMarkup).toContain("practice-feedback-spinner");
+    expect(reviewingMarkup).toContain("Reviewing your latest revision…");
+
+    const feedbackMarkup = html(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ editorStatus: "feedback", checkpoint: { status: "feedback", feedback: "Add the acceptance marker.", evidence: { kind: "editor", text: "draft" } } } as any),
+      refresh: vi.fn()
+    }));
+    expect(feedbackMarkup).toContain("practice-feedback-bar is-feedback");
+    expect(feedbackMarkup).toContain("Add the acceptance marker.");
+    expect(feedbackMarkup).not.toContain("practice-feedback-spinner");
+
+    const container = await mount(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ revision: 1, draftText: "first draft", editorStatus: "feedback", checkpoint: { status: "feedback", feedback: "Keep the old actionable feedback.", evidence: { kind: "editor", text: "first draft" } } } as any),
+      refresh: vi.fn()
+    }));
+    await act(async () => {
+      mountedRoot!.render(createElement(BlockView, {
+        block: editorBlock,
+        progress: activeEditorProgress({ revision: 2, draftText: "second draft", editorStatus: "reviewing", checkpoint: { status: "reviewing", evidence: { kind: "editor", text: "second draft" } } } as any),
+        refresh: vi.fn()
+      }));
+    });
+    const updatingBar = container.querySelector(".practice-feedback-bar.is-updating")!;
+    expect(updatingBar.textContent).toContain("Keep the old actionable feedback.");
+    expect(updatingBar.textContent).toContain("Updating feedback…");
+    expect(updatingBar.querySelector(".practice-feedback-spinner")?.getAttribute("aria-hidden")).toBe("true");
+
+    await act(async () => {
+      mountedRoot!.render(createElement(BlockView, {
+        block: editorBlock,
+        progress: activeEditorProgress({ active: false, completed: true, editorStatus: "unlocked", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted" } } } as any),
+        refresh: vi.fn()
+      }));
+    });
+    expect(container.querySelector(".practice-feedback-bar.is-success")?.textContent).toContain("Editor accepted.");
+  });
+
   it("shows the checkpoint feedback once, and not as a conversation message", () => {
     // Every review is logged, but a practice block displays only its latest feedback, beside the
     // work surface. It reaches the block through the checkpoint alone, so a second render site
@@ -911,7 +960,7 @@ describe("workbook lesson UI", () => {
 
     expect(container.textContent).toContain(feedback);
     expect(container.textContent).toContain("Updating feedback…");
-    expect(container.querySelector(".editor-updating-spinner")).not.toBeNull();
+    expect(container.querySelector(".practice-feedback-spinner")).not.toBeNull();
     expect(container.textContent).not.toContain("Reviewing your latest revision…");
   });
 
@@ -966,7 +1015,8 @@ describe("workbook lesson UI", () => {
     expect(completedMarkup).toContain("Accepted revision unlocked the next step.");
     expect(completedMarkup).toContain("The latest accepted editor draft was written to the target file.");
     expect(completedMarkup).not.toContain("editor-surface");
-    expect(completedMarkup).not.toContain("role=\"status\"");
+    expect(completedMarkup).toContain("practice-feedback-bar is-success");
+    expect(completedMarkup).toContain("role=\"status\"");
     expect(completedMarkup).not.toMatch(/Editing —|Reviewing your latest revision/);
   });
 
@@ -1208,9 +1258,10 @@ describe("workbook lesson UI", () => {
     editor.textContent = "second draft";
     await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); vi.advanceTimersByTime(750); await Promise.resolve(); await Promise.resolve(); });
 
-    expect(container.textContent).toContain("Old actionable feedback.");
-    expect(container.textContent).toContain("Network unavailable.");
-    expect(container.textContent).toContain("retry");
+    const failureBar = container.querySelector(".practice-feedback-bar.is-failure")!;
+    expect(failureBar.textContent).toContain("Old actionable feedback.");
+    expect(failureBar.textContent).toContain("Network unavailable.");
+    expect(failureBar.textContent).toContain("retry");
     expect(refresh).not.toHaveBeenCalled();
   });
 
@@ -1308,6 +1359,47 @@ describe("workbook lesson UI", () => {
     const clueOnlyBlock = { ...lesson.blocks[1]!, markdown: "Try the command you just edited, then compare its output." };
     const withoutCommand = html(createElement(BlockView, { block: clueOnlyBlock, progress: activeTerminalProgress, refresh: vi.fn() }));
     expect(withoutCommand).toContain("terminal-connection-status");
+  });
+
+  it("uses the shared welded practice feedback bar for terminal running, checking, feedback, retry, and success states", () => {
+    const terminalBlock = lesson.blocks[1]!;
+    const runningMarkup = html(createElement(BlockView, { block: terminalBlock, progress: activeBlockProgress(terminalBlock, { terminal: { phase: "running" } } as any), refresh: vi.fn() }));
+    expect(runningMarkup).toContain("practice-feedback-bar is-status is-busy");
+    expect(runningMarkup).toContain("practice-feedback-spinner");
+    expect(runningMarkup).toContain("Running…");
+    expect(runningMarkup).not.toContain("terminal-running-spinner");
+
+    const checkingMarkup = html(createElement(BlockView, { block: terminalBlock, progress: activeBlockProgress(terminalBlock, { terminal: { phase: "checking" } } as any), refresh: vi.fn() }));
+    expect(checkingMarkup).toContain("practice-feedback-bar is-status is-busy");
+    expect(checkingMarkup).toContain("Checking…");
+
+    const retry = vi.fn(async () => undefined);
+    const retryMarkup = html(createElement(BlockView, { block: terminalBlock, progress: activeBlockProgress(terminalBlock, { terminal: { phase: "feedback", message: "Review is temporarily unavailable.", retryFailureId: "failure-1" } } as any), refresh: vi.fn(), onRetry: retry }));
+    expect(retryMarkup).toContain("practice-feedback-bar is-failure");
+    expect(retryMarkup).toContain("Review is temporarily unavailable.");
+    expect(retryMarkup).toContain("Retry review");
+
+    const successMarkup = html(createElement(TerminalHistory, {
+      state: activeBlockProgress(terminalBlock, { terminal: { phase: "complete", message: "Terminal accepted." }, terminalSnapshot: { transcript: "$ npm test\nPASS" } } as any).blocks[0]
+    }));
+    expect(successMarkup).toContain("terminal-completion-surface");
+    expect(successMarkup).toContain("practice-feedback-bar is-success");
+    expect(successMarkup).toContain("Terminal accepted.");
+  });
+
+  it("welds the shared practice feedback bar to editor, terminal, and narrow activity layouts in CSS", () => {
+    expect(stylesCss).toContain(".practice-feedback-bar");
+    expect(stylesCss).toContain(".terminal-live-surface.has-feedback .embedded-terminal-panel");
+    expect(stylesCss).toContain("border-bottom: 0");
+    expect(stylesCss).toContain("border-radius: 9px 9px 0 0");
+    expect(stylesCss).toContain(".editor-live-surface.has-feedback .editor-surface");
+    expect(stylesCss).toContain(".terminal-live-surface .practice-feedback-bar");
+    expect(stylesCss).toContain("width: 100%");
+    expect(stylesCss).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(stylesCss).toContain(".practice-feedback-spinner");
+    expect(stylesCss).not.toContain("terminal-feedback-overlay::before");
+    expect(stylesCss).not.toContain("width: fit-content; max-width: min(620px");
+    expect(stylesCss).not.toContain("margin: 12px 0 12px auto");
   });
 
   it("renders terminal feedback as Markdown for inline code and fenced shell blocks", () => {
@@ -2396,11 +2488,11 @@ describe("workbook lesson UI", () => {
     expect(container.textContent).toContain("Running…");
     expect(container.textContent).not.toContain(oldFeedback.message);
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
-    expect(container.querySelector(".terminal-running-spinner")?.getAttribute("aria-hidden")).toBe("true");
+    expect(container.querySelector(".practice-feedback-spinner")?.getAttribute("aria-hidden")).toBe("true");
 
     await act(async () => { mountedRoot!.render(render({ phase: "checking" })); });
     expect(container.textContent).toContain("Checking…");
-    expect(container.querySelector(".terminal-running-spinner")).toBeNull();
+    expect(container.querySelector(".practice-feedback-spinner")).not.toBeNull();
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
   });
 

@@ -290,6 +290,22 @@ function CompletionMarker({ completedAt }: { completedAt?: string }) {
   return <span className="continuation-completed">✓ <time dateTime={completedAt}>{completionAgeLabel(completedAt, now)}</time></span>;
 }
 
+type PracticeFeedbackTone = "status" | "feedback" | "updating" | "failure" | "success";
+
+function PracticeFeedbackBar({ tone, markdown, status, label, title, busy = false, className = "", retry }: { tone: PracticeFeedbackTone; markdown?: string; status?: string; label?: string; title?: string; busy?: boolean; className?: string; retry?: { label: string; onClick(): void } }) {
+  const classes = [`practice-feedback-bar is-${tone}`, busy ? "is-busy" : "", className].filter(Boolean).join(" ");
+  return <aside className={classes} aria-live="polite" aria-atomic="true" role="status">
+    {tone === "success" && <span className="success-check" aria-hidden="true">✓</span>}
+    <div className="practice-feedback-content">
+      {label && <p className="section-label">{label}</p>}
+      {title && <h3>{title}</h3>}
+      {markdown && <Markdown source="generated">{markdown}</Markdown>}
+      {status && <p className="practice-feedback-status">{busy && <span className="practice-feedback-spinner" aria-hidden="true" />}{status}</p>}
+    </div>
+    {retry && <button className="button secondary" onClick={retry.onClick}>{retry.label}</button>}
+  </aside>;
+}
+
 export function ContinuationPageBreak({ completedAt }: { completedAt?: string }) {
   return <div className="continuation-controls"><CompletionMarker completedAt={completedAt} /><div className="continuation-page-break" aria-hidden="true" /></div>;
 }
@@ -312,9 +328,12 @@ function initialTerminalDisplay(state: BlockProgress | undefined): TerminalCoach
 
 export function TerminalHistory({ state }: { state: BlockProgress | undefined }) {
   if (!state?.terminalSnapshot) return null;
+  const terminalSuccess = state.terminal?.phase === "complete" ? state.terminal.message : undefined;
   return <div className="terminal-history" aria-label="Completed terminal output">
-    <FrozenTerminal text={state.terminalSnapshot.transcript} />
-    {state.terminal?.phase === "complete" && <aside className="terminal-history-complete"><Markdown source="generated">{state.terminal.message}</Markdown></aside>}
+    <div className={terminalSuccess ? "terminal-completion-surface has-feedback" : undefined}>
+      <FrozenTerminal text={state.terminalSnapshot.transcript} />
+      {terminalSuccess && <PracticeFeedbackBar tone="success" markdown={terminalSuccess} className="terminal-feedback-overlay terminal-history-complete" />}
+    </div>
   </div>;
 }
 
@@ -333,9 +352,11 @@ function TerminalBlock({ block, state, onRetry, onTerminalInsertionChange }: { b
   const preloading = Boolean(state?.ready && !state.active && !state.completed);
   const text = terminalError ?? (display.phase === "idle" ? undefined : display.text);
   const retryFailureId = display.phase === "feedback" ? display.retryFailureId : undefined;
+  const terminalBusy = display.phase === "running" || display.phase === "checking";
+  const terminalTone: PracticeFeedbackTone = terminalError || retryFailureId ? "failure" : display.phase === "feedback" ? "feedback" : "status";
   // Exactly one in-place learner-facing node represents status, feedback, completion, or a
   // transport error. It is never moved into the activity/timeline portal.
-  const displayPanel = text ? <aside className={`live-block-feedback terminal-feedback-overlay${display.phase === "running" ? " running" : ""}`} aria-live="polite" role="status">{display.phase === "running" && <span className="terminal-running-spinner" aria-hidden="true" />}<Markdown source="generated">{text}</Markdown>{retryFailureId && <button className="button secondary" onClick={() => void onRetry(retryFailureId)}>Retry review</button>}</aside> : null;
+  const displayPanel = text ? <PracticeFeedbackBar tone={terminalTone} busy={terminalBusy} status={terminalBusy ? text : undefined} markdown={terminalBusy ? undefined : text} className="live-block-feedback terminal-feedback-overlay" retry={retryFailureId ? { label: "Retry review", onClick: () => void onRetry(retryFailureId) } : undefined} /> : null;
   return <div className={`work-block terminal ${state?.active ? "is-active" : ""}`}>
     {showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
       <EmbeddedTerminal command={command} active={Boolean(state?.active)} onError={setTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} />
@@ -469,18 +490,15 @@ function EditorPracticeBlockView({ block, state, refresh, onLocalRevision }: { b
   const liveFeedback = showingRetainedFeedback ? checkpointFeedback ?? retainedFeedback : undefined;
   const reviewNotice = localError ?? state?.checkpoint?.reviewNotice ?? (liveFeedback && state?.checkpoint?.status === "reviewing" ? "Updating feedback…" : undefined);
   const liveStatus = liveFeedback ? reviewNotice : editorStatusText(state, completed);
+  const editorBusy = state?.checkpoint?.status === "reviewing";
+  const editorTone: PracticeFeedbackTone = localError ? "failure" : editorBusy && liveFeedback ? "updating" : liveFeedback ? "feedback" : "status";
   return <div className={`work-block editor-practice ${state?.active ? "is-active" : ""}`}>
     <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
     {canEdit && <div className={`editor-live-surface${liveFeedback || liveStatus ? " has-feedback" : ""}`}>
       <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} />
-      {(liveFeedback || liveStatus) && <aside className={`live-block-feedback editor-feedback-overlay${state?.checkpoint?.status === "reviewing" && liveFeedback ? " updating" : ""}`} aria-live="polite">
-        {liveFeedback && <Markdown source="generated">{liveFeedback}</Markdown>}
-        {liveStatus && <p className="editor-review-status">{state?.checkpoint?.status === "reviewing" && liveFeedback && <span className="editor-updating-spinner" aria-hidden="true" />}{liveStatus}</p>}
-      </aside>}
+      {(liveFeedback || liveStatus) && <PracticeFeedbackBar tone={editorTone} busy={editorBusy} markdown={liveFeedback} status={liveStatus} className="live-block-feedback editor-feedback-overlay" />}
     </div>}
-    {completed ? <aside className="success-checkpoint editor-unlocked" aria-live="polite">
-      <span className="success-check" aria-hidden="true">✓</span><div><p className="section-label">Unlocked</p><h3>Accepted revision unlocked the next step.</h3><p>{state?.checkpoint?.successMessage || "The latest accepted editor draft was written to the target file."}</p></div>
-    </aside> : !canEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
+    {completed ? <PracticeFeedbackBar tone="success" label="Unlocked" title="Accepted revision unlocked the next step." markdown={state?.checkpoint?.successMessage || "The latest accepted editor draft was written to the target file."} className="success-checkpoint editor-unlocked" /> : !canEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
   </div>;
 }
 

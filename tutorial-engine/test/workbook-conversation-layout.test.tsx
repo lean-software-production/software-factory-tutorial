@@ -105,29 +105,21 @@ describe("workbook fixed conversation layout", () => {
     expect(workbookStyles).not.toContain(badCascadeSelector);
   });
 
-  it("visually attaches terminal feedback to the terminal bottom instead of overlaying output", () => {
-    const terminalSurface = declarationsFor(".terminal-live-surface");
+  it("visually welds terminal feedback to the terminal bottom instead of overlaying output", () => {
     const terminalBase = declarationsFor(".embedded-terminal-panel");
-    const feedbackPanel = declarationsFor(".terminal-feedback-overlay");
-    const feedbackMarkdownBody = declarationsFor(".live-block-feedback .markdown p, .live-block-feedback .markdown ul, .live-block-feedback .markdown ol");
-    const feedbackMarkdownTail = declarationsFor(".live-block-feedback .markdown > :last-child");
+    const terminalWithFeedback = declarationsFor(".terminal-live-surface.has-feedback .embedded-terminal-panel");
+    const feedbackPanel = declarationsFor(".terminal-live-surface .practice-feedback-bar");
 
-    expect(terminalSurface).toContain("position: relative");
+    expect(workbookStyles).toMatch(/\.terminal-live-surface,\s*\.terminal-completion-surface,\s*\.editor-live-surface\s*\{[^}]*position:\s*relative/);
     expect(terminalBase).toContain("margin: 4px 0 12px");
-    expect(terminalBase).toContain("border-radius: 9px");
-    // Ensure no terminal feedback-state override selectors set margin-bottom: 0, border-bottom: 0, or border-radius: 9px 9px 0 0
-    const terminalFeedbackOverridePattern = /\.terminal-live-surface\.has-feedback[^{]*\.embedded-terminal-panel[^{]*\{[^}]*\}/g;
-    const terminalFeedbackMatches = [...workbookStyles.matchAll(terminalFeedbackOverridePattern)];
-    terminalFeedbackMatches.forEach(match => {
-      const declarations = match[0];
-      expect(declarations).not.toContain("margin-bottom: 0");
-      expect(declarations).not.toContain("border-bottom: 0");
-      expect(declarations).not.toContain("border-radius: 9px 9px 0 0");
-    });
+    expect(terminalBase).toContain("border-radius: var(--practice-surface-radius)");
+    expect(terminalWithFeedback).toContain("margin-bottom: 0");
+    expect(terminalWithFeedback).toContain("border-bottom: 0");
+    expect(terminalWithFeedback).toContain("border-radius: 9px 9px 0 0");
     expect(feedbackPanel).toContain("margin: 0 0 12px");
-    expect(feedbackPanel).toContain("border-radius: 9px");
-    expect(feedbackMarkdownBody).toContain("font: inherit");
-    expect(feedbackMarkdownTail).toContain("margin-bottom: 0");
+    expect(feedbackPanel).toContain("border-radius: 0 0 var(--practice-surface-radius) var(--practice-surface-radius)");
+    expect(workbookStyles).toMatch(/\.practice-feedback-bar \.markdown p,\s*\.practice-feedback-bar \.markdown ul,\s*\.practice-feedback-bar \.markdown ol\s*\{[^}]*font:\s*inherit/);
+    expect(workbookStyles).toMatch(/\.practice-feedback-bar \.markdown > :last-child\s*\{[^}]*margin-bottom:\s*0/);
     expect(feedbackPanel).not.toContain("position: absolute");
     expect(feedbackPanel).not.toContain("bottom:");
     expect(feedbackPanel).not.toContain("left:");
@@ -137,34 +129,28 @@ describe("workbook fixed conversation layout", () => {
     expect(feedbackPanel).not.toContain("blur");
   });
 
-  it("styles live terminal coaching as a compact right-aligned tip", () => {
-    const liveSurfaceRule = declarationsFor(".terminal-live-surface .terminal-feedback-overlay");
+  it("styles live terminal feedback as a full-width welded bar, not a right-aligned bubble", () => {
+    const liveSurfaceRule = declarationsFor(".terminal-live-surface .practice-feedback-bar");
     const liveSurfaceTailRule = declarationsFor(".terminal-live-surface .terminal-feedback-overlay::before");
 
-    expect(liveSurfaceRule).toContain("width: fit-content");
-    expect(liveSurfaceRule).toContain("max-width: min(620px, calc(100% - 24px))");
-    expect(liveSurfaceRule).toContain("margin: 12px 0 12px auto");
-    expect(liveSurfaceRule).toContain("border-radius: 12px 12px 4px 12px");
-    expect(liveSurfaceTailRule).toContain("content: \"\"");
-    expect(liveSurfaceTailRule).toContain("top: -7px");
-    expect(liveSurfaceTailRule).toContain("transform: rotate(45deg)");
-    expect(liveSurfaceTailRule).toContain("width: 12px");
-    expect(liveSurfaceTailRule).toContain("height: 12px");
-    expect(liveSurfaceTailRule).toContain("right: 18px");
-    expect(liveSurfaceTailRule).toContain("background: rgb(234 241 253 / .96)");
-    expect(liveSurfaceTailRule).toMatch(/border\s*:/); // Guard that a border is declared
+    expect(liveSurfaceRule).toContain("width: 100%");
+    expect(liveSurfaceRule).toContain("margin: 0 0 12px");
+    expect(liveSurfaceRule).toContain("border-radius: 0 0 var(--practice-surface-radius) var(--practice-surface-radius)");
+    expect(liveSurfaceRule).not.toContain("width: fit-content");
+    expect(liveSurfaceRule).not.toContain("margin: 12px 0 12px auto");
+    expect(liveSurfaceRule).not.toContain("max-width: min(620px");
+    expect(liveSurfaceTailRule).toBe("");
   });
 
   it("attaches editor feedback to the editor bottom the same way the terminal does", () => {
-    const editorSurface = declarationsFor(".editor-live-surface");
     const editorWithFeedback = declarationsFor(".editor-live-surface.has-feedback .editor-surface");
-    const feedbackPanel = declarationsFor(".editor-feedback-overlay");
+    const feedbackPanel = declarationsFor(".editor-live-surface .practice-feedback-bar");
 
-    expect(editorSurface).toContain("position: relative");
+    expect(workbookStyles).toMatch(/\.terminal-live-surface,\s*\.terminal-completion-surface,\s*\.editor-live-surface\s*\{[^}]*position:\s*relative/);
     expect(editorWithFeedback).toContain("border-bottom: 0");
     expect(editorWithFeedback).toContain("border-radius: 9px 9px 0 0");
     expect(feedbackPanel).toContain("margin: 0 0 12px");
-    expect(feedbackPanel).toContain("border-radius: 0 0 9px 9px");
+    expect(feedbackPanel).toContain("border-radius: 0 0 var(--practice-surface-radius) var(--practice-surface-radius)");
     // The green advice palette means accepted; feedback asks for a revision, so both practice
     // blocks use the same informational treatment.
     expect(feedbackPanel).not.toContain("var(--green-pale)");

@@ -83,7 +83,7 @@ describe("ActivityBand stability", () => {
     expect(terminalStyles).toMatch(/\.current-activity-band\[data-activity-type="terminal-practice"\]\s*>\s*\.work-block\s*\{[^}]*transition:\s*none;/);
     expect(workbookStyles).toMatch(/\.current-activity-band\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;/);
     expect(workbookStyles).toMatch(/\.current-activity-band\s*\{[^}]*top:\s*var\(--activity-top\);/);
-    expect(workbookStyles).toMatch(/\.current-activity-band\s*>\s*\.work-block\s*\{[^}]*left:\s*var\(--activity-left-offset\);[^}]*width:\s*var\(--activity-width\);[^}]*transition:\s*left 80ms linear, width 80ms linear;/);
+    expect(workbookStyles).toMatch(/\.current-activity-band\s*>\s*\.work-block\s*\{[^}]*left:\s*var\(--activity-left-offset\);[^}]*width:\s*var\(--activity-width\);[^}]*transition:\s*left 80ms linear,\s*width 80ms linear;/);
   });
 
   it("does not auto-focus terminal practice but keeps editor auto-focus", async () => {
