@@ -156,6 +156,32 @@ describe("authored workbook public eval trace projection", () => {
       artifacts: [],
       internalEvents: [{ type: "lesson_jump_started", lessonId: "mixed-secret" }]
     })).toThrow(/lesson_jump_started/);
+    expect(() => copyAuthoredWorkbookEvalTrace({
+      events: [{ type: "lesson_jump_started", lessonId: "top-level-secret" }]
+    })).toThrow(/lesson_jump_started found in events/);
+    expect(() => copyAuthoredWorkbookEvalTrace({
+      scenarioId: "mixed-events-copy",
+      publicStates: [],
+      terminalTranscript: [],
+      reflections: [],
+      editors: [],
+      progressionEvents: [],
+      artifacts: [],
+      events: [{ type: "lesson_jump_started", lessonId: "mixed-top-level-secret" }]
+    })).toThrow(/lesson_jump_started found in events/);
+    const copied = copyAuthoredWorkbookEvalTrace({
+      scenarioId: "copied-source",
+      publicStates: [],
+      terminalTranscript: [],
+      reflections: [],
+      editors: [],
+      progressionEvents: [],
+      artifacts: []
+    });
+    expect(() => copyAuthoredWorkbookEvalTrace({
+      ...copied,
+      events: [{ type: "lesson_jump_started", lessonId: "copied-top-level-secret" }]
+    })).toThrow(/lesson_jump_started found in events/);
   });
 
   it("keeps raw workbook events only in memory and projects progression facts by explicit allowlist", () => {
@@ -253,7 +279,10 @@ describe("authored workbook public eval trace projection", () => {
     await mkdir(resolve(root, "factory/.tmp"), { recursive: true });
     await writeFile(resolve(root, "public.txt"), "public artifact\n", "utf8");
     await writeFile(resolve(root, "large.txt"), "x".repeat(12), "utf8");
-    await writeFile(resolve(root, "factory/.tmp/events"), "private events secret\n", "utf8");
+    await mkdir(resolve(root, "factory/.tmp/events"), { recursive: true });
+    await writeFile(resolve(root, "workbook/events.jsonl"), "private workbook event secret\n", "utf8").catch(async () => { await mkdir(resolve(root, "workbook"), { recursive: true }); await writeFile(resolve(root, "workbook/events.jsonl"), "private workbook event secret\n", "utf8"); });
+    await writeFile(resolve(root, "factory/.tmp/events/1-do.jsonl"), "private do event secret\n", "utf8");
+    await writeFile(resolve(root, "factory/.tmp/events/readme.txt"), "private events dir secret\n", "utf8");
     await writeFile(resolve(root, "factory/.tmp/findings.json"), "private findings secret\n", "utf8");
     await writeFile(resolve(root, "factory/.tmp/evidence.log"), "private evidence secret\n", "utf8");
     await writeFile(resolve(root, "factory/.tmp/worker.log"), "private log secret\n", "utf8");
@@ -271,12 +300,12 @@ describe("authored workbook public eval trace projection", () => {
     const snapshots = await snapshotAuthoredWorkbookEvalArtifacts(root, { files: ["public.txt"], maxFileBytes: 1024, maxTotalBytes: 1024, maxFiles: 1 });
     expect(snapshots).toEqual([{ path: "public.txt", content: "public artifact\n" }]);
     const serialized = JSON.stringify(snapshots);
-    for (const secret of ["private events secret", "private findings secret", "private evidence secret", "private log secret", "private commit message secret", "private rpc steering secret"]) {
+    for (const secret of ["private workbook event secret", "private do event secret", "private events dir secret", "private findings secret", "private evidence secret", "private log secret", "private commit message secret", "private rpc steering secret"]) {
       expect(serialized).not.toContain(secret);
     }
 
-    await expect(snapshotAuthoredWorkbookEvalArtifacts(root, { files: ["factory/.tmp/events"], maxFileBytes: 1024, maxTotalBytes: 1024, maxFiles: 1 })).resolves.toEqual([
-      { path: "factory/.tmp/events", content: "private events secret\n" }
-    ]);
+    for (const path of ["workbook/events.jsonl", "nested/workbook/events.jsonl", "Workbook/Events.JSONL", "factory/.tmp/events/1-do.jsonl", "factory/.tmp/events/readme.txt", "factory/.tmp/Events/1-Do.JSONL"]) {
+      await expect(snapshotAuthoredWorkbookEvalArtifacts(root, { files: [path], maxFileBytes: 1024, maxTotalBytes: 1024, maxFiles: 1 }), path).rejects.toThrow(/Raw workbook or station event files/);
+    }
   });
 });

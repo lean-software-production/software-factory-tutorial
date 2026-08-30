@@ -108,6 +108,16 @@ function provenanceEntryFor(entries: readonly AuthoredSliceProvenanceEntry[], ki
   return entries.find((entry) => entry.kind === kind && entry.materializedRelativePath === materializedRelativePath);
 }
 
+async function expectRejectedError(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof Error) return error;
+    throw new Error(`Expected Error rejection, got ${String(error)}`);
+  }
+  throw new Error("Expected promise to reject.");
+}
+
 describe("authored curriculum slice materialization", () => {
   it("materializes the Tetris primer with its exact workspace fixture and practice blocks", async () => {
     const workspace = await createAuthoredCurriculumSliceWorkspace({
@@ -386,6 +396,106 @@ describe("authored curriculum slice materialization", () => {
     await workspace.close();
     await expect(stat(workspace.repositoryRoot)).rejects.toMatchObject({ code: "ENOENT" });
     tempRoots.splice(tempRoots.indexOf(workspace.repositoryRoot), 1);
+  });
+
+  it("offers an idempotent pre-Judge guarded-state check that is safe to call concurrently while clean", async () => {
+    const workspace = await createAuthoredCurriculumSliceWorkspace({
+      selection: { parts: [{ id: "validation-loop", lessons: [{ id: "003-build-a-validator", blocks: ["key-concept"] }] }] },
+      dependencies: { startWorkbookServer: async () => ({ url: "http://127.0.0.1:1", port: 1, host: "127.0.0.1", close: async () => {} }) }
+    });
+    tempRoots.push(workspace.repositoryRoot);
+    const server = await workspace.startServer({ embeddedTerminal: false, mainTutor: new AuthoredSliceFakeTutor() });
+
+    await Promise.all([workspace.assertGuardedStateUnchanged(), workspace.assertGuardedStateUnchanged(), workspace.assertGuardedStateUnchanged()]);
+    await server.close();
+    await workspace.assertGuardedStateUnchanged();
+    await workspace.close();
+    await expect(stat(workspace.repositoryRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    tempRoots.length = 0;
+  });
+
+  it("reports a fixed sanitized pre-Judge error for source and disposable curriculum mutations", async () => {
+    const source = await makeSourceCopy();
+    const workspace = await createAuthoredCurriculumSliceWorkspace({
+      sourceTutorialRoot: source,
+      selection: { parts: [{ id: "validation-loop", lessons: [{ id: "003-build-a-validator", blocks: ["key-concept"] }] }] },
+      dependencies: { startWorkbookServer: async () => ({ url: "http://127.0.0.1:1", port: 1, host: "127.0.0.1", close: async () => {} }) }
+    });
+    tempRoots.push(workspace.repositoryRoot);
+    await workspace.startServer({ embeddedTerminal: false, mainTutor: new AuthoredSliceFakeTutor() });
+
+    await writeFile(resolve(source, "lessons/003-build-a-validator/blocks/key-concept.md"), "mutated source before judge\n");
+    const first = await expectRejectedError(workspace.assertGuardedStateUnchanged());
+    const second = await expectRejectedError(workspace.assertGuardedStateUnchanged());
+    expect(first.message).toBe("Authored curriculum guarded state changed.");
+    expect(second.message).toBe("Authored curriculum guarded state changed.");
+    expect(first.message).not.toContain("key-concept");
+    expect(first.message).not.toContain(workspace.repositoryRoot);
+    await expect(workspace.close()).rejects.toThrow(/Failed to clean authored curriculum slice workspace/);
+    await expect(stat(workspace.repositoryRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    tempRoots.splice(tempRoots.indexOf(workspace.repositoryRoot), 1);
+
+    const cleanSource = await makeSourceCopy();
+    const disposable = await createAuthoredCurriculumSliceWorkspace({ sourceTutorialRoot: cleanSource, selection: { parts: [{ id: "validation-loop", lessons: [{ id: "003-build-a-validator", blocks: ["key-concept"] }] }] } });
+    tempRoots.push(disposable.repositoryRoot);
+    await writeFile(resolve(disposable.root, "lessons/003-build-a-validator/blocks/key-concept.md"), "mutated disposable before judge\n");
+    await expect(disposable.assertGuardedStateUnchanged()).rejects.toThrow("Authored curriculum guarded state changed.");
+    await disposable.close().catch(() => undefined);
+    tempRoots.splice(tempRoots.indexOf(disposable.repositoryRoot), 1);
+  });
+
+  it("detects symlink, hardlink, and same-mode directory replacement before Judge", async () => {
+    const source = await makeSourceCopy();
+    await mkdir(resolve(source, "workspaces/refactor-line/factory/guard-empty"), { recursive: true });
+    const workspace = await createAuthoredCurriculumSliceWorkspace({ sourceTutorialRoot: source, selection: twoLessonKeyConceptSlice });
+    tempRoots.push(workspace.repositoryRoot);
+
+    const disposableFile = resolve(workspace.root, "lessons/003-build-a-validator/blocks/key-concept.md");
+    const original = await readFile(disposableFile);
+    await rm(disposableFile);
+    await symlink(resolve(source, "lessons/003-build-a-validator/blocks/key-concept.md"), disposableFile);
+    await expect(workspace.assertGuardedStateUnchanged()).rejects.toThrow("Authored curriculum guarded state changed.");
+    await rm(disposableFile);
+    await writeFile(disposableFile, original);
+    await workspace.close().catch(() => undefined);
+    tempRoots.splice(tempRoots.indexOf(workspace.repositoryRoot), 1);
+
+    const hardlinkWorkspace = await createAuthoredCurriculumSliceWorkspace({ sourceTutorialRoot: await makeSourceCopy(), selection: { parts: [{ id: "validation-loop", lessons: [{ id: "003-build-a-validator", blocks: ["key-concept"] }] }] } });
+    tempRoots.push(hardlinkWorkspace.repositoryRoot);
+    const hardlinkFile = resolve(hardlinkWorkspace.root, "lessons/003-build-a-validator/blocks/key-concept.md");
+    const hardlinkBytes = await readFile(hardlinkFile);
+    const alias = resolve(dirname(hardlinkWorkspace.repositoryRoot), "guard-hardlink-alias.md");
+    tempRoots.push(alias);
+    await writeFile(alias, hardlinkBytes);
+    await rm(hardlinkFile);
+    await link(alias, hardlinkFile);
+    await expect(hardlinkWorkspace.assertGuardedStateUnchanged()).rejects.toThrow("Authored curriculum guarded state changed.");
+    await hardlinkWorkspace.close().catch(() => undefined);
+    tempRoots.splice(tempRoots.indexOf(hardlinkWorkspace.repositoryRoot), 1);
+
+    const dirSource = await makeSourceCopy();
+    await mkdir(resolve(dirSource, "workspaces/refactor-line/factory/guard-empty"), { recursive: true });
+    const dirWorkspace = await createAuthoredCurriculumSliceWorkspace({ sourceTutorialRoot: dirSource, selection: twoLessonKeyConceptSlice });
+    tempRoots.push(dirWorkspace.repositoryRoot);
+    const directory = resolve(dirWorkspace.root, "workspaces/refactor-line/factory/guard-empty");
+    const mode = (await stat(directory)).mode & 0o7777;
+    await rm(directory, { recursive: true });
+    await mkdir(directory);
+    await chmod(directory, mode);
+    await expect(dirWorkspace.assertGuardedStateUnchanged()).rejects.toThrow("Authored curriculum guarded state changed.");
+    await dirWorkspace.close().catch(() => undefined);
+    tempRoots.splice(tempRoots.indexOf(dirWorkspace.repositoryRoot), 1);
+  });
+
+  it("runs the guarded-state check again during close after a clean pre-Judge check", async () => {
+    const workspace = await createAuthoredCurriculumSliceWorkspace({ selection: { parts: [{ id: "validation-loop", lessons: [{ id: "003-build-a-validator", blocks: ["key-concept"] }] }] } });
+    tempRoots.push(workspace.repositoryRoot);
+    await workspace.assertGuardedStateUnchanged();
+    await writeFile(resolve(workspace.root, "lessons/003-build-a-validator/blocks/key-concept.md"), "mutated between judge and close\n");
+
+    await expect(workspace.close()).rejects.toThrow(/Failed to clean authored curriculum slice workspace/);
+    await expect(stat(workspace.repositoryRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    tempRoots.length = 0;
   });
 
   it("rejects selected authored source files with hardlink aliases before materialization", async () => {

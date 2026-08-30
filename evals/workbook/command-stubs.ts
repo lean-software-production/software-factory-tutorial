@@ -57,6 +57,8 @@ export type AuthoredCommandInvocationEvidence = {
   namespace: typeof AUTHORED_COMMAND_STUB_NAMESPACE;
   owner: typeof AUTHORED_COMMAND_STUB_OWNER;
   schemaVersion: typeof AUTHORED_COMMAND_STUB_SCHEMA_VERSION;
+  /** Random per-fixture identity copied from the generated command-stub config. */
+  runId: string;
   kind: AuthoredCommandStubKind;
   accepted: boolean;
   cwd: string;
@@ -105,6 +107,8 @@ export type AuthoredCommandStubHandle = {
   containerEvidencePath: string;
   /** Container path to the generated config when the disposable workspace is mounted at /workspace. */
   containerConfigPath: string;
+  /** Random identity shared by the generated config and every evidence record for this fixture. */
+  runId: string;
   /** Shell snippet for future scripted terminal actions inside the canonical /workspace bind mount. */
   containerShellActivation: string;
   /** Minimal host subprocess environment for deterministic tests; intentionally not process.env. */
@@ -162,6 +166,7 @@ export async function createAuthoredCommandStubs(options: AuthoredCommandStubOpt
     namespace: AUTHORED_COMMAND_STUB_NAMESPACE,
     owner: AUTHORED_COMMAND_STUB_OWNER,
     schemaVersion: AUTHORED_COMMAND_STUB_SCHEMA_VERSION,
+    runId: randomUUID(),
     lessonNumber: options.lessonNumber,
     scenarioId: options.scenarioId ?? "authored-scenario",
     maxPromptBytes: options.maxPromptBytes ?? DEFAULT_MAX_PROMPT_BYTES,
@@ -223,6 +228,7 @@ export async function createAuthoredCommandStubs(options: AuthoredCommandStubOpt
     containerStateDir,
     containerEvidencePath,
     containerConfigPath,
+    runId: sharedConfig.runId,
     containerShellActivation,
     hostEnv,
     close: async () => {
@@ -296,12 +302,13 @@ export async function readAuthoredCommandStubEvidence(evidencePath: string): Pro
 
 function validateEvidenceEntry(value: unknown, lineNumber: number): AuthoredCommandInvocationEvidence {
   if (!isRecord(value)) throw evidenceError("ENTRY_NOT_OBJECT");
-  const allowedKeys = new Set(["namespace", "owner", "schemaVersion", "kind", "accepted", "cwd", "mode", "tools", "station", "verdict", "mutation", "prompt", "rpc", "output", "rejectionCode"]);
+  const allowedKeys = new Set(["namespace", "owner", "schemaVersion", "runId", "kind", "accepted", "cwd", "mode", "tools", "station", "verdict", "mutation", "prompt", "rpc", "output", "rejectionCode"]);
   rejectUnknownKeys(value, allowedKeys);
   const entry: AuthoredCommandInvocationEvidence = {
     namespace: expectLiteral(value.namespace, AUTHORED_COMMAND_STUB_NAMESPACE, "namespace"),
     owner: expectLiteral(value.owner, AUTHORED_COMMAND_STUB_OWNER, "owner"),
     schemaVersion: expectLiteral(value.schemaVersion, AUTHORED_COMMAND_STUB_SCHEMA_VERSION, "schemaVersion"),
+    runId: expectRunId(value.runId, "runId"),
     kind: expectOneOf(value.kind, ALLOWED_KINDS, "kind"),
     accepted: expectBoolean(value.accepted, "accepted"),
     cwd: expectRelativeCwd(value.cwd, "cwd")
@@ -365,6 +372,11 @@ function expectOneOf<const T extends readonly string[]>(value: unknown, allowed:
 
 function expectBoolean(value: unknown, _field: string): boolean {
   if (typeof value !== "boolean") throw evidenceError("BOOLEAN_INVALID");
+  return value;
+}
+
+function expectRunId(value: unknown, _field: string): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)) throw evidenceError("RUN_ID_INVALID");
   return value;
 }
 
@@ -549,10 +561,11 @@ function loadAndValidateConfig() {
   catch (_) { bareReject("CONFIG_INVALID", 78); }
   try {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid");
-    const required = ["namespace", "owner", "schemaVersion", "lessonNumber", "scenarioId", "maxPromptBytes", "maxEvidenceEntryBytes", "maxEvidenceTotalBytes", "rpcEarlySteerWindowMs", "rpcLateSteerWindowMs", "runtime", "workspaceRoot", "stateDir", "evidencePath"];
+    const required = ["namespace", "owner", "schemaVersion", "runId", "lessonNumber", "scenarioId", "maxPromptBytes", "maxEvidenceEntryBytes", "maxEvidenceTotalBytes", "rpcEarlySteerWindowMs", "rpcLateSteerWindowMs", "runtime", "workspaceRoot", "stateDir", "evidencePath"];
     for (const key of Object.keys(parsed)) if (!required.includes(key)) throw new Error("invalid");
     if (parsed.namespace !== "evals/workbook/authored-workbook/command-stubs") throw new Error("invalid");
     if (parsed.owner !== "authored-eval" || parsed.schemaVersion !== 1) throw new Error("invalid");
+    if (typeof parsed.runId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(parsed.runId)) throw new Error("invalid");
     if (!Number.isInteger(parsed.lessonNumber) || parsed.lessonNumber < 2 || parsed.lessonNumber > 13) throw new Error("invalid");
     if (typeof parsed.scenarioId !== "string" || parsed.scenarioId.length === 0 || parsed.scenarioId.length > 128 || parsed.scenarioId.includes("\0")) throw new Error("invalid");
     for (const key of ["maxPromptBytes", "maxEvidenceEntryBytes", "maxEvidenceTotalBytes", "rpcEarlySteerWindowMs", "rpcLateSteerWindowMs"]) {
@@ -671,6 +684,7 @@ function evidenceLine(entry) {
     namespace: config.namespace,
     owner: config.owner,
     schemaVersion: config.schemaVersion,
+    runId: config.runId,
     ...entry
   };
   const line = JSON.stringify(full) + "\n";
@@ -891,7 +905,7 @@ function planCompleteRefactor() {
 function applyPartialRefactor() { const plan = planPartialRefactor(); if (plan.nextSource !== undefined) writeSourceAtomic(plan.nextSource); return plan.mutation; }
 function applyCompleteRefactor() { const plan = planCompleteRefactor(); if (plan.nextSource !== undefined) writeSourceAtomic(plan.nextSource); return plan.mutation; }
 function parseLabelledSections(prompt) {
-  const header = /^=== (QUALITY BEFORE(?: \(recorded before the doer ran\))?|QUALITY NOW|TESTS|WORKING DIFF) ===$/gm;
+  const header = /^=== (QUALITY BEFORE(?: \(recorded before the doer ran\))?|QUALITY NOW|TESTS(?: NOW)?|WORKING DIFF|DIFF SINCE BASELINE) ===$/gm;
   const matches = [...prompt.matchAll(header)];
   const canonical = ["QUALITY BEFORE", "QUALITY NOW", "TESTS", "WORKING DIFF"];
   const sections = new Map();
@@ -899,7 +913,7 @@ function parseLabelledSections(prompt) {
   let invalidReason = matches.length === 0 ? "missing" : "count";
   for (let i = 0; i < matches.length; i++) {
     const rawName = matches[i][1];
-    const name = rawName.startsWith("QUALITY BEFORE") ? "QUALITY BEFORE" : rawName;
+    const name = rawName.startsWith("QUALITY BEFORE") ? "QUALITY BEFORE" : rawName === "TESTS NOW" ? "TESTS" : rawName === "DIFF SINCE BASELINE" ? "WORKING DIFF" : rawName;
     const start = (matches[i].index || 0) + matches[i][0].length;
     const end = i + 1 < matches.length ? matches[i + 1].index || prompt.length : prompt.length;
     const body = prompt.slice(start, end).trim();
@@ -927,7 +941,7 @@ function diffHasCompleteRefactor(diff) {
     && occurrences(diff, "-      if (pieces[place++] !== \"by\") fail();") >= 2;
 }
 function nonPassingQualityBaseline(text) {
-  return text.includes("Findings reported by: eslint.")
+  return /Findings reported by:/i.test(text)
     || text.includes(DUPLICATION_FINDING)
     || /duplicated operator branch parser|no duplication|duplication/i.test(text) && !text.includes(QUALITY_PASS);
 }
@@ -951,9 +965,6 @@ function validatorVerdict(prompt) {
   if (!source.complete) return "FAIL";
   const evidence = labelledEvidence(prompt);
   const currentQuality = currentQualityFromSource(sourceText);
-  if (config.lessonNumber < 6) {
-    return nonPassingQualityBaseline(prompt) && currentQuality === QUALITY_PASS ? "PASS" : "FAIL";
-  }
   const baselineOk = evidence.qualityBefore.includes(QUALITY_PASS) || evidence.baselineReduction;
   return evidence.complete && evidence.testsPassed && evidence.qualityPassed && evidence.qualityCorroborates && baselineOk && evidence.diffComplete ? "PASS" : "FAIL";
 }

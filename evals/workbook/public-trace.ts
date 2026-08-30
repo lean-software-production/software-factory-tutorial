@@ -17,6 +17,8 @@ const DEFAULT_MAX_ARTIFACT_BYTES = 64 * 1024;
 const DEFAULT_MAX_TOTAL_ARTIFACT_BYTES = 256 * 1024;
 const DEFAULT_MAX_ARTIFACT_FILES = 50;
 const MAX_PUBLIC_CHANNEL_TEXT_BYTES = 64 * 1024;
+const KNOWN_EVENT_BEARING_FIELDS = ["events", "internalEvents", "progressionEvents"] as const;
+const MAX_EVENT_BEARING_FIELD_EVENTS = 10_000;
 
 export type {
   AuthoredWorkbookEvalArtifactSnapshot,
@@ -86,10 +88,9 @@ export function projectAuthoredWorkbookEvalTrace(trace: AuthoredWorkbookEvalSess
 }
 
 export function copyAuthoredWorkbookEvalTrace(value: unknown): AuthoredWorkbookEvalTrace {
-  if (!isPlainRecord(value) || typeof value.scenarioId !== "string" || !hasPublicTraceArrays(value)) throw new Error("Invalid authored workbook public eval trace.");
-  const internalEvents = (value as Record<string, unknown>).internalEvents;
-  if (Array.isArray(internalEvents)) assertNoLessonJumpEvents(internalEvents, "internalEvents");
-  assertNoLessonJumpEvents(value.progressionEvents, "progressionEvents");
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook public eval trace.");
+  assertNoKnownLessonJumpFields(value);
+  if (typeof value.scenarioId !== "string" || !hasPublicTraceArrays(value)) throw new Error("Invalid authored workbook public eval trace.");
   return {
     scenarioId: boundedText(value.scenarioId, "scenario id"),
     publicStates: value.publicStates.map((entry, index) => copyRecordedPublicState(entry, index)),
@@ -190,7 +191,7 @@ export async function snapshotAuthoredWorkbookEvalArtifacts(workspaceRoot: strin
     if (!isInside(workspaceReal, real)) throw new Error(`Artifact '${relativePath}' is outside the workspace.`);
     const stableRelativePath = relative(workspaceReal, real).split(sep).join("/");
     if (stableRelativePath !== safeFile) throw new Error(`Artifact '${relativePath}' must not be a symlink or alias.`);
-    if (seen.has(stableRelativePath)) continue;
+    if (seen.has(stableRelativePath)) throw new Error(`Duplicate authored workbook eval artifact allowlist entry: ${stableRelativePath}.`);
     if (metadata.size > limits.maxFileBytes) throw new Error(`Artifact '${stableRelativePath}' is too large to include in an authored workbook eval trace.`);
     totalBytes += metadata.size;
     if (totalBytes > limits.maxTotalBytes) throw new Error(`Authored workbook eval artifacts exceed ${limits.maxTotalBytes} bytes.`);
@@ -258,7 +259,15 @@ function copyArtifactSnapshot(value: unknown, index: number): AuthoredWorkbookEv
   return { path, content: boundedText(value.content, `artifact '${path}'`) };
 }
 
+function assertNoKnownLessonJumpFields(record: Record<string, unknown>): void {
+  for (const field of KNOWN_EVENT_BEARING_FIELDS) {
+    const events = record[field];
+    if (Array.isArray(events)) assertNoLessonJumpEvents(events, field);
+  }
+}
+
 function assertNoLessonJumpEvents(events: readonly unknown[], channel: string): void {
+  if (events.length > MAX_EVENT_BEARING_FIELD_EVENTS) throw new Error(`Authored workbook eval setup event field ${channel} is too large.`);
   if (events.some((event) => isPlainRecord(event) && event.type === "lesson_jump_started")) throw new Error(`Authored workbook eval setup forbids lesson jumps; lesson_jump_started found in ${channel}.`);
 }
 
@@ -266,7 +275,13 @@ function assertSafeRelativeArtifactFile(file: string): string {
   if (typeof file !== "string" || file.length === 0 || isAbsolute(file) || file.split(/[\\/]+/).includes("..")) throw new Error("Invalid relative artifact file allowlist entry.");
   const normalized = file.split(/[\\/]+/).filter(Boolean).join("/");
   if (normalized.length === 0 || normalized !== file.split("\\").join("/")) throw new Error("Invalid relative artifact file allowlist entry.");
+  if (isRawEventArtifactPath(normalized)) throw new Error("Raw workbook or station event files are internal gate-only inputs, not public eval artifacts.");
   return normalized;
+}
+
+function isRawEventArtifactPath(normalized: string): boolean {
+  const lower = normalized.toLowerCase();
+  return /(^|\/)workbook\/events\.jsonl$/.test(lower) || /(^|\/)events(\/|$)/.test(lower);
 }
 
 function isInside(root: string, candidate: string): boolean {

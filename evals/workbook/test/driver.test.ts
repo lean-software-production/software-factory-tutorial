@@ -73,7 +73,9 @@ class ReplayWebSocket {
   readonly CLOSED = ReplayWebSocket.CLOSED;
   readyState = ReplayWebSocket.CONNECTING;
   sent: unknown[] = [];
+  closeCalls = 0;
   protected handlers = new Map<string, Array<(...args: any[]) => void>>();
+  private readonly onceWrappers = new Map<string, Map<(...args: any[]) => void, (...args: any[]) => void>>();
 
   constructor() {
     queueMicrotask(() => {
@@ -84,9 +86,12 @@ class ReplayWebSocket {
 
   once(event: string, callback: (...args: any[]) => void): void {
     const wrapper = (...args: any[]) => {
-      this.off(event, wrapper);
+      this.off(event, callback);
       callback(...args);
     };
+    const eventWrappers = this.onceWrappers.get(event) ?? new Map<(...args: any[]) => void, (...args: any[]) => void>();
+    eventWrappers.set(callback, wrapper);
+    this.onceWrappers.set(event, eventWrappers);
     this.on(event, wrapper);
   }
 
@@ -97,7 +102,16 @@ class ReplayWebSocket {
   }
 
   off(event: string, callback: (...args: any[]) => void): void {
-    this.handlers.set(event, (this.handlers.get(event) ?? []).filter((handler) => handler !== callback));
+    const eventWrappers = this.onceWrappers.get(event);
+    const wrapper = eventWrappers?.get(callback);
+    eventWrappers?.delete(callback);
+    if (eventWrappers?.size === 0) this.onceWrappers.delete(event);
+    this.handlers.set(event, (this.handlers.get(event) ?? []).filter((handler) => handler !== callback && handler !== wrapper));
+  }
+
+  listenerCount(event?: string): number {
+    if (event !== undefined) return this.handlers.get(event)?.length ?? 0;
+    return [...this.handlers.values()].reduce((total, handlers) => total + handlers.length, 0);
   }
 
   send(data: string): void {
@@ -109,6 +123,7 @@ class ReplayWebSocket {
   }
 
   close(): void {
+    this.closeCalls += 1;
     this.readyState = ReplayWebSocket.CLOSED;
     this.emit("close");
   }
@@ -527,6 +542,165 @@ describe("authored workbook public driver", () => {
     expect(trace.terminalTranscript).toEqual([]);
   });
 
+  it("does not commit terminal input when send synchronously closes the socket", async () => {
+    class SyncCloseWebSocket extends ReplayWebSocket {
+      static instances: SyncCloseWebSocket[] = [];
+      constructor() {
+        super();
+        SyncCloseWebSocket.instances.push(this);
+      }
+      override send(data: string): void {
+        this.sent.push(JSON.parse(data));
+        this.emit("message", Buffer.from(JSON.stringify({ type: "output", data: "sync output must be dropped\r\n" })));
+        this.close();
+        setTimeout(() => this.emit("message", Buffer.from(JSON.stringify({ type: "output", data: "late output must be dropped\r\n" }))), 1);
+      }
+    }
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-sync-close-during-send");
+    let fetchReads = 0;
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      WebSocket: SyncCloseWebSocket as any,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async () => {
+        fetchReads += 1;
+        return new Response(JSON.stringify(stateWithTerminal("checking")), { status: 200 });
+      }
+    });
+
+    await expect(driver.submitTerminalCommand(blockId, "close before commit", { complete: false })).rejects.toThrow(`Workbook terminal socket closed before terminal review completed for ${blockId}.`);
+    await allowLateCallbacks();
+
+    expect(fetchReads).toBe(1);
+    expect(trace.publicStates.map((entry) => entry.label)).toEqual(["terminal:lesson--001-public-contract--terminal:baseline"]);
+    expect(trace.terminalTranscript).toEqual([]);
+    expect(SyncCloseWebSocket.instances[0]?.closeCalls).toBe(1);
+    expect(SyncCloseWebSocket.instances[0]?.listenerCount()).toBe(0);
+  });
+
+  it("does not commit terminal input when send synchronously emits a socket error", async () => {
+    class SyncErrorWebSocket extends ReplayWebSocket {
+      static instances: SyncErrorWebSocket[] = [];
+      constructor() {
+        super();
+        SyncErrorWebSocket.instances.push(this);
+      }
+      override send(data: string): void {
+        this.sent.push(JSON.parse(data));
+        this.emit("message", Buffer.from(JSON.stringify({ type: "output", data: "sync output must be dropped\r\n" })));
+        this.emit("error", new Error("private socket diagnostic"));
+        setTimeout(() => this.emit("message", Buffer.from(JSON.stringify({ type: "output", data: "late output must be dropped\r\n" }))), 1);
+      }
+    }
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-sync-error-during-send");
+    let fetchReads = 0;
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      WebSocket: SyncErrorWebSocket as any,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async () => {
+        fetchReads += 1;
+        return new Response(JSON.stringify(stateWithTerminal("checking")), { status: 200 });
+      }
+    });
+
+    const pending = driver.submitTerminalCommand(blockId, "error before commit", { complete: false });
+    await expect(pending).rejects.toThrow(`Workbook terminal socket errored before terminal review completed for ${blockId}.`);
+    await expect(pending).rejects.not.toThrow(/private socket diagnostic/);
+    await allowLateCallbacks();
+
+    expect(fetchReads).toBe(1);
+    expect(trace.publicStates.map((entry) => entry.label)).toEqual(["terminal:lesson--001-public-contract--terminal:baseline"]);
+    expect(trace.terminalTranscript).toEqual([]);
+    expect(SyncErrorWebSocket.instances[0]?.closeCalls).toBe(1);
+    expect(SyncErrorWebSocket.instances[0]?.listenerCount()).toBe(0);
+  });
+
+  it("does not commit terminal input or buffered output when send synchronously throws", async () => {
+    class SyncThrowWebSocket extends ReplayWebSocket {
+      static instances: SyncThrowWebSocket[] = [];
+      constructor() {
+        super();
+        SyncThrowWebSocket.instances.push(this);
+      }
+      override send(data: string): void {
+        this.sent.push(JSON.parse(data));
+        this.emit("message", Buffer.from(JSON.stringify({ type: "output", data: "sync output must be dropped\r\n" })));
+        setTimeout(() => this.emit("message", Buffer.from(JSON.stringify({ type: "output", data: "late output must be dropped\r\n" }))), 1);
+        throw new Error("send failed before input commit");
+      }
+    }
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-sync-throw-during-send");
+    let fetchReads = 0;
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      WebSocket: SyncThrowWebSocket as any,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async () => {
+        fetchReads += 1;
+        return new Response(JSON.stringify(stateWithTerminal("checking")), { status: 200 });
+      }
+    });
+
+    await expect(driver.submitTerminalCommand(blockId, "throw before commit", { complete: false })).rejects.toThrow("send failed before input commit");
+    await allowLateCallbacks();
+
+    expect(fetchReads).toBe(1);
+    expect(trace.publicStates.map((entry) => entry.label)).toEqual(["terminal:lesson--001-public-contract--terminal:baseline"]);
+    expect(trace.terminalTranscript).toEqual([]);
+    expect(SyncThrowWebSocket.instances[0]?.closeCalls).toBe(1);
+    expect(SyncThrowWebSocket.instances[0]?.listenerCount()).toBe(0);
+  });
+
+  it("does not commit terminal input when abort settles during send", async () => {
+    const abort = trackedAbortController();
+    class AbortDuringSendWebSocket extends ReplayWebSocket {
+      static instances: AbortDuringSendWebSocket[] = [];
+      constructor() {
+        super();
+        AbortDuringSendWebSocket.instances.push(this);
+      }
+      override send(data: string): void {
+        this.sent.push(JSON.parse(data));
+        abort.abort(new Error("private abort diagnostic"));
+        this.emit("message", Buffer.from(JSON.stringify({ type: "output", data: "sync output must be dropped\r\n" })));
+        setTimeout(() => this.emit("message", Buffer.from(JSON.stringify({ type: "output", data: "late output must be dropped\r\n" }))), 1);
+      }
+    }
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-abort-during-send");
+    let fetchReads = 0;
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      signal: abort.signal,
+      WebSocket: AbortDuringSendWebSocket as any,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async () => {
+        fetchReads += 1;
+        return new Response(JSON.stringify(stateWithTerminal("checking")), { status: 200 });
+      }
+    });
+
+    const pending = driver.submitTerminalCommand(blockId, "abort before commit", { complete: false });
+    await expect(pending).rejects.toThrow("Authored workbook driver operation was cancelled.");
+    await expect(pending).rejects.not.toThrow(/private abort diagnostic/);
+    await allowLateCallbacks();
+
+    expect(fetchReads).toBe(1);
+    expect(trace.publicStates.map((entry) => entry.label)).toEqual(["terminal:lesson--001-public-contract--terminal:baseline"]);
+    expect(trace.terminalTranscript).toEqual([]);
+    expect(AbortDuringSendWebSocket.instances[0]?.closeCalls).toBe(1);
+    expect(AbortDuringSendWebSocket.instances[0]?.listenerCount()).toBe(0);
+    expect(abort.listenerBalance()).toBe(0);
+  });
+
   it("ignores stale terminal feedback until a correlated new attempt appears", async () => {
     const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-stale-feedback");
     const oldFeedback = stateWithTerminal("feedback", "Use the visible filename.");
@@ -678,4 +852,132 @@ describe("authored workbook public driver", () => {
 
     await expect(driver.submitTerminalCommand(blockId, "bad command", { complete: false })).rejects.toThrow(/non-JSON|JSON/);
   });
+
+  it("aborts before HTTP work starts with a fixed sanitized error", async () => {
+    const abort = new AbortController();
+    abort.abort(new Error("private reason"));
+    let fetchCalled = false;
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace: createEmptyAuthoredWorkbookEvalSessionTrace("abort-before"),
+      signal: abort.signal,
+      fetch: async () => { fetchCalled = true; return new Response(JSON.stringify(stateWithTerminal("running")), { status: 200 }); }
+    });
+
+    await expect(driver.readState("aborted")).rejects.toThrow("Authored workbook driver operation was cancelled.");
+    expect(fetchCalled).toBe(false);
+  });
+
+  it("aborts a stalled HTTP fetch and removes external abort listeners", async () => {
+    const abort = trackedAbortController();
+    let fetchSignal: AbortSignal | undefined;
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace: createEmptyAuthoredWorkbookEvalSessionTrace("abort-fetch"),
+      signal: abort.signal,
+      requestTimeoutMs: 10_000,
+      fetch: async (_input, init) => {
+        fetchSignal = init?.signal as AbortSignal | undefined;
+        return new Promise<Response>(() => {});
+      }
+    });
+
+    const pending = driver.readState("stalled");
+    while (!fetchSignal) await new Promise((resolve) => setTimeout(resolve, 1));
+    abort.abort();
+
+    await expect(pending).rejects.toThrow("Authored workbook driver operation was cancelled.");
+    expect(fetchSignal.aborted).toBe(true);
+    expect(abort.listenerBalance()).toBe(0);
+  });
+
+  it("aborts during editor-review polling without recording stale review transitions", async () => {
+    const abort = trackedAbortController();
+    let pollStarted = false;
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("abort-poll");
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      signal: abort.signal,
+      editorReviewTimeoutMs: 10_000,
+      fetch: async (_input, init) => {
+        if (init?.method === "POST") return new Response(JSON.stringify(stateWithEditor(1, "reviewing")), { status: 200 });
+        pollStarted = true;
+        return new Promise<Response>(() => {});
+      }
+    });
+
+    const pending = driver.submitEditorDraft("lesson--001-public-contract--editor", "draft");
+    while (!pollStarted) await new Promise((resolve) => setTimeout(resolve, 1));
+    abort.abort();
+
+    await expect(pending).rejects.toThrow("Authored workbook driver operation was cancelled.");
+    expect(trace.editors).toEqual([{ blockId: "lesson--001-public-contract--editor", revision: 1, status: "reviewing" }]);
+    expect(abort.listenerBalance()).toBe(0);
+  });
+
+  it("aborts terminal baseline/review work, closes the socket, and records no stale terminal transition", async () => {
+    const abort = trackedAbortController();
+    class StalledTerminalWebSocket extends ReplayWebSocket {
+      static instances: StalledTerminalWebSocket[] = [];
+      closed = false;
+      constructor() {
+        super();
+        StalledTerminalWebSocket.instances.push(this);
+      }
+      override close(): void {
+        this.closed = true;
+        super.close();
+      }
+    }
+    let fetchStarted = false;
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("abort-terminal");
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      signal: abort.signal,
+      WebSocket: StalledTerminalWebSocket as any,
+      terminalTimeoutMs: 1_000,
+      terminalReviewTimeoutMs: 10_000,
+      fetch: async () => {
+        fetchStarted = true;
+        return new Promise<Response>(() => {});
+      }
+    });
+
+    const pending = driver.submitTerminalCommand(blockId, "never sent", { complete: false });
+    while (!fetchStarted) await new Promise((resolve) => setTimeout(resolve, 1));
+    abort.abort();
+
+    await expect(pending).rejects.toThrow("Authored workbook driver operation was cancelled.");
+    expect(StalledTerminalWebSocket.instances[0]?.closed).toBe(true);
+    expect(StalledTerminalWebSocket.instances[0]?.sent).toEqual([]);
+    expect(trace.terminalTranscript).toEqual([]);
+    expect(abort.listenerBalance()).toBe(0);
+  });
 });
+
+async function allowLateCallbacks(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+function trackedAbortController(): AbortController & { listenerBalance(): number } {
+  const controller = new AbortController() as AbortController & { listenerBalance(): number };
+  const signal = controller.signal as AbortSignal & {
+    addEventListener: AbortSignal["addEventListener"];
+    removeEventListener: AbortSignal["removeEventListener"];
+  };
+  const add = signal.addEventListener.bind(signal);
+  const remove = signal.removeEventListener.bind(signal);
+  let balance = 0;
+  signal.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
+    if (type === "abort") balance += 1;
+    return add(type, listener, options);
+  }) as AbortSignal["addEventListener"];
+  signal.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) => {
+    if (type === "abort") balance -= 1;
+    return remove(type, listener, options);
+  }) as AbortSignal["removeEventListener"];
+  controller.listenerBalance = () => balance;
+  return controller;
+}

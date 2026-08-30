@@ -6,7 +6,7 @@ import {
   createAgentSession,
   getAgentDir
 } from "@earendil-works/pi-coding-agent";
-import { PRACTICE_COACH_MODEL_ENV, TUTOR_MODEL_ENV, resolvePracticeCoachModel, resolveTutorModel, type TutorModelChoice } from "./model.js";
+import { PRACTICE_COACH_MODEL_ENV, TUTOR_MODEL_ENV, resolvePracticeCoachModel, resolveTutorModel, snapshotWorkbookModelEnvironment, type TutorModelChoice, type WorkbookModelEnvironment } from "./model.js";
 import { createResilientTutorSession, type PiTutorSession, type ResilientTutorSession } from "./pi-tutor-session.js";
 import type { TutorialLogger } from "./runtime-log.js";
 
@@ -77,7 +77,7 @@ export interface WorkbookRolePreflightRequest {
   contentRoot: string;
   workspaceRoot: string;
   logger: TutorialLogger;
-  environment: NodeJS.ProcessEnv;
+  environment: WorkbookModelEnvironment;
 }
 
 export type WorkbookRolePreflightProbe = (request: WorkbookRolePreflightRequest) => Promise<WorkbookModelPreflightResult>;
@@ -86,7 +86,7 @@ export interface WorkbookModelPreflightOptions {
   contentRoot: string;
   workspaceRoot: string;
   logger: TutorialLogger;
-  environment?: NodeJS.ProcessEnv;
+  environment?: WorkbookModelEnvironment;
   probeRole?: WorkbookRolePreflightProbe;
 }
 
@@ -178,7 +178,7 @@ export async function probePiWorkbookRoleModel(request: WorkbookRolePreflightReq
   }
 }
 
-function roleRequests(options: Required<Pick<WorkbookModelPreflightOptions, "contentRoot" | "workspaceRoot" | "logger">> & { environment: NodeJS.ProcessEnv }): WorkbookRolePreflightRequest[] {
+function roleRequests(options: Required<Pick<WorkbookModelPreflightOptions, "contentRoot" | "workspaceRoot" | "logger">> & { environment: WorkbookModelEnvironment }): WorkbookRolePreflightRequest[] {
   return [
     { role: "Main Tutor", envVar: TUTOR_MODEL_ENV, contentRoot: options.contentRoot, workspaceRoot: options.workspaceRoot, logger: options.logger, environment: options.environment },
     { role: "Practice Coach", envVar: PRACTICE_COACH_MODEL_ENV, contentRoot: options.contentRoot, workspaceRoot: options.workspaceRoot, logger: options.logger, environment: options.environment }
@@ -186,7 +186,7 @@ function roleRequests(options: Required<Pick<WorkbookModelPreflightOptions, "con
 }
 
 export async function preflightWorkbookModels(options: WorkbookModelPreflightOptions): Promise<WorkbookModelPreflightResult[]> {
-  const environment = options.environment ?? process.env;
+  const environment = options.environment === undefined ? process.env : snapshotWorkbookModelEnvironment(options.environment);
   const probeRole = options.probeRole ?? probePiWorkbookRoleModel;
   const probes = roleRequests({ contentRoot: options.contentRoot, workspaceRoot: options.workspaceRoot, logger: options.logger, environment })
     .map(async (request) => {

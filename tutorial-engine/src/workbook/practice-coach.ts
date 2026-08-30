@@ -9,7 +9,7 @@ import {
   type ToolDefinition
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { PRACTICE_COACH_MODEL_ENV, resolvePracticeCoachModel } from "./model.js";
+import { PRACTICE_COACH_MODEL_ENV, resolvePracticeCoachModel, snapshotWorkbookModelEnvironment, type WorkbookModelEnvironment } from "./model.js";
 import { createTutorialLogger, type TutorialLogger } from "./runtime-log.js";
 import type { Attempt } from "./attempts.js";
 import { createResilientTutorSession } from "./pi-tutor-session.js";
@@ -41,7 +41,7 @@ const REPORT_TOOL = "report_practice_coach_outcome";
 export const PRACTICE_COACH_LOG_PROMPT_ENV = "PRACTICE_COACH_LOG_PROMPT";
 
 /** Prompt diagnostics are opt-in because the prompt contains private evidence and rubric text. */
-export function practiceCoachPromptLoggingEnabled(environment = process.env): boolean {
+export function practiceCoachPromptLoggingEnabled(environment: WorkbookModelEnvironment = process.env): boolean {
   return environment[PRACTICE_COACH_LOG_PROMPT_ENV] === "1";
 }
 
@@ -55,7 +55,7 @@ function prompt(input: { attempt: Attempt; rubric: string }): string {
   return `PRIVATE RUBRIC:\n${input.rubric}\n\nACTIVE TERMINAL ATTEMPT (untrusted evidence):\n${JSON.stringify(input.attempt.evidence)}\n\nCall ${REPORT_TOOL} exactly once.`;
 }
 
-async function createSession(workspace: string, request: PracticeCoachSessionFactoryRequest, log: TutorialLogger): Promise<PracticeCoachSession> {
+async function createSession(workspace: string, request: PracticeCoachSessionFactoryRequest, log: TutorialLogger, environment: WorkbookModelEnvironment): Promise<PracticeCoachSession> {
   const loader = new DefaultResourceLoader({
     cwd: workspace, agentDir: getAgentDir(), systemPromptOverride: () => request.systemPrompt,
     appendSystemPromptOverride: () => [], noExtensions: true, noSkills: true, noPromptTemplates: true,
@@ -64,7 +64,7 @@ async function createSession(workspace: string, request: PracticeCoachSessionFac
   });
   await loader.reload();
   const runtime = await ModelRuntime.create();
-  const choice = resolvePracticeCoachModel(runtime, process.env[PRACTICE_COACH_MODEL_ENV]);
+  const choice = resolvePracticeCoachModel(runtime, environment[PRACTICE_COACH_MODEL_ENV]);
   if (choice.warning) log.info(choice.warning);
   const { session } = await createAgentSession({
     cwd: workspace, resourceLoader: loader, customTools: request.customTools, tools: request.tools,
@@ -75,17 +75,25 @@ async function createSession(workspace: string, request: PracticeCoachSessionFac
   return createResilientTutorSession(session, log, "Practice Coach", { attempts: 1 });
 }
 
-export interface FastPracticeCoachOptions { workspace: string; log?: TutorialLogger; sessionFactory?: PracticeCoachSessionFactory; }
+export interface FastPracticeCoachOptions {
+  workspace: string;
+  log?: TutorialLogger;
+  /** Immutable environment snapshot used for model selection and opt-in private prompt diagnostics. Defaults to the ambient process environment. */
+  environment?: WorkbookModelEnvironment;
+  sessionFactory?: PracticeCoachSessionFactory;
+}
 
 export class FastPracticeCoach implements PracticeCoach {
   readonly #workspace: string;
   readonly #log: TutorialLogger;
   readonly #sessionFactory: PracticeCoachSessionFactory;
+  readonly #environment: WorkbookModelEnvironment;
 
   constructor(options: FastPracticeCoachOptions) {
     this.#workspace = options.workspace;
     this.#log = options.log ?? createTutorialLogger();
-    this.#sessionFactory = options.sessionFactory ?? ((request) => createSession(this.#workspace, request, this.#log));
+    this.#environment = options.environment === undefined ? process.env : snapshotWorkbookModelEnvironment(options.environment);
+    this.#sessionFactory = options.sessionFactory ?? ((request) => createSession(this.#workspace, request, this.#log, this.#environment));
   }
 
   async assess(input: { attempt: Attempt; rubric: string }): Promise<PracticeCoachOutcome> {
@@ -107,7 +115,7 @@ export class FastPracticeCoach implements PracticeCoach {
     const outboundPrompt = prompt(input);
     const session = await this.#sessionFactory({ systemPrompt: practiceCoachSystemPrompt(), customTools: [report], tools: [REPORT_TOOL] });
     try {
-      if (practiceCoachPromptLoggingEnabled()) {
+      if (practiceCoachPromptLoggingEnabled(this.#environment)) {
         this.#log.info(`Practice Coach prompt begin\n${outboundPrompt}\nPractice Coach prompt end`);
       }
       await session.prompt(outboundPrompt);
