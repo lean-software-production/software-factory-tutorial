@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import * as pty from "node-pty";
@@ -25,7 +25,7 @@ export interface TerminalPty {
   open?(): void;
 }
 
-export interface DockerCommandSyncOptions { stdio: "ignore"; env?: NodeJS.ProcessEnv; timeout: number; }
+export interface DockerCommandSyncOptions { stdio: "ignore"; env?: NodeJS.ProcessEnv; timeout: number; privateStdin?: string | Buffer; signal?: AbortSignal; }
 export type DockerCommandRunner = (file: string, args: string[], options: DockerCommandSyncOptions) => unknown;
 
 export interface TerminalPtyOptions {
@@ -69,7 +69,30 @@ export const DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS = {
   piAuthentication: 20_000,
   cleanup: 10_000
 } as const;
-const defaultDockerCommandRunner: DockerCommandRunner = (file, args, options) => { execFileSync(file, args, options); };
+const ASYNC_DOCKER_COMMAND_RUNNER_ERROR = "Docker command runner must complete synchronously.";
+function rejectAsyncDockerCommandRunnerResult(result: unknown): void {
+  if (!result || typeof (result as { then?: unknown }).then !== "function") return;
+  void Promise.resolve(result).catch(() => undefined);
+  throw new Error(ASYNC_DOCKER_COMMAND_RUNNER_ERROR);
+}
+function isAsyncDockerCommandRunnerError(error: unknown): boolean {
+  return error instanceof Error && error.message === ASYNC_DOCKER_COMMAND_RUNNER_ERROR;
+}
+
+function runDockerCommandSynchronously(commandRunner: DockerCommandRunner, file: string, args: string[], options: DockerCommandSyncOptions): void {
+  rejectAsyncDockerCommandRunnerResult(commandRunner(file, args, options));
+}
+
+const defaultDockerCommandRunner: DockerCommandRunner = (file, args, options) => {
+  const { privateStdin, stdio: _stdio, ...execOptions } = options;
+  if (privateStdin === undefined) {
+    execFileSync(file, args, { ...execOptions, stdio: "ignore" });
+    return;
+  }
+  const result = spawnSync(file, args, { ...execOptions, input: privateStdin, stdio: ["pipe", "ignore", "ignore"] });
+  if (result.error) throw result.error;
+  if (result.signal || result.status !== 0) throw new Error("Docker command failed.");
+};
 const DEFAULT_WRITABLE_SCRATCH_DIRECTORIES = [".tmp"] as const;
 export type TerminalPtyFactory = (options: TerminalPtyOptions) => TerminalPty;
 export interface DockerRunArgumentsOptions { workspace: string; name: string; runtimeProvision?: TrustedRuntimeProvision; }
@@ -198,12 +221,16 @@ function workspaceChildForMount(workspace: string, child: string): string | unde
   return safeExistingChildForMount(workspace, child, "workbook workspace");
 }
 
+export function dockerDaemonProbeArguments(): string[] { return ["info"]; }
+
+export function dockerImageProbeArguments(image = WORKBOOK_TERMINAL_IMAGE): string[] { return ["image", "inspect", image]; }
+
 export function assertDockerDaemonAndImage(commandRunner: DockerCommandRunner = defaultDockerCommandRunner, environment: NodeJS.ProcessEnv = process.env): void {
   const dockerEnvironment = dockerClientEnvironment(environment);
-  try { commandRunner("docker", ["info"], { stdio: "ignore", env: dockerEnvironment, timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.info }); }
-  catch { throw new Error("Docker must be running before starting the workbook terminal."); }
-  try { commandRunner("docker", ["image", "inspect", WORKBOOK_TERMINAL_IMAGE], { stdio: "ignore", env: dockerEnvironment, timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.imageInspect }); }
-  catch { throw new Error(`Docker image ${WORKBOOK_TERMINAL_IMAGE} is missing. Run npm run --workspace=tutorial-engine build:workbook-terminal.`); }
+  try { runDockerCommandSynchronously(commandRunner, "docker", dockerDaemonProbeArguments(), { stdio: "ignore", env: dockerEnvironment, timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.info }); }
+  catch (error) { if (isAsyncDockerCommandRunnerError(error)) throw error; throw new Error("Docker must be running before starting the workbook terminal."); }
+  try { runDockerCommandSynchronously(commandRunner, "docker", dockerImageProbeArguments(WORKBOOK_TERMINAL_IMAGE), { stdio: "ignore", env: dockerEnvironment, timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.imageInspect }); }
+  catch (error) { if (isAsyncDockerCommandRunnerError(error)) throw error; throw new Error(`Docker image ${WORKBOOK_TERMINAL_IMAGE} is missing. Run npm run --workspace=tutorial-engine build:workbook-terminal.`); }
 }
 
 export function dockerPiAuthenticationProbeArguments(name: string): string[] {
@@ -211,13 +238,13 @@ export function dockerPiAuthenticationProbeArguments(name: string): string[] {
 }
 
 export function assertDockerPiAuthentication(name: string, commandRunner: DockerCommandRunner = defaultDockerCommandRunner, environment: NodeJS.ProcessEnv = process.env): void {
-  try { commandRunner("docker", dockerPiAuthenticationProbeArguments(name), { stdio: "ignore", env: dockerClientEnvironment(environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.piAuthentication }); }
-  catch { throw new Error(WORKBOOK_TERMINAL_AUTH_PUBLIC_ERROR); }
+  try { runDockerCommandSynchronously(commandRunner, "docker", dockerPiAuthenticationProbeArguments(name), { stdio: "ignore", env: dockerClientEnvironment(environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.piAuthentication }); }
+  catch (error) { if (isAsyncDockerCommandRunnerError(error)) throw error; throw new Error(WORKBOOK_TERMINAL_AUTH_PUBLIC_ERROR); }
 }
 
 function removeDockerContainerStrict(name: string, commandRunner: DockerCommandRunner, environment: NodeJS.ProcessEnv): boolean {
   try {
-    commandRunner("docker", ["rm", "-f", name], { stdio: "ignore", env: dockerClientEnvironment(environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.cleanup });
+    runDockerCommandSynchronously(commandRunner, "docker", ["rm", "-f", name], { stdio: "ignore", env: dockerClientEnvironment(environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.cleanup });
     return true;
   } catch {
     return false;
@@ -295,13 +322,15 @@ class PreparedDockerPty implements DockerPty {
     prepareDefaultWritableWorkspaceDirectories(this.#workspace);
     const args = dockerRunArguments({ workspace: this.#workspace, runtimeProvision: this.#runtimeProvision, name: this.#name });
     args.push(WORKBOOK_TERMINAL_IMAGE, "sleep", "infinity");
-    try { this.#dockerCommandRunner("docker", args, { stdio: "ignore", env: dockerRunEnvironment(apiKey, this.#environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.containerStart }); }
-    catch {
+    try { runDockerCommandSynchronously(this.#dockerCommandRunner, "docker", args, { stdio: "ignore", env: dockerRunEnvironment(apiKey, this.#environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.containerStart }); }
+    catch (error) {
+      if (isAsyncDockerCommandRunnerError(error)) throw error;
       if (!removeDockerContainerStrict(this.#name, this.#dockerCommandRunner, this.#environment)) throw new Error(WORKBOOK_TERMINAL_STARTUP_CLEANUP_PUBLIC_ERROR);
       throw new Error(WORKBOOK_TERMINAL_STARTUP_PUBLIC_ERROR);
     }
     try { assertDockerPiAuthentication(this.#name, this.#dockerCommandRunner, this.#environment); }
     catch (error) {
+      if (isAsyncDockerCommandRunnerError(error)) throw error;
       if (!removeDockerContainerStrict(this.#name, this.#dockerCommandRunner, this.#environment)) throw new Error(WORKBOOK_TERMINAL_AUTH_CLEANUP_PUBLIC_ERROR);
       throw error;
     }
@@ -327,7 +356,7 @@ class PreparedDockerPty implements DockerPty {
     this.#shell?.resize(cols, rows);
   }
   kill(): void { this.#shell?.kill(); this.#shell = undefined; }
-  stopContainer(): void { this.kill(); try { this.#dockerCommandRunner("docker", ["rm", "-f", this.#name], { stdio: "ignore", env: dockerClientEnvironment(this.#environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.cleanup }); } catch { /* normal disposal is best effort; --rm cleans a stopped container. */ } }
+  stopContainer(): void { this.kill(); try { runDockerCommandSynchronously(this.#dockerCommandRunner, "docker", ["rm", "-f", this.#name], { stdio: "ignore", env: dockerClientEnvironment(this.#environment), timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.cleanup }); } catch { /* normal disposal is best effort; --rm cleans a stopped container. */ } }
   onData(callback: (data: string) => void): void { this.#dataCallbacks.push(callback); }
   onExit(callback: (event: { exitCode: number; signal?: number }) => void): void { this.#exitCallbacks.push(callback); }
 }

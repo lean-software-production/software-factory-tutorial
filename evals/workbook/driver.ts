@@ -33,6 +33,11 @@ export interface AuthoredWorkbookDriverOptions {
   editorReviewTimeoutMs?: number;
   requestTimeoutMs?: number;
   maxStructuralAutoProgressionSteps?: number;
+  /**
+   * Runner-private shell prefix prepended only to WebSocket input bytes. It is stripped from
+   * all driver-recorded trace/state/transcript data and must never appear in reports.
+   */
+  privateTerminalShellPrefix?: string;
   signal?: AbortSignal;
 }
 
@@ -58,6 +63,8 @@ export class AuthoredWorkbookDriver {
   readonly #editorReviewTimeoutMs: number;
   readonly #requestTimeoutMs: number;
   readonly #maxStructuralAutoProgressionSteps: number;
+  readonly #privateTerminalShellPrefix?: string;
+  readonly #privateTerminalNeedles: readonly string[];
   readonly #signal?: AbortSignal;
 
   constructor(options: AuthoredWorkbookDriverOptions) {
@@ -70,6 +77,8 @@ export class AuthoredWorkbookDriver {
     this.#editorReviewTimeoutMs = options.editorReviewTimeoutMs ?? 120_000;
     this.#requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
     this.#maxStructuralAutoProgressionSteps = options.maxStructuralAutoProgressionSteps ?? 100;
+    this.#privateTerminalShellPrefix = normalizePrivateTerminalShellPrefix(options.privateTerminalShellPrefix);
+    this.#privateTerminalNeedles = privateTerminalNeedles(this.#privateTerminalShellPrefix);
     this.#signal = options.signal;
   }
 
@@ -139,9 +148,10 @@ export class AuthoredWorkbookDriver {
   async submitTerminalCommand(blockId: string, command: string, options: SubmitTerminalCommandOptions = {}): Promise<WorkbookApiState> {
     const authoredBlockId = blockId;
     blockId = await this.#canonicalBlockId(blockId);
-    const input = /[\r\n]$/.test(command) ? command : `${command}\r`;
+    const logicalInput = /[\r\n]$/.test(command) ? command : `${command}\r`;
+    const socketInput = this.#privateTerminalShellPrefix === undefined ? logicalInput : `${this.#privateTerminalShellPrefix}\n${logicalInput}`;
     const label = options.label ?? `terminal:${authoredBlockId}`;
-    const reviewed = await this.#submitTerminalInput(blockId, input, label, options.timeoutMs ?? this.#terminalReviewTimeoutMs, options.expectedFeedback);
+    const reviewed = await this.#submitTerminalInput(blockId, socketInput, logicalInput, label, options.timeoutMs ?? this.#terminalReviewTimeoutMs, options.expectedFeedback);
     const terminal = terminalStateFor(reviewed, blockId);
     if (terminal?.phase === "feedback" || options.complete === false) return reviewed;
     return this.completeTerminalBlock(blockId);
@@ -180,7 +190,8 @@ export class AuthoredWorkbookDriver {
       catch { throw new Error(`${method} ${path} returned non-JSON response (${response.status}).`); }
       const stateJson = json && typeof json === "object" && "outcome" in json && "state" in json ? (json as { state: unknown }).state : json;
       throwIfAborted(combinedSignal);
-      const state = parsePublicWorkbookState(stateJson);
+      const sanitizedStateJson = sanitizePrivateTerminalValue(stateJson, this.#privateTerminalNeedles);
+      const state = parsePublicWorkbookState(sanitizedStateJson);
       throwIfAborted(combinedSignal);
       return recordAuthoredWorkbookEvalPublicState(this.trace, label, state).state;
     } catch (error) {
@@ -310,9 +321,14 @@ export class AuthoredWorkbookDriver {
     throw new Error(`Timed out waiting for terminal review for ${blockId}.`);
   }
 
-  async #submitTerminalInput(blockId: string, input: string, label: string, reviewTimeoutMs: number, expectedFeedback: TerminalFeedbackExpectation | undefined): Promise<WorkbookApiState> {
+  async #submitTerminalInput(blockId: string, socketInput: string, logicalInput: string, label: string, reviewTimeoutMs: number, expectedFeedback: TerminalFeedbackExpectation | undefined): Promise<WorkbookApiState> {
     throwIfAborted(this.#signal);
-    const ws = new this.#WebSocket(`${this.serverUrl.replace(/^http/, "ws")}/api/workbook/terminal`, { headers: { Origin: this.serverUrl } });
+    let ws: WebSocket;
+    try {
+      ws = new this.#WebSocket(`${this.serverUrl.replace(/^http/, "ws")}/api/workbook/terminal`, { headers: { Origin: this.serverUrl } });
+    } catch {
+      throw new Error(`Workbook terminal socket could not be created for ${blockId}.`);
+    }
     try {
       return await new Promise<WorkbookApiState>((resolve, reject) => {
         let settled = false;
@@ -350,13 +366,13 @@ export class AuthoredWorkbookDriver {
         const failFrame = (frame: PublicTerminalFrame): boolean => {
           if (frame.type === "terminal-error" || frame.type === "busy") {
             const row = terminalTranscriptRow(frame, blockId);
-            if (row) recordAuthoredWorkbookEvalTerminalTranscript(this.trace, row);
-            finish(new Error(frame.message));
+            if (row) recordAuthoredWorkbookEvalTerminalTranscript(this.trace, sanitizePrivateTerminalTranscriptEntry(row, this.#privateTerminalNeedles));
+            finish(new Error(sanitizePrivateTerminalText(frame.message, this.#privateTerminalNeedles)));
             return true;
           }
           if (frame.type === "exit") {
             const row = terminalTranscriptRow(frame, blockId);
-            if (row) recordAuthoredWorkbookEvalTerminalTranscript(this.trace, row);
+            if (row) recordAuthoredWorkbookEvalTerminalTranscript(this.trace, sanitizePrivateTerminalTranscriptEntry(row, this.#privateTerminalNeedles));
             finish(new Error(`Workbook terminal command exited with code ${frame.exitCode}${frame.signal === undefined ? "" : ` signal ${frame.signal}`}.`));
             return true;
           }
@@ -365,7 +381,7 @@ export class AuthoredWorkbookDriver {
         const processPostSendFrame = (frame: PublicTerminalFrame) => {
           if (failFrame(frame)) return;
           const row = terminalTranscriptRow(frame, blockId);
-          if (row) recordAuthoredWorkbookEvalTerminalTranscript(this.trace, row);
+          if (row) recordAuthoredWorkbookEvalTerminalTranscript(this.trace, sanitizePrivateTerminalTranscriptEntry(row, this.#privateTerminalNeedles));
         };
         const processPreSendFrame = (frame: PublicTerminalFrame) => {
           if (frame.type === "output") return;
@@ -399,10 +415,10 @@ export class AuthoredWorkbookDriver {
             try {
               bufferingDuringSend = true;
               throwIfAborted(reviewAbort.signal);
-              ws.send(JSON.stringify({ type: "input", data: input }));
-            } catch (error) {
+              ws.send(JSON.stringify({ type: "input", data: socketInput }));
+            } catch {
               bufferedDuringSend.length = 0;
-              finish(error instanceof Error ? error : new Error(String(error)));
+              finish(new Error(`Workbook terminal socket send failed before terminal review completed for ${blockId}.`));
               return;
             } finally {
               bufferingDuringSend = false;
@@ -412,7 +428,7 @@ export class AuthoredWorkbookDriver {
               return;
             }
             commandSent = true;
-            recordAuthoredWorkbookEvalTerminalTranscript(this.trace, { blockId, direction: "input", text: input });
+            recordAuthoredWorkbookEvalTerminalTranscript(this.trace, { blockId, direction: "input", text: logicalInput });
             for (const frame of bufferedDuringSend.splice(0)) processPostSendFrame(frame);
             if (settled || reviewAbort.signal.aborted) return;
             void this.#waitForTerminalReview(blockId, label, reviewTimeoutMs, expectedFeedback, baseline, reviewAbort.signal).then(finish, (error) => finish(error instanceof Error ? error : new Error(String(error))));
@@ -495,6 +511,40 @@ function terminalTranscriptRow(frame: PublicTerminalFrame, blockId: string): Aut
     case "busy": return { blockId, direction: "observer", text: frame.message };
     case "exit": return { blockId, direction: "observer", text: `exit:${frame.exitCode}${frame.signal === undefined ? "" : ` signal:${frame.signal}`}` };
   }
+}
+
+function normalizePrivateTerminalShellPrefix(prefix: string | undefined): string | undefined {
+  if (prefix === undefined) return undefined;
+  const trimmed = prefix.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function privateTerminalNeedles(prefix: string | undefined): readonly string[] {
+  if (prefix === undefined) return [];
+  return [...new Set([prefix, `${prefix}\n`, `${prefix}\r`, `${prefix}\r\n`])];
+}
+
+function sanitizePrivateTerminalTranscriptEntry(entry: AuthoredWorkbookEvalTerminalTranscriptEntry, needles: readonly string[]): AuthoredWorkbookEvalTerminalTranscriptEntry {
+  if (needles.length === 0) return entry;
+  return { ...entry, text: sanitizePrivateTerminalText(entry.text, needles) };
+}
+
+function sanitizePrivateTerminalValue(value: unknown, needles: readonly string[]): unknown {
+  if (needles.length === 0) return value;
+  if (typeof value === "string") return sanitizePrivateTerminalText(value, needles);
+  if (Array.isArray(value)) return value.map((item) => sanitizePrivateTerminalValue(item, needles));
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) out[key] = sanitizePrivateTerminalValue(child, needles);
+    return out;
+  }
+  return value;
+}
+
+function sanitizePrivateTerminalText(text: string, needles: readonly string[]): string {
+  let sanitized = text;
+  for (const needle of needles) sanitized = sanitized.split(needle).join("");
+  return sanitized.replace(/^[\r\n]+/, "");
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

@@ -23,6 +23,7 @@ export type PracticeCoachOutcome =
 /** The terminal-only coach is not a learner-facing tutor and cannot accept work. */
 export interface PracticeCoach {
   assess(input: { attempt: Attempt; rubric: string }): Promise<PracticeCoachOutcome>;
+  dispose(): void;
 }
 
 export interface PracticeCoachSession {
@@ -88,6 +89,9 @@ export class FastPracticeCoach implements PracticeCoach {
   readonly #log: TutorialLogger;
   readonly #sessionFactory: PracticeCoachSessionFactory;
   readonly #environment: WorkbookModelEnvironment;
+  readonly #activeSessions = new Set<PracticeCoachSession>();
+  #disposed = false;
+  #generation = 0;
 
   constructor(options: FastPracticeCoachOptions) {
     this.#workspace = options.workspace;
@@ -97,6 +101,8 @@ export class FastPracticeCoach implements PracticeCoach {
   }
 
   async assess(input: { attempt: Attempt; rubric: string }): Promise<PracticeCoachOutcome> {
+    if (this.#disposed) throw new Error("Practice Coach is disposed.");
+    const generation = this.#generation;
     if (input.attempt.evidence.kind !== "terminal") throw new Error("Practice Coach requires terminal evidence.");
     let result: PracticeCoachOutcome | undefined;
     const report = defineTool({
@@ -114,6 +120,11 @@ export class FastPracticeCoach implements PracticeCoach {
     });
     const outboundPrompt = prompt(input);
     const session = await this.#sessionFactory({ systemPrompt: practiceCoachSystemPrompt(), customTools: [report], tools: [REPORT_TOOL] });
+    if (this.#disposed || generation !== this.#generation) {
+      session.dispose();
+      throw new Error("Practice Coach is disposed.");
+    }
+    this.#activeSessions.add(session);
     try {
       if (practiceCoachPromptLoggingEnabled(this.#environment)) {
         this.#log.info(`Practice Coach prompt begin\n${outboundPrompt}\nPractice Coach prompt end`);
@@ -121,6 +132,17 @@ export class FastPracticeCoach implements PracticeCoach {
       await session.prompt(outboundPrompt);
       if (!result) throw new Error("Practice Coach did not report an outcome.");
       return result;
-    } finally { session.dispose(); }
+    } finally {
+      this.#activeSessions.delete(session);
+      session.dispose();
+    }
+  }
+
+  dispose(): void {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    this.#generation += 1;
+    for (const session of [...this.#activeSessions]) session.dispose();
+    this.#activeSessions.clear();
   }
 }

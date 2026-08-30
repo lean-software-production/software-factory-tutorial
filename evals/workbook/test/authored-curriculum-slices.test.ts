@@ -180,17 +180,17 @@ describe("authored curriculum slice materialization", () => {
     tempRoots.length = 0;
   });
 
-  it("keeps authored-workbook evaluator ownership at the repository root without a public runner yet", async () => {
+  it("keeps authored-workbook evaluator ownership at the repository root with only the eval runner wired", async () => {
     const packageJson = JSON.parse(await readFile(resolve(import.meta.dirname, "../../../package.json"), "utf8")) as { scripts: Record<string, string> };
     const engineTsconfig = JSON.parse(await readFile(resolve(import.meta.dirname, "../../../tutorial-engine/evals/tsconfig.json"), "utf8")) as { include: string[] };
 
-    expect(packageJson.scripts["eval:workbook"]).toBeUndefined();
+    expect(packageJson.scripts["eval:workbook"]).toBe("tsx evals/workbook/run.ts");
     expect(packageJson.scripts["check:eval:workbook"]).toBe("tsc -p evals/workbook/tsconfig.json");
     expect(packageJson.scripts["test:eval:workbook"]).toBe("vitest run evals/workbook/test/*.test.ts");
     expect(packageJson.scripts.check).not.toContain("check:eval:workbook");
     expect(packageJson.scripts.check).not.toContain("test:eval:workbook");
     expect(engineTsconfig.include).not.toContain("authored/**/*.ts");
-    await expect(stat(resolve(import.meta.dirname, "../run.ts"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(resolve(import.meta.dirname, "../run.ts"))).resolves.toMatchObject({ isFile: expect.any(Function) });
     await expect(stat(resolve(import.meta.dirname, "../../../tutorial-engine/evals/authored"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 

@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { chmod, link, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -287,6 +289,43 @@ describe("authored workbook judge command", () => {
       expect(String(error.message)).not.toContain(root);
       expect(String(error.message)).not.toContain("provider/model");
     }
+  });
+
+  it("cancels Judge command invocation by closing stdin and killing the child promptly", async () => {
+    const kills: string[] = [];
+    let stdinClosed = false;
+    class FakeChild extends EventEmitter {
+      stdout = new PassThrough();
+      stderr = new PassThrough();
+      stdin = new PassThrough();
+      pid = 0;
+      constructor() {
+        super();
+        const originalEnd = this.stdin.end.bind(this.stdin) as typeof this.stdin.end;
+        this.stdin.end = ((...args: any[]) => { stdinClosed = true; return originalEnd(...args as [any]); }) as typeof this.stdin.end;
+      }
+      kill(signal?: NodeJS.Signals): boolean {
+        kills.push(signal ?? "SIGTERM");
+        this.emit("close", null, signal);
+        return true;
+      }
+    }
+    const child = new FakeChild();
+    const controller = new AbortController();
+    const pending = invokeAuthoredWorkbookJudgeCommand({
+      prompt: "prompt",
+      environment: { EVAL_JUDGE_COMMAND: "judge", EVAL_JUDGE_MODEL: "provider/model", PATH: process.env.PATH, HOME: "/tmp" },
+      signal: controller.signal,
+      timeoutMs: 5_000,
+      spawnProcess: (() => child) as any
+    });
+
+    controller.abort();
+    await expect(pending).rejects.toThrow("Judge command cancelled before returning a bounded JSON result.");
+    expect(stdinClosed).toBe(true);
+    expect(kills).toContain("SIGTERM");
+    expect(child.listenerCount("close")).toBe(0);
+    expect(controller.signal).toBeDefined();
   });
 });
 

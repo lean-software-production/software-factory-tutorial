@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readAuthoredCommandStubEvidence } from "../command-stubs.js";
 import {
   AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL,
@@ -78,6 +78,7 @@ function stubFixture(overrides: Partial<AuthoredWorkbookEvalDisposableFixture> =
   return {
     root: process.cwd(),
     workspaceRoot: process.cwd(),
+    workspaceVolumeName: "authored-workbook-preflight-00000000-0000-4000-8000-000000000000",
     trustedNodeModulesHostPath: process.cwd(),
     commandStubs: {
       hostBinDir: resolve(process.cwd(), "factory/.tmp/authored-eval-command-stubs/bin"),
@@ -125,9 +126,9 @@ function recordingOperations(events: string[], overrides: Partial<AuthoredWorkbo
   };
 }
 
-async function expectPreflightFailure(input: AuthoredWorkbookEvalPreflightRequestInput, operations: Partial<AuthoredWorkbookEvalExternalOperations>): Promise<AuthoredWorkbookEvalPreflightError> {
+async function expectPreflightFailure(input: AuthoredWorkbookEvalPreflightRequestInput, operations: Partial<AuthoredWorkbookEvalExternalOperations>, signal?: AbortSignal): Promise<AuthoredWorkbookEvalPreflightError> {
   try {
-    await runAuthoredWorkbookEvalPreflight(input, { operations, timeoutsMs: { npmVersion: 5, dockerReady: 5, terminalStart: 5, terminalReadiness: 5, terminalAuth: 5, terminalCleanup: 5, fixture: 5, fixtureCleanup: 5, mainTutor: 5, practiceCoach: 5, judge: 5 } });
+    await runAuthoredWorkbookEvalPreflight(input, { operations, signal, timeoutsMs: { npmVersion: 5, dockerReady: 5, terminalStart: 5, terminalReadiness: 5, terminalAuth: 5, terminalCleanup: 5, fixture: 5, fixtureCleanup: 5, mainTutor: 5, practiceCoach: 5, judge: 5 } });
   } catch (error) {
     expect(error).toBeInstanceOf(AuthoredWorkbookEvalPreflightError);
     return error as AuthoredWorkbookEvalPreflightError;
@@ -140,9 +141,9 @@ function serializedPublicError(error: AuthoredWorkbookEvalPreflightError): strin
   return JSON.stringify({ ownPropertySnapshot, json: error, stack: error.stack, message: error.message });
 }
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolveDeferred!: () => void;
-  return { promise: new Promise<void>((resolve) => { resolveDeferred = resolve; }), resolve: resolveDeferred };
+function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolveDeferred!: (value: T) => void;
+  return { promise: new Promise<T>((resolve) => { resolveDeferred = resolve; }), resolve: resolveDeferred };
 }
 
 async function waitUntil(assertion: () => boolean, timeoutMs = 500): Promise<void> {
@@ -156,6 +157,7 @@ async function waitUntil(assertion: () => boolean, timeoutMs = 500): Promise<voi
 async function pauseableFixtureTimeoutCase(pauseAfter: "root" | "calculator" | "stub"): Promise<{ error: AuthoredWorkbookEvalPreflightError; events: string[]; root: string; closed: number }> {
   const events: string[] = [];
   const pause = deferred();
+  const enteredFixture = deferred<void>();
   let root = "";
   let closed = 0;
   let operationSettled: Promise<unknown> | undefined;
@@ -164,6 +166,7 @@ async function pauseableFixtureTimeoutCase(pauseAfter: "root" | "calculator" | "
       events.push(`fixture-create:${input.timeoutMs}:${input.signal instanceof AbortSignal}`);
       operationSettled = (async () => {
         root = await mkdtemp(join(tmpdir(), `authored-preflight-timeout-${pauseAfter}-`));
+        enteredFixture.resolve();
         const workspaceRoot = resolve(root, "workspace");
         let commandStubs: AuthoredWorkbookEvalDisposableFixture["commandStubs"] | undefined;
         input.registerPartialFixtureLease?.({
@@ -197,14 +200,29 @@ async function pauseableFixtureTimeoutCase(pauseAfter: "root" | "calculator" | "
     }
   });
 
-  const failure = expectPreflightFailure(validRequest(), operations);
-  await waitUntil(() => root !== "");
-  await waitUntil(() => !existsSync(root));
-  pause.resolve();
-  const error = await failure;
-  await operationSettled?.catch(() => undefined);
-  await new Promise((resolveWait) => setTimeout(resolveWait, 10));
-  return { error, events, root, closed };
+  vi.useFakeTimers();
+  try {
+    const failure = (async () => {
+      try {
+        await runAuthoredWorkbookEvalPreflight(validRequest(), { operations, timeoutsMs: { npmVersion: 5, dockerReady: 5, terminalStart: 5, terminalReadiness: 5, terminalAuth: 5, terminalCleanup: 5, fixture: 100, fixtureCleanup: 5, mainTutor: 5, practiceCoach: 5, judge: 5 } });
+      } catch (error) {
+        expect(error).toBeInstanceOf(AuthoredWorkbookEvalPreflightError);
+        return error as AuthoredWorkbookEvalPreflightError;
+      }
+      throw new Error("Expected preflight to fail.");
+    })();
+    await enteredFixture.promise;
+    expect(root).not.toBe("");
+    await vi.advanceTimersByTimeAsync(100);
+    const error = await failure;
+    expect(existsSync(root)).toBe(false);
+    pause.resolve();
+    await operationSettled?.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    return { error, events, root, closed };
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 describe("authored workbook eval preflight", () => {
@@ -388,7 +406,7 @@ describe("authored workbook eval preflight", () => {
       "npm:5",
       "docker-ready:11",
       "fixture-create:5",
-      "terminal-run:30000:node_modules",
+      "terminal-run:30000:",
       "terminal-readiness:20000:true:/workspace/factory/.tmp/authored-eval-command-stubs/container-config.json",
       "terminal-auth:20000:true",
       "terminal-rm:10000:true",
@@ -412,7 +430,7 @@ describe("authored workbook eval preflight", () => {
       "npm:5",
       "docker-ready:5",
       "fixture-create:5",
-      "terminal-run:5:node_modules",
+      "terminal-run:5:",
       `readiness-fails:${secret}:${privatePath}`,
       "terminal-rm:5:true",
       expect.stringMatching(/^fixture-rm:5:workbook-terminal-preflight-/)
@@ -425,7 +443,7 @@ describe("authored workbook eval preflight", () => {
   it("cleans up a fixture even if no terminal input can be prepared", async () => {
     const events: string[] = [];
     const error = await expectPreflightFailure(validRequest(), recordingOperations(events, {
-      createDisposablePreflightFixture: async () => { events.push("fixture-create-invalid"); return stubFixture({ trustedNodeModulesHostPath: resolve(process.cwd(), "missing-node-modules-for-preflight-test") }); }
+      createDisposablePreflightFixture: async () => { events.push("fixture-create-invalid"); return stubFixture({ workspaceVolumeName: "private/bad-volume-name" }); }
     }));
 
     expect(error.phase).toBe("terminal");
@@ -452,7 +470,7 @@ describe("authored workbook eval preflight", () => {
     for (const pauseAfter of ["root", "calculator", "stub"] as const) {
       const { error, events, root, closed } = await pauseableFixtureTimeoutCase(pauseAfter);
       expect(error.phase, pauseAfter).toBe("terminal");
-      expect(events).toEqual(["npm:5", "docker-ready:5", `fixture-create:5:true`]);
+      expect(events).toEqual(["npm:5", "docker-ready:5", `fixture-create:100:true`]);
       expect(events.some((event) => event.startsWith("paid:"))).toBe(false);
       expect(existsSync(root), pauseAfter).toBe(false);
       expect(closed, pauseAfter).toBeGreaterThanOrEqual(1);
@@ -481,6 +499,25 @@ describe("authored workbook eval preflight", () => {
       const error = await expectPreflightFailure(validRequest(), recordingOperations(events, overrides));
       expect(error.phase, stage).toBe(phase);
       if (phase !== "mainTutor" && phase !== "practiceCoach" && phase !== "judge") expect(events.some((event) => event.startsWith("paid:"))).toBe(false);
+    }
+  });
+
+  it("propagates external abort through runtime, Docker, fixture, and paid operations without continuing", async () => {
+    for (const stage of ["npmVersion", "dockerReady", "dockerRunTerminal", "probeMainTutor"] as const) {
+      const events: string[] = [];
+      const controller = new AbortController();
+      const operations = recordingOperations(events, {
+        [stage]: async (input: any) => {
+          events.push(`abort-stage:${stage}:${input.signal instanceof AbortSignal}`);
+          controller.abort();
+          await new Promise((_resolve, reject) => input.signal.addEventListener("abort", () => reject(new Error(`raw ${secret} ${privatePath}`)), { once: true }));
+        }
+      } as Partial<AuthoredWorkbookEvalExternalOperations>);
+      const error = await expectPreflightFailure(validRequest(), operations, controller.signal);
+      expect(error).toBeInstanceOf(AuthoredWorkbookEvalPreflightError);
+      if (stage !== "probeMainTutor") expect(events.some((event) => event.startsWith("paid:")), stage).toBe(false);
+      expect(serializedPublicError(error)).not.toContain(secret);
+      expect(serializedPublicError(error)).not.toContain(privatePath);
     }
   });
 
@@ -517,11 +554,40 @@ describe("authored workbook eval preflight", () => {
     expect(dockerClientEnvironment(request.environment).OPENCODE_API_KEY).toBeUndefined();
   });
 
+  it("sends terminal readiness and authentication scripts through private Docker stdin, not argv", async () => {
+    const request = validateAuthoredWorkbookEvalPreflightRequest(validRequest());
+    const calls: Array<{ args: string[]; stdin?: string; serialized: string }> = [];
+    const operations = defaultPreflightOperations({
+      authoredDockerCommandRunner: async (_file, args, options) => {
+        calls.push({ args, stdin: typeof options.privateStdin === "string" ? options.privateStdin : options.privateStdin?.toString("utf8"), serialized: JSON.stringify({ args, options }) });
+      }
+    });
+    const input: AuthoredWorkbookEvalTerminalInput = { request, timeoutMs: 123, name: "workbook-terminal-preflight-test", fixture: stubFixture(), runtimeProvision: { mounts: [], workspaceMountTargets: [] } };
+
+    await operations.dockerMountReadiness(input);
+    await operations.dockerPiAuthentication(input);
+
+    expect(calls.map((call) => call.args)).toEqual([
+      ["exec", "-i", "workbook-terminal-preflight-test", "sh"],
+      ["exec", "-i", "workbook-terminal-preflight-test", "sh"]
+    ]);
+    expect(calls[0]?.stdin).toContain("AUTHORED_EVAL_COMMAND_STUB_CONFIG");
+    expect(calls[0]?.stdin).toContain(stubFixture().commandStubs.containerConfigPath);
+    expect(calls[1]?.stdin).toContain("ModelRuntime");
+    for (const call of calls) {
+      expect(call.args.join(" ")).not.toContain("AUTHORED_EVAL_COMMAND_STUB_CONFIG");
+      expect(call.args.join(" ")).not.toContain(stubFixture().commandStubs.containerConfigPath);
+      expect(call.args.join(" ")).not.toContain(stubFixture().commandStubs.containerEvidencePath);
+      expect(call.args.join(" ")).not.toContain(stubFixture().commandStubs.runId);
+      expect(call.serialized).not.toContain(secret);
+    }
+  });
+
   it("uses the production Docker ready primitive seam rather than copied daemon/image commands", async () => {
     const request = validateAuthoredWorkbookEvalPreflightRequest(validRequest());
     const calls: Array<{ file: string; args: string[]; timeout: number; hasSecret: boolean }> = [];
     const operations = defaultPreflightOperations({
-      dockerCommandRunner: (file, args, options) => {
+      authoredDockerCommandRunner: async (file, args, options) => {
         calls.push({ file, args, timeout: options.timeout, hasSecret: options.env?.OPENCODE_API_KEY === secret });
       }
     });

@@ -121,6 +121,7 @@ const WORKSPACE_RELATIVE_BIN_PATH = `${WORKSPACE_RELATIVE_STATE_DIR}/bin`;
 const CONTAINER_WORKSPACE = "/workspace";
 const DEFAULT_MAX_PROMPT_BYTES = 256_000;
 const DEFAULT_MAX_EVIDENCE_ENTRY_BYTES = 8_192;
+export const AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS = 5_000;
 const DEFAULT_MAX_EVIDENCE_TOTAL_BYTES = 1_000_000;
 const MAX_EVIDENCE_READ_BYTES = 1_000_000;
 const MAX_EVIDENCE_LINE_BYTES = 16_384;
@@ -219,7 +220,7 @@ export async function createAuthoredCommandStubs(options: AuthoredCommandStubOpt
     maxPromptBytes: options.maxPromptBytes ?? DEFAULT_MAX_PROMPT_BYTES,
     maxEvidenceEntryBytes: options.maxEvidenceEntryBytes ?? DEFAULT_MAX_EVIDENCE_ENTRY_BYTES,
     maxEvidenceTotalBytes: options.maxEvidenceTotalBytes ?? DEFAULT_MAX_EVIDENCE_TOTAL_BYTES,
-    rpcEarlySteerWindowMs: options.rpcEarlySteerWindowMs ?? 500,
+    rpcEarlySteerWindowMs: options.rpcEarlySteerWindowMs ?? AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS,
     rpcLateSteerWindowMs: options.rpcLateSteerWindowMs ?? 500
   };
   await writeJsonAtomic(hostConfigPath, {

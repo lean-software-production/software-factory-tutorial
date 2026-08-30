@@ -21,6 +21,7 @@ const REVIEW_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please try a
 const TERMINAL_REVIEW_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please run the command again in a moment.";
 const TUTOR_UNAVAILABLE = "The tutor is temporarily unavailable. Please retry.";
 const TERMINAL_ASSESSMENT_TIMEOUT_MS = 30_000;
+const WORKFLOW_CLOSE_GRACE_MS = 250;
 const MAX_PUBLIC_TERMINAL_SNAPSHOT_BYTES = 16_000;
 
 class TerminalAssessmentTimeoutError extends Error {
@@ -447,6 +448,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     return message.replace(/\s+/g, " ").trim().slice(0, 500) || "The workbook content could not be loaded yet.";
   };
   const generationIsCurrent = (generation: number): boolean => !closed && generation === reloadGeneration;
+  const currentGeneration = (): number => reloadGeneration;
   const authoredMessageExists = (lessonId: string, blockId: string): boolean => records.some((record) => record.type === "message" && record.source === "authored" && record.lessonId === lessonId && record.blockId === blockId);
   const currentWorkbookProjection = (source = records) => projectWorkbookBlocks(stream, source);
   const activeOrderedBlock = (source = records) => currentWorkbookProjection(source).current;
@@ -463,14 +465,17 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     return index >= 0 ? stream[index + 1] : undefined;
   };
   const hasWorkAccepted = (blockId: string): boolean => records.some((record) => record.type === "work_accepted" && record.blockId === blockId);
-  const ensureReadySuccessor = async (block: OrderedWorkbookBlock): Promise<void> => {
+  const ensureReadySuccessor = async (block: OrderedWorkbookBlock, generation = currentGeneration()): Promise<void> => {
+    if (!generationIsCurrent(generation)) return;
     const successor = successorOf(block);
-    if (successor) await ensureAuthoredBlock(successor);
+    if (successor && generationIsCurrent(generation)) await ensureAuthoredBlock(successor);
   };
-  const recordWorkAccepted = async (block: OrderedWorkbookBlock): Promise<WorkbookTimelineRecord | undefined> => {
+  const recordWorkAccepted = async (block: OrderedWorkbookBlock, generation = currentGeneration()): Promise<WorkbookTimelineRecord | undefined> => {
+    if (!generationIsCurrent(generation)) return undefined;
     let accepted: WorkbookTimelineRecord | undefined;
     if (!hasWorkAccepted(block.id)) accepted = await append({ type: "work_accepted", blockId: block.id });
-    await ensureReadySuccessor(block);
+    if (!generationIsCurrent(generation)) return accepted;
+    await ensureReadySuccessor(block, generation);
     return accepted;
   };
   const ensureAuthoredCurrentBlock = async (): Promise<void> => {
@@ -478,12 +483,14 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     if (!active) return;
     await ensureAuthoredBlock(active);
   };
-  const ensureActiveWorkAcceptance = async (): Promise<void> => {
+  const ensureActiveWorkAcceptance = async (generation = currentGeneration()): Promise<void> => {
+    if (!generationIsCurrent(generation)) return;
     const active = activeOrderedBlock();
     if (!active) return;
     await ensureAuthoredCurrentBlock();
-    if (acceptsWorkImmediately(active)) await recordWorkAccepted(active);
-    else if (hasWorkAccepted(active.id)) await ensureReadySuccessor(active);
+    if (!generationIsCurrent(generation)) return;
+    if (acceptsWorkImmediately(active)) await recordWorkAccepted(active, generation);
+    else if (hasWorkAccepted(active.id)) await ensureReadySuccessor(active, generation);
   };
 
   const activeTerminalPrivateContext = async (active: DeclaredWorkbookBlock) => {
@@ -634,7 +641,11 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   };
 
   const trackFinalizer = (finalizer: Promise<unknown>): void => {
-    reviewFinalizers.add(finalizer); void finalizer.finally(() => reviewFinalizers.delete(finalizer));
+    reviewFinalizers.add(finalizer);
+    void finalizer.then(
+      () => { reviewFinalizers.delete(finalizer); },
+      () => { reviewFinalizers.delete(finalizer); }
+    );
   };
   const finishReview = async (attempt: Attempt, privateGuidance: string, generation = reloadGeneration): Promise<void> => {
     if (!generationIsCurrent(generation)) return;
@@ -762,13 +773,17 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     return reviewing;
   };
   const submitAttempt = (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }): Promise<Attempt> => transact(() => createAttempt(input));
-  const requeueActiveAttempt = async (options: { includeFeedback?: boolean } = { includeFeedback: true }): Promise<void> => {
+  const requeueActiveAttempt = async (options: { includeFeedback?: boolean; generation?: number } = { includeFeedback: true }): Promise<void> => {
+    const generation = options.generation ?? currentGeneration();
+    if (!generationIsCurrent(generation)) return;
     const active = activeDeclaredBlock();
     if (!active || !isEvaluatedBlock(active.block)) return;
     const current = await attempts.current(active.lessonId, active.id).catch(() => undefined);
+    if (!generationIsCurrent(generation)) return;
     if (!current || current.status === "accepted" || current.status === "superseded" || (!options.includeFeedback && current.status === "feedback")) return;
     const reviewing = await attempts.markReviewing(current.id) ?? current;
-    void finishReview(reviewing, active.block.tutor);
+    if (!generationIsCurrent(generation)) return;
+    void finishReview(reviewing, active.block.tutor, generation);
   };
 
   const activeObservedBlock = (): ActiveObservedTerminalBlock | undefined => {
@@ -806,6 +821,21 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     for (const handle of [...terminalAssessmentTimeouts]) {
       assessmentScheduler.cancel(handle);
       terminalAssessmentTimeouts.delete(handle);
+    }
+  };
+  const boundedDrain = async (promises: Promise<unknown>[], timeoutMs: number): Promise<void> => {
+    if (promises.length === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.allSettled(promises),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, timeoutMs);
+          timer.unref?.();
+        })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   };
   const withTerminalAssessmentTimeout = async <T>(operation: Promise<T>): Promise<T> => {
@@ -1037,36 +1067,53 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     if (attempt) launchTerminalMainReview(resume.request, resume.handoff, attempt);
   };
 
-  const summarizeDeparture = async (leaving: DeclaredWorkbookBlock, workflowId: string): Promise<void> => {
+  const summarizeDeparture = async (leaving: DeclaredWorkbookBlock, workflowId: string, generation = currentGeneration()): Promise<void> => {
+    if (!generationIsCurrent(generation)) return;
     if (isEvaluatedBlock(leaving.block)) {
-      try { await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text: requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId: workflowId }), "block_summary"), coveredThroughId: workflowId }); }
-      catch (error) {
+      try {
+        const text = requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId: workflowId }), "block_summary");
+        if (!generationIsCurrent(generation)) return;
+        await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text, coveredThroughId: workflowId });
+      } catch (error) {
+        if (!generationIsCurrent(generation)) return;
         logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId }, error);
+        if (!generationIsCurrent(generation)) return;
         await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId, operation: "block_summary", publicMessage: TUTOR_UNAVAILABLE });
       }
     }
+    if (!generationIsCurrent(generation)) return;
     const projection = currentWorkbookProjection();
     const lessonComplete = stream.filter((block) => block.origin === "declared" && block.lessonId === leaving.lessonId).every((block) => projection.completedBlockIds.has(block.id));
     if (lessonComplete) {
-      try { await append({ type: "lesson_summarized", lessonId: leaving.lessonId, text: requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: leaving.lessonId, coveredThroughId: workflowId }), "lesson_summary"), coveredThroughId: workflowId }); }
-      catch (error) {
+      try {
+        const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: leaving.lessonId, coveredThroughId: workflowId }), "lesson_summary");
+        if (!generationIsCurrent(generation)) return;
+        await append({ type: "lesson_summarized", lessonId: leaving.lessonId, text, coveredThroughId: workflowId });
+      } catch (error) {
+        if (!generationIsCurrent(generation)) return;
         logSummaryFailure("lesson_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId }, error);
+        if (!generationIsCurrent(generation)) return;
         await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId, operation: "lesson_summary", publicMessage: TUTOR_UNAVAILABLE });
       }
     }
   };
 
-  const requestCompletionSummary = async (workflowId: string): Promise<void> => {
+  const requestCompletionSummary = async (workflowId: string, generation = currentGeneration()): Promise<void> => {
+    if (!generationIsCurrent(generation)) return;
     try {
       const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: "workbook", coveredThroughId: workflowId }), "completion_summary");
+      if (!generationIsCurrent(generation)) return;
       await append({ type: "workbook_completion_summary", text });
     } catch (error) {
+      if (!generationIsCurrent(generation)) return;
       logSummaryFailure("completion_summary", { lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID, requestId: workflowId }, error);
+      if (!generationIsCurrent(generation)) return;
       await appendFailure({ lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID, requestId: workflowId, operation: "completion_summary", publicMessage: TUTOR_UNAVAILABLE });
     }
   };
 
-  const completeBlock = async (blockId: string): Promise<CompleteBlockResult> => {
+  const completeBlock = async (blockId: string, generation = currentGeneration()): Promise<CompleteBlockResult> => {
+    if (!generationIsCurrent(generation)) return { outcome: "rejected", state: await currentPublicState(), reason: "not-current" };
     const projection = currentWorkbookProjection();
     const stateBefore = async () => await currentPublicState();
     if (projection.completedBlockIds.has(blockId)) return { outcome: "already-completed", state: await stateBefore() };
@@ -1083,9 +1130,11 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       catch (error) { log.info(`Could not reset completed terminal ${requested.id}: ${error instanceof Error ? error.message : String(error)}`); }
     }
     const nextProjection = currentWorkbookProjection();
-    if (requested.origin === "declared") await summarizeDeparture(requested, written.id);
-    if (!nextProjection.current) await requestCompletionSummary(written.id);
-    if (nextProjection.current) await ensureActiveWorkAcceptance();
+    if (requested.origin === "declared") await summarizeDeparture(requested, written.id, generation);
+    if (!generationIsCurrent(generation)) return { outcome: "completed", state: await currentPublicState(), navigationTarget: successorAnchor(stream, requested.id) };
+    if (!nextProjection.current) await requestCompletionSummary(written.id, generation);
+    if (!generationIsCurrent(generation)) return { outcome: "completed", state: await currentPublicState(), navigationTarget: successorAnchor(stream, requested.id) };
+    if (nextProjection.current) await ensureActiveWorkAcceptance(generation);
     return { outcome: "completed", state: await currentPublicState(), navigationTarget: successorAnchor(stream, requested.id) };
   };
 
@@ -1122,7 +1171,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       await mainTutor.restore(await mainContext());
       await transact(async () => {
         if (!generationIsCurrent(generation)) return;
-        await requeueActiveAttempt({ includeFeedback: false });
+        await requeueActiveAttempt({ includeFeedback: false, generation });
       });
       await requeueTerminalLifecycle();
     } catch (error) {
@@ -1218,39 +1267,69 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   const retry = (failureId: string) => trackOrdinaryCommand(async () => transact(async () => {
     const failure = records.find((record): record is TutorFailure => record.type === "tutor_failed" && record.id === failureId);
     if (!failure) throw new WorkbookWorkflowCommandError(404, "Unknown tutor failure.");
+    const generation = currentGeneration();
+    if (!generationIsCurrent(generation)) return await currentPublicState();
     if (failure.operation === "reply") {
       const index = records.findIndex((record) => record.id === failure.id);
       const learnerMessage = [...records.slice(0, index)].reverse().find((record): record is TimelineMessage => record.type === "message" && record.source === "learner" && record.lessonId === failure.lessonId && record.blockId === failure.blockId);
       if (!learnerMessage) throw new WorkbookWorkflowCommandError(409, "The original learner message is unavailable.");
       try {
-        const active = activeDeclaredBlock();
-        const reply = await mainTutor.reply({ ...(await mainContextForTarget(failure.lessonId, failure.blockId)), learnerMessage });
-        if (typeof reply !== "string" && reply.outcome === "complete-block") { await completeBlock(reply.blockId); return await currentPublicState(); }
+        const context = await mainContextForTarget(failure.lessonId, failure.blockId);
+        if (!generationIsCurrent(generation)) return await currentPublicState();
+        const reply = await mainTutor.reply({ ...context, learnerMessage });
+        if (!generationIsCurrent(generation)) return await currentPublicState();
+        if (typeof reply !== "string" && reply.outcome === "complete-block") { await completeBlock(reply.blockId, generation); return await currentPublicState(); }
         const textReply = requireTutorText(reply as string, "reply");
+        if (!generationIsCurrent(generation)) return await currentPublicState();
         await append({ type: "message", lessonId: failure.lessonId, blockId: failure.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: textReply, inReplyTo: learnerMessage.id }) as TimelineMessage;
-      } catch { await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE }); }
+      } catch {
+        if (!generationIsCurrent(generation)) return await currentPublicState();
+        await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE });
+      }
     } else if (failure.operation === "restore") {
-      try { await mainTutor.restore(await mainContext()); await requeueActiveAttempt(); }
-      catch { await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: "restore", operation: "restore", publicMessage: TUTOR_UNAVAILABLE }); }
+      try {
+        const context = await mainContext();
+        if (!generationIsCurrent(generation)) return await currentPublicState();
+        await mainTutor.restore(context);
+        if (!generationIsCurrent(generation)) return await currentPublicState();
+        await requeueActiveAttempt({ generation });
+      } catch {
+        if (!generationIsCurrent(generation)) return await currentPublicState();
+        await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: "restore", operation: "restore", publicMessage: TUTOR_UNAVAILABLE });
+      }
     } else if (failure.operation === "review") {
-      await requeueActiveAttempt();
+      await requeueActiveAttempt({ generation });
     } else if (failure.operation === "block_summary") {
       const leaving = stream.find((block): block is DeclaredWorkbookBlock => block.origin === "declared" && block.lessonId === failure.lessonId && block.id === failure.blockId);
       if (leaving) {
-        try { await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text: requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId: failure.requestId }), "block_summary"), coveredThroughId: failure.requestId }); }
-        catch (error) {
+        try {
+          const context = await mainContext();
+          if (!generationIsCurrent(generation)) return await currentPublicState();
+          const text = requireTutorText(await mainTutor.summarizeBlock({ ...context, lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId: failure.requestId }), "block_summary");
+          if (!generationIsCurrent(generation)) return await currentPublicState();
+          await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text, coveredThroughId: failure.requestId });
+        } catch (error) {
+          if (!generationIsCurrent(generation)) return await currentPublicState();
           logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: failure.requestId }, error);
+          if (!generationIsCurrent(generation)) return await currentPublicState();
           await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: failure.requestId, operation: "block_summary", publicMessage: TUTOR_UNAVAILABLE });
         }
       }
     } else if (failure.operation === "lesson_summary") {
-      try { await append({ type: "lesson_summarized", lessonId: failure.lessonId, text: requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: failure.lessonId, coveredThroughId: failure.requestId }), "lesson_summary"), coveredThroughId: failure.requestId }); }
-      catch (error) {
+      try {
+        const context = await mainContext();
+        if (!generationIsCurrent(generation)) return await currentPublicState();
+        const text = requireTutorText(await mainTutor.summarizeLesson({ ...context, lessonId: failure.lessonId, coveredThroughId: failure.requestId }), "lesson_summary");
+        if (!generationIsCurrent(generation)) return await currentPublicState();
+        await append({ type: "lesson_summarized", lessonId: failure.lessonId, text, coveredThroughId: failure.requestId });
+      } catch (error) {
+        if (!generationIsCurrent(generation)) return await currentPublicState();
         logSummaryFailure("lesson_summary", { lessonId: failure.lessonId, blockId: failure.blockId, requestId: failure.requestId }, error);
+        if (!generationIsCurrent(generation)) return await currentPublicState();
         await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: failure.requestId, operation: "lesson_summary", publicMessage: TUTOR_UNAVAILABLE });
       }
     } else if (failure.operation === "completion_summary") {
-      await requestCompletionSummary(failure.requestId);
+      await requestCompletionSummary(failure.requestId, generation);
     }
     return await currentPublicState();
   }));
@@ -1273,14 +1352,15 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       }
     },
     close: async () => {
-      // New/queued ordinary commands observe `closed` when they enter either phase. Commands
-      // already awaiting a provider are drained here; their guarded finalizer rejects rather than
-      // appending into a closed workflow.
+      // New/queued ordinary commands observe `closed` when they enter either phase. Dispose model
+      // roles first so active or racing provider sessions are cancelled before the short drain.
       closed = true;
+      reloadGeneration += 1;
       cancelAllTerminalAssessmentTimeouts();
-      // In-flight model requests are not cancellable through the current provider APIs. Their
-      // guarded callbacks observe `closed`; do not let a stalled provider prevent terminal close.
-      await Promise.allSettled([...ordinaryCommands, ...reviewFinalizers]);
+      mainTutor.dispose();
+      practiceCoach.dispose();
+      // Guarded callbacks observe `closed`; do not let a stalled provider prevent terminal close.
+      await boundedDrain([...ordinaryCommands, ...reviewFinalizers, ...terminalAssessmentTasks], WORKFLOW_CLOSE_GRACE_MS);
     },
     state: currentPublicState,
     timeline: () => publicTimeline(loaded, records),

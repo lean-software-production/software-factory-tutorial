@@ -325,6 +325,8 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
   #workingAttemptId: string | undefined;
   #completionBlockId: string | undefined;
   #tail: Promise<unknown> = Promise.resolve();
+  #disposed = false;
+  #sessionGeneration = 0;
 
   constructor(options: MainWorkbookTutorOptions) {
     this.workspace = options.workspace;
@@ -407,13 +409,17 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
   }
 
   dispose(): void {
+    this.#disposed = true;
+    this.#sessionGeneration += 1;
     this.#session?.dispose();
     this.#session = undefined;
   }
 
   async #ensureSession(input?: MainTutorContext): Promise<WorkbookTutorSession> {
+    if (this.#disposed) throw new Error("Workbook tutor is disposed.");
     if (input) this.#setHistory(input);
     if (this.#session) return this.#session;
+    const generation = this.#sessionGeneration;
     const owner = this;
     const accept = defineTool({
       name: ACCEPT_TOOL_NAME,
@@ -455,7 +461,12 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
     }) : undefined;
     const customTools = completeBlock ? [accept, working, completeBlock] : [accept, working];
     const tools = completeBlock ? [ACCEPT_TOOL_NAME, WORKING_TOOL_NAME, COMPLETE_BLOCK_TOOL_NAME] : [ACCEPT_TOOL_NAME, WORKING_TOOL_NAME];
-    this.#session = await this.#sessionFactory({ systemPrompt: systemPrompt(), customTools, tools, history: this.#history });
+    const session = await this.#sessionFactory({ systemPrompt: systemPrompt(), customTools, tools, history: this.#history });
+    if (this.#disposed || generation !== this.#sessionGeneration) {
+      session.dispose();
+      throw new Error("Workbook tutor is disposed.");
+    }
+    this.#session = session;
     return this.#session;
   }
 
@@ -465,13 +476,18 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
     this.#history = next;
     if (nextSignature !== this.#historySignature) {
       this.#historySignature = nextSignature;
+      this.#sessionGeneration += 1;
       this.#session?.dispose();
       this.#session = undefined;
     }
   }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const run = this.#tail.catch(() => undefined).then(operation);
+    if (this.#disposed) return Promise.reject(new Error("Workbook tutor is disposed."));
+    const run = this.#tail.catch(() => undefined).then(() => {
+      if (this.#disposed) throw new Error("Workbook tutor is disposed.");
+      return operation();
+    });
     this.#tail = run.catch(() => undefined);
     return run;
   }

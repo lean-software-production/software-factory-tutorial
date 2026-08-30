@@ -9,6 +9,7 @@ import {
   AUTHORED_COMMAND_STUB_NAMESPACE,
   AUTHORED_COMMAND_STUB_OWNER,
   AUTHORED_COMMAND_STUB_SCHEMA_VERSION,
+  AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS,
   createAuthoredCommandStubs,
   readAuthoredCommandStubEvidence,
   type AuthoredCommandInvocationEvidence
@@ -260,7 +261,7 @@ describe("authored workbook scenario descriptors", () => {
   it("declares model-call upper bounds above the computed authored drive path", async () => {
     for (const scenario of AUTHORED_WORKBOOK_SCENARIOS) {
       const recorder = new RecordingDriver();
-      await scenario.drive({ driver: recorder, containerShellActivation: "export PATH='/workspace/factory/.tmp/authored-eval-command-stubs/bin':\"$PATH\"" });
+      await scenario.drive({ driver: recorder });
       const calls = recorder.calls.map((call) => call.method);
       const terminalReviews = calls.filter((method) => method === "submitTerminalCommand").length;
       const reflectionReviews = calls.filter((method) => method === "submitReflection" || method === "submitReflectionFollowUp").length;
@@ -287,15 +288,15 @@ describe("authored workbook scenario descriptors", () => {
     ]);
 
     const stubbed = new RecordingDriver();
-    await authoredWorkbookScenarioById("lessons-003-004-evidence-feedback").drive({ driver: stubbed, containerShellActivation: "export PATH='/workspace/factory/.tmp/authored-eval-command-stubs/bin':\"$PATH\"" });
+    await authoredWorkbookScenarioById("lessons-003-004-evidence-feedback").drive({ driver: stubbed });
     const commands = stubbed.calls.filter((call) => call.method === "submitTerminalCommand").map((call) => call.command ?? "");
     expect(commands.some((command) => command.endsWith(lesson004WrongCommand))).toBe(true);
     expect(commands.some((command) => command.endsWith(lesson004MultiplyCommand))).toBe(true);
     expect(commands.some((command) => command.endsWith(lesson004DivideCommand))).toBe(true);
-    expect(commands.every((command) => command.startsWith("export PATH="))).toBe(true);
+    expect(commands.every((command) => !command.startsWith("export PATH=") && !command.includes("AUTHORED_EVAL_COMMAND_STUB_CONFIG"))).toBe(true);
 
     const capstone = new RecordingDriver();
-    await authoredWorkbookScenarioById("lesson-013-operator-judgement").drive({ driver: capstone, containerShellActivation: "export PATH='/workspace/factory/.tmp/authored-eval-command-stubs/bin':\"$PATH\"" });
+    await authoredWorkbookScenarioById("lesson-013-operator-judgement").drive({ driver: capstone });
     const capstoneCommand = capstone.calls.find((call) => call.method === "submitTerminalCommand")?.command ?? "";
     expect(capstoneCommand).toContain("./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &");
     expect(capstoneCommand).toContain("./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &");
@@ -309,14 +310,13 @@ describe("authored workbook scenario descriptors", () => {
     expect(Object.isFrozen(AUTHORED_WORKBOOK_GATE_CHECKPOINT_LABELS)).toBe(true);
 
     const noOpRecorder = new RecordingDriver();
-    await scenario.drive({ driver: noOpRecorder, containerShellActivation: "export PATH='/workspace/factory/.tmp/authored-eval-command-stubs/bin':\"$PATH\"" });
+    await scenario.drive({ driver: noOpRecorder });
 
     const checkpointRecorder = createAuthoredWorkbookScenarioGateCheckpointRecorder(scenario);
     const recorder = new RecordingDriver();
     const checkpointCallCounts: number[] = [];
     await scenario.drive({
       driver: recorder,
-      containerShellActivation: "export PATH='/workspace/factory/.tmp/authored-eval-command-stubs/bin':\"$PATH\"",
       captureGateCheckpoint: (label) => { checkpointRecorder.captureGateCheckpoint(label); checkpointCallCounts.push(recorder.calls.length); }
     });
     expect(checkpointRecorder.labels).toEqual(["lessons003004:after-multiply-only"]);
@@ -484,7 +484,7 @@ describe("authored scenario shell commands", () => {
   }, 30_000);
 
   it("executes the Lesson 013 run/watch/ask/steer path with real RPC stubs and a clean exact commit", async () => {
-    const { workspace, sessionWorkspace, handle, commands } = await liveScenarioHarness("lesson-013-operator-judgement", { rpcEarlySteerWindowMs: 500, rpcLateSteerWindowMs: 20 });
+    const { workspace, sessionWorkspace, handle, commands } = await liveScenarioHarness("lesson-013-operator-judgement", { rpcEarlySteerWindowMs: AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS, rpcLateSteerWindowMs: 20 });
     try {
       expect(commands).toHaveLength(1);
       await execShell(stripActivation(commands[0]!), sessionWorkspace, stubbedShellEnv(handle), 20_000);
@@ -872,7 +872,7 @@ async function liveScenarioHarness(id: AuthoredWorkbookScenarioId, stubOptions: 
   const sessionWorkspace = workspace.latestSession().workspaceRoots["refactor-line"]!;
   const handle = await createAuthoredCommandStubs({ lessonNumber: scenario.stubLessonNumber!, workspaceRoot: sessionWorkspace, scenarioId: id, ...stubOptions });
   const recorder = new RecordingDriver();
-  await scenario.drive({ driver: recorder, containerShellActivation: handle.containerShellActivation });
+  await scenario.drive({ driver: recorder });
   return { workspace, sessionWorkspace, handle, commands: recorder.calls.filter((call) => call.method === "submitTerminalCommand").map((call) => call.command!) };
 }
 

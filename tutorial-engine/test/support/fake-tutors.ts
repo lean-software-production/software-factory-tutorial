@@ -78,9 +78,12 @@ export class QueuedMainTutor extends RecordingMainTutor {
 export class RecordingPracticeCoach implements PracticeCoach {
   readonly assessments: Array<{ attempt: Attempt; rubric: string }> = [];
   queue: QueuedCoachOutcome[] = [];
+  disposed = false;
 
   async assess(input: { attempt: Attempt; rubric: string }): Promise<PracticeCoachOutcome> {
     this.assessments.push(input);
     return unwrap(await (this.queue.shift() ?? { outcome: "ready", text: "Ordinary terminal handoff." }));
   }
+
+  dispose(): void { this.disposed = true; }
 }

@@ -141,6 +141,19 @@ describe("WorkbookTerminalManager", () => {
     expect(JSON.stringify(dockerRunEnvironment("child-key", parent))).not.toContain("parent-key");
   });
 
+  it("rejects asynchronous production Docker command runners during terminal startup", async () => {
+    const workspace = await mkdtemp(resolve(tmpdir(), "workbook-terminal-async-runner-"));
+    tempDirs.push(workspace);
+    await expect(() => createDockerPty({
+      cwd: workspace,
+      cols: 80,
+      rows: 24,
+      environment: { [OPENCODE_API_KEY_ENV]: "not-recorded", PATH: "/bin" },
+      dockerCommandRunner: (() => Promise.resolve()) as any
+    })).toThrow("Docker command runner must complete synchronously.");
+    await Promise.resolve();
+  });
+
   it("strictly cleans up attempted production docker startup failures with sanitized precedence", async () => {
     for (const [failAt, cleanupFails, expected, expectedStages] of [
       ["run", false, WORKBOOK_TERMINAL_STARTUP_PUBLIC_ERROR, ["info", "image", "run", "cleanup"]],

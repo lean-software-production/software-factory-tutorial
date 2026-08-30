@@ -144,7 +144,7 @@ export const PACKAGE_SCRIPT_WIRING_CONTRACT = Object.freeze([
   packageScript({ script: "check:eval:workbook", status: WIRING_WIRED, command: "tsc -p evals/workbook/tsconfig.json" }),
   packageScript({ script: "test:eval:workbook", status: WIRING_WIRED, command: "vitest run evals/workbook/test/*.test.ts" }),
   packageScript({ script: "eval:engine", status: WIRING_WIRED, command: "npm run --workspace=tutorial-engine eval --" }),
-  packageScript({ script: "eval:workbook", status: WIRING_PLANNED, command: `tsx ${WORKBOOK_EVAL_MODULE}` }),
+  packageScript({ script: "eval:workbook", status: WIRING_WIRED, command: `tsx ${WORKBOOK_EVAL_MODULE}` }),
   packageScript({ packageName: "tutorial-engine", workspace: ENGINE_WORKSPACE, script: "test:fast", status: WIRING_PLANNED })
 ]);
 
@@ -295,7 +295,7 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
     "eval:workbook": commandContract({
       name: "eval:workbook",
       owner: "root",
-      purpose: "Live authored-workbook eval for learner curriculum outcomes; forwards arguments to the authored-workbook evaluator module when that task lands.",
+      purpose: "Live authored-workbook eval for learner curriculum outcomes; forwards arguments to the authored-workbook evaluator module.",
       deterministic: false,
       modelFree: false,
       spendsTokens: true,
@@ -304,7 +304,7 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
       steps: [
         rootModuleStep({ command: "eval:workbook", module: WORKBOOK_EVAL_MODULE, shell: `tsx ${WORKBOOK_EVAL_MODULE}`, forwardsArguments: true, requiresDocker: true })
       ],
-      notes: [liveEvalCostNote, `Planned package implementation is a direct root module command (tsx ${WORKBOOK_EVAL_MODULE}), not npm run eval:workbook as a self-delegating step.`, "The module is intentionally absent until the authored-workbook evaluator runner task lands."]
+      notes: [liveEvalCostNote, `Package implementation is a direct root module command (tsx ${WORKBOOK_EVAL_MODULE}), not npm run eval:workbook as a self-delegating step.`]
     })
   }),
   compatibility: Object.freeze({

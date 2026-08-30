@@ -17,6 +17,7 @@ const JUDGE_COMMAND_TIMEOUT_MESSAGE = "Judge command timed out before returning 
 const JUDGE_COMMAND_PROMPT_TOO_LARGE_MESSAGE = "Judge prompt exceeded the bounded input size limit.";
 const JUDGE_COMMAND_OUTPUT_TOO_LARGE_MESSAGE = "Judge command exceeded the bounded output size limit.";
 const JUDGE_COMMAND_INVALID_JSON_MESSAGE = "Judge command returned invalid bounded JSON.";
+const JUDGE_COMMAND_CANCELLED_MESSAGE = "Judge command cancelled before returning a bounded JSON result.";
 
 export interface AuthoredWorkbookEvalScenarioCriterion {
   id: string;
@@ -74,6 +75,7 @@ export interface AuthoredWorkbookJudgeCommandRequest {
   model?: string;
   environment?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  signal?: AbortSignal;
   spawnProcess?: AuthoredWorkbookJudgeSpawn;
 }
 
@@ -213,7 +215,8 @@ export async function invokeAuthoredWorkbookJudgeCommand(request: AuthoredWorkbo
     try {
       child = spawnProcess(command, [...configuredArgs, "--model", model, "-p"], {
         env: { PATH: environment.PATH ?? "", HOME: environment.HOME ?? "", NO_COLOR: "1" },
-        stdio: ["pipe", "pipe", "pipe"]
+        stdio: ["pipe", "pipe", "pipe"],
+        detached: true
       });
     } catch {
       reject(new Error(JUDGE_COMMAND_FAILURE_MESSAGE));
@@ -224,17 +227,58 @@ export async function invokeAuthoredWorkbookJudgeCommand(request: AuthoredWorkbo
     let stdoutChunks: Buffer[] = [];
     let settled = false;
     let timedOut = false;
+    let cancelling = false;
+    let exited = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let cleanupAbort = () => undefined as void;
+    const killChild = (signal: NodeJS.Signals): void => {
+      if (child.pid && child.pid > 0) {
+        try { process.kill(-child.pid, signal); } catch { /* ignore process-group kill races */ }
+      }
+      try { child.kill(signal); } catch { /* ignore kill races */ }
+    };
+    const cleanup = (): void => {
+      if (timer) clearTimeout(timer);
+      cleanupAbort();
+      child.stdout.removeAllListeners();
+      child.stderr.removeAllListeners();
+      child.stdin.removeAllListeners();
+      child.removeAllListeners("error");
+    };
     const settle = (action: () => void): void => {
       if (settled) return;
       settled = true;
-      if (timer) clearTimeout(timer);
+      cleanup();
       action();
     };
+    const cancel = (message: string): void => {
+      if (settled) return;
+      cancelling = true;
+      try { child.stdin.end(); } catch { try { child.stdin.destroy(); } catch { /* ignore */ } }
+      killChild("SIGTERM");
+      if (!exited) {
+        killTimer = setTimeout(() => {
+          if (exited) return;
+          killTimer = undefined;
+          killChild("SIGKILL");
+        }, 500);
+        killTimer.unref?.();
+      }
+      settle(() => reject(new Error(message)));
+    };
+    if (request.signal) {
+      if (request.signal.aborted) {
+        cancel(JUDGE_COMMAND_CANCELLED_MESSAGE);
+        return;
+      }
+      const abortListener = () => cancel(JUDGE_COMMAND_CANCELLED_MESSAGE);
+      request.signal.addEventListener("abort", abortListener, { once: true });
+      cleanupAbort = () => request.signal?.removeEventListener("abort", abortListener);
+    }
     timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
-      settle(() => reject(new Error(JUDGE_COMMAND_TIMEOUT_MESSAGE)));
+      cancel(JUDGE_COMMAND_TIMEOUT_MESSAGE);
     }, timeoutMs);
     timer.unref?.();
     child.stdout.on("data", (chunk: Buffer | string) => {
@@ -243,21 +287,25 @@ export async function invokeAuthoredWorkbookJudgeCommand(request: AuthoredWorkbo
       stdoutBytes += buffer.length;
       if (stdoutBytes > AUTHORED_WORKBOOK_JUDGE_STDOUT_MAX_BYTES) {
         stdoutChunks = [];
-        child.kill("SIGKILL");
-        settle(() => reject(new Error(JUDGE_COMMAND_OUTPUT_TOO_LARGE_MESSAGE)));
+        cancel(JUDGE_COMMAND_OUTPUT_TOO_LARGE_MESSAGE);
         return;
       }
       stdoutChunks.push(buffer);
     });
-    child.stdout.once("error", () => { settle(() => reject(new Error(JUDGE_COMMAND_FAILURE_MESSAGE))); });
+    child.stdout.once("error", () => { if (!cancelling) settle(() => reject(new Error(JUDGE_COMMAND_FAILURE_MESSAGE))); });
     child.stderr.on("data", () => { /* stderr is intentionally discarded; it may contain secrets or paths. */ });
-    child.stderr.once("error", () => { settle(() => reject(new Error(JUDGE_COMMAND_FAILURE_MESSAGE))); });
-    child.once("error", () => { settle(() => reject(new Error(JUDGE_COMMAND_FAILURE_MESSAGE))); });
+    child.stderr.once("error", () => { if (!cancelling) settle(() => reject(new Error(JUDGE_COMMAND_FAILURE_MESSAGE))); });
+    child.once("error", () => { if (!cancelling) settle(() => reject(new Error(JUDGE_COMMAND_FAILURE_MESSAGE))); });
     child.once("close", (code) => {
-      if (timedOut) return;
+      exited = true;
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = undefined;
+      }
+      if (timedOut || cancelling) return;
       settle(() => code === 0 ? resolve(Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8")) : reject(new Error(JUDGE_COMMAND_FAILURE_MESSAGE)));
     });
-    child.stdin.once("error", () => { settle(() => reject(new Error(JUDGE_COMMAND_FAILURE_MESSAGE))); });
+    child.stdin.once("error", () => { if (!cancelling) settle(() => reject(new Error(JUDGE_COMMAND_FAILURE_MESSAGE))); });
     try { child.stdin.end(request.prompt, "utf8", () => { /* successful stdin completion is not a result boundary. */ }); }
     catch { settle(() => reject(new Error(JUDGE_COMMAND_FAILURE_MESSAGE))); }
   });

@@ -1,20 +1,19 @@
-import { execFile, execFileSync } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { promisify } from "node:util";
+
 import {
   DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS,
   OPENCODE_API_KEY_ENV,
   WORKBOOK_TERMINAL_IMAGE,
-  assertDockerDaemonAndImage,
   dockerClientEnvironment,
-  dockerPiAuthenticationProbeArguments,
-  dockerRunArguments as engineDockerRunArguments,
+  dockerContainerUser,
+  dockerDaemonProbeArguments,
+  dockerImageProbeArguments,
   dockerRunEnvironment,
   requireOpenCodeApiKey,
-  type DockerCommandRunner,
   type DockerCommandSyncOptions
 } from "../../tutorial-engine/src/workbook/terminal.js";
 import { PRACTICE_COACH_MODEL_ENV, TUTOR_MODEL_ENV, type WorkbookModelEnvironment } from "../../tutorial-engine/src/workbook/model.js";
@@ -27,8 +26,6 @@ import { createAuthoredCommandStubs, type AuthoredCommandStubHandle } from "./co
 import { AUTHORED_WORKBOOK_SCENARIOS, type AuthoredWorkbookScenarioDescriptor, type AuthoredWorkbookScenarioId } from "./scenarios.js";
 
 export { OPENCODE_API_KEY_ENV, WORKBOOK_TERMINAL_IMAGE, dockerClientEnvironment } from "../../tutorial-engine/src/workbook/terminal.js";
-
-const execFileAsync = promisify(execFile);
 
 export const SUPPORTED_NODE_RANGE = ">=24.2.0 <25";
 export const SUPPORTED_NPM_RANGE = ">=11.0.0";
@@ -175,6 +172,8 @@ export interface AuthoredWorkbookEvalCommandStubFixture {
 export interface AuthoredWorkbookEvalDisposableFixture {
   root: string;
   workspaceRoot: string;
+  /** Docker named volume used only by the terminal preflight; safe, generated, non-secret name. */
+  workspaceVolumeName: string;
   trustedNodeModulesHostPath: string;
   commandStubs: AuthoredWorkbookEvalCommandStubFixture;
 }
@@ -214,13 +213,16 @@ export interface AuthoredWorkbookEvalPreflightTimeouts {
 }
 
 
+export type AuthoredWorkbookEvalAsyncDockerCommandRunner = (file: string, args: string[], options: DockerCommandSyncOptions) => Promise<unknown>;
+
 export interface AuthoredWorkbookEvalDefaultOperationDependencies {
-  dockerCommandRunner?: DockerCommandRunner;
+  authoredDockerCommandRunner?: AuthoredWorkbookEvalAsyncDockerCommandRunner;
   judgeCommandProbe?: JudgeCommandModelProbe;
 }
 export interface AuthoredWorkbookEvalPreflightOptions {
   operations?: Partial<AuthoredWorkbookEvalExternalOperations>;
   timeoutsMs?: Partial<AuthoredWorkbookEvalPreflightTimeouts>;
+  signal?: AbortSignal;
 }
 
 export interface AuthoredWorkbookEvalCallCounts {
@@ -245,6 +247,11 @@ export interface AuthoredWorkbookEvalPublicSummary {
   expectedCapabilityFlags: Record<string, boolean>;
   warnings: string[];
 }
+
+const DOCKER_PRIVATE_STDIN_MAX_BYTES = 64 * 1024;
+const DOCKER_PRIVATE_ARCHIVE_MAX_BYTES = 4 * 1024 * 1024;
+const DOCKER_EXEC_STDIN_ARGS = ["exec", "-i"] as const;
+const PREFLIGHT_DOCKER_VOLUME_PATTERN = /^authored-workbook-preflight-[0-9a-f-]{36}$/;
 
 const DEFAULT_TIMEOUTS_MS: AuthoredWorkbookEvalPreflightTimeouts = Object.freeze({
   npmVersion: 10_000,
@@ -406,24 +413,31 @@ export async function runAuthoredWorkbookEvalPreflight(input: AuthoredWorkbookEv
   const operations: AuthoredWorkbookEvalExternalOperations = { ...defaultPreflightOperations(), ...options.operations };
   const timeouts = { ...DEFAULT_TIMEOUTS_MS, ...options.timeoutsMs };
   const callCounts = emptyCallCounts();
+  const externalSignal = options.signal;
+  throwPreflightIfAborted(externalSignal, "runtime");
 
   callCounts.npmVersionChecks += 1;
-  const npmVersion = await sanitizeStage("runtime", "unsupported_npm_version", () => withAbortableTimeout((signal) => operations.npmVersion({ request, timeoutMs: timeouts.npmVersion, signal }), timeouts.npmVersion));
+  const npmVersion = await sanitizeStage("runtime", "unsupported_npm_version", () => withAbortableTimeout((signal) => operations.npmVersion({ request, timeoutMs: timeouts.npmVersion, signal }), timeouts.npmVersion, undefined, externalSignal));
   if (!satisfiesVersionRange(npmVersion, request.npmRange)) throw new AuthoredWorkbookEvalPreflightError("runtime", { code: "unsupported_npm_version" });
+  throwPreflightIfAborted(externalSignal, "runtime");
 
   callCounts.dockerReadyChecks += 1;
-  await sanitizeStage("dockerReady", "docker_ready_preflight_failed", () => withAbortableTimeout((signal) => operations.dockerReady({ request, timeoutMs: timeouts.dockerReady, signal }), timeouts.dockerReady));
+  await sanitizeStage("dockerReady", "docker_ready_preflight_failed", () => withAbortableTimeout((signal) => operations.dockerReady({ request, timeoutMs: timeouts.dockerReady, signal }), timeouts.dockerReady, undefined, externalSignal));
+  throwPreflightIfAborted(externalSignal, "dockerReady");
 
-  await runDisposableTerminalPreflight(request, operations, callCounts, timeouts);
+  await runDisposableTerminalPreflight(request, operations, callCounts, timeouts, externalSignal);
+  throwPreflightIfAborted(externalSignal, "terminal");
 
   const selectedModels: Array<{ role: AuthoredWorkbookEvalRoleLabel } & PublicModelIdentity> = [];
   const mainTutor = WORKBOOK_EVAL_ROLES[0]!;
   const practiceCoach = WORKBOOK_EVAL_ROLES[1]!;
   const judge = WORKBOOK_EVAL_ROLES[2]!;
 
-  selectedModels.push(await runPaidRole("mainTutor", mainTutor, request, operations, callCounts, timeouts.mainTutor));
-  selectedModels.push(await runPaidRole("practiceCoach", practiceCoach, request, operations, callCounts, timeouts.practiceCoach));
-  const judgeResult = await runPaidJudge(judge, request, operations, callCounts, timeouts.judge);
+  selectedModels.push(await runPaidRole("mainTutor", mainTutor, request, operations, callCounts, timeouts.mainTutor, externalSignal));
+  throwPreflightIfAborted(externalSignal, "mainTutor");
+  selectedModels.push(await runPaidRole("practiceCoach", practiceCoach, request, operations, callCounts, timeouts.practiceCoach, externalSignal));
+  throwPreflightIfAborted(externalSignal, "practiceCoach");
+  const judgeResult = await runPaidJudge(judge, request, operations, callCounts, timeouts.judge, externalSignal);
   selectedModels.push({ role: judge.label, ...request.models.judge });
 
   return publicPreflightSummary(request, selectedModels, judgeResult, callCounts);
@@ -433,7 +447,8 @@ async function runDisposableTerminalPreflight(
   request: AuthoredWorkbookEvalPreflightRequest,
   operations: AuthoredWorkbookEvalExternalOperations,
   callCounts: AuthoredWorkbookEvalCallCounts,
-  timeouts: AuthoredWorkbookEvalPreflightTimeouts
+  timeouts: AuthoredWorkbookEvalPreflightTimeouts,
+  externalSignal?: AbortSignal
 ): Promise<void> {
   let fixture: AuthoredWorkbookEvalDisposableFixture | undefined;
   let terminalInput: AuthoredWorkbookEvalTerminalInput | undefined;
@@ -441,20 +456,21 @@ async function runDisposableTerminalPreflight(
   let cleanupFailure = false;
 
   try {
-    fixture = await sanitizeStage("terminal", "terminal_fixture_failed", () => createFixtureWithAbortableLease(request, operations, timeouts.fixture));
+    fixture = await sanitizeStage("terminal", "terminal_fixture_failed", () => createFixtureWithAbortableLease(request, operations, timeouts.fixture, externalSignal));
     callCounts.disposableFixturesCreated += 1;
-    const runtimeProvision = trustRuntimeProvision({ mounts: [{ source: fixture.trustedNodeModulesHostPath, target: "node_modules", readonly: true }] });
+    assertSafePreflightDockerVolumeName(fixture.workspaceVolumeName);
+    const runtimeProvision = trustRuntimeProvision();
     const preparedTerminalInput: AuthoredWorkbookEvalTerminalInput = { request, timeoutMs: timeouts.terminalStart, signal: neverAbortedSignal(), name: `workbook-terminal-preflight-${randomUUID()}`, fixture, runtimeProvision };
     terminalInput = preparedTerminalInput;
 
     callCounts.terminalContainerStarts += 1;
-    await sanitizeStage("terminal", "terminal_start_failed", () => withAbortableTimeout((signal) => operations.dockerRunTerminal({ ...preparedTerminalInput, timeoutMs: timeouts.terminalStart, signal }), timeouts.terminalStart));
+    await sanitizeStage("terminal", "terminal_start_failed", () => withAbortableTimeout((signal) => operations.dockerRunTerminal({ ...preparedTerminalInput, timeoutMs: timeouts.terminalStart, signal }), timeouts.terminalStart, undefined, externalSignal));
 
     callCounts.terminalReadinessChecks += 1;
-    await sanitizeStage("terminalReadiness", "terminal_readiness_failed", () => withAbortableTimeout((signal) => operations.dockerMountReadiness({ ...preparedTerminalInput, timeoutMs: timeouts.terminalReadiness, signal }), timeouts.terminalReadiness));
+    await sanitizeStage("terminalReadiness", "terminal_readiness_failed", () => withAbortableTimeout((signal) => operations.dockerMountReadiness({ ...preparedTerminalInput, timeoutMs: timeouts.terminalReadiness, signal }), timeouts.terminalReadiness, undefined, externalSignal));
 
     callCounts.terminalAuthChecks += 1;
-    await sanitizeStage("terminalAuth", "terminal_auth_failed", () => withAbortableTimeout((signal) => operations.dockerPiAuthentication({ ...preparedTerminalInput, timeoutMs: timeouts.terminalAuth, signal }), timeouts.terminalAuth));
+    await sanitizeStage("terminalAuth", "terminal_auth_failed", () => withAbortableTimeout((signal) => operations.dockerPiAuthentication({ ...preparedTerminalInput, timeoutMs: timeouts.terminalAuth, signal }), timeouts.terminalAuth, undefined, externalSignal));
   } catch (error) {
     primaryFailure = error instanceof AuthoredWorkbookEvalPreflightError ? error : new AuthoredWorkbookEvalPreflightError("terminal", { code: "terminal_preflight_failed" });
   } finally {
@@ -481,7 +497,8 @@ async function runPaidRole(
   request: AuthoredWorkbookEvalPreflightRequest,
   operations: AuthoredWorkbookEvalExternalOperations,
   callCounts: AuthoredWorkbookEvalCallCounts,
-  timeoutMs: number
+  timeoutMs: number,
+  externalSignal?: AbortSignal
 ): Promise<{ role: AuthoredWorkbookEvalRoleLabel } & PublicModelIdentity> {
   const model = request.models[role.key];
   callCounts.paidPreflightCallsByRole[role.label] += 1;
@@ -489,7 +506,9 @@ async function runPaidRole(
     (signal) => operation === "mainTutor"
       ? operations.probeMainTutor({ request, timeoutMs, signal, role: role.key, roleLabel: role.label, model })
       : operations.probePracticeCoach({ request, timeoutMs, signal, role: role.key, roleLabel: role.label, model }),
-    timeoutMs
+    timeoutMs,
+    undefined,
+    externalSignal
   ), role.label, model);
   return { role: role.label, ...validatePublicModelIdentity(result.selectedModel) };
 }
@@ -499,13 +518,16 @@ async function runPaidJudge(
   request: AuthoredWorkbookEvalPreflightRequest,
   operations: AuthoredWorkbookEvalExternalOperations,
   callCounts: AuthoredWorkbookEvalCallCounts,
-  timeoutMs: number
+  timeoutMs: number,
+  externalSignal?: AbortSignal
 ): Promise<AuthoredWorkbookEvalJudgeResult> {
   const model = request.models.judge;
   callCounts.paidPreflightCallsByRole[role.label] += 1;
   const result = await sanitizeStage("judge", "judge_paid_preflight_failed", () => withAbortableTimeout(
     (signal) => operations.probeJudge({ request, timeoutMs, signal, role: role.key, roleLabel: role.label, model }),
-    timeoutMs
+    timeoutMs,
+    undefined,
+    externalSignal
   ), role.label, model);
   if (result.model !== model.identity || result.capabilities.jsonObject !== true) throw new AuthoredWorkbookEvalPreflightError("judge", { code: "judge_model_mismatch", role: role.label, model });
   return { commandLabel: result.commandLabel, model: result.model, capabilities: { jsonObject: true } };
@@ -574,24 +596,35 @@ function assertRunnerSummaryMatchesRequest(
 }
 
 export function defaultPreflightOperations(dependencies: AuthoredWorkbookEvalDefaultOperationDependencies = {}): AuthoredWorkbookEvalExternalOperations {
-  const dockerRunner = dependencies.dockerCommandRunner ?? defaultDockerCommandRunner;
+  const dockerRunner = dependencies.authoredDockerCommandRunner ?? defaultDockerCommandRunner;
   return {
-    npmVersion: async ({ request, timeoutMs }) => (await execFileText("npm", ["--version"], request.environment, timeoutMs)).trim(),
-    dockerReady: async ({ request }) => { assertDockerDaemonAndImage(dockerRunner, request.environment); },
+    npmVersion: async ({ request, timeoutMs, signal }) => (await execFileText("npm", ["--version"], request.environment, timeoutMs, signal)).trim(),
+    dockerReady: async ({ request, signal }) => {
+      const env = dockerClientEnvironment(request.environment);
+      await dockerRunner("docker", dockerDaemonProbeArguments(), { stdio: "ignore", env, timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.info, signal });
+      await dockerRunner("docker", dockerImageProbeArguments(request.workbookTerminalImage), { stdio: "ignore", env, timeout: DOCKER_TERMINAL_COMMAND_TIMEOUTS_MS.imageInspect, signal });
+    },
     createDisposablePreflightFixture: defaultCreateDisposablePreflightFixture,
     dockerRunTerminal: async (input) => {
       const apiKey = requireOpenCodeApiKey(input.request.environment);
+      await dockerRunner("docker", dockerVolumeCreateArguments(input.fixture.workspaceVolumeName), { stdio: "ignore", env: dockerClientEnvironment(input.request.environment), timeout: input.timeoutMs, signal: input.signal });
+      await dockerRunner("docker", dockerPopulateVolumeArguments(input.fixture.workspaceVolumeName, input.request.workbookTerminalImage), { stdio: "ignore", env: dockerClientEnvironment(input.request.environment), timeout: input.timeoutMs, signal: input.signal, privateStdin: await buildBoundedWorkspaceTar(input.fixture.workspaceRoot) });
       const args = authoredTerminalDockerRunArguments(input);
-      dockerRunner("docker", args, { stdio: "ignore", env: dockerRunEnvironment(apiKey, input.request.environment), timeout: input.timeoutMs });
+      await dockerRunner("docker", args, { stdio: "ignore", env: dockerRunEnvironment(apiKey, input.request.environment), timeout: input.timeoutMs, signal: input.signal });
     },
     dockerMountReadiness: async (input) => {
-      dockerRunner("docker", ["exec", input.name, "sh", "-lc", terminalReadinessShell(input.fixture.commandStubs)], { stdio: "ignore", env: dockerClientEnvironment(input.request.environment), timeout: input.timeoutMs });
+      await dockerRunner("docker", dockerExecShStdinArguments(input.name), { stdio: "ignore", env: dockerClientEnvironment(input.request.environment), timeout: input.timeoutMs, signal: input.signal, privateStdin: boundedDockerPrivateStdin(terminalReadinessShell(input.fixture.commandStubs)) });
     },
     dockerPiAuthentication: async (input) => {
-      dockerRunner("docker", dockerPiAuthenticationProbeArguments(input.name), { stdio: "ignore", env: dockerClientEnvironment(input.request.environment), timeout: input.timeoutMs });
+      await dockerRunner("docker", dockerExecShStdinArguments(input.name), { stdio: "ignore", env: dockerClientEnvironment(input.request.environment), timeout: input.timeoutMs, signal: input.signal, privateStdin: boundedDockerPrivateStdin(dockerPiAuthenticationShell()) });
     },
     dockerRemoveTerminal: async (input) => {
-      dockerRunner("docker", ["rm", "-f", input.name], { stdio: "ignore", env: dockerClientEnvironment(input.request.environment), timeout: input.timeoutMs });
+      let failure: unknown;
+      try { await dockerRunner("docker", ["rm", "-f", input.name], { stdio: "ignore", env: dockerClientEnvironment(input.request.environment), timeout: input.timeoutMs, signal: input.signal }); }
+      catch (error) { failure = error; }
+      try { await dockerRunner("docker", dockerVolumeRemoveArguments(input.fixture.workspaceVolumeName), { stdio: "ignore", env: dockerClientEnvironment(input.request.environment), timeout: input.timeoutMs, signal: input.signal }); }
+      catch (error) { failure ??= error; }
+      if (failure) throw new Error("Docker terminal cleanup failed.");
     },
     removeDisposablePreflightFixture: defaultRemoveDisposablePreflightFixture,
     probeMainTutor: createDefaultWorkbookRoleProbe("Main Tutor"),
@@ -600,10 +633,11 @@ export function defaultPreflightOperations(dependencies: AuthoredWorkbookEvalDef
   };
 }
 
-const defaultDockerCommandRunner: DockerCommandRunner = (file: string, args: string[], options: DockerCommandSyncOptions): unknown => execFileSync(file, args, options);
+const defaultDockerCommandRunner: AuthoredWorkbookEvalAsyncDockerCommandRunner = (file: string, args: string[], options: DockerCommandSyncOptions): Promise<unknown> => runBoundedProcess(file, args, options);
 
 export function authoredTerminalDockerRunArguments(input: AuthoredWorkbookEvalTerminalInput): string[] {
-  return [...engineDockerRunArguments({ workspace: input.fixture.workspaceRoot, name: input.name, runtimeProvision: input.runtimeProvision }), input.request.workbookTerminalImage, "sleep", "infinity"];
+  const [uid, gid] = dockerContainerUser().split(":");
+  return ["run", "-d", "--rm", "--name", input.name, "--label", "workbook-terminal=true", "--user", dockerContainerUser(), "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=bridge", "--init", "--env", OPENCODE_API_KEY_ENV, "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--tmpfs", `/home/learner/.pi/agent:uid=${uid},gid=${gid},mode=0700`, "--mount", dockerWorkspaceVolumeMount(input.fixture.workspaceVolumeName), "--workdir", "/workspace", input.request.workbookTerminalImage, "sleep", "infinity"];
 }
 
 export function createDefaultWorkbookRoleProbe(role: "Main Tutor" | "Practice Coach"): (input: AuthoredWorkbookEvalPaidRoleInput) => Promise<AuthoredWorkbookEvalPaidRoleResult> {
@@ -616,19 +650,20 @@ export function createDefaultWorkbookRoleProbe(role: "Main Tutor" | "Practice Co
       contentRoot: request.repositoryRoot,
       workspaceRoot: request.repositoryRoot,
       logger: noopLogger(),
-      environment: request.environment
-    }), timeoutMs);
+      environment: request.environment,
+      signal
+    }), timeoutMs, undefined, signal);
     throwIfAborted(signal);
     return { selectedModel: validatePublicModelIdentity(result.selectedModel ?? result.requestedModel ?? modelIdentityFromEnvironment(request, envVar)) };
   };
 }
 
-export type JudgeCommandModelProbe = (environment: NodeJS.ProcessEnv, options?: { timeoutMs?: number }) => Promise<V2JudgeCommandPreflightResult>;
+export type JudgeCommandModelProbe = (environment: NodeJS.ProcessEnv, options?: { timeoutMs?: number; signal?: AbortSignal }) => Promise<V2JudgeCommandPreflightResult>;
 
 export function createDefaultJudgeProbe(commandProbe: JudgeCommandModelProbe = probeV2JudgeCommandModel): (input: AuthoredWorkbookEvalPaidRoleInput) => Promise<AuthoredWorkbookEvalJudgeResult> {
   return async ({ request, timeoutMs, signal }) => {
     throwIfAborted(signal);
-    const result = await commandProbe(request.environment, { timeoutMs });
+    const result = await commandProbe(request.environment, { timeoutMs, signal });
     throwIfAborted(signal);
     return { commandLabel: result.commandLabel, model: result.model, capabilities: { jsonObject: true } };
   };
@@ -642,6 +677,7 @@ export async function defaultCreateDisposablePreflightFixture({ request, signal,
     throwIfAborted(abortSignal);
     root = await mkdtemp(resolve(tmpdir(), "authored-workbook-preflight-"));
     const workspaceRoot = resolve(root, "workspace");
+    const workspaceVolumeName = safePreflightDockerVolumeName();
     const trustedNodeModulesHostPath = resolve(root, "node_modules");
     const lease: AuthoredWorkbookEvalPartialFixtureLease = {
       root,
@@ -670,7 +706,7 @@ export async function defaultCreateDisposablePreflightFixture({ request, signal,
     throwIfAborted(abortSignal);
     commandStubs = toDisposableCommandStubFixture(await createAuthoredCommandStubs({ lessonNumber: 4, workspaceRoot, scenarioId: "authored-preflight" }));
     throwIfAborted(abortSignal);
-    return { root, workspaceRoot, trustedNodeModulesHostPath, commandStubs };
+    return { root, workspaceRoot, workspaceVolumeName, trustedNodeModulesHostPath, commandStubs };
   } catch (error) {
     if (root) await cleanupFixtureRoot(root, commandStubs).catch(() => undefined);
     throw error;
@@ -742,6 +778,51 @@ async function cleanupFixtureRoot(root: string, commandStubs: AuthoredWorkbookEv
   return cleanupError;
 }
 
+function safePreflightDockerVolumeName(): string {
+  return `authored-workbook-preflight-${randomUUID()}`;
+}
+
+function assertSafePreflightDockerVolumeName(name: string): string {
+  if (!PREFLIGHT_DOCKER_VOLUME_PATTERN.test(name)) throw new Error("Unsafe preflight Docker volume name.");
+  return name;
+}
+
+function dockerWorkspaceVolumeMount(volumeName: string): string {
+  return `type=volume,src=${assertSafePreflightDockerVolumeName(volumeName)},dst=/workspace`;
+}
+
+function dockerVolumeCreateArguments(volumeName: string): string[] {
+  return ["volume", "create", assertSafePreflightDockerVolumeName(volumeName)];
+}
+
+function dockerVolumeRemoveArguments(volumeName: string): string[] {
+  return ["volume", "rm", "-f", assertSafePreflightDockerVolumeName(volumeName)];
+}
+
+function dockerPopulateVolumeArguments(volumeName: string, image: string): string[] {
+  return ["run", "--rm", "-i", "--network", "none", "--mount", dockerWorkspaceVolumeMount(volumeName), image, "tar", "-x", "-f", "-", "-C", "/workspace"];
+}
+
+function dockerExecShStdinArguments(name: string): string[] {
+  return [...DOCKER_EXEC_STDIN_ARGS, name, "sh"];
+}
+
+function boundedDockerPrivateStdin(script: string): string {
+  const payload = script.endsWith("\n") ? script : `${script}\n`;
+  if (Buffer.byteLength(payload, "utf8") > DOCKER_PRIVATE_STDIN_MAX_BYTES) throw new Error("Docker private stdin payload exceeds the authored preflight limit.");
+  return payload;
+}
+
+function dockerPiAuthenticationShell(): string {
+  const script = [
+    "const { execFile } = await import('node:child_process');",
+    "const globalRoot = await new Promise((resolve, reject) => execFile('npm', ['root', '--global'], { encoding: 'utf8' }, (error, stdout) => error ? reject(error) : resolve(String(stdout).trim())));",
+    "const { ModelRuntime } = await import(`${globalRoot}/@earendil-works/pi-coding-agent/dist/index.js`);",
+    "if ((await ModelRuntime.create().then((runtime) => runtime.getAvailable())).length === 0) process.exit(1);"
+  ].join(" ");
+  return `node --input-type=module <<'NODE'\n${script}\nNODE`;
+}
+
 function terminalReadinessShell(stubs: AuthoredWorkbookEvalCommandStubFixture): string {
   const validatorPrompt = "Findings reported by: authored preflight.\n- calculator/src/index.ts duplicated operator branch parser\n";
   return [
@@ -798,13 +879,175 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-async function execFileText(file: string, args: readonly string[], environment: AuthoredWorkbookEvalEnvironment, timeoutMs: number): Promise<string> {
+async function buildBoundedWorkspaceTar(root: string): Promise<Buffer> {
+  const realRoot = await realpath(root);
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const push = (chunk: Buffer) => {
+    total += chunk.length;
+    if (total > DOCKER_PRIVATE_ARCHIVE_MAX_BYTES) throw new Error("Docker private archive exceeds the authored preflight limit.");
+    chunks.push(chunk);
+  };
+  const visit = async (directory: string, relativeDirectory = ""): Promise<void> => {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      const path = resolve(directory, entry.name);
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+      if (!/^[A-Za-z0-9._/-]+$/.test(relativePath) || relativePath.split("/").some((segment) => !segment || segment === "." || segment === "..")) throw new Error("Unsafe archive entry path.");
+      const stat = await lstat(path);
+      if (stat.isSymbolicLink()) {
+        throw new Error("Unsafe archive entry symlink.");
+      } else if (stat.isDirectory()) {
+        push(tarHeader(`${relativePath}/`, stat.mode, 0, "5"));
+        await visit(path, relativePath);
+      } else if (stat.isFile()) {
+        if (!insideRoot(realRoot, await realpath(path))) throw new Error("Unsafe archive entry outside workspace.");
+        const content = await readFile(path);
+        push(tarHeader(relativePath, stat.mode, content.length, "0"));
+        push(content);
+        const padding = (512 - (content.length % 512)) % 512;
+        if (padding) push(Buffer.alloc(padding));
+      }
+    }
+  };
+  await visit(realRoot);
+  push(Buffer.alloc(1024));
+  return Buffer.concat(chunks, total);
+}
+
+function tarHeader(name: string, mode: number, size: number, typeflag: "0" | "2" | "5", linkname = ""): Buffer {
+  if (Buffer.byteLength(name) > 100 || Buffer.byteLength(linkname) > 100) throw new Error("Archive entry path exceeds the authored preflight limit.");
+  const header = Buffer.alloc(512, 0);
+  const writeString = (value: string, offset: number, length: number) => header.write(value.slice(0, length), offset, length, "utf8");
+  const writeOctal = (value: number, offset: number, length: number) => {
+    const text = value.toString(8).padStart(length - 1, "0").slice(-(length - 1));
+    header.write(text, offset, length - 1, "ascii");
+    header[offset + length - 1] = 0;
+  };
+  writeString(name, 0, 100);
+  writeOctal(mode & 0o7777, 100, 8);
+  writeOctal(0, 108, 8);
+  writeOctal(0, 116, 8);
+  writeOctal(size, 124, 12);
+  writeOctal(0, 136, 12);
+  header.fill(0x20, 148, 156);
+  writeString(typeflag, 156, 1);
+  writeString(linkname, 157, 100);
+  writeString("ustar", 257, 6);
+  writeString("00", 263, 2);
+  let checksum = 0;
+  for (const byte of header) checksum += byte;
+  const checksumText = checksum.toString(8).padStart(6, "0");
+  header.write(checksumText, 148, 6, "ascii");
+  header[154] = 0;
+  header[155] = 0x20;
+  return header;
+}
+
+async function execFileText(file: string, args: readonly string[], environment: AuthoredWorkbookEvalEnvironment, timeoutMs: number, signal?: AbortSignal): Promise<string> {
   try {
-    const { stdout } = await execFileAsync(file, [...args], { encoding: "utf8", maxBuffer: 1024 * 1024, env: hostCommandEnvironment(environment), timeout: timeoutMs });
-    return stdout;
+    const result = await runBoundedProcess(file, [...args], { stdio: "ignore", env: hostCommandEnvironment(environment), timeout: timeoutMs, signal }, { stdoutMaxBytes: 1024 * 1024 });
+    return result.stdout;
   } catch {
     throw new Error("external command failed");
   }
+}
+
+async function runBoundedProcess(file: string, args: string[], options: DockerCommandSyncOptions, capture: { stdoutMaxBytes?: number } = {}): Promise<{ stdout: string }> {
+  const timeoutMs = options.timeout;
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error("Invalid process timeout.");
+  const stdin = options.privateStdin;
+  if (stdin !== undefined && Buffer.byteLength(stdin) > Math.max(DOCKER_PRIVATE_STDIN_MAX_BYTES, DOCKER_PRIVATE_ARCHIVE_MAX_BYTES)) throw new Error("Private stdin exceeds the authored preflight limit.");
+  return await new Promise((resolvePromise, reject) => {
+    let child!: ChildProcess;
+    try {
+      const spawnOptions: SpawnOptions = { env: options.env, stdio: [stdin === undefined ? "ignore" : "pipe", capture.stdoutMaxBytes ? "pipe" : "ignore", "ignore"], detached: true };
+      child = spawn(file, args, spawnOptions);
+    } catch {
+      reject(new Error("external command failed"));
+      return;
+    }
+    const stdoutChunks: Buffer[] = [];
+    let stdoutBytes = 0;
+    let settled = false;
+    let exited = false;
+    let cancelling = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let cleanupAbort = () => undefined as void;
+    const killChild = (signal: NodeJS.Signals): void => {
+      if (child.pid && child.pid > 0) {
+        try { process.kill(-child.pid, signal); } catch { /* ignore process-group kill races */ }
+      }
+      try { child.kill(signal); } catch { /* ignore kill races */ }
+    };
+    const cleanup = (): void => {
+      if (timer) clearTimeout(timer);
+      cleanupAbort();
+      child.stdout?.removeAllListeners();
+      child.stderr?.removeAllListeners();
+      child.stdin?.removeAllListeners();
+      child.removeAllListeners("error");
+    };
+    const settle = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolvePromise({ stdout: Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8") });
+    };
+    const cancel = (message: string): void => {
+      if (settled) return;
+      cancelling = true;
+      try { child.stdin?.end(); } catch { try { child.stdin?.destroy(); } catch { /* ignore */ } }
+      killChild("SIGTERM");
+      if (!exited) {
+        killTimer = setTimeout(() => {
+          if (exited) return;
+          killTimer = undefined;
+          killChild("SIGKILL");
+        }, 500);
+        killTimer.unref?.();
+      }
+      settle(new Error(message));
+    };
+    if (options.signal) {
+      if (options.signal.aborted) { cancel("external command aborted"); return; }
+      const abortListener = () => cancel("external command aborted");
+      options.signal.addEventListener("abort", abortListener, { once: true });
+      cleanupAbort = () => options.signal?.removeEventListener("abort", abortListener);
+    }
+    timer = setTimeout(() => cancel("external command timed out"), timeoutMs);
+    timer.unref?.();
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      if (settled) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      stdoutBytes += buffer.length;
+      if (capture.stdoutMaxBytes && stdoutBytes > capture.stdoutMaxBytes) {
+        stdoutChunks.length = 0;
+        cancel("external command output exceeded limit");
+        return;
+      }
+      stdoutChunks.push(buffer);
+    });
+    child.stdout?.once("error", () => { if (!cancelling) settle(new Error("external command failed")); });
+    child.stderr?.once("error", () => { if (!cancelling) settle(new Error("external command failed")); });
+    child.once("error", () => { if (!cancelling) settle(new Error("external command failed")); });
+    child.once("close", (code: number | null) => {
+      exited = true;
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = undefined;
+      }
+      if (cancelling) return;
+      settle(code === 0 ? undefined : new Error("external command failed"));
+    });
+    child.stdin?.once("error", () => { if (!cancelling) settle(new Error("external command failed")); });
+    if (stdin !== undefined) {
+      try { child.stdin?.end(stdin); }
+      catch { settle(new Error("external command failed")); }
+    }
+  });
 }
 
 function hostCommandEnvironment(environment: AuthoredWorkbookEvalEnvironment): NodeJS.ProcessEnv {
@@ -824,7 +1067,8 @@ async function sanitizeStage<T>(phase: AuthoredWorkbookEvalPreflightPhase, code:
 async function createFixtureWithAbortableLease(
   request: AuthoredWorkbookEvalPreflightRequest,
   operations: AuthoredWorkbookEvalExternalOperations,
-  timeoutMs: number
+  timeoutMs: number,
+  externalSignal?: AbortSignal
 ): Promise<AuthoredWorkbookEvalDisposableFixture> {
   const leases: AuthoredWorkbookEvalPartialFixtureLease[] = [];
   let completed = false;
@@ -844,7 +1088,7 @@ async function createFixtureWithAbortableLease(
       }
     );
     return operation;
-  }, timeoutMs, async () => cleanupPartialFixtureLeases(leases));
+  }, timeoutMs, async () => cleanupPartialFixtureLeases(leases), externalSignal);
   completed = true;
   return fixture;
 }
@@ -866,35 +1110,68 @@ async function cleanupPartialFixtureLeases(leases: readonly AuthoredWorkbookEval
 async function withAbortableTimeout<T>(
   operationFactory: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
-  onAbort?: () => Promise<void>
+  onAbort?: () => Promise<void>,
+  externalSignal?: AbortSignal
 ): Promise<T> {
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw validationError();
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
+  let externallyAborted = false;
+  let cleanupExternal = () => undefined as void;
+  const abortController = (reason?: unknown) => { if (!controller.signal.aborted) controller.abort(reason); };
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      externallyAborted = true;
+      abortController(externalSignal.reason);
+    } else {
+      const listener = () => {
+        externallyAborted = true;
+        abortController(externalSignal.reason);
+      };
+      externalSignal.addEventListener("abort", listener, { once: true });
+      cleanupExternal = () => externalSignal.removeEventListener("abort", listener);
+    }
+  }
   const timeout = new Promise<T>((_resolve, reject) => {
     timer = setTimeout(() => {
       timedOut = true;
-      controller.abort();
+      abortController(new Error("bounded operation timed out"));
       reject(new Error("bounded operation timed out"));
     }, timeoutMs);
     timer.unref?.();
   });
+  const abort = new Promise<T>((_resolve, reject) => {
+    if (controller.signal.aborted) {
+      reject(new Error("bounded operation aborted"));
+      return;
+    }
+    const listener = () => {
+      controller.signal.removeEventListener("abort", listener);
+      reject(new Error("bounded operation aborted"));
+    };
+    controller.signal.addEventListener("abort", listener, { once: true });
+  });
   try {
-    return await Promise.race([operationFactory(controller.signal), timeout]);
+    return await Promise.race([operationFactory(controller.signal), timeout, abort]);
   } catch (error) {
-    if (timedOut) {
+    if (timedOut || externallyAborted) {
       try { await onAbort?.(); }
       catch { throw new AuthoredWorkbookEvalPreflightError("cleanup", { code: "preflight_cleanup_failed" }); }
     }
     throw error;
   } finally {
+    cleanupExternal();
     if (timer) clearTimeout(timer);
   }
 }
 
 function neverAbortedSignal(): AbortSignal {
   return new AbortController().signal;
+}
+
+function throwPreflightIfAborted(signal: AbortSignal | undefined, phase: AuthoredWorkbookEvalPreflightPhase): void {
+  if (signal?.aborted) throw new AuthoredWorkbookEvalPreflightError(phase, { code: "authored_workbook_eval_preflight_aborted" });
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -1078,6 +1355,11 @@ function validateHostPath(value: string): string {
   const path = resolve(value);
   if (!isAbsolute(path)) throw validationError();
   return path;
+}
+
+function insideRoot(root: string, candidate: string): boolean {
+  const inside = relative(root, candidate);
+  return inside === "" || (inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside));
 }
 
 function validationError(): AuthoredWorkbookEvalPreflightError {

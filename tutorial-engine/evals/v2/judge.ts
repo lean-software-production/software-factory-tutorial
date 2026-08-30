@@ -21,8 +21,9 @@ const V2_JUDGE_COMMAND_TIMEOUT_MESSAGE = "Judge command timed out before returni
 const V2_JUDGE_COMMAND_PROMPT_TOO_LARGE_MESSAGE = "Judge prompt exceeded the bounded input size limit.";
 const V2_JUDGE_COMMAND_OUTPUT_TOO_LARGE_MESSAGE = "Judge command exceeded the bounded output size limit.";
 const V2_JUDGE_COMMAND_INVALID_JSON_MESSAGE = "Judge command returned invalid bounded JSON.";
+const V2_JUDGE_COMMAND_CANCELLED_MESSAGE = "Judge command cancelled before returning a bounded JSON result.";
 
-export interface JudgeCommandRequest { prompt: string; model?: string; environment?: NodeJS.ProcessEnv; timeoutMs?: number }
+export interface JudgeCommandRequest { prompt: string; model?: string; environment?: NodeJS.ProcessEnv; timeoutMs?: number; signal?: AbortSignal }
 
 export type JudgeCommandLabel = "default-pi" | "configured-command";
 
@@ -47,7 +48,8 @@ export async function invokeJudgeCommand(request: JudgeCommandRequest): Promise<
     try {
       child = spawn(command, [...args, "--model", model, "-p"], {
         env: { PATH: environment.PATH ?? "", HOME: environment.HOME ?? "", NO_COLOR: "1" },
-        stdio: ["pipe", "pipe", "pipe"]
+        stdio: ["pipe", "pipe", "pipe"],
+        detached: true
       });
     } catch {
       reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE));
@@ -58,17 +60,52 @@ export async function invokeJudgeCommand(request: JudgeCommandRequest): Promise<
     let stdoutChunks: Buffer[] = [];
     let settled = false;
     let timedOut = false;
+    let cancelling = false;
+    let exited = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let cleanupAbort = () => undefined as void;
+    const killChild = (signal: NodeJS.Signals): void => {
+      if (child.pid && child.pid > 0) {
+        try { process.kill(-child.pid, signal); } catch { /* ignore process-group kill races */ }
+      }
+      try { child.kill(signal); } catch { /* ignore kill races */ }
+    };
     const settle = (action: () => void): void => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      cleanupAbort();
+      child.stdout.removeAllListeners();
+      child.stderr.removeAllListeners();
+      child.stdin.removeAllListeners();
+      child.removeAllListeners("error");
       action();
     };
+    const cancel = (message: string): void => {
+      if (settled) return;
+      cancelling = true;
+      try { child.stdin.end(); } catch { try { child.stdin.destroy(); } catch { /* ignore */ } }
+      killChild("SIGTERM");
+      if (!exited) {
+        killTimer = setTimeout(() => {
+          if (exited) return;
+          killTimer = undefined;
+          killChild("SIGKILL");
+        }, 500);
+        killTimer.unref?.();
+      }
+      settle(() => reject(new Error(message)));
+    };
+    if (request.signal) {
+      if (request.signal.aborted) { cancel(V2_JUDGE_COMMAND_CANCELLED_MESSAGE); return; }
+      const abortListener = () => cancel(V2_JUDGE_COMMAND_CANCELLED_MESSAGE);
+      request.signal.addEventListener("abort", abortListener, { once: true });
+      cleanupAbort = () => request.signal?.removeEventListener("abort", abortListener);
+    }
     timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
-      settle(() => reject(new Error(V2_JUDGE_COMMAND_TIMEOUT_MESSAGE)));
+      cancel(V2_JUDGE_COMMAND_TIMEOUT_MESSAGE);
     }, timeoutMs);
     timer.unref?.();
     child.stdout.on("data", (chunk: Buffer | string) => {
@@ -77,21 +114,25 @@ export async function invokeJudgeCommand(request: JudgeCommandRequest): Promise<
       stdoutBytes += buffer.length;
       if (stdoutBytes > V2_JUDGE_STDOUT_MAX_BYTES) {
         stdoutChunks = [];
-        child.kill("SIGKILL");
-        settle(() => reject(new Error(V2_JUDGE_COMMAND_OUTPUT_TOO_LARGE_MESSAGE)));
+        cancel(V2_JUDGE_COMMAND_OUTPUT_TOO_LARGE_MESSAGE);
         return;
       }
       stdoutChunks.push(buffer);
     });
-    child.stdout.once("error", () => { settle(() => reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE))); });
+    child.stdout.once("error", () => { if (!cancelling) settle(() => reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE))); });
     child.stderr.on("data", () => { /* stderr is intentionally not retained; it can contain paths or secrets. */ });
-    child.stderr.once("error", () => { settle(() => reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE))); });
-    child.once("error", () => { settle(() => reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE))); });
+    child.stderr.once("error", () => { if (!cancelling) settle(() => reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE))); });
+    child.once("error", () => { if (!cancelling) settle(() => reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE))); });
     child.once("close", (code) => {
-      if (timedOut) return;
+      exited = true;
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = undefined;
+      }
+      if (timedOut || cancelling) return;
       settle(() => code === 0 ? resolve(Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8")) : reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE)));
     });
-    child.stdin.once("error", () => { settle(() => reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE))); });
+    child.stdin.once("error", () => { if (!cancelling) settle(() => reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE))); });
     try { child.stdin.end(request.prompt, "utf8", () => { /* successful stdin completion is not a result boundary. */ }); }
     catch { settle(() => reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE))); }
   });
@@ -109,7 +150,7 @@ export interface V2JudgeCommandPreflightResult {
   capabilities: { jsonObject: true };
 }
 
-export async function probeV2JudgeCommandModel(environment: NodeJS.ProcessEnv = process.env, options: { timeoutMs?: number } = {}): Promise<V2JudgeCommandPreflightResult> {
+export async function probeV2JudgeCommandModel(environment: NodeJS.ProcessEnv = process.env, options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<V2JudgeCommandPreflightResult> {
   const model = environment.EVAL_JUDGE_MODEL?.trim();
   if (!model) throw new Error("EVAL_JUDGE_MODEL is required for a live eval judge preflight.");
   const commandLabel = judgeCommandLabel(environment);
@@ -120,6 +161,7 @@ export async function probeV2JudgeCommandModel(environment: NodeJS.ProcessEnv = 
       environment,
       model,
       timeoutMs: options.timeoutMs,
+      signal: options.signal,
       prompt: "Judge connectivity preflight. Return exactly {\"ok\":true} as JSON and no other text."
     });
   } catch {

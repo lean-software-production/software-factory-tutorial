@@ -294,6 +294,40 @@ describe("authored workbook public driver", () => {
     expect(trace.publicStates.map((entry) => entry.label)).toEqual(["terminal:bad:baseline", "terminal:bad:reviewed:1", "terminal:bad:reviewed:2", "terminal:retry:reviewed:1", "terminal:retry:reviewed:2"]);
   });
 
+  it("applies private terminal activation only to socket bytes and redacts it from trace/state", async () => {
+    const activation = "export AUTHORED_EVAL_COMMAND_STUB_CONFIG=/workspace/private/config.json; export PATH=/workspace/private/bin:$PATH";
+    class CapturingWebSocket extends ReplayWebSocket {
+      static instances: CapturingWebSocket[] = [];
+      constructor() { super(); CapturingWebSocket.instances.push(this); }
+      override send(data: string): void {
+        this.sent.push(JSON.parse(data));
+        this.emit("message", Buffer.from(JSON.stringify({ type: "output", data: `${activation}\r\nlogical output\r\n` })));
+      }
+    }
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("private-terminal-prefix");
+    const states = [stateWithTerminal("running"), stateWithTerminal("checking", activation, 1), stateWithTerminal("complete", `${activation} Accepted.`, 2)];
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      WebSocket: CapturingWebSocket as any,
+      privateTerminalShellPrefix: activation,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async () => new Response(JSON.stringify(states.shift() ?? stateWithTerminal("complete", `${activation} Accepted.`, 2)), { status: 200 })
+    });
+
+    await driver.submitTerminalCommand(blockId, "echo logical", { complete: false });
+
+    expect(CapturingWebSocket.instances[0]?.sent).toEqual([{ type: "input", data: `${activation}\necho logical\r` }]);
+    const serializedTrace = JSON.stringify(trace);
+    expect(serializedTrace).not.toContain("AUTHORED_EVAL_COMMAND_STUB_CONFIG");
+    expect(serializedTrace).not.toContain("/workspace/private/config.json");
+    expect(trace.terminalTranscript).toEqual([
+      { blockId, direction: "input", text: "echo logical\r" },
+      { blockId, direction: "output", text: "logical output\r\n" }
+    ]);
+  });
+
   it("does not send or record input when a terminal busy frame arrives before the open callback", async () => {
     class EarlyBusyWebSocket extends ReplayWebSocket {
       static instances: EarlyBusyWebSocket[] = [];
@@ -538,7 +572,7 @@ describe("authored workbook public driver", () => {
       fetch: async () => new Response(JSON.stringify(stateWithTerminal("running")), { status: 200 })
     });
 
-    await expect(driver.submitTerminalCommand(blockId, "not sent", { complete: false })).rejects.toThrow("send failed after sync output");
+    await expect(driver.submitTerminalCommand(blockId, "not sent", { complete: false })).rejects.toThrow(`Workbook terminal socket send failed before terminal review completed for ${blockId}.`);
     expect(trace.terminalTranscript).toEqual([]);
   });
 
@@ -648,7 +682,7 @@ describe("authored workbook public driver", () => {
       }
     });
 
-    await expect(driver.submitTerminalCommand(blockId, "throw before commit", { complete: false })).rejects.toThrow("send failed before input commit");
+    await expect(driver.submitTerminalCommand(blockId, "throw before commit", { complete: false })).rejects.toThrow(`Workbook terminal socket send failed before terminal review completed for ${blockId}.`);
     await allowLateCallbacks();
 
     expect(fetchReads).toBe(1);

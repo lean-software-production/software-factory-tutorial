@@ -11,7 +11,7 @@ workspaces under `tutorial/.tutorial/<session-id>/workspaces/<workspace-id>/`.
 | [`tutorial/`](tutorial/) | Learner-facing workbook, lessons, specs, seed files, and authored starter trees. |
 | [`tutorial-engine/`](tutorial-engine/) | The browser-led workbook engine and its tests. |
 | [`tutorial-engine/evals/`](tutorial-engine/evals/) | Tutorial-engine-owned synthetic engine-mechanics live evals, engine-v2 report markers, deterministic evaluator checks, and active reports under `tutorial-engine/evals/reports/`. |
-| [`evals/`](evals/) | Root-owned evaluation map and authored-workbook evaluator foundations. Current workbook eval commands are deterministic; the future live runner will report under `evals/workbook/reports/`. |
+| [`evals/`](evals/) | Root-owned evaluation map, authored-workbook evaluator foundations, and the authored-workbook live runner reporting under `evals/workbook/reports/`. |
 | [`scripts/`](scripts/) | Root launchers and setup helpers. |
 
 ## Root commands
@@ -33,11 +33,11 @@ npm run --workspace=tutorial-engine test:eval   # deterministic synthetic engine
 npm run eval:engine -- --help      # live synthetic engine eval CLI, forwarded to tutorial-engine
 npm run eval:release               # bounded six-scenario engine eval release profile
 npm run eval -- --help             # temporary compatibility alias for eval:engine, not authored eval
+npm run eval:workbook -- --list    # zero-side-effect authored-workbook scenario catalog
+npm run eval:workbook -- --release # paid/Docker-backed four-scenario authored release profile
 ```
 
-`eval:workbook` is reserved for the future authored-curriculum live runner and is intentionally not
-wired in `package.json` yet. The current authored-workbook eval commands are `check:eval:workbook`
-and `test:eval:workbook`; both are deterministic and model-free.
+`eval:workbook` is the authored-curriculum live runner. It is paid and Docker-backed for live scopes; `--list` is zero-side-effect. The deterministic authored-workbook eval commands remain `check:eval:workbook` and `test:eval:workbook`; both are model-free.
 
 `npm run tutorial:workbook` supplies the embedded terminal with one read-only runtime mount: root
 `node_modules/` at the active live workspace's `node_modules/`. A normal launch creates a new
@@ -55,9 +55,9 @@ Use [`evals/README.md`](evals/README.md) as the active ownership map.
   The live run is paid and Docker-backed; the package `check:eval` and `test:eval` scripts are
   deterministic and model-free.
 - [`evals/workbook/`](evals/workbook/) is root-owned. It holds real authored-curriculum evaluator
-  foundations and the future live authored-workbook runner. Its current deterministic commands are
-  `check:eval:workbook` and `test:eval:workbook`. Future reports belong under
-  `evals/workbook/reports/` and should carry workbook-owned markers.
+  foundations and the live authored-workbook runner. Its deterministic commands are
+  `check:eval:workbook` and `test:eval:workbook`; live reports belong under
+  `evals/workbook/reports/` and carry workbook-owned markers.
 - `evals/reports/` is historical compatibility only. No active runner writes there. Do not delete,
   migrate, or rewrite historical report artifacts or historical plan paths as part of current eval
   ownership work.

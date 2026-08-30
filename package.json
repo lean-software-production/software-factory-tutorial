@@ -18,6 +18,7 @@
     "test:onboarding": "node --test test/onboarding.test.mjs",
     "check:eval:workbook": "tsc -p evals/workbook/tsconfig.json",
     "test:eval:workbook": "vitest run evals/workbook/test/*.test.ts",
+    "eval:workbook": "tsx evals/workbook/run.ts",
     "eval:engine": "npm run --workspace=tutorial-engine eval --",
     "eval:release": "npm run --workspace=tutorial-engine eval:release --",
     "eval": "npm run eval:engine --",

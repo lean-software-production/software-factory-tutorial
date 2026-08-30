@@ -97,17 +97,18 @@ describe("evaluator package ownership", () => {
     expect(await exists(resolve(engineRoot, "test/check-visual-surface.test.ts"))).toBe(false);
     expect(await exists(resolve(repoRoot, "scripts/check-visual.mjs"))).toBe(false);
     expect(await exists(resolve(repoRoot, "evals/run.ts"))).toBe(false);
+    expect(await exists(resolve(repoRoot, "evals/workbook/run.ts"))).toBe(true);
 
     expect(rootReadme).toContain("tutorial-engine/evals/reports/");
     expect(rootReadme).toContain("evals/workbook/reports/");
     expect(rootReadme).toContain("temporary compatibility alias for eval:engine, not authored eval");
-    expect(rootReadme).toContain("`eval:workbook` is reserved");
+    expect(rootReadme).toContain("`eval:workbook` is the authored-curriculum live runner");
 
     expect(rootEvalsReadme).toContain("[`../tutorial-engine/evals/`](../tutorial-engine/evals/) | `tutorial-engine` | Synthetic engine-mechanics live evals");
     expect(rootEvalsReadme).toContain("[`workbook/`](workbook/) | `root` | Real authored-curriculum evaluator foundations");
     expect(rootEvalsReadme).toContain("namespace `tutorial-engine/evals/engine-v2`, owner `tutorial-engine`, suite `engine-v2`");
-    expect(rootEvalsReadme).toContain("schema `workbook-evaluator-prerequisite-seeds/v1` and owner `evals/workbook`");
-    expect(rootEvalsReadme).toContain("`eval:workbook` is reserved and intentionally not wired");
+    expect(rootEvalsReadme).toContain("namespace `root/workbook`, owner `root`, suite `workbook`");
+    expect(rootEvalsReadme).toContain("`npm run eval:workbook -- ...` runs the authored-workbook live evaluator");
     expect(rootEvalsReadme).toContain("No active runner writes `evals/reports/`");
 
     expect(workbookEvalsReadme).toContain("Root-owned evaluator code");
@@ -122,7 +123,7 @@ describe("evaluator package ownership", () => {
     expect(engineEvalsReadme).toContain("root `evals/workbook/reports/`");
 
     expect(gitignore).toContain("Historical root eval reports from older runner locations; no active runner writes here.");
-    expect(gitignore).toContain("Future authored-workbook live eval reports (owner: root)");
+    expect(gitignore).toContain("Authored-workbook live eval reports (owner: root)");
     expect(gitignore).toContain("Current live synthetic engine-mechanics eval reports (owner: tutorial-engine)");
     expect(gitignore).toContain("evals/reports/");
     expect(gitignore).toContain("evals/workbook/reports/");

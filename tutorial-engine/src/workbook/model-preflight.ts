@@ -78,6 +78,7 @@ export interface WorkbookRolePreflightRequest {
   workspaceRoot: string;
   logger: TutorialLogger;
   environment: WorkbookModelEnvironment;
+  signal?: AbortSignal;
 }
 
 export type WorkbookRolePreflightProbe = (request: WorkbookRolePreflightRequest) => Promise<WorkbookModelPreflightResult>;
@@ -96,6 +97,10 @@ const WORKBOOK_MODEL_PREFLIGHT_TIMEOUT_MESSAGE = "Workbook model preflight timed
 
 interface PiModelLike { provider: string; id: string }
 
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new Error("Workbook model preflight was cancelled.");
+}
+
 function identity(model: PiModelLike | undefined): WorkbookModelIdentity | undefined {
   return model ? { provider: model.provider, id: model.id } : undefined;
 }
@@ -104,14 +109,25 @@ function resolverForRole(role: WorkbookModelBackedRole): (runtime: ModelRuntime,
   return role === "Main Tutor" ? resolveTutorModel : resolvePracticeCoachModel;
 }
 
-async function withModelPreflightTimeout<T>(operation: Promise<T>): Promise<T> {
+async function withModelPreflightTimeout<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let cleanupAbort = () => undefined as void;
   const timeout = new Promise<T>((_resolve, reject) => {
     timer = setTimeout(() => { reject(new Error(WORKBOOK_MODEL_PREFLIGHT_TIMEOUT_MESSAGE)); }, WORKBOOK_MODEL_PREFLIGHT_TIMEOUT_MS);
     timer.unref?.();
   });
-  try { return await Promise.race([operation, timeout]); }
-  finally { if (timer) clearTimeout(timer); }
+  const abort = new Promise<T>((_resolve, reject) => {
+    if (!signal) return;
+    if (signal.aborted) {
+      reject(new Error("Workbook model preflight was cancelled."));
+      return;
+    }
+    const listener = () => reject(new Error("Workbook model preflight was cancelled."));
+    signal.addEventListener("abort", listener, { once: true });
+    cleanupAbort = () => signal.removeEventListener("abort", listener);
+  });
+  try { return await Promise.race([operation, timeout, abort]); }
+  finally { cleanupAbort(); if (timer) clearTimeout(timer); }
 }
 
 export async function probePiWorkbookRoleModel(request: WorkbookRolePreflightRequest): Promise<WorkbookModelPreflightResult> {
@@ -121,6 +137,7 @@ export async function probePiWorkbookRoleModel(request: WorkbookRolePreflightReq
   let session: PiTutorSession | undefined;
   let resilient: ResilientTutorSession | undefined;
   try {
+    throwIfAborted(request.signal);
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
       retry: { enabled: false },
@@ -149,10 +166,13 @@ export async function probePiWorkbookRoleModel(request: WorkbookRolePreflightReq
       extensionFactories: []
     });
     await loader.reload();
+    throwIfAborted(request.signal);
     const modelRuntime = await ModelRuntime.create();
+    throwIfAborted(request.signal);
     const choice = resolverForRole(request.role)(modelRuntime, requested);
     requestedModel = identity(choice.requestedModel ?? choice.model);
     if (choice.warning) request.logger.info(choice.warning);
+    throwIfAborted(request.signal);
     const created = await createAgentSession({
       cwd: request.workspaceRoot,
       resourceLoader: loader,
@@ -165,10 +185,17 @@ export async function probePiWorkbookRoleModel(request: WorkbookRolePreflightReq
       sessionManager: SessionManager.inMemory(request.workspaceRoot),
       settingsManager
     });
-    session = created.session;
-    selectedModel = identity(session.state.model ?? choice.model);
-    resilient = createResilientTutorSession(session, request.logger, `${request.role} preflight`, { attempts: 1 });
-    const response = await withModelPreflightTimeout(resilient.prompt(PREFLIGHT_PROMPT));
+    const createdSession = created.session;
+    session = createdSession;
+    if (request.signal?.aborted) {
+      createdSession.dispose();
+      session = undefined;
+      throwIfAborted(request.signal);
+    }
+    selectedModel = identity(createdSession.state.model ?? choice.model);
+    resilient = createResilientTutorSession(createdSession, request.logger, `${request.role} preflight`, { attempts: 1 });
+    const response = await withModelPreflightTimeout(resilient.prompt(PREFLIGHT_PROMPT), request.signal);
+    throwIfAborted(request.signal);
     if (!response.trim()) throw new Error(`${request.role} preflight returned an empty assistant completion.`);
     return { role: request.role, envVar: request.envVar, requested, requestedModel, selectedModel };
   } catch (cause) {

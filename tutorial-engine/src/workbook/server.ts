@@ -192,7 +192,7 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     logger: log,
   }) : undefined;
   try { terminal?.start(); }
-  catch (error) { terminal?.dispose(); await workflow.close(); mainTutor.dispose(); throw error; }
+  catch (error) { terminal?.dispose(); await workflow.close(); mainTutor.dispose(); practiceCoach.dispose(); throw error; }
 
   const logTerminalStartupFailure = (operation: string, error: unknown): void => {
     log.info(`Embedded terminal ${operation} failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -314,5 +314,5 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
   if (options.watchContent) contentWatch = watchWorkbookContent(runtime.contentRoot, queueContentReload, (error) => log.info(`Workbook content watcher failed: ${error.message}`), { watchFactory: options.contentWatchFactory, debounceMs: options.contentWatchDebounceMs });
   const url = `http://${LOOPBACK_HOST}:${address.port}`;
   log.info(`Workbook tutor listening on ${url}. State: ${timeline.eventPath}${terminal ? " Embedded terminal enabled on loopback only." : ""}${contentWatch ? " Content watch enabled." : ""}`);
-  return { url, port: address.port, host, close: async () => { contentWatch?.close(); terminal?.dispose(); wss?.close(); for (const client of sseClients) client.end(); sseClients.clear(); await Promise.allSettled([contentReloads, workflow.close()]); mainTutor.dispose(); const closing = new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise())); server.closeAllConnections(); await closing; } };
+  return { url, port: address.port, host, close: async () => { contentWatch?.close(); terminal?.dispose(); wss?.close(); for (const client of sseClients) client.end(); sseClients.clear(); await Promise.allSettled([contentReloads, workflow.close()]); mainTutor.dispose(); practiceCoach.dispose(); const closing = new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise())); server.closeAllConnections(); await closing; } };
 }

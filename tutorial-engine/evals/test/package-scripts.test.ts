@@ -26,7 +26,7 @@ describe("evaluator package scripts", () => {
     expect(packageJson.scripts["eval:engine"]).toBe("npm run --workspace=tutorial-engine eval --");
     expect(packageJson.scripts["eval:release"]).toBe("npm run --workspace=tutorial-engine eval:release --");
     expect(packageJson.scripts.eval).toBe("npm run eval:engine --");
-    expect(packageJson.scripts["eval:workbook"]).toBeUndefined();
+    expect(packageJson.scripts["eval:workbook"]).toBe("tsx evals/workbook/run.ts");
 
     expect(enginePackageJson.scripts["check:eval"]).toBe("tsc -p evals/tsconfig.json");
     // Asserted by property, not by exact string: the guarantees that matter are that this runs

@@ -240,10 +240,10 @@ describe("local test command contract", () => {
     }
   });
 
-  it("models eval:workbook as a planned direct module command, not a recursive package alias", () => {
+  it("models eval:workbook as a wired direct module command, not a recursive package alias", () => {
     const command = rootCommandContract("eval:workbook");
 
-    assert.equal(command.packageScript.status, "planned");
+    assert.equal(command.packageScript.status, "wired");
     assert.equal(command.packageScript.command, "tsx evals/workbook/run.ts");
     assert.deepEqual(
       command.steps.map((step) => ({ implementation: step.implementation, module: step.module, shell: step.shell, forwardsArguments: step.forwardsArguments })),
@@ -285,12 +285,18 @@ describe("local test command contract", () => {
       assert.equal(entry.aligned, true);
     }
 
-    for (const script of ["test", "test:fast", "test:engine", "test:workbook", "eval:workbook"]) {
+    for (const script of ["test", "test:fast", "test:engine", "test:workbook"]) {
       const entry = report.find((candidate) => candidate.packageName === "root" && candidate.script === script);
       assert.equal(entry.status, "planned", `${script} should remain explicitly planned`);
       assert.equal(entry.present, false, `${script} must not be claimed as wired yet`);
       assert.equal(entry.aligned, true, `${script} should align by being absent until wiring flips its status`);
     }
+
+    const evalWorkbook = report.find((entry) => entry.packageName === "root" && entry.script === "eval:workbook");
+    assert.equal(evalWorkbook.status, "wired");
+    assert.equal(evalWorkbook.expectedCommand, "tsx evals/workbook/run.ts");
+    assert.equal(evalWorkbook.actual, "tsx evals/workbook/run.ts");
+    assert.equal(evalWorkbook.aligned, true);
 
     const engineFast = report.find((entry) => entry.packageName === "tutorial-engine" && entry.script === "test:fast");
     assert.equal(engineFast.status, "planned");
