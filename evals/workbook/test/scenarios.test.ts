@@ -170,10 +170,12 @@ source = source.replace(
 writeFileSync(path, source);
 NODE
 ${lesson004CurrentEvidenceAndValidationCommand}`;
-const lesson004DivideCommand = String.raw`(cd factory \
+const lesson004DivideCommand = String.raw`bash <<'BASH'
+(cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
-${lesson004CurrentEvidenceAndValidationCommand}`;
+${lesson004CurrentEvidenceAndValidationCommand}
+BASH`;
 
 const completedSource = `type Output = (line: string) => void;
 
