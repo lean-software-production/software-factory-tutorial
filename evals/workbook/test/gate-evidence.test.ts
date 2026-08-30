@@ -389,7 +389,7 @@ function traceForScenario(id: string, options: { rawJump?: boolean }): AuthoredW
 
 function primerTrace(): AuthoredWorkbookEvalSessionTrace {
   const trace = createEmptyAuthoredWorkbookEvalSessionTrace("primer-validation-misconception");
-  trace.internalEvents = [raw("workbook_introduction_completed"), raw("reflection_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_follow_up_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("block_completed", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl")];
+  trace.internalEvents = [raw("workbook_introduction_completed"), raw("reflection_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_follow_up_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"), raw("block_completed", "what-is-a-factory", "lesson--what-is-a-factory--conclusion")];
   trace.reflections = [
     { blockId: "lesson--what-is-a-factory--factory-vs-repl", role: "learner", text: "A factory requires more trust/faith in the LLM." },
     { blockId: "lesson--what-is-a-factory--factory-vs-repl", role: "tutor", text: "The validation loop exists because you do not trust the model unchecked." },
@@ -440,7 +440,10 @@ function lesson013Trace(options: { rawJump?: boolean } = {}): AuthoredWorkbookEv
   const trace = createEmptyAuthoredWorkbookEvalSessionTrace("lesson-013-operator-judgement");
   trace.internalEvents = [raw("workbook_introduction_completed"), raw("attempt_accepted", "013-oversee-the-orchestrator", "lesson--013-oversee-the-orchestrator--implementation-order", "terminal"), raw("reflection_completed", "013-oversee-the-orchestrator", "lesson--013-oversee-the-orchestrator--checks")];
   if (options.rawJump) trace.internalEvents.push({ type: "lesson_jump_started", lessonId: "copied" } as any);
-  trace.terminalTranscript = [{ blockId: "lesson--013-oversee-the-orchestrator--implementation-order", direction: "input", text: 'export PATH=/stubs:$PATH\n./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &\n./factory/steer.sh refactor "Finish multiply and divide independently before validation."\n./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &\n./factory/ask.sh refactor "What happened in this run?"' }];
+  trace.terminalTranscript = [
+    { blockId: "lesson--013-oversee-the-orchestrator--implementation-order", direction: "input", text: 'export PATH=/stubs:$PATH\n./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &\n./factory/steer.sh refactor "Finish multiply and divide independently before validation."\n./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &\necho "=== RUN LOG (tail) ==="\ntail -n 80 .tmp/refactor-run.log\nprintf \'\\n\'\necho "=== WATCH LOG (tail) ==="\ntail -n 80 .tmp/refactor-watch.log\nprintf \'\\n\'\necho "=== ASK SUMMARY ==="\n./factory/ask.sh refactor "What happened in this run?"' },
+    { blockId: "lesson--013-oversee-the-orchestrator--implementation-order", direction: "output", text: "=== RUN LOG (tail) ===\nStarting doer\nStarting validation\nStarting commit\nLine finished\n=== WATCH LOG (tail) ===\n→ read\nauthored-eval accepted early steer\n→ edit\n=== ASK SUMMARY ===\nThe supplied record contains deterministic authored-eval structural events with zero recorded cost.\n" }
+  ];
   trace.reflections = [{ blockId: "lesson--013-oversee-the-orchestrator--checks", role: "learner", text: "The factory is factory/. The line is refactor/. The orchestrator is run.sh: it starts the line, hands inputs to stations, branches on VERDICT, handles failures with repair, and stops by counters. Prompt/script pairs are stations. ask.sh is no-tools because the record is supplied. I am the operator. Repeated FAIL can mean an unmet criterion or missing/unreachable evidence. Cost, regressions, and whether the result is worth it are still operator judgement." }];
   return trace;
 }
@@ -468,7 +471,7 @@ async function writeLessons003004Final(root: string, options: { extraArtifact?: 
 
 async function writeLesson013Final(root: string, options: { dirtyAfterCommit?: boolean; wrongCommitIdentity?: boolean; committerMismatch?: boolean; extraCommittedIgnoredFile?: boolean; alternateCommittedSource?: boolean }) {
   await writeFile(join(root, ".tmp/refactor-run.log"), "Starting doer\nStarting validation\nStarting commit\nLine finished\n");
-  await writeFile(join(root, ".tmp/refactor-watch.log"), "queue_update\n→ read\nauthored-eval accepted early steer\n→ edit\n");
+  await writeFile(join(root, ".tmp/refactor-watch.log"), "→ read\nauthored-eval accepted early steer\n→ edit\n");
   await mkdir(join(root, "factory/refactor/.tmp"), { recursive: true });
   await writeFile(join(root, "factory/refactor/.tmp/quality-before.txt"), "Findings reported by: eslint.\n");
   await writeFile(join(root, "factory/refactor/.tmp/evidence.txt"), "=== QUALITY BEFORE (recorded before the doer ran) ===\nFindings reported by: eslint.\n\n=== QUALITY NOW ===\nAll quality checks passed.\n\n=== TESTS ===\nTests: PASS\n\n=== WORKING DIFF ===\n+    const readFirstOperand = (separator: \"and\" | \"from\" | \"by\"): number => {\n+      const first = readFirstOperand(\"by\");\n");

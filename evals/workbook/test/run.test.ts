@@ -144,14 +144,18 @@ function makeDeps(options: { failGate?: boolean; judgePass?: boolean; abortOnDri
 }
 
 function fakeDriver(trace: AuthoredWorkbookEvalSessionTrace, events: string[], abortOnDrive?: AbortController): any {
-  const push = (type: string, extra: Record<string, unknown> = {}) => trace.internalEvents.push({ type, lessonId: "what-is-a-factory", blockId: String(extra.blockId ?? "factory-vs-repl"), ...extra } as any);
-  const state = (blockId = "factory-vs-repl", status = "accepted") => ({ progress: { blocks: [{ id: blockId, checkpoint: { status } }] } });
+  const canonical = (blockId = "factory-vs-repl") => blockId.includes("--") ? blockId : `lesson--what-is-a-factory--${blockId}`;
+  const push = (type: string, extra: Record<string, unknown> = {}) => {
+    const blockId = canonical(String(extra.blockId ?? "factory-vs-repl"));
+    trace.internalEvents.push({ type, lessonId: "what-is-a-factory", ...extra, blockId } as any);
+  };
+  const state = (blockId = "factory-vs-repl", status = "accepted") => ({ progress: { blocks: [{ id: canonical(blockId), checkpoint: { status } }] } });
   return {
     completeIntroduction: async () => { events.push("drive:intro"); push("workbook_introduction_completed"); return state(); },
-    continueBlock: async (blockId: string) => { events.push(`drive:continue:${blockId}`); push("block_continued", { blockId }); return state(blockId); },
-    submitReflection: async (blockId: string, response: string) => { events.push(`drive:reflection:${blockId}`); trace.reflections.push({ blockId, role: "learner", text: response }); trace.reflections.push({ blockId, role: "tutor", text: "Tutor feedback: use validation rather than trust." }); push("reflection_submitted", { blockId }); push("reflection_reply_recorded", { blockId }); if (abortOnDrive) { abortOnDrive.abort(); throw new Error("aborted by test"); } return state(blockId, "feedback"); },
-    submitReflectionFollowUp: async (blockId: string, response: string) => { trace.reflections.push({ blockId, role: "learner", text: response }); trace.reflections.push({ blockId, role: "tutor", text: "accepted" }); push("reflection_follow_up_submitted", { blockId }); push("reflection_reply_recorded", { blockId }); return state(blockId, "accepted"); },
-    completeReflection: async (blockId: string) => { push("reflection_completed", { blockId }); return state(blockId); },
+    continueBlock: async (blockId: string) => { events.push(`drive:continue:${blockId}`); push("block_continued", { blockId: canonical(blockId) }); return state(blockId); },
+    submitReflection: async (blockId: string, response: string) => { events.push(`drive:reflection:${blockId}`); const id = canonical(blockId); trace.reflections.push({ blockId: id, role: "learner", text: response }); trace.reflections.push({ blockId: id, role: "tutor", text: "Tutor feedback: use validation rather than trust." }); push("reflection_submitted", { blockId: id }); push("reflection_reply_recorded", { blockId: id }); if (abortOnDrive) { abortOnDrive.abort(); throw new Error("aborted by test"); } return state(blockId, "feedback"); },
+    submitReflectionFollowUp: async (blockId: string, response: string) => { const id = canonical(blockId); trace.reflections.push({ blockId: id, role: "learner", text: response }); trace.reflections.push({ blockId: id, role: "tutor", text: "accepted" }); push("reflection_follow_up_submitted", { blockId: id }); push("reflection_reply_recorded", { blockId: id }); return state(blockId, "accepted"); },
+    completeReflection: async (blockId: string) => { push("reflection_completed", { blockId: canonical(blockId) }); return state(blockId); },
     submitTerminalCommand: async (blockId: string, command: string) => { trace.terminalTranscript.push({ blockId, direction: "input", text: command }); trace.terminalTranscript.push({ blockId, direction: "output", text: "ok" }); push("attempt_accepted", { blockId, kind: "terminal" }); return state(blockId, "feedback"); },
     completeTerminalBlock: async (blockId: string) => { push("block_completed", { blockId }); return state(blockId); }
   };

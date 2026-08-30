@@ -37,6 +37,45 @@ function stateWithTerminal(phase: "running" | "checking" | "feedback" | "complet
   };
 }
 
+function stateAfterTerminalAdvanced(message = "Accepted."): PublicWorkbookState {
+  const nextBlockId = "lesson--001-public-contract--next";
+  return {
+    ...stateWithTerminal("complete", message, 2),
+    progress: {
+      ...stateWithTerminal("complete", message, 2).progress,
+      activeBlockId: nextBlockId,
+      blocks: [
+        {
+          id: blockId,
+          type: "terminal-practice",
+          ready: true,
+          active: false,
+          completed: true,
+          verified: true,
+          emerged: true,
+          workAccepted: true,
+          terminal: { phase: "complete", message },
+          terminalRevision: 2
+        },
+        {
+          id: nextBlockId,
+          type: "narrative",
+          ready: true,
+          active: true,
+          completed: false,
+          verified: false,
+          emerged: true
+        }
+      ]
+    },
+    currentBlock: { id: nextBlockId, anchorId: nextBlockId, origin: "lesson", kind: "narrative", title: "Next", lessonId: "001-public-contract", declaredId: "next" },
+    orderedBlocks: [
+      { id: blockId, anchorId: blockId, origin: "lesson", kind: "terminal-practice", title: "Terminal", lessonId: "001-public-contract", declaredId: "terminal" },
+      { id: nextBlockId, anchorId: nextBlockId, origin: "lesson", kind: "narrative", title: "Next", lessonId: "001-public-contract", declaredId: "next" }
+    ]
+  };
+}
+
 function stateWithEditor(revision: number, status: "reviewing" | "feedback" | "accepted", feedback?: string): PublicWorkbookState {
   return {
     ...stateWithTerminal("running"),
@@ -454,6 +493,53 @@ describe("authored workbook public driver", () => {
     });
 
     await expect(driver.submitTerminalCommand(blockId, "good command")).rejects.toThrow("Timed out waiting for workbook HTTP response.");
+  });
+
+  it("treats a 409 terminal completion race as success only after the same accepted block advanced", async () => {
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-complete-409-applied");
+    const states = [stateWithTerminal("running"), stateWithTerminal("complete", "Accepted."), stateAfterTerminalAdvanced("Accepted.")];
+    const posted: unknown[] = [];
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      WebSocket: ReplayWebSocket as any,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async (_input, init) => {
+        if (init?.method === "POST") {
+          posted.push(JSON.parse(String(init.body)));
+          return new Response(JSON.stringify({ error: "private active-block race diagnostic" }), { status: 409 });
+        }
+        return new Response(JSON.stringify(states.shift() ?? stateAfterTerminalAdvanced("Accepted.")), { status: 200 });
+      }
+    });
+
+    const continued = await driver.submitTerminalCommand(blockId, "good command");
+
+    expect(continued.progress.activeBlockId).toBe("lesson--001-public-contract--next");
+    expect(posted).toEqual([{ blockId, action: "continue" }]);
+    expect(JSON.stringify(trace.publicStates)).not.toContain("private active-block race diagnostic");
+    expect(trace.publicStates.map((entry) => entry.label)).toContain(`terminal:${blockId}:complete:conflict-state`);
+  });
+
+  it("does not swallow a genuine 409 terminal completion conflict", async () => {
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-complete-409-conflict");
+    const states = [stateWithTerminal("running"), stateWithTerminal("complete", "Accepted."), stateWithTerminal("feedback", "Still active feedback.", 2)];
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      WebSocket: ReplayWebSocket as any,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async (_input, init) => {
+        if (init?.method === "POST") return new Response(JSON.stringify({ error: "private body" }), { status: 409, statusText: "private status" });
+        return new Response(JSON.stringify(states.shift() ?? stateWithTerminal("feedback", "Still active feedback.", 2)), { status: 200 });
+      }
+    });
+
+    const pending = driver.submitTerminalCommand(blockId, "good command");
+    await expect(pending).rejects.toThrow("POST /api/workbook/events failed with HTTP 409.");
+    await expect(pending).rejects.not.toThrow(/private body|private status/);
   });
 
   it("accepts identical repeated terminal feedback when the public revision advances", async () => {

@@ -330,7 +330,14 @@ watch_pid=$!
 wait "$run_pid"
 kill "$watch_pid" 2>/dev/null || true
 wait "$watch_pid" 2>/dev/null || true
-./factory/ask.sh refactor "What happened in this run?" > /dev/null 2>&1`;
+echo "=== RUN LOG (tail) ==="
+tail -n 80 .tmp/refactor-run.log
+printf '\n'
+echo "=== WATCH LOG (tail) ==="
+tail -n 80 .tmp/refactor-watch.log
+printf '\n'
+echo "=== ASK SUMMARY ==="
+./factory/ask.sh refactor "What happened in this run?"`;
 
 const lessons003004ArtifactAllowlist = Object.freeze([
   "factory/refactor-validate.md",
@@ -766,6 +773,7 @@ function gateLesson013OperatorJudgement(input: AuthoredWorkbookScenarioGateInput
   const commitMessage = files.get("factory/refactor/.tmp/commit-message.txt") ?? "";
   const source = files.get("calculator/src/index.ts") ?? "";
   const reflection = allReflectionText(input.trace, "checks");
+  const terminalOutput = terminalOutputTexts(input.trace).join("\n");
   return evaluateGate([
     assertion("lesson013-no-jump", noLessonJumpEverywhere(input), "No lesson jump entered internal raw events or the public trace."),
     assertion("lesson013-exact-artifacts", artifactPathsMatch(input, lesson013ArtifactAllowlist), "Only the exact Lesson 013 public artifact allowlist is captured; raw event JSONL stays internal."),
@@ -781,7 +789,8 @@ function gateLesson013OperatorJudgement(input: AuthoredWorkbookScenarioGateInput
     assertion("lesson013-quality-evidence", realQualityEvidencePasses(input, files.get("factory/refactor/.tmp/evidence.txt") ?? ""), "Real labelled quality and test evidence is present, current, and passes before the validator PASS."),
     assertion("lesson013-pass-commit", firstNonEmptyLineIsVerdict(findings, "PASS") && commitMessage.trim() === "Refactor calculator operand parsing\n\nUse a shared operand reader across prefix operator branches." && input.facts.calculatorHeadChanged === true && input.facts.calculatorGitStatus === "" && input.facts.calculatorTopCommit === input.facts.calculatorExpectedTopCommit && input.facts.calculatorTopCommitTree === input.facts.calculatorExpectedTopCommitTree, "The run reaches PASS and leaves calculator Git clean at the exact expected top commit and tree."),
     assertion("lesson013-source-complete", hasTrustedCalculatorBehavior(input, source), "Final calculator behavior, source digest, and Git tree reflect the completed refactor."),
-    assertion("lesson013-run-watch-logs", ["Starting doer", "Starting validation", "Starting commit", "Line finished"].every((marker) => runLog.includes(marker)) && ["→ read", "authored-eval", "→ edit", "queue_update"].every((marker) => watchLog.includes(marker)), "Run and watch logs contain bounded public evidence for watch.sh and RPC steering."),
+    assertion("lesson013-run-watch-logs", ["Starting doer", "Starting validation", "Starting commit", "Line finished"].every((marker) => runLog.includes(marker)) && ["→ read", "authored-eval", "→ edit"].every((marker) => watchLog.includes(marker)), "Run and watch logs contain bounded public evidence for watch.sh and RPC steering."),
+    assertion("lesson013-visible-terminal-output", ["=== RUN LOG (tail) ===", "Starting doer", "=== WATCH LOG (tail) ===", "→ read", "authored-eval", "→ edit", "=== ASK SUMMARY ===", "deterministic authored-eval structural events"].every((marker) => terminalOutput.includes(marker)), "Terminal output exposes bounded public run, watch, and ask evidence for the Tutor."),
     assertion("lesson013-reflection-vocabulary", /factory\//.test(reflection) && /refactor\//.test(reflection) && /run\.sh/.test(reflection) && /orchestrator/i.test(reflection) && /station/i.test(reflection) && /ask\.sh/i.test(reflection) && /no tools|no-tools/i.test(reflection) && /operator/i.test(reflection), "Reflection names the factory, line, orchestrator, stations, ask station, and operator."),
     assertion("lesson013-five-jobs", /start/i.test(reflection) && /hand|input|carry/i.test(reflection) && /branch|VERDICT/i.test(reflection) && /failure|repair/i.test(reflection) && /stop|finished|counter/i.test(reflection), "Reflection maps run.sh to the five orchestrator jobs."),
     assertion("lesson013-failure-judgement", /unmet|not met|criterion/i.test(reflection) && /missing|unreachable|evidence/i.test(reflection) && /cost/i.test(reflection) && /regression|going backwards/i.test(reflection) && /worth|value/i.test(reflection), "Reflection distinguishes repeated FAIL causes and leaves cost/regression/worth to human judgement."),
@@ -819,8 +828,35 @@ function hasProgressionOrder(trace: AuthoredWorkbookEvalTrace, types: readonly s
 }
 
 function hasPrimerNormalCompletion(trace: AuthoredWorkbookEvalTrace): boolean {
-  return hasProgressionOrder(trace, ["workbook_introduction_completed", "reflection_submitted", "reflection_reply_recorded", "reflection_follow_up_submitted", "reflection_reply_recorded", "block_completed"])
-    || hasProgressionOrder(trace, ["workbook_introduction_completed", "reflection_submitted", "reflection_reply_recorded", "reflection_follow_up_submitted", "reflection_reply_recorded", "reflection_completed"]);
+  const misconceptionBlockId = "lesson--what-is-a-factory--factory-vs-repl";
+  const conclusionBlockId = "lesson--what-is-a-factory--conclusion";
+  const orderedMisconception = [
+    primerIntroductionStep(),
+    primerStep("reflection_submitted", misconceptionBlockId),
+    primerStep("reflection_reply_recorded", misconceptionBlockId),
+    primerStep("reflection_follow_up_submitted", misconceptionBlockId),
+    primerStep("reflection_reply_recorded", misconceptionBlockId)
+  ];
+  return hasProgressionSteps(trace, [...orderedMisconception, primerStep("block_completed", conclusionBlockId)])
+    || hasProgressionSteps(trace, [...orderedMisconception, primerStep("reflection_completed", misconceptionBlockId)]);
+}
+
+function primerIntroductionStep(): (event: AuthoredWorkbookEvalTrace["progressionEvents"][number]) => boolean {
+  return (event) => event.type === "workbook_introduction_completed"
+    || event.type === "block_completed" && "blockId" in event && event.blockId === "workbook--introduction";
+}
+
+function primerStep(type: string, blockId?: string): (event: AuthoredWorkbookEvalTrace["progressionEvents"][number]) => boolean {
+  return (event) => event.type === type && (blockId === undefined || "blockId" in event && event.blockId === blockId);
+}
+
+function hasProgressionSteps(trace: AuthoredWorkbookEvalTrace, steps: ReadonlyArray<(event: AuthoredWorkbookEvalTrace["progressionEvents"][number]) => boolean>): boolean {
+  let cursor = 0;
+  for (const event of trace.progressionEvents) {
+    if (steps[cursor]?.(event)) cursor += 1;
+    if (cursor === steps.length) return true;
+  }
+  return false;
 }
 
 function hasLessonProgressionOrder(trace: AuthoredWorkbookEvalTrace, lessonIds: readonly string[]): boolean {

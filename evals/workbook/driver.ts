@@ -53,6 +53,12 @@ export interface SubmitEditorDraftOptions {
   timeoutMs?: number;
 }
 
+class WorkbookHttpStatusError extends Error {
+  constructor(readonly method: "GET" | "POST", readonly path: string, readonly status: number) {
+    super(`${method} ${path} failed with HTTP ${status}.`);
+  }
+}
+
 export class AuthoredWorkbookDriver {
   readonly serverUrl: string;
   readonly trace: AuthoredWorkbookEvalSessionTrace;
@@ -125,7 +131,15 @@ export class AuthoredWorkbookDriver {
   }
 
   async completeTerminalBlock(blockId: string, label = `terminal:${blockId}:complete`): Promise<WorkbookApiState> {
-    return this.submitWorkbookAction(await this.#canonicalBlockId(blockId), "continue", {}, label);
+    const canonicalBlockId = await this.#canonicalBlockId(blockId);
+    try {
+      return await this.submitWorkbookAction(canonicalBlockId, "continue", {}, label);
+    } catch (error) {
+      if (!isHttpStatusError(error, "POST", "/api/workbook/events", 409)) throw error;
+      const state = await this.readState(`${label}:conflict-state`);
+      if (terminalCompletionAlreadyApplied(state, canonicalBlockId)) return state;
+      throw error;
+    }
   }
 
   async submitWorkbookAction(blockId: string, action: string, payload: Record<string, unknown> = {}, label = `${action}:${blockId}`): Promise<WorkbookApiState> {
@@ -183,7 +197,7 @@ export class AuthoredWorkbookDriver {
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: combinedSignal
       }), combinedSignal);
-      if (!response.ok) throw new Error(`${method} ${path} failed with HTTP ${response.status}.`);
+      if (!response.ok) throw new WorkbookHttpStatusError(method, path, response.status);
       const text = await withAbort(response.text(), combinedSignal);
       let json: unknown;
       try { json = text ? JSON.parse(text) : {}; }
@@ -465,6 +479,19 @@ function workbookBlockState(state: WorkbookApiState, blockId: string): PublicWor
 
 function terminalStateFor(state: WorkbookApiState, blockId: string): PublicWorkbookState["progress"]["blocks"][number]["terminal"] | undefined {
   return workbookBlockState(state, blockId)?.terminal;
+}
+
+function terminalCompletionAlreadyApplied(state: WorkbookApiState, blockId: string): boolean {
+  const block = workbookBlockState(state, blockId);
+  return state.progress.activeBlockId !== blockId
+    && block?.completed === true
+    && block.verified === true
+    && block.workAccepted === true
+    && block.terminal?.phase === "complete";
+}
+
+function isHttpStatusError(error: unknown, method: "GET" | "POST", path: string, status: number): error is WorkbookHttpStatusError {
+  return error instanceof WorkbookHttpStatusError && error.method === method && error.path === path && error.status === status;
 }
 
 function terminalReviewBaseline(state: WorkbookApiState, blockId: string): TerminalReviewBaseline {

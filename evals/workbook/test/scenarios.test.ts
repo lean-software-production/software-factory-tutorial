@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import type { TutorDecision } from "../../../tutorial-engine/src/workbook/tutor.js";
+import { RecordingMainTutor, type ReviewInput } from "../../../tutorial-engine/test/support/fake-tutors.js";
 import {
   AUTHORED_COMMAND_STUB_NAMESPACE,
   AUTHORED_COMMAND_STUB_OWNER,
@@ -25,6 +27,9 @@ import {
   type AuthoredWorkbookScenarioGateInput,
   type AuthoredWorkbookScenarioId
 } from "../scenarios.js";
+import { AuthoredWorkbookDriver } from "../driver.js";
+import { readAuthoredWorkbookTimeline } from "../internal-timeline.js";
+import { createEmptyAuthoredWorkbookEvalSessionTrace, projectAuthoredWorkbookEvalTrace } from "../public-trace.js";
 import { dockerContainerUser } from "../../../tutorial-engine/src/workbook/terminal.js";
 import { buildAuthoredWorkbookJudgePrompt, copyAuthoredWorkbookEvalScenarioPublicDescriptor } from "../judge.js";
 import { createAuthoredCurriculumSliceWorkspace } from "../workspace.js";
@@ -33,6 +38,19 @@ import type { AuthoredCurriculumSliceSessionCapability } from "../workspace.js";
 const execFileAsync = promisify(execFile);
 const tempRoots: string[] = [];
 const realPrerequisitesRoot = resolve(import.meta.dirname, "../prerequisites");
+
+class PrimerWorkflowFakeTutor extends RecordingMainTutor {
+  protected override defaultReply = "Public fake tutor reply.";
+  protected override blockSummaryFor = (blockId: string): string => `Public summary for ${blockId}.`;
+  protected override lessonSummaryFor = (lessonId: string): string => `Public lesson summary for ${lessonId}.`;
+
+  protected override async decide(input: ReviewInput): Promise<TutorDecision> {
+    const response = input.attempt.evidence.kind === "reflection" ? input.attempt.evidence.response : "";
+    return /more trust\/faith in the LLM/i.test(response)
+      ? { outcome: "feedback", message: "The validation loop exists because you do not trust the model unchecked." }
+      : { outcome: "accepted", message: "Accepted by deterministic fake tutor." };
+  }
+}
 
 const lesson001SimpleCommand = `pi -p "What is the capital of France?"`;
 const lesson001SuppliedCommand = `echo "Describe what this calculator does, in three sentences." \\\n  | (cd calculator && pi --no-session --tools read,grep,find,ls -p)`;
@@ -311,7 +329,10 @@ describe("authored workbook scenario descriptors", () => {
     const capstoneCommand = capstone.calls.find((call) => call.method === "submitTerminalCommand")?.command ?? "";
     expect(capstoneCommand).toContain("./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &");
     expect(capstoneCommand).toContain("./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &");
+    expect(capstoneCommand).toContain("tail -n 80 .tmp/refactor-run.log");
+    expect(capstoneCommand).toContain("tail -n 80 .tmp/refactor-watch.log");
     expect(capstoneCommand).toContain("./factory/ask.sh refactor \"What happened in this run?\"");
+    expect(capstoneCommand).not.toMatch(/ask\.sh refactor \"What happened in this run\?\"\s*>/);
     expect(capstoneCommand).toContain("./factory/steer.sh refactor \"Finish multiply and divide independently before validation.\"");
   });
 
@@ -371,15 +392,58 @@ describe("authored workbook scenario gates", () => {
     }
   });
 
-  it("accepts the live block_completed primer completion event and legacy replay shape", async () => {
+  it("passes the primer gate using actual workbook workflow projection through conclusion", async () => {
+    const scenario = authoredWorkbookScenarioById("primer-validation-misconception");
+    const workspace = await createAuthoredCurriculumSliceWorkspace({ selection: scenario.selection });
+    tempRoots.push(workspace.repositoryRoot);
+    let server: { url: string; close(): Promise<void> } | undefined;
+    try {
+      server = await workspace.startServer({ embeddedTerminal: false, mainTutor: new PrimerWorkflowFakeTutor() });
+      const trace = createEmptyAuthoredWorkbookEvalSessionTrace(scenario.id);
+      const driver = new AuthoredWorkbookDriver({ serverUrl: server.url, trace, requestTimeoutMs: 5_000, editorReviewTimeoutMs: 5_000 });
+
+      await scenario.drive({ driver });
+
+      const rawEvents = await readAuthoredWorkbookTimeline(workspace.latestSession().sessionRoot);
+      const publicTrace = projectAuthoredWorkbookEvalTrace({ ...trace, internalEvents: rawEvents });
+      expect(publicTrace.progressionEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "block_completed", blockId: "workbook--introduction" }),
+        expect.objectContaining({ type: "block_completed", blockId: "lesson--what-is-a-factory--conclusion" })
+      ]));
+      expect(publicTrace.progressionEvents.at(-1)).toMatchObject({ type: "block_completed", blockId: "lesson--what-is-a-factory--conclusion" });
+
+      const gateInput: AuthoredWorkbookScenarioGateInput = {
+        trace: publicTrace,
+        commandInvocations: [],
+        artifactSnapshots: [],
+        workspaceFileSnapshots: [],
+        rawEvents,
+        facts: { authoredSourceChanged: false, disposableCurriculumChanged: false, lessonJumpStarted: false, commandStubsCreated: false, learnerWorkspaceChangedOutsideAllowlist: [] }
+      };
+      const gate = scenario.gate(gateInput);
+      expect(gate.assertions.find((assertion) => assertion.id === "primer-normal-completion")).toMatchObject({ passed: true });
+      expect(gate).toMatchObject({ passed: true });
+    } finally {
+      await server?.close().catch(() => undefined);
+      await workspace.close().catch(() => undefined);
+      const index = tempRoots.indexOf(workspace.repositoryRoot);
+      if (index >= 0) tempRoots.splice(index, 1);
+    }
+  }, 15_000);
+
+  it("requires the current conclusion completion while accepting the legacy reflection replay shape", async () => {
     const scenario = authoredWorkbookScenarioById("primer-validation-misconception");
     const live = await passingFixture("primer-validation-misconception");
-    expect(live.trace.progressionEvents.at(-1)?.type).toBe("block_completed");
+    expect(live.trace.progressionEvents.at(-1)).toEqual({ type: "block_completed", lessonId: "what-is-a-factory", blockId: "lesson--what-is-a-factory--conclusion" });
     expect(scenario.gate(live).passed).toBe(true);
 
     const legacy = cloneInput(live);
     legacy.trace.progressionEvents[legacy.trace.progressionEvents.length - 1] = event("reflection_completed", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl");
     expect(scenario.gate(legacy).passed).toBe(true);
+
+    const obsoleteReflectionBlockCompletion = cloneInput(live);
+    obsoleteReflectionBlockCompletion.trace.progressionEvents[obsoleteReflectionBlockCompletion.trace.progressionEvents.length - 1] = event("block_completed", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl");
+    expect(scenario.gate(obsoleteReflectionBlockCompletion).passed).toBe(false);
   });
 
   it("mutation-tests primer gate assertions", async () => {
@@ -390,7 +454,8 @@ describe("authored workbook scenario gates", () => {
       ["add unexpected artifact", (input) => { input.artifactSnapshots = [{ path: "factory/.tmp/unexpected.txt", content: "unexpected" }]; }],
       ["mark stubs created", (input) => { input.facts.commandStubsCreated = true; }],
       ["mark source changed", (input) => { input.facts.authoredSourceChanged = true; }],
-      ["remove live completion", (input) => { input.trace.progressionEvents = input.trace.progressionEvents.filter((entry) => entry.type !== "block_completed" && entry.type !== "reflection_completed"); }],
+      ["remove conclusion completion", (input) => { input.trace.progressionEvents = input.trace.progressionEvents.filter((entry) => entry.type !== "block_completed" && entry.type !== "reflection_completed"); }],
+      ["wrong conclusion block", (input) => { input.trace.progressionEvents[input.trace.progressionEvents.length - 1] = event("block_completed", "what-is-a-factory", "lesson--what-is-a-factory--importance-of-validation"); }],
       ["inject lesson jump", (input) => { input.facts.lessonJumpStarted = true; }],
       ["inject raw lesson jump", (input) => { input.rawEvents = [{ type: "lesson_jump_started", lessonId: "copied" } as any]; }]
     ]);
@@ -489,6 +554,7 @@ describe("authored workbook scenario gates", () => {
       ["failed quality status", (input) => { input.facts.calculatorBehaviorProjection!.qualityStatus = "failed"; }],
       ["stale git top", (input) => { input.facts.calculatorTopCommitTree = "stale-tree"; }],
       ["remove run log", (input) => { mutateSnapshot(input, ".tmp/refactor-run.log", () => "Line finished"); }],
+      ["remove visible terminal output", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => entry.direction !== "output"); }],
       ["remove vocabulary", (input) => { input.trace.reflections[0]!.text = "It worked."; }],
       ["remove five jobs", (input) => { input.trace.reflections[0]!.text = "The factory is factory/. The line is refactor/. The orchestrator is run.sh. Prompt/script pairs are stations. ask.sh is no-tools because the record is supplied. I am the operator. Repeated FAIL can mean an unmet criterion or missing/unreachable evidence. Cost, regressions, and whether the result is worth it are still operator judgement."; }],
       ["remove judgement", (input) => { input.trace.reflections[0]!.text = input.trace.reflections[0]!.text.replace(/Cost, regressions, and whether the result is worth it are still operator judgement\./, "It decides everything."); }],
@@ -542,7 +608,8 @@ describe("authored scenario shell commands", () => {
     const { workspace, sessionWorkspace, handle, commands } = await liveScenarioHarness("lesson-013-operator-judgement", { rpcEarlySteerWindowMs: AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS, rpcLateSteerWindowMs: 20 });
     try {
       expect(commands).toHaveLength(1);
-      await execShell(stripActivation(commands[0]!), sessionWorkspace, stubbedShellEnv(handle), 20_000);
+      const output = await execShell(stripActivation(commands[0]!), sessionWorkspace, stubbedShellEnv(handle), 20_000);
+      expectLesson013VisibleOutput(output);
       await expectLesson013StubbedResult(sessionWorkspace, handle.hostEvidencePath);
     } finally {
       await handle.close().catch(() => undefined);
@@ -558,10 +625,11 @@ describe("authored scenario shell commands", () => {
       expect(commands).toHaveLength(1);
       await execFileAsync("docker", dockerVolumeCreateArguments(volumeName), { timeout: 10_000 });
       await execDockerWithPrivateInput(dockerPopulateVolumeArguments(volumeName, WORKBOOK_TERMINAL_IMAGE), await buildBoundedWorkspaceTar(sessionWorkspace), 20_000);
-      await execDockerWithPrivateInput([
+      const output = await execDockerWithPrivateInput([
         "run", "--rm", "-i", "--user", dockerContainerUser(), "--network", "none", "--mount", dockerWorkspaceVolumeMount(volumeName),
         "--workdir", "/workspace", WORKBOOK_TERMINAL_IMAGE, "bash"
       ], Buffer.from(dockerLesson013SmokeScript(handle.containerShellActivation, stripActivation(commands[0]!)), "utf8"), 30_000);
+      expectLesson013VisibleOutput(output);
     } finally {
       await execFileAsync("docker", dockerVolumeRemoveArguments(volumeName), { timeout: 10_000 }).catch(() => undefined);
       await handle.close().catch(() => undefined);
@@ -656,7 +724,7 @@ function primerFixture(input: AuthoredWorkbookScenarioGateInput): AuthoredWorkbo
     event("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"),
     event("reflection_follow_up_submitted", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"),
     event("reflection_reply_recorded", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl"),
-    event("block_completed", "what-is-a-factory", "lesson--what-is-a-factory--factory-vs-repl")
+    event("block_completed", "what-is-a-factory", "lesson--what-is-a-factory--conclusion")
   ];
   input.trace.reflections = [
     { blockId: "lesson--what-is-a-factory--factory-vs-repl", role: "learner", text: "A factory requires more trust/faith in the LLM." },
@@ -787,7 +855,10 @@ function lesson013Fixture(input: AuthoredWorkbookScenarioGateInput): AuthoredWor
     accepted("013-oversee-the-orchestrator", "lesson--013-oversee-the-orchestrator--implementation-order", "terminal"),
     event("reflection_completed", "013-oversee-the-orchestrator", "lesson--013-oversee-the-orchestrator--checks")
   ];
-  input.trace.terminalTranscript = [{ blockId: "lesson--013-oversee-the-orchestrator--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\n./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &\n./factory/steer.sh refactor \"Finish multiply and divide independently before validation.\"\n./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &\n./factory/ask.sh refactor \"What happened in this run?\"" }];
+  input.trace.terminalTranscript = [
+    { blockId: "lesson--013-oversee-the-orchestrator--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\n./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &\n./factory/steer.sh refactor \"Finish multiply and divide independently before validation.\"\n./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &\necho \"=== RUN LOG (tail) ===\"\ntail -n 80 .tmp/refactor-run.log\nprintf '\\n'\necho \"=== WATCH LOG (tail) ===\"\ntail -n 80 .tmp/refactor-watch.log\nprintf '\\n'\necho \"=== ASK SUMMARY ===\"\n./factory/ask.sh refactor \"What happened in this run?\"" },
+    { blockId: "lesson--013-oversee-the-orchestrator--implementation-order", direction: "output", text: "=== RUN LOG (tail) ===\nStarting doer\nStarting validation\nStarting commit\nLine finished after 1 iterations.\n=== WATCH LOG (tail) ===\n→ read\nauthored-eval accepted early steer\n→ edit\n=== ASK SUMMARY ===\nThe supplied record contains deterministic authored-eval structural events with zero recorded cost.\n" }
+  ];
   input.trace.reflections = [{ blockId: "lesson--013-oversee-the-orchestrator--checks", role: "learner", text: "The factory is factory/. The line is refactor/. The orchestrator is run.sh: it starts the line, hands inputs to stations, branches on VERDICT, handles failures with repair, and stops by counters. Prompt/script pairs are stations. ask.sh is no-tools because the record is supplied. I am the operator. Repeated FAIL can mean an unmet criterion or missing/unreachable evidence. Cost, regressions, and whether the result is worth it are still operator judgement." }];
   input.commandInvocations = [
     stub("doer", { mode: "rpc", mutation: "complete-refactor", rpc: true, rpcOverrides: { commandCount: 2, earlySteerCount: 1, steerBytes: Buffer.byteLength("Finish multiply and divide independently before validation.", "utf8"), steerSha256: sha256Text(sha256Text("Finish multiply and divide independently before validation.")) } }),
@@ -797,7 +868,7 @@ function lesson013Fixture(input: AuthoredWorkbookScenarioGateInput): AuthoredWor
   ];
   setSnapshots(input, {
     ".tmp/refactor-run.log": "Starting doer\nStarting validation\nStarting commit\nLine finished after 1 iterations.\n",
-    ".tmp/refactor-watch.log": "queue_update\n→ read\nauthored-eval accepted early steer\n→ edit\n",
+    ".tmp/refactor-watch.log": "→ read\nauthored-eval accepted early steer\n→ edit\n",
     "factory/refactor/.tmp/quality-before.txt": "Findings reported by: eslint.\n",
     "factory/refactor/.tmp/evidence.txt": "=== QUALITY BEFORE (recorded before the doer ran) ===\nFindings reported by: eslint.\n\n=== QUALITY NOW ===\nAll quality checks passed.\n\n=== TESTS ===\nTests: PASS\nauthored-eval npm test stub: calculator tests passed without network.\n\n=== WORKING DIFF ===\n+    const readFirstOperand = (separator: \"and\" | \"from\" | \"by\"): number => {\n+      const first = readFirstOperand(\"by\");\n+      const first = readFirstOperand(\"by\");\n-      const first = read();\n-      if (pieces[place++] !== \"by\") fail();\n",
     "factory/refactor/.tmp/validate-findings.txt": "VERDICT: PASS\n\nFINDINGS:\n- [PASS] tests and quality passed before this verdict.\n",
@@ -945,10 +1016,24 @@ function stubbedShellEnv(handle: Awaited<ReturnType<typeof createAuthoredCommand
   return { ...handle.hostEnv, PATH: path, STUBBED_PATH: path };
 }
 
-async function execShell(command: string, cwd: string, env: NodeJS.ProcessEnv, timeout: number): Promise<void> {
+async function execShell(command: string, cwd: string, env: NodeJS.ProcessEnv, timeout: number): Promise<string> {
   const shellCommand = `export PATH=${shellQuote(env.STUBBED_PATH ?? env.PATH ?? "")}; ${command}`;
   const { stdout, stderr } = await execFileAsync("/bin/bash", ["-lc", shellCommand], { cwd, env, timeout, encoding: "utf8", maxBuffer: 1024 * 1024 });
-  expect(`${stdout}\n${stderr}`).not.toMatch(/authored-eval command stub rejected|Doer did not start/);
+  const output = `${stdout}\n${stderr}`;
+  expect(output).not.toMatch(/authored-eval command stub rejected|Doer did not start/);
+  return output;
+}
+
+function expectLesson013VisibleOutput(output: string): void {
+  expect(output).toContain("=== RUN LOG (tail) ===");
+  expect(output).toContain("Starting doer");
+  expect(output).toContain("=== WATCH LOG (tail) ===");
+  expect(output).toContain("→ read");
+  expect(output).toContain("authored-eval");
+  expect(output).toContain("→ edit");
+  expect(output).toContain("=== ASK SUMMARY ===");
+  expect(output).toContain("deterministic authored-eval structural events");
+  expect(output).not.toMatch(/AUTHORED_EVAL_COMMAND_STUB_CONFIG|authored-eval-command-stubs\/container-config|\/var\/folders|\/private\/tmp/);
 }
 
 async function expectLesson013StubbedResult(sessionWorkspace: string, evidencePath: string): Promise<void> {
@@ -969,24 +1054,28 @@ async function expectLesson013StubbedResult(sessionWorkspace: string, evidencePa
   expect(subject).toBe("Refactor calculator operand parsing");
 }
 
-async function execDockerWithPrivateInput(args: string[], input: Buffer, timeout = 20_000): Promise<void> {
-  await new Promise<void>((resolvePromise, reject) => {
-    const child = spawn("docker", args, { stdio: ["pipe", "ignore", "pipe"] });
+async function execDockerWithPrivateInput(args: string[], input: Buffer, timeout = 20_000): Promise<string> {
+  return await new Promise<string>((resolvePromise, reject) => {
+    const child = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
+    const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error("docker command timed out"));
     }, timeout);
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (Buffer.concat(stderr).length < 4096) stderr.push(chunk);
-    });
+    const appendBounded = (target: Buffer[], chunk: Buffer) => {
+      if (Buffer.concat(target).length < 16_384) target.push(chunk);
+    };
+    child.stdout.on("data", (chunk: Buffer) => appendBounded(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => appendBounded(stderr, chunk));
     child.once("error", (error) => {
       clearTimeout(timer);
       reject(error);
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      code === 0 ? resolvePromise() : reject(new Error(`docker ${args.slice(0, 4).join(" ")} exited ${code}: ${Buffer.concat(stderr).toString("utf8").slice(0, 512)}`));
+      const output = `${Buffer.concat(stdout).toString("utf8")}\n${Buffer.concat(stderr).toString("utf8")}`;
+      code === 0 ? resolvePromise(output) : reject(new Error(`docker ${args.slice(0, 4).join(" ")} exited ${code}: ${output.slice(0, 512)}`));
     });
     child.stdin.end(input);
   });
