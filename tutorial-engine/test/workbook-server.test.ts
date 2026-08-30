@@ -14,7 +14,8 @@ import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import type { ContentWatchFactory } from "../src/workbook/content-watch.js";
 import type { TerminalPty, TerminalPtyFactory } from "../src/workbook/terminal.js";
 import type { Attempt } from "../src/workbook/attempts.js";
-import type { TutorDecision } from "../src/workbook/tutor.js";
+import { DefaultMainWorkbookTutor, type TutorDecision, type WorkbookTutorSessionFactoryRequest } from "../src/workbook/tutor.js";
+import { createResilientTutorSession, type PiTutorSessionEvent } from "../src/workbook/pi-tutor-session.js";
 import { WorkbookTimeline, type TimelineMessage, type WorkbookTimelineRecord } from "../src/workbook/timeline.js";
 import { QueuedMainTutor as FakeMainTutor, RecordingPracticeCoach as FakePracticeCoach } from "./support/fake-tutors.js";
 
@@ -1696,6 +1697,64 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("limits the Default Main Tutor to one low-level provider prompt per durable terminal review request and logs failures generically", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty(false);
+    const logLines: string[] = [];
+    const lowLevelPrompts: string[] = [];
+    const logger = {
+      info: (message: string) => { logLines.push(`INFO ${message}`); },
+      error: (message: string, error?: unknown) => { logLines.push(`ERROR ${message}${error ? ` ${String(error)}` : ""}`); }
+    };
+    const sessionFactory = async (request: WorkbookTutorSessionFactoryRequest) => {
+      const subscribers = new Set<(event: PiTutorSessionEvent) => void>();
+      const emitAssistant = (text: string) => subscribers.forEach((listener) => listener({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text }] } }));
+      const emitError = () => subscribers.forEach((listener) => listener({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [],
+          errorMessage: "provider-error terminal-secret Observe run result /tmp/private"
+        }
+      }));
+      const session = createResilientTutorSession({
+        state: { model: { provider: "CodexProvider", id: "secret-model" } },
+        subscribe(listener: (event: PiTutorSessionEvent) => void) { subscribers.add(listener); return () => { subscribers.delete(listener); }; },
+        async prompt(prompt: string) {
+          lowLevelPrompts.push(prompt);
+          if (prompt.includes("finished-terminal-review-evidence")) { emitError(); return; }
+          if (prompt.includes("WORKBOOK ATTEMPT REVIEW")) {
+            await (request.customTools.find((tool: any) => tool.name === "accept_current_attempt") as any).execute("tool-call", {});
+            emitAssistant("Editor accepted.");
+            return;
+          }
+          emitAssistant("Tutor reply.");
+        },
+        dispose() {}
+      }, logger, "Workbook tutor", { wait: async () => {} });
+      return { ...session, compact: async () => ({ summary: "Summary." }) };
+    };
+    const tutor = new DefaultMainWorkbookTutor({ workspace: dir, log: logger, sessionFactory });
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, logger, terminalPtyFactory: () => pty, mainTutor: tutor, practiceCoach: new FakePracticeCoach() });
+    try {
+      await introduceAndOpenEditor(server.url);
+      expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "factory acceptance marker" })).status).toBe(202);
+      await waitForWorkbookState(server.url, (next) => block(next, "edit-answer")?.checkpoint?.status === "accepted", "default tutor editor acceptance");
+      expect((await completeBlock(server.url, "lesson--001-first--edit-answer")).status).toBe(202);
+
+      pty.data?.(bashCommandMarker("terminal-secret"));
+      pty.data?.(`terminal-secret-output\r\n${bashFinishedMarker()}`);
+      await waitForWorkbookState(server.url, (next) => Boolean(block(next, "run-supplied-command")?.terminal?.retryFailureId), "default tutor terminal failure");
+
+      const records = await privateTimeline(dir);
+      const requests = records.filter((record) => record.type === "terminal-review-requested");
+      const terminalPrompts = lowLevelPrompts.filter((prompt) => prompt.includes("finished-terminal-review-evidence"));
+      expect(requests).toHaveLength(2);
+      expect(terminalPrompts).toHaveLength(requests.length);
+      expect(logLines.join("\n")).not.toMatch(/CodexProvider|secret-model|provider-error|terminal-secret|terminal-secret-output|Observe run result|\/tmp\/private/);
+    } finally { await server.close(); }
+  });
+
   it("exposes durable terminal-local Retry review after automatic calls exhaust and succeeds after restart without another command", async () => {
     const dir = await fixture();
     const firstPty = new ServerFakePty(false);
@@ -1787,16 +1846,25 @@ describe("workbook browser API", () => {
       expect(response.status).toBe(202);
       const failedAgain = await waitForWorkbookState(second.url, (next) => {
         const terminal = block(next, "run-supplied-command")?.terminal;
-        return terminal?.phase === "feedback" && Boolean(terminal.retryFailureId) && terminal.retryFailureId !== firstFailureId;
-      }, "manual terminal retry failure");
+        return terminal?.phase === "feedback" && terminal.retryFailureId === undefined;
+      }, "manual terminal retry failure without another entitlement");
+      expect(block(failedAgain, "run-supplied-command")?.terminal?.message).toMatch(/Review is temporarily unavailable/i);
       expect(JSON.stringify(failedAgain)).not.toMatch(/manual-failure-secret|provider secret/);
       expect(retryTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(1);
       const records = await privateTimeline(dir);
       expect(records.filter((record) => record.type === "terminal-command-submitted")).toHaveLength(1);
       expect(records.filter((record) => record.type === "terminal-command-finished")).toHaveLength(1);
-      expect(records.filter((record) => record.type === "terminal-review-requested")).toHaveLength(3);
-      expect(records.filter((record) => record.type === "terminal-review-requested" && record.mode === "automatic")).toHaveLength(2);
-      expect(records.filter((record) => record.type === "terminal-review-failed")).toHaveLength(2);
+      const requests = records.filter((record) => record.type === "terminal-review-requested") as any[];
+      expect(requests).toHaveLength(3);
+      expect(requests.map((record) => record.callNumber)).toEqual([1, 2, 3]);
+      expect(requests.filter((record) => record.mode === "automatic")).toHaveLength(2);
+      expect(requests.filter((record) => record.mode === "manual")).toHaveLength(1);
+      const failures = records.filter((record) => record.type === "terminal-review-failed") as any[];
+      expect(failures).toHaveLength(2);
+      const hiddenFinalFailureId = failures.at(-1)!.failureId;
+      const secondRetry = await postRetry(second.url, { failureId: hiddenFinalFailureId });
+      expect(secondRetry.status).toBe(409);
+      expect((await privateTimeline(dir)).filter((record) => record.type === "terminal-review-requested")).toHaveLength(3);
     } finally { await second.close(); }
   });
 
@@ -1914,7 +1982,49 @@ describe("workbook browser API", () => {
       const reviewEvidence = JSON.parse(terminalReviewTranscript(terminalReview));
       expect(reviewEvidence.commandEvidence.command).toBe("finished");
       const requests = (await privateTimeline(dir)).filter((record) => record.type === "terminal-review-requested") as any[];
+      expect(requests).toHaveLength(2);
+      expect(requests.map((record) => record.callNumber)).toEqual([1, 2]);
+      expect(requests.map((record) => record.mode)).toEqual(["automatic", "automatic"]);
       expect(new Set(requests.map((record) => record.evidenceRef))).toEqual(new Set([evidenceRef]));
+      expect(requests[1]!.requestId).not.toBe(requests[0]!.requestId);
+    } finally { await second.close(); }
+  });
+
+  it("turns a pending terminal review into a generic retryable failure on restart when the automatic budget is already consumed", async () => {
+    const dir = await fixture();
+    const firstPty = new ServerFakePty(false);
+    const pendingSecondReview = deferred<TutorDecision>();
+    const firstTutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      new Error("first automatic provider failure"),
+      pendingSecondReview.promise,
+    );
+    const first = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => firstPty, mainTutor: firstTutor, practiceCoach: new FakePracticeCoach() });
+    let evidenceRef = "";
+    try {
+      await introduceAndOpenEditor(first.url);
+      await acceptEditor(first.url, firstTutor);
+      firstPty.data?.(bashCommandMarker("restart-budget-secret"));
+      firstPty.data?.(`done\r\n${bashFinishedMarker()}`);
+      const records = await waitForPrivateTimeline(dir, (latest) => latest.filter((record) => record.type === "terminal-review-requested").length === 2, "second automatic direct terminal review request");
+      const requests = records.filter((record) => record.type === "terminal-review-requested") as any[];
+      evidenceRef = requests[0]!.evidenceRef;
+      expect(firstTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(2);
+    } finally { await first.close(); }
+
+    const secondTutor = new FakeMainTutor({ outcome: "feedback", message: "Should not replay beyond budget." });
+    const second = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => new ServerFakePty(false), mainTutor: secondTutor, practiceCoach: new FakePracticeCoach() });
+    try {
+      const failed = await waitForWorkbookState(second.url, (next) => Boolean(block(next, "run-supplied-command")?.terminal?.retryFailureId), "restart automatic budget exhausted failure");
+      expect(block(failed, "run-supplied-command")?.terminal).toMatchObject({ phase: "feedback", message: expect.stringMatching(/Review is temporarily unavailable.*retry the review/i), retryFailureId: expect.any(String) });
+      expect(JSON.stringify(failed)).not.toMatch(/restart-budget-secret|provider failure/);
+      expect(secondTutor.reviews.filter((review) => review.attempt.evidence.kind === "terminal")).toHaveLength(0);
+      const records = await privateTimeline(dir);
+      const requests = records.filter((record) => record.type === "terminal-review-requested") as any[];
+      expect(requests).toHaveLength(2);
+      expect(requests.map((record) => record.callNumber)).toEqual([1, 2]);
+      expect(new Set(requests.map((record) => record.evidenceRef))).toEqual(new Set([evidenceRef]));
+      expect(records).toContainEqual(expect.objectContaining({ type: "terminal-review-failed", requestId: requests[1]!.requestId, evidenceRef }));
     } finally { await second.close(); }
   });
 

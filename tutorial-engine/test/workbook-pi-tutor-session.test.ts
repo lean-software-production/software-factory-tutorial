@@ -89,6 +89,20 @@ test("honours a one-attempt preflight prompt without waiting", async () => {
   expect(logs.errors).toContain("Workbook tutor prompt failed (attempt 1/1; anthropic/claude): usage limit");
 });
 
+test("can constrain a privacy-sensitive prompt to one generic logged attempt", async () => {
+  const session = fakeSession([assistantError("usage limit for private terminal transcript")]);
+  const logs = logger();
+  const wait = vi.fn(async () => {});
+
+  await expect(createResilientTutorSession(session, logs.log, "Workbook tutor", { wait }).prompt("private terminal transcript", { attempts: 1, failureLog: "generic" }))
+    .rejects.toThrow("usage limit for private terminal transcript");
+
+  expect(session.prompts).toEqual(["private terminal transcript"]);
+  expect(wait).not.toHaveBeenCalled();
+  expect(logs.errors).toEqual(["Workbook tutor prompt failed (attempt 1/1)."]);
+  expect(logs.errors.join("\n")).not.toMatch(/anthropic|claude|usage limit|private terminal transcript/);
+});
+
 test("redacts a learner prompt echoed by rejected provider errors from logs but preserves it in the final error", async () => {
   const privatePrompt = "private learner prompt: My salary is $123,456";
   const providerReason = `transport down while sending: ${privatePrompt}`;

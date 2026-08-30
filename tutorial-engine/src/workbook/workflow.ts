@@ -8,6 +8,7 @@ import { publicTerminalTranscript, type ActiveObservedTerminalBlock, type Active
 import type { TerminalObservationFact } from "./terminal-observation.js";
 import { MAX_TERMINAL_TRANSCRIPT_SNAPSHOT_BYTES, TerminalEvidenceRepository, type TerminalEvidence, type TerminalEvidenceRef, type TerminalInteraction, type TerminalTranscriptSnapshot } from "./terminal-evidence.js";
 import { projectTerminalAttempts, type ProjectedTerminalAttempt } from "./terminal-attempt-projector.js";
+import { canStartAutomaticTerminalReview, canStartManualTerminalReview, terminalReviewCallCounts, terminalReviewNextCallNumber, type TerminalReviewRequestLike } from "./terminal-review-policy.js";
 import { promoteCurrentEditorAttempt, resolveEditorTarget } from "./editor.js";
 import { AttemptStore, type Attempt, type AttemptEvidence } from "./attempts.js";
 import type { PracticeCoach } from "./practice-coach.js";
@@ -18,10 +19,10 @@ import type { EditorPracticeBlock, WorkbookBlock, WorkbookLesson } from "./contr
 import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTerminal, PublicTerminalSnapshot, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookLesson, PublicWorkbookOrderedBlock, PublicWorkbookState } from "./public-contract.js";
 
 const REVIEW_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please try another attempt in a moment.";
-const TERMINAL_REVIEW_FAILURE_FEEDBACK = "Review is temporarily unavailable. You can retry the review without rerunning the command.";
+const TERMINAL_REVIEW_RETRYABLE_FAILURE_FEEDBACK = "Review is temporarily unavailable. You can retry the review without rerunning the command.";
+const TERMINAL_REVIEW_FINAL_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please try another attempt in a moment.";
 const TUTOR_UNAVAILABLE = "The tutor is temporarily unavailable. Please retry.";
 const TERMINAL_ASSESSMENT_TIMEOUT_MS = 30_000;
-const TERMINAL_AUTOMATIC_REVIEW_CALL_BUDGET = 2;
 const MAX_PUBLIC_TERMINAL_SNAPSHOT_BYTES = 16_000;
 
 class TerminalAssessmentTimeoutError extends Error {
@@ -831,12 +832,26 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   const logTerminalReviewCall = (request: TerminalReviewRequest, startedAtMs: number, outcome: "accepted" | "feedback" | "infrastructure_failure"): void => {
     log.info(`Terminal direct review call completed durationMs=${terminalReviewDurationMs(startedAtMs)} retryCount=${terminalReviewRetryCount(request)} outcome=${outcome}`);
   };
-  const logTerminalReviewDecision = (request: TerminalReviewRequest, outcome: "accepted" | "feedback" | "retryable_failure"): void => {
+  const logTerminalReviewDecision = (request: TerminalReviewRequest, outcome: "accepted" | "feedback" | "retryable_failure" | "failure"): void => {
     const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> =>
       record.type === "terminal-command-finished" && record.attemptId === request.attemptId && record.evidenceRef === request.evidenceRef);
     const finishedAtMs = finished ? Date.parse(finished.at) : NaN;
     const latencyMs = Number.isFinite(finishedAtMs) ? Math.max(0, Date.now() - finishedAtMs) : 0;
     log.info(`Terminal direct review decision completed finishedToDecisionMs=${latencyMs} retryCount=${terminalReviewRetryCount(request)} outcome=${outcome}`);
+  };
+  const terminalReviewRequestsFor = (input: { evidenceRef: string }): TerminalReviewRequestLike[] => records.filter((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-review-requested" }> =>
+    record.type === "terminal-review-requested" && record.evidenceRef === input.evidenceRef);
+  const terminalReviewCountsFor = (input: { evidenceRef: string }) => terminalReviewCallCounts(terminalReviewRequestsFor(input), input);
+  const terminalReviewFailureRetryable = (request: TerminalReviewRequest): boolean => canStartManualTerminalReview(terminalReviewCountsFor(request));
+  const terminalReviewFailureMessage = (retryable: boolean): string => retryable
+    ? TERMINAL_REVIEW_RETRYABLE_FAILURE_FEEDBACK
+    : TERMINAL_REVIEW_FINAL_FAILURE_FEEDBACK;
+  const appendTerminalReviewFailureWithinRun = async (request: TerminalReviewRequest): Promise<void> => {
+    const failureId = randomUUID();
+    const retryable = terminalReviewFailureRetryable(request);
+    await append({ type: "terminal-review-failed", attemptId: request.attemptId, lessonId: request.lessonId, blockId: request.blockId, evidenceRef: request.evidenceRef, requestId: request.requestId, failureId, publicMessage: terminalReviewFailureMessage(retryable) });
+    logTerminalReviewDecision(request, retryable ? "retryable_failure" : "failure");
+    notifyStateChanged({ lessonId: request.lessonId, blockId: request.blockId, status: "feedback", terminalPhase: "feedback" });
   };
   const appendTerminalReviewRequest = async (input: Omit<TerminalReviewRequest, "requestId" | "generation"> & { generation?: number }): Promise<TerminalReviewRequest> => {
     const request: TerminalReviewRequest = { ...input, generation: input.generation ?? reloadGeneration, requestId: randomUUID() };
@@ -897,18 +912,15 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   const recordTerminalReviewFailure = async (request: TerminalReviewRequest): Promise<void> => {
     await transact(async () => {
       if (!terminalRequestIsCurrent(request)) return;
-      const failureId = randomUUID();
-      await append({ type: "terminal-review-failed", attemptId: request.attemptId, lessonId: request.lessonId, blockId: request.blockId, evidenceRef: request.evidenceRef, requestId: request.requestId, failureId, publicMessage: TERMINAL_REVIEW_FAILURE_FEEDBACK });
-      logTerminalReviewDecision(request, "retryable_failure");
-      notifyStateChanged({ lessonId: request.lessonId, blockId: request.blockId, status: "feedback", terminalPhase: "feedback" });
+      await appendTerminalReviewFailureWithinRun(request);
     });
   };
   const retryTerminalReviewAutomatically = async (request: TerminalReviewRequest): Promise<TerminalReviewRequest | undefined> => {
     return await transact(async () => {
       if (!terminalRequestIsCurrent(request)) return undefined;
-      const automaticCallCount = records.filter((record) => record.type === "terminal-review-requested" && record.attemptId === request.attemptId && record.evidenceRef === request.evidenceRef && record.mode === "automatic").length;
-      if (automaticCallCount >= TERMINAL_AUTOMATIC_REVIEW_CALL_BUDGET) return undefined;
-      return await appendTerminalReviewRequest({ attemptId: request.attemptId, lessonId: request.lessonId, blockId: request.blockId, command: request.command, exitStatus: request.exitStatus, rubric: request.rubric, evidenceRef: request.evidenceRef, mode: "automatic", callNumber: automaticCallCount + 1 });
+      const counts = terminalReviewCountsFor(request);
+      if (!canStartAutomaticTerminalReview(counts)) return undefined;
+      return await appendTerminalReviewRequest({ attemptId: request.attemptId, lessonId: request.lessonId, blockId: request.blockId, command: request.command, exitStatus: request.exitStatus, rubric: request.rubric, evidenceRef: request.evidenceRef, mode: "automatic", callNumber: terminalReviewNextCallNumber(counts) });
     });
   };
   const handleTerminalReviewInfrastructureFailure = async (request: TerminalReviewRequest, handoff?: PracticeCoachHandoff): Promise<void> => {
@@ -984,7 +996,8 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     trackTerminalAssessment(task);
   };
   const createInitialTerminalReviewRequest = async (input: { attemptId: string; lessonId: string; blockId: string; command: string; exitStatus: number; rubric: string; evidenceRef: TerminalEvidenceRef }): Promise<TerminalReviewRequest> => {
-    return await appendTerminalReviewRequest({ ...input, mode: "automatic", callNumber: 1 });
+    const counts = terminalReviewCountsFor(input);
+    return await appendTerminalReviewRequest({ ...input, mode: "automatic", callNumber: terminalReviewNextCallNumber(counts) });
   };
 
   const observeTerminalFact = (fact: TerminalObservationFact): Promise<void> => trackOrdinaryCommand(async () => {
@@ -1063,10 +1076,17 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       const handoff = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-coach-handoff-recorded" }> =>
         record.type === "terminal-coach-handoff-recorded" && record.attemptId === submission.attemptId);
       if (latestRequest) {
-        const request = terminalReviewRequestFromRecord(latestRequest, { command: submission.command, exitStatus: finished.exitStatus, rubric: active.block.tutor });
-        return handoff ? { request, handoff: { outcome: handoff.outcome, text: handoff.text } } : { request };
+        const pending = terminalReviewRequestFromRecord(latestRequest, { command: submission.command, exitStatus: finished.exitStatus, rubric: active.block.tutor });
+        const counts = terminalReviewCountsFor(pending);
+        if (pending.mode !== "manual" && canStartAutomaticTerminalReview(counts)) {
+          const request = await appendTerminalReviewRequest({ attemptId: submission.attemptId, lessonId: submission.lessonId, blockId: submission.blockId, command: submission.command, exitStatus: finished.exitStatus, rubric: active.block.tutor, evidenceRef: finished.evidenceRef, mode: "automatic", callNumber: terminalReviewNextCallNumber(counts) });
+          return handoff ? { request, handoff: { outcome: handoff.outcome, text: handoff.text } } : { request };
+        }
+        await appendTerminalReviewFailureWithinRun(pending);
+        return undefined;
       }
-      const request = await appendTerminalReviewRequest({ attemptId: submission.attemptId, lessonId: submission.lessonId, blockId: submission.blockId, command: submission.command, exitStatus: finished.exitStatus, rubric: active.block.tutor, evidenceRef: finished.evidenceRef, mode: handoff ? "legacy-handoff" : "automatic", callNumber: 1 });
+      const counts = terminalReviewCountsFor({ evidenceRef: finished.evidenceRef });
+      const request = await appendTerminalReviewRequest({ attemptId: submission.attemptId, lessonId: submission.lessonId, blockId: submission.blockId, command: submission.command, exitStatus: finished.exitStatus, rubric: active.block.tutor, evidenceRef: finished.evidenceRef, mode: handoff ? "legacy-handoff" : "automatic", callNumber: terminalReviewNextCallNumber(counts) });
       return handoff ? { request, handoff: { outcome: handoff.outcome, text: handoff.text } } : { request };
     });
     if (!resume) return;
@@ -1091,7 +1111,9 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       record.type === "terminal-review-failed" && record.attemptId === failure.attemptId);
     const laterRequest = records.some((record) => record.type === "terminal-review-requested" && record.attemptId === failure.attemptId && record.sequence > failure.sequence);
     if (latestFailure?.failureId !== failure.failureId || laterRequest) throw new WorkbookWorkflowCommandError(409, "The terminal review is already retrying.");
-    return await appendTerminalReviewRequest({ attemptId: failure.attemptId, lessonId: failure.lessonId, blockId: failure.blockId, command: submission.command, exitStatus: finished.exitStatus, rubric: active.block.tutor, evidenceRef: failure.evidenceRef, mode: "manual", callNumber: 1 });
+    const counts = terminalReviewCountsFor(failure);
+    if (!canStartManualTerminalReview(counts)) throw new WorkbookWorkflowCommandError(409, "The terminal review retry budget is exhausted.");
+    return await appendTerminalReviewRequest({ attemptId: failure.attemptId, lessonId: failure.lessonId, blockId: failure.blockId, command: submission.command, exitStatus: finished.exitStatus, rubric: active.block.tutor, evidenceRef: failure.evidenceRef, mode: "manual", callNumber: terminalReviewNextCallNumber(counts) });
   };
 
   const summarizeDeparture = async (leaving: DeclaredWorkbookBlock, workflowId: string): Promise<void> => {

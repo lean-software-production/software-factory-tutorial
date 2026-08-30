@@ -18,14 +18,20 @@ export interface PiTutorSession<Event = PiTutorSessionEvent> {
   dispose(): void;
 }
 
+export type ResilientTutorFailureLog = "detailed" | "generic";
+
+export interface ResilientTutorPromptOptions {
+  attempts?: number;
+  failureLog?: ResilientTutorFailureLog;
+}
+
 export interface ResilientTutorSession {
-  prompt(prompt: string): Promise<string>;
+  prompt(prompt: string, options?: ResilientTutorPromptOptions): Promise<string>;
   dispose(): void;
 }
 
-export interface ResilientTutorSessionOptions {
+export interface ResilientTutorSessionOptions extends ResilientTutorPromptOptions {
   wait?: (milliseconds: number) => Promise<void>;
-  attempts?: number;
 }
 
 const DEFAULT_PROMPT_ATTEMPTS = 3;
@@ -56,6 +62,23 @@ function redactPromptFromLog(reason: string, prompt: string): string {
   return prompt ? reason.replaceAll(prompt, "[redacted learner prompt]") : reason;
 }
 
+function promptAttemptCount(defaultAttempts: number, options: ResilientTutorPromptOptions | undefined): number {
+  const attempts = options?.attempts ?? defaultAttempts;
+  if (!Number.isInteger(attempts) || attempts < 1) throw new Error("Tutor session attempts must be a positive integer.");
+  return attempts;
+}
+
+function logPromptFailure<Event>(input: { session: PiTutorSession<Event>; log: TutorialLogger; label: string; prompt: string; error: unknown; attempt: number; maxAttempts: number; failureLog: ResilientTutorFailureLog }): string {
+  const reason = errorReason(input.error);
+  if (input.failureLog === "generic") {
+    input.log.error(`${input.label} prompt failed (attempt ${input.attempt}/${input.maxAttempts}).`);
+    return reason;
+  }
+  const logReason = redactPromptFromLog(reason, input.prompt);
+  input.log.error(`${input.label} prompt failed (attempt ${input.attempt}/${input.maxAttempts}; ${input.session.state.model.provider}/${input.session.state.model.id}): ${logReason}`);
+  return reason;
+}
+
 async function promptOnce<Event>(session: PiTutorSession<Event>, prompt: string): Promise<string> {
   let result: { text: string; errorMessage?: string } | undefined;
   const unsubscribe = session.subscribe((event) => { result = terminalResult(event) ?? result; });
@@ -76,17 +99,17 @@ export function createResilientTutorSession<Event>(
   options: ResilientTutorSessionOptions = {}
 ): ResilientTutorSession {
   const wait = options.wait ?? defaultWait;
-  const maxAttempts = options.attempts ?? DEFAULT_PROMPT_ATTEMPTS;
-  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) throw new Error("Tutor session attempts must be a positive integer.");
+  const defaultAttempts = promptAttemptCount(DEFAULT_PROMPT_ATTEMPTS, options);
+  const defaultFailureLog = options.failureLog ?? "detailed";
   return {
-    async prompt(prompt: string): Promise<string> {
+    async prompt(prompt: string, promptOptions?: ResilientTutorPromptOptions): Promise<string> {
+      const maxAttempts = promptAttemptCount(defaultAttempts, promptOptions);
+      const failureLog = promptOptions?.failureLog ?? defaultFailureLog;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         try {
           return await promptOnce(session, prompt);
         } catch (error) {
-          const reason = errorReason(error);
-          const logReason = redactPromptFromLog(reason, prompt);
-          log.error(`${label} prompt failed (attempt ${attempt}/${maxAttempts}; ${session.state.model.provider}/${session.state.model.id}): ${logReason}`);
+          const reason = logPromptFailure({ session, log, label, prompt, error, attempt, maxAttempts, failureLog });
           if (attempt === maxAttempts) throw error instanceof Error ? error : new Error(reason);
           await wait(attempt * 250);
         }

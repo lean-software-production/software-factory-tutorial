@@ -1,5 +1,6 @@
 import type { TerminalEvidenceReader } from "./terminal-evidence.js";
 import type { WorkbookTimelineRecord } from "./timeline.js";
+import { canStartManualTerminalReview, terminalReviewCallCounts, type TerminalReviewRequestLike } from "./terminal-review-policy.js";
 
 /** The only terminal lifecycle phases that a browser can receive from the server. */
 export type TerminalAttemptState = "running" | "checking" | "feedback" | "complete";
@@ -21,7 +22,8 @@ type Attempt = {
   finished: boolean;
   evidenceRef?: string;
   feedback?: string;
-  reviewFailure?: { message: string; failureId: string };
+  reviewFailure?: { message: string; failureId?: string };
+  reviewRequests: TerminalReviewRequestLike[];
   latestReviewRequestId?: string;
   accepted?: string;
 };
@@ -50,6 +52,7 @@ export function projectTerminalAttempts(
           command: record.command,
           terminalSessionId: record.terminalSessionId,
           finished: false,
+          reviewRequests: [],
         });
         currentAttemptByBlock.set(record.blockId, record.attemptId);
         break;
@@ -65,6 +68,7 @@ export function projectTerminalAttempts(
       case "terminal-review-requested": {
         const attempt = attempts.get(record.attemptId);
         if (!attempt?.finished || attempt.evidenceRef !== record.evidenceRef || attempt.lessonId !== record.lessonId || attempt.blockId !== record.blockId) break;
+        attempt.reviewRequests.push(record);
         attempt.latestReviewRequestId = record.requestId;
         attempt.reviewFailure = undefined;
         break;
@@ -73,7 +77,8 @@ export function projectTerminalAttempts(
         const attempt = attempts.get(record.attemptId);
         if (!attempt?.finished || attempt.evidenceRef !== record.evidenceRef || attempt.lessonId !== record.lessonId || attempt.blockId !== record.blockId) break;
         if (attempt.latestReviewRequestId && attempt.latestReviewRequestId !== record.requestId) break;
-        attempt.reviewFailure = { message: record.publicMessage, failureId: record.failureId };
+        const counts = terminalReviewCallCounts(attempt.reviewRequests, { evidenceRef: record.evidenceRef });
+        attempt.reviewFailure = { message: record.publicMessage, ...(canStartManualTerminalReview(counts) ? { failureId: record.failureId } : {}) };
         break;
       }
       case "terminal-feedback-recorded": {
@@ -116,7 +121,7 @@ export function projectTerminalAttempts(
     if (!attempt.finished && activeTerminalSessionId && attempt.terminalSessionId !== activeTerminalSessionId) continue;
     if (attempt.accepted !== undefined) projection.set(blockId, { state: "complete", successMessage: attempt.accepted });
     else if (attempt.feedback !== undefined) projection.set(blockId, { state: "feedback", feedback: attempt.feedback });
-    else if (attempt.reviewFailure !== undefined) projection.set(blockId, { state: "feedback", feedback: attempt.reviewFailure.message, retryFailureId: attempt.reviewFailure.failureId });
+    else if (attempt.reviewFailure !== undefined) projection.set(blockId, { state: "feedback", feedback: attempt.reviewFailure.message, ...(attempt.reviewFailure.failureId ? { retryFailureId: attempt.reviewFailure.failureId } : {}) });
     else projection.set(blockId, { state: attempt.finished ? "checking" : "running" });
   }
   return projection;

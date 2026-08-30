@@ -13,7 +13,7 @@ import { TUTOR_MODEL_ENV, resolveTutorModel, type TutorModelChoice } from "./mod
 import { createTutorialLogger, type TutorialLogger } from "./runtime-log.js";
 import type { Attempt } from "./attempts.js";
 import { projectMainTutorHistory, type ActiveBlockContext, type MainTutorHistoryProjection } from "./pi-history.js";
-import { createResilientTutorSession } from "./pi-tutor-session.js";
+import { createResilientTutorSession, type ResilientTutorPromptOptions } from "./pi-tutor-session.js";
 import { createTutorWorkspaceTools } from "./tutor-workspace-tools.js";
 import type { TimelineMessage, WorkbookTimelineRecord } from "./timeline.js";
 
@@ -44,7 +44,7 @@ export interface MainWorkbookTutor {
 }
 
 export interface WorkbookTutorSession {
-  prompt(prompt: string): Promise<string>;
+  prompt(prompt: string, options?: ResilientTutorPromptOptions): Promise<string>;
   compact(instruction: string): Promise<{ summary: string }>;
   dispose(): void;
 }
@@ -362,7 +362,10 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
       this.#acceptedAttemptId = undefined;
       this.#workingAttemptId = undefined;
       try {
-        const text = await session.prompt(reviewPrompt(input));
+        const promptOptions: ResilientTutorPromptOptions | undefined = input.attempt.evidence.kind === "terminal"
+          ? { attempts: 1, failureLog: "generic" }
+          : undefined;
+        const text = await session.prompt(reviewPrompt(input), promptOptions);
         if (this.#workingAttemptId === input.attempt.id) {
           if (input.attempt.evidence.kind === "reflection") return { outcome: "feedback", message: "Please add the missing distinction in learner-visible terms." };
           if (input.attempt.evidence.kind === "editor") return { outcome: "feedback", message: "Please add the missing editor details before continuing." };

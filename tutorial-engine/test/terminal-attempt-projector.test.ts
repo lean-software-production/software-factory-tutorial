@@ -13,11 +13,11 @@ function submitted(attemptId = "attempt-1", session = "terminal-1", sequence = 1
   return record({ type: "terminal-command-submitted", attemptId, lessonId: "lesson", blockId: "block", command: "npm test", terminalSessionId: session }, sequence);
 }
 function finished(attemptId = "attempt-1", sequence = 2) { return record({ type: "terminal-command-finished", attemptId, exitStatus: 0, evidenceRef: "finished" }, sequence); }
-function reviewRequested(requestId = "request-1", sequence = 3, attemptId = "attempt-1", mode = "automatic") {
-  return record({ type: "terminal-review-requested", attemptId, lessonId: "lesson", blockId: "block", evidenceRef: "finished", requestId, mode, callNumber: 1 }, sequence);
+function reviewRequested(requestId = "request-1", sequence = 3, attemptId = "attempt-1", mode = "automatic", callNumber = 1) {
+  return record({ type: "terminal-review-requested", attemptId, lessonId: "lesson", blockId: "block", evidenceRef: "finished", requestId, mode, callNumber }, sequence);
 }
-function reviewFailed(requestId = "request-1", failureId = "failure-1", sequence = 4, attemptId = "attempt-1") {
-  return record({ type: "terminal-review-failed", attemptId, lessonId: "lesson", blockId: "block", evidenceRef: "finished", requestId, failureId, publicMessage: "Review is temporarily unavailable. You can retry the review without rerunning the command." }, sequence);
+function reviewFailed(requestId = "request-1", failureId = "failure-1", sequence = 4, attemptId = "attempt-1", publicMessage = "Review is temporarily unavailable. You can retry the review without rerunning the command.") {
+  return record({ type: "terminal-review-failed", attemptId, lessonId: "lesson", blockId: "block", evidenceRef: "finished", requestId, failureId, publicMessage }, sequence);
 }
 
 describe("projectTerminalAttempts", () => {
@@ -51,6 +51,23 @@ describe("projectTerminalAttempts", () => {
 
     retrying.push(record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Accepted after retry." }, 6));
     expect(projectTerminalAttempts(retrying, reader(finalEvidence), "terminal-1").get("block")).toEqual({ state: "complete", successMessage: "Accepted after retry." });
+  });
+
+  it("does not expose another retry entitlement after the one manual review-only call fails", () => {
+    const exhaustedEvents: WorkbookTimelineRecord[] = [
+      submitted(),
+      finished(),
+      reviewRequested("automatic-1", 3, "attempt-1", "automatic", 1),
+      reviewRequested("automatic-2", 4, "attempt-1", "automatic", 2),
+      reviewFailed("automatic-2", "retryable-failure", 5),
+      reviewRequested("manual-3", 6, "attempt-1", "manual", 3),
+      reviewFailed("manual-3", "hidden-final-failure", 7, "attempt-1", "Review is temporarily unavailable. Please try another attempt in a moment."),
+    ];
+
+    expect(projectTerminalAttempts(exhaustedEvents, reader(finalEvidence), "terminal-1").get("block")).toEqual({
+      state: "feedback",
+      feedback: "Review is temporarily unavailable. Please try another attempt in a moment.",
+    });
   });
 
   it("does not project feedback, failure, or acceptance before valid Bash-finished evidence", () => {
