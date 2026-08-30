@@ -696,12 +696,6 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       const active = activeDeclaredBlock();
       const current = await attempts.current(attempt.lessonId, attempt.blockId).catch(() => undefined);
       if (!active || active.lessonId !== attempt.lessonId || active.id !== attempt.blockId || !current || current.id !== attempt.id || !isEvaluatedBlock(active.block) || !evidenceMatchesBlock(current.evidence, active.block)) return;
-      if (decision.outcome === "working") {
-        const updated = await attempts.markWorking(current.id);
-        if (updated) notifyStateChanged(attemptStateEvent(updated));
-        return;
-      }
-
       let message: string;
       try { message = requireTutorText(decision.message, "review"); }
       catch {
@@ -928,7 +922,6 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     };
   };
   const classifyTerminalReviewDecision = (decision: TutorDecision): TerminalReviewResult | undefined => {
-    if (decision.outcome === "working") return undefined;
     try { return { outcome: decision.outcome, message: requireTutorText(decision.message, "review") }; }
     catch { return undefined; }
   };

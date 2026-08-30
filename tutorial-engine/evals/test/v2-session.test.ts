@@ -14,7 +14,7 @@ class SessionFakeMainTutor extends RecordingMainTutor {
   protected override defaultReply = "Public fake tutor reply.";
   protected override blockSummaryFor = () => "Public fake block summary.";
   protected override lessonSummaryFor = () => "Public fake lesson summary.";
-  protected override async decide(): Promise<TutorDecision> { return { outcome: "working" }; }
+  protected override async decide(): Promise<TutorDecision> { return { outcome: "feedback", message: "Keep going." }; }
 }
 
 afterEach(async () => {

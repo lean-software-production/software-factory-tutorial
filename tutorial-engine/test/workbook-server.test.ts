@@ -1483,21 +1483,16 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
-  it("keeps an incomplete attempt quietly working without a visible review message when the main tutor says working", async () => {
+  it("records feedback for an incomplete attempt instead of silently staying in draft progress", async () => {
     const dir = await fixture();
-    const mainTutor = new FakeMainTutor({ outcome: "working" });
+    const mainTutor = new FakeMainTutor({ outcome: "feedback", message: "Add the marker before continuing." });
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor });
     try {
       await introduceAndOpenEditor(server.url);
       expect((await postEditor(server.url, { blockId: "lesson--001-first--edit-answer", text: "unfinished" })).status).toBe(202);
-      const working = await waitForWorkbookState(server.url, (next) => mainTutor.reviews.length === 1 && block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "working", "quiet working review");
-      expect(block(working, "lesson--001-first--edit-answer")?.checkpoint?.status).toBe("working");
-      // A `working` outcome appends no review at all, so unlike the feedback and accepted paths
-      // there is no log entry to wait for — the guarantee IS the absence. Asserting it against the
-      // private log too is what distinguishes "nothing was written" from "the public projection
-      // hid something", which the public timeline alone cannot tell apart.
-      expect(await privateTimeline(dir)).not.toContainEqual(expect.objectContaining({ type: "message", source: "main_tutor", presentation: "review" }));
-      expect(working.timeline.filter((record: any) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review")).toEqual([]);
+      const feedback = await waitForWorkbookState(server.url, (next) => mainTutor.reviews.length === 1 && block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "feedback", "review feedback");
+      expect(block(feedback, "lesson--001-first--edit-answer")?.checkpoint).toMatchObject({ status: "feedback", feedback: "Add the marker before continuing." });
+      await waitForPrivateTimeline(dir, (records) => records.some((record) => record.type === "message" && record.source === "main_tutor" && record.presentation === "review" && record.text === "Add the marker before continuing."), "feedback review message");
     } finally { await server.close(); }
   });
 
@@ -1870,7 +1865,6 @@ describe("workbook browser API", () => {
   for (const scenario of [
     { name: "empty accepted text", decision: { outcome: "accepted" as const, message: "" } },
     { name: "empty feedback text", decision: { outcome: "feedback" as const, message: "" } },
-    { name: "working result", decision: { outcome: "working" as const } },
   ]) {
     it(`classifies ${scenario.name} from terminal review as infrastructure failure, not learner feedback`, async () => {
       const dir = await fixture();
@@ -1888,7 +1882,6 @@ describe("workbook browser API", () => {
         pty.data?.(`done\r\n${bashFinishedMarker()}`);
         const failed = await waitForWorkbookState(server.url, (next) => Boolean(block(next, "run-supplied-command")?.terminal?.retryFailureId), `${scenario.name} retryable failure`);
         expect(block(failed, "run-supplied-command")?.terminal).toMatchObject({ phase: "feedback", message: expect.stringMatching(/Review is temporarily unavailable/) });
-        expect(JSON.stringify(failed)).not.toContain("working");
         const records = await privateTimeline(dir);
         expect(records).toContainEqual(expect.objectContaining({ type: "terminal-review-failed" }));
         expect(records).not.toContainEqual(expect.objectContaining({ type: "terminal-feedback-recorded", text: "" }));

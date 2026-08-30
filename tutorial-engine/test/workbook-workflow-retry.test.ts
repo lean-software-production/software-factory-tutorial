@@ -105,7 +105,7 @@ class RetryStallTutor {
 
   async review(_input: { attempt: Attempt }) {
     if (this.operation === "review") return await this.#stall({ outcome: "accepted", message: "Late accepted review after close." });
-    return { outcome: "working" as const };
+    return { outcome: "feedback" as const, message: "Keep going." };
   }
 
   async summarizeBlock() {

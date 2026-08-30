@@ -372,6 +372,6 @@ class SummaryStallTutor {
   dispose() {}
 }
 
-function fakeTutor(decision: any = { outcome: "working" }, reply: any = "Tutor reply."): any {
+function fakeTutor(decision: any = { outcome: "feedback", message: "Keep going." }, reply: any = "Tutor reply."): any {
   return { restore: async () => undefined, reply: async () => reply, review: async () => decision, summarizeBlock: async () => "Block summary.", summarizeLesson: async () => "Lesson summary.", dispose() {} };
 }

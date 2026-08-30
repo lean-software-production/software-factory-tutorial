@@ -2973,7 +2973,7 @@ describe("workbook lesson UI", () => {
     expect(sendButton.disabled).toBe(true);
   });
 
-  it("routes a second reflection message as a follow-up after quiet working state", async () => {
+  it("routes a second reflection message as a follow-up while a reflection draft is working", async () => {
     const reflectionProgress: Progress = {
       ...progress,
       activeBlockId: "reflect",
