@@ -158,14 +158,6 @@ export class AttemptStore {
     return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback, retainedFeedback: undefined, reviewUnavailable: undefined, privateQuickFeedback: undefined }));
   }
 
-  async markReviewUnavailable(id: string, message: string): Promise<Attempt | undefined> {
-    const feedback = message.trim().slice(0, 1_000) || "Review is temporarily unavailable. Please try another attempt in a moment.";
-    return this.#updateCurrent(id, (attempt) => {
-      const retainedFeedback = attempt.retainedFeedback ?? (attempt.status === "feedback" && !attempt.reviewUnavailable ? attempt.feedback : undefined);
-      return { ...attempt, status: "feedback", feedback, ...(retainedFeedback ? { retainedFeedback } : { retainedFeedback: undefined }), reviewUnavailable: true, privateQuickFeedback: undefined };
-    });
-  }
-
   async markQuickFeedback(id: string, message: string): Promise<Attempt | undefined> {
     const feedback = message.trim().slice(0, 1_000) || "Check the terminal output and try again.";
     return this.#updateCurrent(id, (attempt) => ({ ...attempt, status: "feedback", feedback, retainedFeedback: undefined, reviewUnavailable: undefined, privateQuickFeedback: true }));

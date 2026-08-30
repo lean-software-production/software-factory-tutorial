@@ -1,4 +1,6 @@
 /** Browser-safe JSON contract for the workbook HTTP API. This module has no Node imports. */
+import { TUTOR_INFRASTRUCTURE_FATAL_MESSAGE, type PublicTutorInfrastructureFatalState } from "./tutor-infrastructure.js";
+
 export type PublicWorkbookBlockType = "narrative" | "terminal-practice" | "editor-practice" | "reflection";
 export type PublicWorkbookBlockKind = PublicWorkbookBlockType | "workbook-introduction" | "part-preamble" | "lesson-preamble";
 export type PublicAttemptKind = "editor" | "terminal" | "reflection";
@@ -7,7 +9,7 @@ export type PublicEditorStatus = "editing" | "waiting" | "reviewing" | "feedback
 export type PublicTerminal =
   | { phase: "running" }
   | { phase: "checking" }
-  | { phase: "feedback"; message: string; retryFailureId?: string }
+  | { phase: "feedback"; message: string }
   | { phase: "complete"; message: string };
 /** Sanitized, bounded output captured when a terminal attempt is accepted. */
 export type PublicTerminalSnapshot = { transcript: string };
@@ -24,9 +26,8 @@ export interface PublicWorkbookBlockProgress { id: string; type?: PublicWorkbook
 export interface PublicWorkbookProgress { activeLessonId: string; activeBlockId: string; activeAnchorId?: string; completedLessons: string[]; completedBlocks?: string[]; workAcceptedBlocks?: string[]; readyBlocks?: string[]; blocks: PublicWorkbookBlockProgress[]; reflections: Record<string, string>; reflectionConversations: Record<string, PublicReflectionTurn[]>; canComplete?: { blockId: string; eligible: boolean; reason?: string }; workbookComplete?: boolean; }
 export interface PublicWorkbookOrderedBlock { id: string; anchorId: string; origin: string; kind: PublicWorkbookBlockKind | string; title: string; lessonId: string; declaredId?: string; order?: number; }
 export type PublicTimelineMessage = { type: "message"; id: string; sequence: number; at: string; lessonId: string; blockId: string; role: "assistant" | "user"; source: "authored" | "learner" | "main_tutor"; presentation: "course" | "chat" | "review"; text: string; blockInView?: string; };
-export type PublicTutorFailure = { type: "tutor_failed"; id: string; sequence: number; at: string; lessonId: string; blockId: string; failureId: string; operation: string; publicMessage: string; };
-export type PublicTimelineRecord = PublicTimelineMessage | PublicTutorFailure;
-export interface PublicWorkbookState { workbook: { title: string }; introduction: string; introductionComplete: boolean; chapters: PublicWorkbookChapter[]; progress: PublicWorkbookProgress; adapter: { note?: string; modelBackedHelp?: boolean }; orderedBlocks?: PublicWorkbookOrderedBlock[]; revealedBlockIds?: string[]; renderedBlockIds?: string[]; readyBlockIds?: string[]; currentBlock?: PublicWorkbookOrderedBlock & { workAccepted?: boolean }; completion?: { complete: true; anchorId: string; summary?: string }; timeline: readonly PublicTimelineRecord[]; }
+export type PublicTimelineRecord = PublicTimelineMessage;
+export interface PublicWorkbookState { workbook: { title: string }; introduction: string; introductionComplete: boolean; chapters: PublicWorkbookChapter[]; progress: PublicWorkbookProgress; adapter: { note?: string; modelBackedHelp?: boolean }; fatal?: PublicTutorInfrastructureFatalState; orderedBlocks?: PublicWorkbookOrderedBlock[]; revealedBlockIds?: string[]; renderedBlockIds?: string[]; readyBlockIds?: string[]; currentBlock?: PublicWorkbookOrderedBlock & { workAccepted?: boolean }; completion?: { complete: true; anchorId: string; summary?: string }; timeline: readonly PublicTimelineRecord[]; }
 export type PublicCompleteBlockResult = { outcome: "completed"; state: PublicWorkbookState; navigationTarget: string } | { outcome: "already-completed"; state: PublicWorkbookState } | { outcome: "rejected"; state: PublicWorkbookState; reason: "unrevealed" | "not-current" | "ineligible" };
 function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function strings(value: unknown): value is string[] { return Array.isArray(value) && value.every((item) => typeof item === "string"); }
@@ -34,7 +35,7 @@ function publicRevision(value: unknown): value is number { return Number.isInteg
 function terminal(value: unknown): value is PublicTerminal {
   if (!record(value)) return false;
   if (value.phase === "running" || value.phase === "checking") return true;
-  if (value.phase === "feedback") return typeof value.message === "string" && (value.retryFailureId === undefined || typeof value.retryFailureId === "string");
+  if (value.phase === "feedback") return typeof value.message === "string" && !("retryFailureId" in value);
   return value.phase === "complete" && typeof value.message === "string";
 }
 function terminalSnapshot(value: unknown): value is PublicTerminalSnapshot { return record(value) && typeof value.transcript === "string"; }
@@ -52,22 +53,8 @@ function publicTimelineMessage(value: Record<string, unknown>): value is PublicT
     && typeof value.text === "string"
     && (!("blockInView" in value) || typeof value.blockInView === "string");
 }
-function publicTutorFailure(value: Record<string, unknown>): value is PublicTutorFailure {
-  return value.type === "tutor_failed"
-    && typeof value.id === "string"
-    && typeof value.sequence === "number"
-    && typeof value.at === "string"
-    && typeof value.lessonId === "string"
-    && typeof value.blockId === "string"
-    && typeof value.failureId === "string"
-    && typeof value.operation === "string"
-    && typeof value.publicMessage === "string";
-}
 function publicTimelineRecord(value: unknown): value is PublicTimelineRecord {
-  if (!record(value)) return false;
-  if (value.type === "message") return publicTimelineMessage(value);
-  if (value.type === "tutor_failed") return publicTutorFailure(value);
-  return false;
+  return record(value) && publicTimelineMessage(value);
 }
 function publicBlockProgress(value: unknown): value is PublicWorkbookBlockProgress {
   return record(value)
@@ -75,9 +62,13 @@ function publicBlockProgress(value: unknown): value is PublicWorkbookBlockProgre
     && (value.terminalRevision === undefined || publicRevision(value.terminalRevision))
     && (value.terminalSnapshot === undefined || terminalSnapshot(value.terminalSnapshot));
 }
+function publicFatal(value: unknown): value is PublicTutorInfrastructureFatalState {
+  return record(value) && value.kind === "tutor-infrastructure" && value.message === TUTOR_INFRASTRUCTURE_FATAL_MESSAGE;
+}
 /** Validates fields the browser reads before rendering, without duplicating authored-content validation. */
 export function isPublicWorkbookState(value: unknown): value is PublicWorkbookState {
   if (!record(value) || !record(value.workbook) || typeof value.workbook.title !== "string" || typeof value.introduction !== "string" || typeof value.introductionComplete !== "boolean" || !Array.isArray(value.chapters) || !Array.isArray(value.timeline) || !record(value.progress) || !record(value.adapter)) return false;
+  if (value.fatal !== undefined && !publicFatal(value.fatal)) return false;
   if (!value.chapters.every((chapter) => record(chapter) && typeof chapter.id === "string" && typeof chapter.title === "string" && typeof chapter.lessonNumber === "number" && (chapter.lesson === undefined || lesson(chapter.lesson)))) return false;
   if (!value.timeline.every(publicTimelineRecord)) return false;
   const progress = value.progress;

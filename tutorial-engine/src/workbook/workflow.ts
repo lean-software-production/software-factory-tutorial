@@ -8,19 +8,16 @@ import { publicTerminalTranscript, type ActiveObservedTerminalBlock, type Active
 import type { TerminalObservationFact } from "./terminal-observation.js";
 import { MAX_TERMINAL_TRANSCRIPT_SNAPSHOT_BYTES, validateTerminalEvidence, type TerminalEvidence, type TerminalInteraction, type TerminalTranscriptSnapshot } from "./terminal-evidence.js";
 import { projectTerminalAttempts, type ProjectedTerminalAttempt } from "./terminal-attempt-projector.js";
-import { canStartAutomaticTerminalReview, canStartManualTerminalReview, terminalReviewCallCounts, terminalReviewNextCallNumber, type TerminalReviewRequestLike } from "./terminal-review-policy.js";
 import { promoteCurrentEditorAttempt, resolveEditorTarget } from "./editor.js";
 import { AttemptStore, type Attempt, type AttemptEvidence } from "./attempts.js";
 import type { MainTutorContext, MainWorkbookTutor, TutorDecision } from "./tutor.js";
-import { WorkbookTimeline, type TimelineMessage, type TutorFailure, type WorkbookTimelineRecord } from "./timeline.js";
+import { WorkbookTimeline, type TimelineMessage, type WorkbookTimelineRecord } from "./timeline.js";
 import { submitReflectionAttempt } from "./reflection.js";
 import type { EditorPracticeBlock, WorkbookBlock, WorkbookLesson } from "./contract.js";
 import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTerminal, PublicTerminalSnapshot, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookLesson, PublicWorkbookOrderedBlock, PublicWorkbookState } from "./public-contract.js";
+import { TUTOR_INFRASTRUCTURE_FATAL_MESSAGE, publicTutorInfrastructureFatalState, type PublicTutorInfrastructureFatalState } from "./tutor-infrastructure.js";
 
 const REVIEW_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please try another attempt in a moment.";
-const TERMINAL_REVIEW_RETRYABLE_FAILURE_FEEDBACK = "Review is temporarily unavailable. You can retry the review without rerunning the command.";
-const TERMINAL_REVIEW_FINAL_FAILURE_FEEDBACK = "Review is temporarily unavailable. Please try another attempt in a moment.";
-const TUTOR_UNAVAILABLE = "The tutor is temporarily unavailable. Please retry.";
 const TERMINAL_ASSESSMENT_TIMEOUT_MS = 30_000;
 const WORKFLOW_CLOSE_GRACE_MS = 250;
 const MAX_PUBLIC_TERMINAL_SNAPSHOT_BYTES = 16_000;
@@ -109,34 +106,27 @@ function projectedTimelineRecords(loaded: LoadedWorkbook, source: readonly Workb
     return projected ? [projected] : [];
   });
 }
-/** Terminal commands, inline finished evidence, review requests, and failures are internal lifecycle material.
- * The Main Tutor receives only the labelled transient attempt, never the raw lifecycle log. */
+/** Terminal commands and finished evidence are internal lifecycle material. The Main Tutor
+ * receives only the labelled transient attempt, never the raw lifecycle log. */
 function mainTutorTimelineRecords(loaded: LoadedWorkbook, source: readonly WorkbookTimelineRecord[]): WorkbookTimelineRecord[] {
   return projectedTimelineRecords(loaded, source).filter((record) => !(
     record.type === "terminal-command-submitted"
     || record.type === "terminal-command-finished"
-    || record.type === "terminal-review-requested"
-    || record.type === "terminal-review-failed"
     || record.type === "terminal-transcript-snapshotted"
     || record.type === "terminal-feedback-recorded"
   ));
 }
 function publicTimelineRecord(record: WorkbookTimelineRecord, loaded?: LoadedWorkbook): PublicTimelineRecord | undefined {
   const projectedRecord = loaded ? projectedTimelineRecord(loaded, record) : record;
-  if (!projectedRecord) return undefined;
-  if (projectedRecord.type === "message") {
-    // Every review is logged, but a practice block shows only its latest feedback, beside the
-    // work surface. Letting these into the conversation would replay the whole review history as
-    // chat, so they are dropped here and reach the learner through the block's checkpoint instead.
-    if (loaded && projectedRecord.source === "main_tutor" && projectedRecord.presentation === "review") {
-      const kind = timelineMessageBlockKind(loaded, projectedRecord);
-      if (kind === "terminal-practice" || kind === "editor-practice") return undefined;
-    }
-    return projectedRecord;
+  if (!projectedRecord || projectedRecord.type !== "message") return undefined;
+  // Every review is logged, but a practice block shows only its latest feedback, beside the
+  // work surface. Letting these into the conversation would replay the whole review history as
+  // chat, so they are dropped here and reach the learner through the block's checkpoint instead.
+  if (loaded && projectedRecord.source === "main_tutor" && projectedRecord.presentation === "review") {
+    const kind = timelineMessageBlockKind(loaded, projectedRecord);
+    if (kind === "terminal-practice" || kind === "editor-practice") return undefined;
   }
-  if (projectedRecord.type !== "tutor_failed") return undefined;
-  const { requestId: _privateRequestId, ...publicFailure } = projectedRecord;
-  return { ...publicFailure, failureId: projectedRecord.id };
+  return projectedRecord;
 }
 function authoredCourseOrder(loaded: LoadedWorkbook, record: PublicTimelineRecord): number | undefined {
   if (record.type !== "message" || record.source !== "authored" || record.presentation !== "course") return undefined;
@@ -307,7 +297,7 @@ function terminalAttemptProjection(records: readonly WorkbookTimelineRecord[], t
   return projectTerminalAttempts(records, terminalSessionId);
 }
 
-async function publicState(loaded: LoadedWorkbook, workspaceRootForLesson: (lesson: WorkbookLesson) => string | undefined, records: WorkbookTimelineRecord[], attempts: AttemptStore, terminalSessionId: string): Promise<PublicWorkbookState> {
+async function publicState(loaded: LoadedWorkbook, workspaceRootForLesson: (lesson: WorkbookLesson) => string | undefined, records: WorkbookTimelineRecord[], attempts: AttemptStore, terminalSessionId: string, fatal?: PublicTutorInfrastructureFatalState): Promise<PublicWorkbookState> {
   const stream = buildWorkbookBlockStream(loaded);
   const terminalAttempts = terminalAttemptProjection(records, terminalSessionId);
   const terminalSnapshots = terminalSnapshotProjection(records);
@@ -346,7 +336,7 @@ async function publicState(loaded: LoadedWorkbook, workspaceRootForLesson: (less
       // AttemptStore checkpoint is never a browser fallback: unfinished work reopens idle.
       const terminal = terminalAttempt?.state === "running" ? { phase: "running" as const }
         : terminalAttempt?.state === "checking" ? { phase: "checking" as const }
-          : terminalAttempt?.state === "feedback" && terminalAttempt.feedback ? { phase: "feedback" as const, message: terminalAttempt.feedback, ...(terminalAttempt.retryFailureId ? { retryFailureId: terminalAttempt.retryFailureId } : {}) }
+          : terminalAttempt?.state === "feedback" && terminalAttempt.feedback ? { phase: "feedback" as const, message: terminalAttempt.feedback }
             : terminalAttempt?.state === "complete" && terminalAttempt.successMessage ? { phase: "complete" as const, message: terminalAttempt.successMessage }
               : undefined;
       return {
@@ -385,7 +375,7 @@ async function publicState(loaded: LoadedWorkbook, workspaceRootForLesson: (less
   });
   const progress = { activeLessonId: current?.origin === "declared" ? current.lessonId : current?.chapter?.lesson.id ?? loaded.chapters[0]?.lesson.id ?? "", activeBlockId: workbookProjection.activeBlockId, activeAnchorId: workbookProjection.activeAnchorId, completedLessons, completedBlocks: [...workbookProjection.completedBlockIds], workAcceptedBlocks: [...workbookProjection.workAcceptedBlockIds], readyBlocks: [...workbookProjection.readyBlockIds], blocks, reflections, reflectionConversations, canComplete: current ? { blockId: current.id, ...canComplete } : { blockId: WORKBOOK_COMPLETE_ANCHOR_ID, eligible: false, reason: "complete" }, workbookComplete: workbookProjection.workbookComplete };
   const completionSummary = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "workbook_completion_summary" }> => record.type === "workbook_completion_summary");
-  return { workbook: loaded.identity, introduction: loaded.introduction, introductionComplete: workbookProjection.completedBlockIds.has(WORKBOOK_INTRODUCTION_BLOCK_ID), chapters, orderedBlocks, revealedBlockIds: [...revealedBlockIds], renderedBlockIds: [...renderedBlockIds], readyBlockIds: [...workbookProjection.readyBlockIds], currentBlock: current ? { ...publicOrderedBlock(current, workbookProjection.activeIndex), workAccepted: workbookProjection.workAcceptedBlockIds.has(current.id) } : undefined, completion: workbookProjection.workbookComplete ? { complete: true, anchorId: WORKBOOK_COMPLETE_ANCHOR_ID, summary: completionSummary?.text } : undefined, progress, timeline: completedBlockTimeline(loaded, workbookProjection, records), adapter: { modelBackedHelp: true, note: "Free-text help is block-scoped." } };
+  return { workbook: loaded.identity, introduction: loaded.introduction, introductionComplete: workbookProjection.completedBlockIds.has(WORKBOOK_INTRODUCTION_BLOCK_ID), chapters, orderedBlocks, revealedBlockIds: [...revealedBlockIds], renderedBlockIds: [...renderedBlockIds], readyBlockIds: [...workbookProjection.readyBlockIds], currentBlock: current ? { ...publicOrderedBlock(current, workbookProjection.activeIndex), workAccepted: workbookProjection.workAcceptedBlockIds.has(current.id) } : undefined, completion: workbookProjection.workbookComplete ? { complete: true, anchorId: WORKBOOK_COMPLETE_ANCHOR_ID, summary: completionSummary?.text } : undefined, progress, timeline: completedBlockTimeline(loaded, workbookProjection, records), adapter: { modelBackedHelp: true, note: "Free-text help is block-scoped." }, ...(fatal ? { fatal } : {}) };
 }
 
 function lessonPreambleBlockIdForServer(lessonId: string): string { return `lesson--${lessonId}`; }
@@ -410,7 +400,7 @@ export class WorkbookWorkflowCommandError extends Error {
   constructor(readonly status: 400 | 404 | 409, message: string) { super(message); }
 }
 
-export interface WorkbookWorkflowStateEvent { lessonId?: string; blockId?: string; revision?: number; status?: PublicCheckpoint["status"]; terminalPhase?: PublicTerminal["phase"]; }
+export interface WorkbookWorkflowStateEvent { lessonId?: string; blockId?: string; revision?: number; status?: PublicCheckpoint["status"]; terminalPhase?: PublicTerminal["phase"]; fatal?: true; }
 
 export interface WorkbookWorkflow {
   start(): Promise<void>;
@@ -427,7 +417,6 @@ export interface WorkbookWorkflow {
   sendMessage(input: { blockId: string; text: string; blockInView?: string }): Promise<Awaited<ReturnType<typeof publicState>>>;
   submitEditor(blockId: string, text: string, revision?: number): Promise<Awaited<ReturnType<typeof publicState>>>;
   submitEvent(input: { blockId: string; action: string; response?: string }): Promise<Awaited<ReturnType<typeof publicState>>>;
-  retry(failureId: string): Promise<Awaited<ReturnType<typeof publicState>>>;
 }
 
 export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, timeline, attempts, mainTutor, terminalAssessmentScheduler: injectedTerminalAssessmentScheduler, activeTerminalContext: currentActiveTerminalContext, onTerminalContinued, log }: WorkbookWorkflowDependencies): Promise<WorkbookWorkflow> {
@@ -441,6 +430,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   const stateListeners = new Set<(event: WorkbookWorkflowStateEvent) => void>();
   const terminalSessionId = randomUUID();
   let reloadGeneration = 0;
+  let fatal: PublicTutorInfrastructureFatalState | undefined;
 
   const append = async (input: Parameters<WorkbookTimeline["append"]>[0]): Promise<WorkbookTimelineRecord> => {
     const record = await timeline.appendWithinRun(input);
@@ -458,7 +448,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     const message = error instanceof Error ? error.message : String(error);
     return message.replace(/\s+/g, " ").trim().slice(0, 500) || "The workbook content could not be loaded yet.";
   };
-  const generationIsCurrent = (generation: number): boolean => !closed && generation === reloadGeneration;
+  const generationIsCurrent = (generation: number): boolean => !closed && !fatal && generation === reloadGeneration;
   const currentGeneration = (): number => reloadGeneration;
   const authoredMessageExists = (lessonId: string, blockId: string): boolean => records.some((record) => record.type === "message" && record.source === "authored" && record.lessonId === lessonId && record.blockId === blockId);
   const currentWorkbookProjection = (source = records) => projectWorkbookBlocks(stream, source);
@@ -579,7 +569,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     const active = activeOrderedBlock();
     return active?.id === blockId ? mainContext() : { records: mainTutorTimelineRecords(loaded, records), activeContext: undefined };
   };
-  const requireTutorText = (text: string, label: TutorFailure["operation"]): string => {
+  const requireTutorText = (text: string, label: "reply" | "review" | "block_summary" | "lesson_summary" | "completion_summary"): string => {
     const trimmed = text.trim();
     if (!trimmed) throw new Error(`Empty tutor response for ${label}.`);
     return trimmed.slice(0, 1_000);
@@ -598,14 +588,21 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     const quoted = workspaceIds.map((id) => `'${id}'`).join(", ");
     return `Workbook content declares interactive workspace ${quoted} that is not available in this running session. Start a new session to use newly declared workspaces.`;
   };
-  const currentPublicState = () => publicState(loaded, workspaceRootForLesson, records, attempts, terminalSessionId);
+  const currentPublicState = () => publicState(loaded, workspaceRootForLesson, records, attempts, terminalSessionId, fatal);
   const attemptStateEvent = (attempt: Attempt): WorkbookWorkflowStateEvent => ({ lessonId: attempt.lessonId, blockId: attempt.blockId, revision: attempt.version, status: attempt.status === "superseded" ? undefined : attempt.status });
   const notifyStateChanged = (event: WorkbookWorkflowStateEvent): void => { if (!closed) for (const listener of stateListeners) listener(event); };
-  const appendFailure = async (input: Omit<TutorFailure, "id" | "sequence" | "at" | "type"> & { operation: TutorFailure["operation"] }): Promise<void> => {
-    await append({ type: "tutor_failed", ...input });
+  const latchTutorInfrastructureFatal = (operation: string): void => {
+    if (fatal || closed) return;
+    fatal = publicTutorInfrastructureFatalState();
+    reloadGeneration += 1;
+    log.error(`Workbook tutor infrastructure fatal state latched during ${operation}.`);
+    notifyStateChanged({ fatal: true });
   };
-  const logSummaryFailure = (operation: Extract<TutorFailure["operation"], "block_summary" | "lesson_summary" | "completion_summary">, { lessonId, blockId, requestId }: Pick<TutorFailure, "lessonId" | "blockId" | "requestId">, error: unknown): void => {
-    log.info(`Workbook tutor ${operation} failed for ${lessonId}/${blockId} (request ${requestId}): ${error instanceof Error ? error.message : String(error)}`);
+  const assertNoFatal = (): void => {
+    if (fatal) throw new WorkbookWorkflowCommandError(409, TUTOR_INFRASTRUCTURE_FATAL_MESSAGE);
+  };
+  const logSummaryFailure = (operation: "block_summary" | "lesson_summary" | "completion_summary", input: { lessonId: string; blockId: string; requestId: string }): void => {
+    log.info(`Workbook tutor ${operation} failed for ${input.lessonId}/${input.blockId} (request ${input.requestId}); fatal state latched.`);
   };
   const appendReviewMessage = async (attempt: Attempt, text: string): Promise<TimelineMessage> => {
     const message = await append({ type: "message", lessonId: attempt.lessonId, blockId: attempt.blockId, role: "assistant", source: "main_tutor", presentation: "review", text }) as TimelineMessage;
@@ -678,16 +675,14 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     if (!activeBeforeAssessment || activeBeforeAssessment.lessonId !== attempt.lessonId || activeBeforeAssessment.id !== attempt.blockId || !currentBeforeAssessment || currentBeforeAssessment.id !== attempt.id || !isEvaluatedBlock(activeBeforeAssessment.block) || !evidenceMatchesBlock(currentBeforeAssessment.evidence, activeBeforeAssessment.block)) return;
 
     let decision: TutorDecision;
-    try { decision = await mainTutor.review({ ...(await mainContext()), attempt: currentBeforeAssessment, privateGuidance }); }
-    catch (error) {
+    try {
+      const context = await mainContext();
+      if (!generationIsCurrent(generation)) return;
+      decision = await mainTutor.review({ ...context, attempt: currentBeforeAssessment, privateGuidance });
+    } catch {
       const failure = transact(async () => {
         if (!generationIsCurrent(generation)) return;
-        log.info(`Workbook tutor review failed for ${attempt.lessonId}/${attempt.blockId}: ${error instanceof Error ? error.message : String(error)}`);
-        const feedback = await attempts.markReviewUnavailable(attempt.id, REVIEW_FAILURE_FEEDBACK);
-        if (feedback) {
-          try { await appendFailure({ lessonId: feedback.lessonId, blockId: feedback.blockId, requestId: feedback.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK }); }
-          finally { notifyStateChanged(attemptStateEvent(feedback)); }
-        }
+        latchTutorInfrastructureFatal("review");
       });
       trackFinalizer(failure);
       return;
@@ -701,10 +696,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       let message: string;
       try { message = requireTutorText(decision.message, "review"); }
       catch {
-        log.info(`Workbook tutor review returned empty text for ${attempt.lessonId}/${attempt.blockId}.`);
-        const updated = await attempts.markReviewUnavailable(current.id, REVIEW_FAILURE_FEEDBACK);
-        try { await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK }); }
-        finally { if (updated) notifyStateChanged(attemptStateEvent(updated)); }
+        latchTutorInfrastructureFatal("review");
         return;
       }
 
@@ -714,16 +706,13 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
             const workspaceRoot = workspaceRootForLesson(active.chapter.lesson);
             if (!workspaceRoot) throw new Error(`Lesson '${active.lessonId}' has no live workspace.`);
             if (!await promoteCurrentEditorAttempt({ workspace: workspaceRoot, attempts, lessonId: active.lessonId, block: { ...active.block, id: active.id }, attemptId: current.id })) {
-              const updated = await attempts.markReviewUnavailable(current.id, REVIEW_FAILURE_FEEDBACK);
-              try { await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK }); }
-              finally { if (updated) notifyStateChanged(attemptStateEvent(updated)); }
+              log.info(`Accepted editor attempt could not be promoted for ${current.lessonId}/${current.blockId}; fatal state latched.`);
+              latchTutorInfrastructureFatal("editor promotion");
               return;
             }
           } catch (error) {
             log.info(`Accepted editor attempt could not be promoted: ${error instanceof Error ? error.message : String(error)}`);
-            const updated = await attempts.markReviewUnavailable(current.id, REVIEW_FAILURE_FEEDBACK);
-            try { await appendFailure({ lessonId: current.lessonId, blockId: current.blockId, requestId: current.id, operation: "review", publicMessage: REVIEW_FAILURE_FEEDBACK }); }
-            finally { if (updated) notifyStateChanged(attemptStateEvent(updated)); }
+            latchTutorInfrastructureFatal("editor promotion");
             return;
           }
         }
@@ -747,6 +736,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   };
 
   const createAttempt = async (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string; version?: number }): Promise<Attempt> => {
+    assertNoFatal();
     if (closed) throw new Error("Workbook server is closed.");
     // This runs inside timeline.run(). Never trust guidance captured by a terminal/browser caller:
     // a reload can change the declared block while that caller is queued. The active declaration is
@@ -759,18 +749,6 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     return reviewing;
   };
   const submitAttempt = (input: { lessonId: string; blockId: string; evidence: AttemptEvidence; privateGuidance: string }): Promise<Attempt> => transact(() => createAttempt(input));
-  const requeueActiveAttempt = async (options: { includeFeedback?: boolean; generation?: number } = { includeFeedback: true }): Promise<void> => {
-    const generation = options.generation ?? currentGeneration();
-    if (!generationIsCurrent(generation)) return;
-    const active = activeDeclaredBlock();
-    if (!active || !isEvaluatedBlock(active.block)) return;
-    const current = await attempts.current(active.lessonId, active.id).catch(() => undefined);
-    if (!generationIsCurrent(generation)) return;
-    if (!current || current.status === "accepted" || current.status === "superseded" || (!options.includeFeedback && current.status === "feedback")) return;
-    const reviewing = await attempts.markReviewing(current.id) ?? current;
-    if (!generationIsCurrent(generation)) return;
-    void finishReview(reviewing, active.block.tutor, generation);
-  };
 
   const activeObservedBlock = (): ActiveObservedTerminalBlock | undefined => {
     const active = activeDeclaredBlock();
@@ -780,9 +758,10 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   };
 
   // One workflow owns one embedded terminal session. Bash submission starts an attempt; only its
-  // immutable finished evidence can begin direct Main Tutor review work.
-  type TerminalReviewRequestMode = "automatic" | "manual";
-  type TerminalReviewRequest = {
+  // immutable finished evidence can begin one in-memory Main Tutor review. The review request is
+  // not durable: after a restart, a finished command remains projected as checking and no model
+  // work is recovered.
+  type TerminalReviewJob = {
     attemptId: string;
     lessonId: string;
     blockId: string;
@@ -790,9 +769,6 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     exitStatus: number;
     rubric: string;
     generation: number;
-    requestId: string;
-    mode: TerminalReviewRequestMode;
-    callNumber: number;
   };
   type TerminalReviewResult = { outcome: "accepted" | "feedback"; message: string };
   const terminalAssessmentTimeouts = new Set<unknown>();
@@ -801,7 +777,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   const trackTerminalAssessment = (task: Promise<void>): void => {
     terminalAssessmentTasks.add(task);
     void task.then(
-      () => terminalAssessmentTasks.delete(task),
+      () => { terminalAssessmentTasks.delete(task); },
       () => {
         terminalAssessmentTasks.delete(task);
         log.info("Terminal direct review task failed before recording an outcome.");
@@ -846,58 +822,33 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     }
   };
   const terminalReviewDurationMs = (startedAtMs: number): number => Math.max(0, Date.now() - startedAtMs);
-  const terminalReviewRetryCount = (request: TerminalReviewRequest): number => Math.max(0, request.callNumber - 1);
-  const logTerminalReviewCall = (request: TerminalReviewRequest, startedAtMs: number, outcome: "accepted" | "feedback" | "infrastructure_failure"): void => {
-    log.info(`Terminal direct review call completed durationMs=${terminalReviewDurationMs(startedAtMs)} retryCount=${terminalReviewRetryCount(request)} outcome=${outcome}`);
+  const logTerminalReviewCall = (startedAtMs: number, outcome: "accepted" | "feedback" | "infrastructure_failure"): void => {
+    log.info(`Terminal direct review call completed durationMs=${terminalReviewDurationMs(startedAtMs)} outcome=${outcome}`);
   };
-  const logTerminalReviewDecision = (request: TerminalReviewRequest, outcome: "accepted" | "feedback" | "retryable_failure" | "failure"): void => {
-    const finished = finishedRecordForAttempt(request.attemptId);
+  const logTerminalReviewDecision = (job: TerminalReviewJob, outcome: "accepted" | "feedback"): void => {
+    const finished = finishedRecordForAttempt(job.attemptId);
     const finishedAtMs = finished ? Date.parse(finished.at) : NaN;
     const latencyMs = Number.isFinite(finishedAtMs) ? Math.max(0, Date.now() - finishedAtMs) : 0;
-    log.info(`Terminal direct review decision completed finishedToDecisionMs=${latencyMs} retryCount=${terminalReviewRetryCount(request)} outcome=${outcome}`);
+    log.info(`Terminal direct review decision completed finishedToDecisionMs=${latencyMs} outcome=${outcome}`);
   };
-  const terminalReviewRequestsFor = (input: { attemptId: string }): TerminalReviewRequestLike[] => records.filter((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-review-requested" }> =>
-    record.type === "terminal-review-requested" && record.attemptId === input.attemptId);
-  const terminalReviewCountsFor = (input: { attemptId: string }) => terminalReviewCallCounts(terminalReviewRequestsFor(input), input);
-  const terminalReviewFailureRetryable = (request: TerminalReviewRequest): boolean => canStartManualTerminalReview(terminalReviewCountsFor(request));
-  const terminalReviewFailureMessage = (retryable: boolean): string => retryable
-    ? TERMINAL_REVIEW_RETRYABLE_FAILURE_FEEDBACK
-    : TERMINAL_REVIEW_FINAL_FAILURE_FEEDBACK;
-  const appendTerminalReviewFailureWithinRun = async (request: TerminalReviewRequest): Promise<void> => {
-    const failureId = randomUUID();
-    const retryable = terminalReviewFailureRetryable(request);
-    await append({ type: "terminal-review-failed", attemptId: request.attemptId, lessonId: request.lessonId, blockId: request.blockId, requestId: request.requestId, failureId, publicMessage: terminalReviewFailureMessage(retryable) });
-    logTerminalReviewDecision(request, retryable ? "retryable_failure" : "failure");
-    notifyStateChanged({ lessonId: request.lessonId, blockId: request.blockId, status: "feedback", terminalPhase: "feedback" });
-  };
-  const appendTerminalReviewRequest = async (input: Omit<TerminalReviewRequest, "requestId" | "generation"> & { generation?: number }): Promise<TerminalReviewRequest> => {
-    const request: TerminalReviewRequest = { ...input, generation: input.generation ?? reloadGeneration, requestId: randomUUID() };
-    await append({ type: "terminal-review-requested", attemptId: request.attemptId, lessonId: request.lessonId, blockId: request.blockId, requestId: request.requestId, mode: request.mode, callNumber: request.callNumber });
-    notifyStateChanged({ lessonId: request.lessonId, blockId: request.blockId, status: "reviewing", terminalPhase: "checking" });
-    return request;
-  };
-  const terminalRequestIsCurrent = (request: TerminalReviewRequest): DeclaredWorkbookBlock | undefined => {
-    if (closed || !generationIsCurrent(request.generation)) return undefined;
+  const terminalJobIsCurrent = (job: TerminalReviewJob): DeclaredWorkbookBlock | undefined => {
+    if (closed || !generationIsCurrent(job.generation)) return undefined;
     const active = activeDeclaredBlock();
-    if (!active || active.block.type !== "terminal-practice" || active.lessonId !== request.lessonId || active.id !== request.blockId) return undefined;
+    if (!active || active.block.type !== "terminal-practice" || active.lessonId !== job.lessonId || active.id !== job.blockId) return undefined;
     const submission = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
-      record.type === "terminal-command-submitted" && record.attemptId === request.attemptId);
+      record.type === "terminal-command-submitted" && record.attemptId === job.attemptId);
     const latestSubmission = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
-      record.type === "terminal-command-submitted" && record.blockId === request.blockId);
-    if (!submission || latestSubmission?.attemptId !== request.attemptId || submission.lessonId !== request.lessonId || submission.blockId !== request.blockId || submission.command !== request.command) return undefined;
-    if (records.some((record) => record.type === "attempt_accepted" && record.attemptId === request.attemptId) || records.some((record) => record.type === "work_accepted" && record.blockId === request.blockId)) return undefined;
-    if (records.some((record) => record.type === "terminal-feedback-recorded" && record.attemptId === request.attemptId)) return undefined;
-    if (!matchingFinishedEvidence({ attemptId: request.attemptId, command: request.command, exitStatus: request.exitStatus })) return undefined;
-    const latestRequest = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-review-requested" }> =>
-      record.type === "terminal-review-requested" && record.attemptId === request.attemptId);
-    if (!latestRequest || latestRequest.requestId !== request.requestId || latestRequest.lessonId !== request.lessonId || latestRequest.blockId !== request.blockId) return undefined;
-    if (records.some((record) => record.type === "terminal-review-failed" && record.attemptId === request.attemptId && record.requestId === request.requestId)) return undefined;
+      record.type === "terminal-command-submitted" && record.blockId === job.blockId);
+    if (!submission || latestSubmission?.attemptId !== job.attemptId || submission.lessonId !== job.lessonId || submission.blockId !== job.blockId || submission.command !== job.command) return undefined;
+    if (records.some((record) => record.type === "attempt_accepted" && record.attemptId === job.attemptId) || records.some((record) => record.type === "work_accepted" && record.blockId === job.blockId)) return undefined;
+    if (records.some((record) => record.type === "terminal-feedback-recorded" && record.attemptId === job.attemptId)) return undefined;
+    if (!matchingFinishedEvidence({ attemptId: job.attemptId, command: job.command, exitStatus: job.exitStatus })) return undefined;
     return active;
   };
-  const terminalAttemptForAssessment = async (request: TerminalReviewRequest): Promise<Attempt | undefined> => {
-    const evidence = matchingFinishedEvidence({ attemptId: request.attemptId, command: request.command, exitStatus: request.exitStatus });
+  const terminalAttemptForAssessment = async (job: TerminalReviewJob): Promise<Attempt | undefined> => {
+    const evidence = matchingFinishedEvidence({ attemptId: job.attemptId, command: job.command, exitStatus: job.exitStatus });
     if (!evidence) return undefined;
-    const transcriptSnapshot = evidence.transcriptSnapshot ?? terminalTranscriptSnapshot({ lessonId: request.lessonId, blockId: request.blockId, interactions: evidence.interactions });
+    const transcriptSnapshot = evidence.transcriptSnapshot ?? terminalTranscriptSnapshot({ lessonId: job.lessonId, blockId: job.blockId, interactions: evidence.interactions });
     const reviewEvidence = {
       label: "finished-terminal-review-evidence",
       commandEvidence: {
@@ -911,107 +862,86 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     // This object adapts immutable lifecycle evidence to the current model APIs. It is deliberately
     // never written to AttemptStore and its transcript never enters the browser contract.
     return {
-      id: request.attemptId,
-      lessonId: request.lessonId,
-      blockId: request.blockId,
+      id: job.attemptId,
+      lessonId: job.lessonId,
+      blockId: job.blockId,
       version: 1,
       status: "reviewing",
       evidence: { kind: "terminal", transcript: JSON.stringify(reviewEvidence, null, 2), terminalHtml: "" }
     };
   };
-  const classifyTerminalReviewDecision = (decision: TutorDecision): TerminalReviewResult | undefined => {
-    try { return { outcome: decision.outcome, message: requireTutorText(decision.message, "review") }; }
-    catch { return undefined; }
-  };
-  const recordTerminalReviewFailure = async (request: TerminalReviewRequest): Promise<void> => {
+  const classifyTerminalReviewDecision = (decision: TutorDecision): TerminalReviewResult => ({
+    outcome: decision.outcome,
+    message: requireTutorText(decision.message, "review"),
+  });
+  const latchTerminalReviewFatal = async (job: TerminalReviewJob): Promise<void> => {
     await transact(async () => {
-      if (!terminalRequestIsCurrent(request)) return;
-      await appendTerminalReviewFailureWithinRun(request);
+      if (!terminalJobIsCurrent(job)) return;
+      latchTutorInfrastructureFatal("terminal review");
     });
   };
-  const retryTerminalReviewAutomatically = async (request: TerminalReviewRequest): Promise<TerminalReviewRequest | undefined> => {
-    return await transact(async () => {
-      if (!terminalRequestIsCurrent(request)) return undefined;
-      const counts = terminalReviewCountsFor(request);
-      if (!canStartAutomaticTerminalReview(counts)) return undefined;
-      return await appendTerminalReviewRequest({ attemptId: request.attemptId, lessonId: request.lessonId, blockId: request.blockId, command: request.command, exitStatus: request.exitStatus, rubric: request.rubric, mode: "automatic", callNumber: terminalReviewNextCallNumber(counts) });
-    });
-  };
-  const handleTerminalReviewInfrastructureFailure = async (request: TerminalReviewRequest): Promise<void> => {
-    const retry = await retryTerminalReviewAutomatically(request);
-    if (retry) {
-      launchTerminalMainReview(retry);
-      return;
-    }
-    await recordTerminalReviewFailure(request);
-  };
-  const recordTerminalReviewSuccess = async (request: TerminalReviewRequest, result: TerminalReviewResult): Promise<void> => {
+  const recordTerminalReviewSuccess = async (job: TerminalReviewJob, result: TerminalReviewResult): Promise<void> => {
     await transact(async () => {
-      const active = terminalRequestIsCurrent(request);
+      const active = terminalJobIsCurrent(job);
       if (!active) return;
       if (result.outcome === "feedback") {
-        await append({ type: "terminal-feedback-recorded", attemptId: request.attemptId, text: result.message });
-        logTerminalReviewDecision(request, "feedback");
-        notifyStateChanged({ lessonId: request.lessonId, blockId: request.blockId, status: "feedback", terminalPhase: "feedback" });
+        await append({ type: "terminal-feedback-recorded", attemptId: job.attemptId, text: result.message });
+        logTerminalReviewDecision(job, "feedback");
+        notifyStateChanged({ lessonId: job.lessonId, blockId: job.blockId, status: "feedback", terminalPhase: "feedback" });
         return;
       }
-      const evidence = matchingFinishedEvidence({ attemptId: request.attemptId, command: request.command, exitStatus: request.exitStatus });
+      const evidence = matchingFinishedEvidence({ attemptId: job.attemptId, command: job.command, exitStatus: job.exitStatus });
       const transcript = evidence
         ? boundedPublicTerminalTranscript(evidence.interactions.filter((interaction) => interaction.kind === "output").map((interaction) => interaction.data).join(""))
         : "";
       // This is intentionally written for every terminal acceptance, even when the command
       // produced no output or a process restart lost the live manager. It never includes the
       // command, rubric, private transcript, or later shell output.
-      await append({ type: "terminal-transcript-snapshotted", attemptId: request.attemptId, lessonId: request.lessonId, blockId: request.blockId, transcript });
-      await appendTerminalAcceptedCheckpoint(request, result.message);
+      await append({ type: "terminal-transcript-snapshotted", attemptId: job.attemptId, lessonId: job.lessonId, blockId: job.blockId, transcript });
+      await appendTerminalAcceptedCheckpoint(job, result.message);
       await recordWorkAccepted(active);
-      logTerminalReviewDecision(request, "accepted");
-      notifyStateChanged({ lessonId: request.lessonId, blockId: request.blockId, status: "accepted", terminalPhase: "complete" });
+      logTerminalReviewDecision(job, "accepted");
+      notifyStateChanged({ lessonId: job.lessonId, blockId: job.blockId, status: "accepted", terminalPhase: "complete" });
     });
   };
-  const launchTerminalMainReview = (request: TerminalReviewRequest): void => {
+  const launchTerminalMainReview = (job: TerminalReviewJob): void => {
     const task = (async () => {
       const review = await transact(async () => {
-        const active = terminalRequestIsCurrent(request);
+        const active = terminalJobIsCurrent(job);
         if (!active) return undefined;
         return { context: await mainContext({ includeTerminalContext: false }), active };
       });
-      if (!review) return;
-      const attempt = await terminalAttemptForAssessment(request);
-      if (!attempt) {
-        await handleTerminalReviewInfrastructureFailure(request);
-        return;
-      }
+      if (!review || !generationIsCurrent(job.generation)) return;
+      const attempt = await terminalAttemptForAssessment(job);
+      if (!attempt || !generationIsCurrent(job.generation)) return;
 
       let decision: TutorDecision;
       const startedAtMs = Date.now();
       try {
-        decision = await withTerminalAssessmentTimeout(mainTutor.review({ ...review.context, attempt, privateGuidance: request.rubric }));
+        decision = await withTerminalAssessmentTimeout(mainTutor.review({ ...review.context, attempt, privateGuidance: job.rubric }));
       } catch {
-        logTerminalReviewCall(request, startedAtMs, "infrastructure_failure");
-        await handleTerminalReviewInfrastructureFailure(request);
+        logTerminalReviewCall(startedAtMs, "infrastructure_failure");
+        await latchTerminalReviewFatal(job);
         return;
       }
 
-      const result = classifyTerminalReviewDecision(decision);
-      if (!result) {
-        logTerminalReviewCall(request, startedAtMs, "infrastructure_failure");
-        await handleTerminalReviewInfrastructureFailure(request);
+      let result: TerminalReviewResult;
+      try {
+        result = classifyTerminalReviewDecision(decision);
+      } catch {
+        logTerminalReviewCall(startedAtMs, "infrastructure_failure");
+        await latchTerminalReviewFatal(job);
         return;
       }
-      logTerminalReviewCall(request, startedAtMs, result.outcome);
-      await recordTerminalReviewSuccess(request, result);
+      logTerminalReviewCall(startedAtMs, result.outcome);
+      await recordTerminalReviewSuccess(job, result);
     })();
     trackTerminalAssessment(task);
   };
-  const createInitialTerminalReviewRequest = async (input: { attemptId: string; lessonId: string; blockId: string; command: string; exitStatus: number; rubric: string }): Promise<TerminalReviewRequest> => {
-    const counts = terminalReviewCountsFor(input);
-    return await appendTerminalReviewRequest({ ...input, mode: "automatic", callNumber: terminalReviewNextCallNumber(counts) });
-  };
 
   const observeTerminalFact = (fact: TerminalObservationFact): Promise<void> => trackOrdinaryCommand(async () => {
-    const request = await transact(async (): Promise<TerminalReviewRequest | undefined> => {
-      if (closed) return undefined;
+    const job = await transact(async (): Promise<TerminalReviewJob | undefined> => {
+      if (closed || fatal) return undefined;
       const active = activeDeclaredBlock();
       if (!active || active.block.type !== "terminal-practice" || active.id !== fact.blockId) return undefined;
 
@@ -1045,90 +975,21 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       const transcriptSnapshot = terminalTranscriptSnapshot({ live: currentActiveTerminalContext?.(), lessonId: active.lessonId, blockId: active.id, interactions });
       const evidence = validateTerminalEvidence({ kind: "finished", command: fact.evidence.command, interactions, exitStatus: fact.evidence.exitStatus, transcriptSnapshot });
       await append({ type: "terminal-command-finished", attemptId: fact.attemptId, evidence });
-      return await createInitialTerminalReviewRequest({ attemptId: fact.attemptId, lessonId: active.lessonId, blockId: active.id, command: submitted.command, exitStatus: fact.evidence.exitStatus, rubric: active.block.tutor });
+      notifyStateChanged({ lessonId: active.lessonId, blockId: active.id, status: "reviewing", terminalPhase: "checking" });
+      return {
+        attemptId: fact.attemptId,
+        lessonId: active.lessonId,
+        blockId: active.id,
+        command: submitted.command,
+        exitStatus: fact.evidence.exitStatus,
+        rubric: active.block.tutor,
+        generation: currentGeneration(),
+      };
     });
-    if (!request) return;
-    // Model calls begin only after their event write and timeline transaction have completed.
-    launchTerminalMainReview(request);
+    if (!job || fatal) return;
+    // Model calls begin only after the finished event write and timeline transaction have completed.
+    launchTerminalMainReview(job);
   });
-
-  const terminalReviewRequestFromRecord = (record: Extract<WorkbookTimelineRecord, { type: "terminal-review-requested" }>, input: { command: string; exitStatus: number; rubric: string }): TerminalReviewRequest => ({
-    attemptId: record.attemptId,
-    lessonId: record.lessonId,
-    blockId: record.blockId,
-    command: input.command,
-    exitStatus: input.exitStatus,
-    rubric: input.rubric,
-    generation: reloadGeneration,
-    requestId: record.requestId,
-    mode: record.mode,
-    callNumber: record.callNumber,
-  });
-  /** Rebuild a completed command's pending final lifecycle after server restart/reload. */
-  const requeueTerminalLifecycle = async (): Promise<void> => {
-    const resume = await transact(async (): Promise<TerminalReviewRequest | undefined> => {
-      const active = activeDeclaredBlock();
-      if (!active || active.block.type !== "terminal-practice") return undefined;
-      const submission = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
-        record.type === "terminal-command-submitted" && record.blockId === active.id);
-      if (!submission || records.some((record) => record.type === "attempt_accepted" && record.attemptId === submission.attemptId) || hasWorkAccepted(active.id)) return undefined;
-      const evidence = matchingFinishedEvidence({ attemptId: submission.attemptId, command: submission.command });
-      if (!evidence) return undefined;
-      if (records.some((record) => record.type === "terminal-feedback-recorded" && record.attemptId === submission.attemptId)) return undefined;
-      const latestRequest = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-review-requested" }> =>
-        record.type === "terminal-review-requested" && record.attemptId === submission.attemptId);
-      const latestFailure = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-review-failed" }> =>
-        record.type === "terminal-review-failed" && record.attemptId === submission.attemptId);
-      if (latestFailure && (!latestRequest || latestFailure.sequence > latestRequest.sequence)) return undefined;
-      if (latestRequest) {
-        const pending = terminalReviewRequestFromRecord(latestRequest, { command: submission.command, exitStatus: evidence.exitStatus, rubric: active.block.tutor });
-        const counts = terminalReviewCountsFor(pending);
-        if (pending.mode !== "manual" && canStartAutomaticTerminalReview(counts)) {
-          return await appendTerminalReviewRequest({ attemptId: submission.attemptId, lessonId: submission.lessonId, blockId: submission.blockId, command: submission.command, exitStatus: evidence.exitStatus, rubric: active.block.tutor, mode: "automatic", callNumber: terminalReviewNextCallNumber(counts) });
-        }
-        await appendTerminalReviewFailureWithinRun(pending);
-        return undefined;
-      }
-      const counts = terminalReviewCountsFor({ attemptId: submission.attemptId });
-      return await appendTerminalReviewRequest({ attemptId: submission.attemptId, lessonId: submission.lessonId, blockId: submission.blockId, command: submission.command, exitStatus: evidence.exitStatus, rubric: active.block.tutor, mode: "automatic", callNumber: terminalReviewNextCallNumber(counts) });
-    });
-    if (!resume) return;
-    launchTerminalMainReview(resume);
-  };
-
-  const createTerminalReviewRetry = async (failureId: string): Promise<TerminalReviewRequest | undefined> => {
-    const failure = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-review-failed" }> => record.type === "terminal-review-failed" && record.failureId === failureId);
-    if (!failure) return undefined;
-    const matchingRequest = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-review-requested" }> =>
-      record.type === "terminal-review-requested"
-      && record.requestId === failure.requestId
-      && record.attemptId === failure.attemptId
-      && record.lessonId === failure.lessonId
-      && record.blockId === failure.blockId
-      && record.sequence < failure.sequence);
-    const latestRequestBeforeFailure = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-review-requested" }> =>
-      record.type === "terminal-review-requested" && record.attemptId === failure.attemptId && record.sequence < failure.sequence);
-    if (!matchingRequest || latestRequestBeforeFailure?.requestId !== failure.requestId) {
-      throw new WorkbookWorkflowCommandError(409, "The terminal review is no longer retryable.");
-    }
-    const active = activeDeclaredBlock();
-    if (!active || active.block.type !== "terminal-practice" || active.lessonId !== failure.lessonId || active.id !== failure.blockId) throw new WorkbookWorkflowCommandError(409, "The terminal review is no longer retryable.");
-    const submission = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
-      record.type === "terminal-command-submitted" && record.blockId === failure.blockId);
-    const evidence = submission && submission.attemptId === failure.attemptId ? matchingFinishedEvidence({ attemptId: failure.attemptId, command: submission.command }) : undefined;
-    if (!submission || submission.attemptId !== failure.attemptId || !evidence) throw new WorkbookWorkflowCommandError(409, "The terminal review is no longer retryable.");
-    if (records.some((record) => record.type === "attempt_accepted" && record.attemptId === failure.attemptId) || records.some((record) => record.type === "work_accepted" && record.blockId === failure.blockId) || records.some((record) => record.type === "terminal-feedback-recorded" && record.attemptId === failure.attemptId)) throw new WorkbookWorkflowCommandError(409, "The terminal review is no longer retryable.");
-    const latestSubmission = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
-      record.type === "terminal-command-submitted" && record.blockId === failure.blockId);
-    if (latestSubmission?.attemptId !== failure.attemptId) throw new WorkbookWorkflowCommandError(409, "The terminal review is no longer retryable.");
-    const latestFailure = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-review-failed" }> =>
-      record.type === "terminal-review-failed" && record.attemptId === failure.attemptId);
-    const laterRequest = records.some((record) => record.type === "terminal-review-requested" && record.attemptId === failure.attemptId && record.sequence > failure.sequence);
-    if (latestFailure?.failureId !== failure.failureId || laterRequest) throw new WorkbookWorkflowCommandError(409, "The terminal review is already retrying.");
-    const counts = terminalReviewCountsFor(failure);
-    if (!canStartManualTerminalReview(counts)) throw new WorkbookWorkflowCommandError(409, "The terminal review retry budget is exhausted.");
-    return await appendTerminalReviewRequest({ attemptId: failure.attemptId, lessonId: failure.lessonId, blockId: failure.blockId, command: submission.command, exitStatus: evidence.exitStatus, rubric: active.block.tutor, mode: "manual", callNumber: terminalReviewNextCallNumber(counts) });
-  };
 
   const summarizeDeparture = async (leaving: DeclaredWorkbookBlock, workflowId: string, generation = currentGeneration()): Promise<void> => {
     if (!generationIsCurrent(generation)) return;
@@ -1137,11 +998,10 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
         const text = requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId: workflowId }), "block_summary");
         if (!generationIsCurrent(generation)) return;
         await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text, coveredThroughId: workflowId });
-      } catch (error) {
+      } catch {
         if (!generationIsCurrent(generation)) return;
-        logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId }, error);
-        if (!generationIsCurrent(generation)) return;
-        await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId, operation: "block_summary", publicMessage: TUTOR_UNAVAILABLE });
+        logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId });
+        latchTutorInfrastructureFatal("block summary");
       }
     }
     if (!generationIsCurrent(generation)) return;
@@ -1152,11 +1012,10 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
         const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: leaving.lessonId, coveredThroughId: workflowId }), "lesson_summary");
         if (!generationIsCurrent(generation)) return;
         await append({ type: "lesson_summarized", lessonId: leaving.lessonId, text, coveredThroughId: workflowId });
-      } catch (error) {
+      } catch {
         if (!generationIsCurrent(generation)) return;
-        logSummaryFailure("lesson_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId }, error);
-        if (!generationIsCurrent(generation)) return;
-        await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId, operation: "lesson_summary", publicMessage: TUTOR_UNAVAILABLE });
+        logSummaryFailure("lesson_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: workflowId });
+        latchTutorInfrastructureFatal("lesson summary");
       }
     }
   };
@@ -1167,15 +1026,15 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: "workbook", coveredThroughId: workflowId }), "completion_summary");
       if (!generationIsCurrent(generation)) return;
       await append({ type: "workbook_completion_summary", text });
-    } catch (error) {
+    } catch {
       if (!generationIsCurrent(generation)) return;
-      logSummaryFailure("completion_summary", { lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID, requestId: workflowId }, error);
-      if (!generationIsCurrent(generation)) return;
-      await appendFailure({ lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID, requestId: workflowId, operation: "completion_summary", publicMessage: TUTOR_UNAVAILABLE });
+      logSummaryFailure("completion_summary", { lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID, requestId: workflowId });
+      latchTutorInfrastructureFatal("completion summary");
     }
   };
 
   const completeBlock = async (blockId: string, generation = currentGeneration()): Promise<CompleteBlockResult> => {
+    assertNoFatal();
     if (!generationIsCurrent(generation)) return { outcome: "rejected", state: await currentPublicState(), reason: "not-current" };
     const projection = currentWorkbookProjection();
     const stateBefore = async () => await currentPublicState();
@@ -1203,6 +1062,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
 
   const reloadContent = async (): Promise<{ outcome: "reloaded"; generation: number } | { outcome: "error"; message: string } | { outcome: "closed" }> => {
     if (closed) return { outcome: "closed" };
+    if (fatal) return { outcome: "error", message: TUTOR_INFRASTRUCTURE_FATAL_MESSAGE };
     let candidate: LoadedWorkbook;
     try {
       candidate = await loadWorkbook(contentRoot);
@@ -1232,17 +1092,10 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     // checks the generation before it changes durable workflow state.
     try {
       await mainTutor.restore(await mainContext());
-      await transact(async () => {
-        if (!generationIsCurrent(generation)) return;
-        await requeueActiveAttempt({ includeFeedback: false, generation });
-      });
-      await requeueTerminalLifecycle();
-    } catch (error) {
+    } catch {
       if (!closed) await transact(async () => {
         if (!generationIsCurrent(generation)) return;
-        log.info(`Workbook tutor restoration after content reload failed: ${error instanceof Error ? error.message : String(error)}`);
-        const active = activeOrderedBlock();
-        await appendFailure({ lessonId: active?.lessonId ?? WORKBOOK_INTRODUCTION_BLOCK_ID, blockId: active?.id ?? WORKBOOK_INTRODUCTION_BLOCK_ID, requestId: "content-reload", operation: "restore", publicMessage: TUTOR_UNAVAILABLE });
+        latchTutorInfrastructureFatal("restore");
       });
     }
     return closed ? { outcome: "closed" } : { outcome: "reloaded", generation };
@@ -1250,6 +1103,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
 
   const sendMessage = ({ blockId, text, blockInView }: { blockId: string; text: string; blockInView?: string }) => trackOrdinaryCommand(async () => {
     const snapshot = await transact(async () => {
+      assertNoFatal();
       if (closed) throw new Error("Workbook server is closed.");
       const active = activeOrderedBlock();
       const projection = currentWorkbookProjection();
@@ -1261,10 +1115,11 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       const learnerMessage = await append({ type: "message", lessonId: target.lessonId, blockId: target.blockId, role: "user", source: "learner", presentation: "chat", text, blockInView: visibleBlock }) as TimelineMessage;
       return { generation: reloadGeneration, target, learnerMessage, tutorContext: await mainContextForTarget(target.lessonId, target.blockId) };
     });
+    if (!generationIsCurrent(snapshot.generation)) return await currentPublicState();
     let reply: Awaited<ReturnType<MainWorkbookTutor["reply"]>> | undefined;
-    let providerError: unknown;
+    let providerError = false;
     try { reply = await mainTutor.reply({ ...snapshot.tutorContext, learnerMessage: snapshot.learnerMessage }); }
-    catch (error) { providerError = error; }
+    catch { providerError = true; }
     return await transact(async () => {
       if (closed) throw new Error("Workbook server is closed.");
       const active = activeOrderedBlock();
@@ -1273,8 +1128,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
         : !active && snapshot.target.blockId === WORKBOOK_COMPLETE_ANCHOR_ID;
       if (!generationIsCurrent(snapshot.generation) || !stillActive) return await currentPublicState();
       if (providerError) {
-        log.info(`Workbook tutor reply failed for ${snapshot.target.lessonId}/${snapshot.target.blockId}: ${providerError instanceof Error ? providerError.message : String(providerError)}`);
-        await appendFailure({ lessonId: snapshot.target.lessonId, blockId: snapshot.target.blockId, requestId: snapshot.learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE });
+        latchTutorInfrastructureFatal("reply");
         return await currentPublicState();
       }
       if (typeof reply !== "string" && reply!.outcome === "complete-block") {
@@ -1284,9 +1138,8 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       try {
         const textReply = requireTutorText(reply as string, "reply");
         await append({ type: "message", lessonId: snapshot.target.lessonId, blockId: snapshot.target.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: textReply, inReplyTo: snapshot.learnerMessage.id }) as TimelineMessage;
-      } catch (error) {
-        log.info(`Workbook tutor reply failed for ${snapshot.target.lessonId}/${snapshot.target.blockId}: ${error instanceof Error ? error.message : String(error)}`);
-        await appendFailure({ lessonId: snapshot.target.lessonId, blockId: snapshot.target.blockId, requestId: snapshot.learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE });
+      } catch {
+        latchTutorInfrastructureFatal("reply");
       }
       return await currentPublicState();
     });
@@ -1294,6 +1147,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
 
 
   const submitEditor = async (blockId: string, text: string, revision?: number) => {
+    assertNoFatal();
     const active = activeDeclaredBlock();
     if (!active || active.block.type !== "editor-practice" || (active.id !== blockId && active.declaredId !== blockId)) throw new WorkbookWorkflowCommandError(409, "This editor block is not active yet.");
     const workspaceRoot = workspaceRootForLesson(active.chapter.lesson);
@@ -1302,6 +1156,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     catch (error) { throw new WorkbookWorkflowCommandError(400, error instanceof Error ? error.message : "Unsafe editor target path."); }
     const editorGuidance = active.block.tutor;
     await transact(async () => {
+      assertNoFatal();
       const current = await attempts.current(active.lessonId, active.id).catch(() => undefined);
       if (revision !== undefined && (!Number.isSafeInteger(revision) || revision <= 0)) throw new WorkbookWorkflowCommandError(400, "Editor revision must be a positive integer.");
       if (revision !== undefined && current && revision <= current.version) return;
@@ -1311,6 +1166,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   };
 
   const submitEvent = async ({ blockId, action, response }: { blockId: string; action: string; response?: string }) => transact(async () => {
+    assertNoFatal();
     const projection = currentWorkbookProjection();
     const active = declaredRefForInput(projection, blockId);
     if (!active || projection.current?.id !== active.id) throw new WorkbookWorkflowCommandError(409, "This block is not active yet.");
@@ -1333,84 +1189,6 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     return (await completeBlock(active.id)).state;
   });
 
-  const retry = (failureId: string) => trackOrdinaryCommand(async () => {
-    let terminalRequest: TerminalReviewRequest | undefined;
-    const result = await transact(async () => {
-      terminalRequest = await createTerminalReviewRetry(failureId);
-      if (terminalRequest) return await currentPublicState();
-
-      const failure = records.find((record): record is TutorFailure => record.type === "tutor_failed" && record.id === failureId);
-      if (!failure) throw new WorkbookWorkflowCommandError(404, "Unknown tutor failure.");
-      const generation = currentGeneration();
-      if (!generationIsCurrent(generation)) return await currentPublicState();
-
-      if (failure.operation === "reply") {
-        const index = records.findIndex((record) => record.id === failure.id);
-        const learnerMessage = [...records.slice(0, index)].reverse().find((record): record is TimelineMessage => record.type === "message" && record.source === "learner" && record.lessonId === failure.lessonId && record.blockId === failure.blockId);
-        if (!learnerMessage) throw new WorkbookWorkflowCommandError(409, "The original learner message is unavailable.");
-        try {
-          const context = await mainContextForTarget(failure.lessonId, failure.blockId);
-          if (!generationIsCurrent(generation)) return await currentPublicState();
-          const reply = await mainTutor.reply({ ...context, learnerMessage });
-          if (!generationIsCurrent(generation)) return await currentPublicState();
-          if (typeof reply !== "string" && reply.outcome === "complete-block") { await completeBlock(reply.blockId, generation); return await currentPublicState(); }
-          const textReply = requireTutorText(reply as string, "reply");
-          if (!generationIsCurrent(generation)) return await currentPublicState();
-          await append({ type: "message", lessonId: failure.lessonId, blockId: failure.blockId, role: "assistant", source: "main_tutor", presentation: "chat", text: textReply, inReplyTo: learnerMessage.id }) as TimelineMessage;
-        } catch {
-          if (!generationIsCurrent(generation)) return await currentPublicState();
-          await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: learnerMessage.id, operation: "reply", publicMessage: TUTOR_UNAVAILABLE });
-        }
-      } else if (failure.operation === "restore") {
-        try {
-          const context = await mainContext();
-          if (!generationIsCurrent(generation)) return await currentPublicState();
-          await mainTutor.restore(context);
-          if (!generationIsCurrent(generation)) return await currentPublicState();
-          await requeueActiveAttempt({ generation });
-        } catch {
-          if (!generationIsCurrent(generation)) return await currentPublicState();
-          await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: "restore", operation: "restore", publicMessage: TUTOR_UNAVAILABLE });
-        }
-      } else if (failure.operation === "review") {
-        await requeueActiveAttempt({ generation });
-      } else if (failure.operation === "block_summary") {
-        const leaving = stream.find((block): block is DeclaredWorkbookBlock => block.origin === "declared" && block.lessonId === failure.lessonId && block.id === failure.blockId);
-        if (leaving) {
-          try {
-            const context = await mainContext();
-            if (!generationIsCurrent(generation)) return await currentPublicState();
-            const text = requireTutorText(await mainTutor.summarizeBlock({ ...context, lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId: failure.requestId }), "block_summary");
-            if (!generationIsCurrent(generation)) return await currentPublicState();
-            await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text, coveredThroughId: failure.requestId });
-          } catch (error) {
-            if (!generationIsCurrent(generation)) return await currentPublicState();
-            logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id, requestId: failure.requestId }, error);
-            if (!generationIsCurrent(generation)) return await currentPublicState();
-            await appendFailure({ lessonId: leaving.lessonId, blockId: leaving.id, requestId: failure.requestId, operation: "block_summary", publicMessage: TUTOR_UNAVAILABLE });
-          }
-        }
-      } else if (failure.operation === "lesson_summary") {
-        try {
-          const context = await mainContext();
-          if (!generationIsCurrent(generation)) return await currentPublicState();
-          const text = requireTutorText(await mainTutor.summarizeLesson({ ...context, lessonId: failure.lessonId, coveredThroughId: failure.requestId }), "lesson_summary");
-          if (!generationIsCurrent(generation)) return await currentPublicState();
-          await append({ type: "lesson_summarized", lessonId: failure.lessonId, text, coveredThroughId: failure.requestId });
-        } catch (error) {
-          if (!generationIsCurrent(generation)) return await currentPublicState();
-          logSummaryFailure("lesson_summary", { lessonId: failure.lessonId, blockId: failure.blockId, requestId: failure.requestId }, error);
-          if (!generationIsCurrent(generation)) return await currentPublicState();
-          await appendFailure({ lessonId: failure.lessonId, blockId: failure.blockId, requestId: failure.requestId, operation: "lesson_summary", publicMessage: TUTOR_UNAVAILABLE });
-        }
-      } else if (failure.operation === "completion_summary") {
-        await requestCompletionSummary(failure.requestId, generation);
-      }
-      return await currentPublicState();
-    });
-    if (terminalRequest) launchTerminalMainReview(terminalRequest);
-    return result;
-  });
 
 
   return {
@@ -1419,14 +1197,8 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       await transact(async () => { await recoverAcceptedActiveAttempt(); await recoverAcceptedTerminalAttempt(); await ensureActiveWorkAcceptance(); });
       try {
         await mainTutor.restore(await mainContext());
-        await transact(async () => { if (!closed) await requeueActiveAttempt(); });
-        await requeueTerminalLifecycle();
-      } catch (error) {
-        if (!closed) {
-          log.info(`Workbook tutor restoration failed: ${error instanceof Error ? error.message : String(error)}`);
-          const active = activeOrderedBlock();
-          await transact(() => appendFailure({ lessonId: active?.lessonId ?? WORKBOOK_INTRODUCTION_BLOCK_ID, blockId: active?.id ?? WORKBOOK_INTRODUCTION_BLOCK_ID, requestId: "restore", operation: "restore", publicMessage: TUTOR_UNAVAILABLE }));
-        }
+      } catch {
+        if (!closed) await transact(async () => { if (!fatal) latchTutorInfrastructureFatal("restore"); });
       }
     },
     close: async () => {
@@ -1454,6 +1226,5 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     sendMessage,
     submitEditor,
     submitEvent,
-    retry,
   };
 }

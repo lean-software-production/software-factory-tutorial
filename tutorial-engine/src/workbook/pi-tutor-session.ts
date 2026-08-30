@@ -1,4 +1,5 @@
 import type { TutorialLogger } from "./runtime-log.js";
+import { TUTOR_PROVIDER_ATTEMPTS, TutorInfrastructureError } from "./tutor-infrastructure.js";
 
 export type PiTutorSessionEvent =
   | {
@@ -21,7 +22,6 @@ export interface PiTutorSession<Event = PiTutorSessionEvent> {
 export type ResilientTutorFailureLog = "detailed" | "generic";
 
 export interface ResilientTutorPromptOptions {
-  attempts?: number;
   failureLog?: ResilientTutorFailureLog;
 }
 
@@ -30,14 +30,22 @@ export interface ResilientTutorSession {
   dispose(): void;
 }
 
-export interface ResilientTutorSessionOptions extends ResilientTutorPromptOptions {
+export interface ResilientTutorSessionOptions {
+  failureLog?: ResilientTutorFailureLog;
   wait?: (milliseconds: number) => Promise<void>;
 }
 
-const DEFAULT_PROMPT_ATTEMPTS = 3;
+export interface ResilientTutorCompactionOptions {
+  wait?: (milliseconds: number) => Promise<void>;
+  isExpectedNoop?: (error: unknown) => boolean;
+}
 
 function defaultWait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, milliseconds); });
+}
+
+function durationMs(startedAtMs: number): number {
+  return Math.max(0, Date.now() - startedAtMs);
 }
 
 function terminalResult(event: unknown): { text: string; errorMessage?: string } | undefined {
@@ -62,21 +70,23 @@ function redactPromptFromLog(reason: string, prompt: string): string {
   return prompt ? reason.replaceAll(prompt, "[redacted learner prompt]") : reason;
 }
 
-function promptAttemptCount(defaultAttempts: number, options: ResilientTutorPromptOptions | undefined): number {
-  const attempts = options?.attempts ?? defaultAttempts;
-  if (!Number.isInteger(attempts) || attempts < 1) throw new Error("Tutor session attempts must be a positive integer.");
-  return attempts;
-}
-
-function logPromptFailure<Event>(input: { session: PiTutorSession<Event>; log: TutorialLogger; label: string; prompt: string; error: unknown; attempt: number; maxAttempts: number; failureLog: ResilientTutorFailureLog }): string {
+function logPromptFailure<Event>(input: { session: PiTutorSession<Event>; log: TutorialLogger; label: string; prompt: string; error: unknown; attempt: number; durationMs: number; failureLog: ResilientTutorFailureLog }): string {
   const reason = errorReason(input.error);
   if (input.failureLog === "generic") {
-    input.log.error(`${input.label} prompt failed (attempt ${input.attempt}/${input.maxAttempts}).`);
+    input.log.error(`${input.label} prompt failed (attempt ${input.attempt}/${TUTOR_PROVIDER_ATTEMPTS}; durationMs=${input.durationMs}).`);
     return reason;
   }
   const logReason = redactPromptFromLog(reason, input.prompt);
-  input.log.error(`${input.label} prompt failed (attempt ${input.attempt}/${input.maxAttempts}; ${input.session.state.model.provider}/${input.session.state.model.id}): ${logReason}`);
+  input.log.error(`${input.label} prompt failed (attempt ${input.attempt}/${TUTOR_PROVIDER_ATTEMPTS}; durationMs=${input.durationMs}; ${input.session.state.model.provider}/${input.session.state.model.id}): ${logReason}`);
   return reason;
+}
+
+function logPromptSuccess(log: TutorialLogger, label: string, attempt: number, durationMs: number): void {
+  log.info(`${label} prompt completed (attempt ${attempt}/${TUTOR_PROVIDER_ATTEMPTS}; durationMs=${durationMs}; outcome=success).`);
+}
+
+function logPromptExhaustion(log: TutorialLogger, label: string, durationMs: number): void {
+  log.error(`${label} prompt exhausted (attempts=${TUTOR_PROVIDER_ATTEMPTS}; durationMs=${durationMs}; outcome=infrastructure_failure).`);
 }
 
 async function promptOnce<Event>(session: PiTutorSession<Event>, prompt: string): Promise<string> {
@@ -91,7 +101,7 @@ async function promptOnce<Event>(session: PiTutorSession<Event>, prompt: string)
   return result?.text ?? "";
 }
 
-/** Retries only terminal provider failures, without logging learner prompt content. */
+/** Retries provider failures exactly three times without logging learner prompt content. */
 export function createResilientTutorSession<Event>(
   session: PiTutorSession<Event>,
   log: TutorialLogger,
@@ -99,23 +109,53 @@ export function createResilientTutorSession<Event>(
   options: ResilientTutorSessionOptions = {}
 ): ResilientTutorSession {
   const wait = options.wait ?? defaultWait;
-  const defaultAttempts = promptAttemptCount(DEFAULT_PROMPT_ATTEMPTS, options);
   const defaultFailureLog = options.failureLog ?? "detailed";
   return {
     async prompt(prompt: string, promptOptions?: ResilientTutorPromptOptions): Promise<string> {
-      const maxAttempts = promptAttemptCount(defaultAttempts, promptOptions);
       const failureLog = promptOptions?.failureLog ?? defaultFailureLog;
-      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const operationStartedAtMs = Date.now();
+      let finalError: unknown;
+      for (let attempt = 1; attempt <= TUTOR_PROVIDER_ATTEMPTS; attempt += 1) {
+        const attemptStartedAtMs = Date.now();
         try {
-          return await promptOnce(session, prompt);
+          const text = await promptOnce(session, prompt);
+          logPromptSuccess(log, label, attempt, durationMs(attemptStartedAtMs));
+          return text;
         } catch (error) {
-          const reason = logPromptFailure({ session, log, label, prompt, error, attempt, maxAttempts, failureLog });
-          if (attempt === maxAttempts) throw error instanceof Error ? error : new Error(reason);
-          await wait(attempt * 250);
+          finalError = error;
+          logPromptFailure({ session, log, label, prompt, error, attempt, durationMs: durationMs(attemptStartedAtMs), failureLog });
+          if (attempt < TUTOR_PROVIDER_ATTEMPTS) await wait(attempt * 250);
         }
       }
-      throw new Error("Unreachable retry state.");
+      logPromptExhaustion(log, label, durationMs(operationStartedAtMs));
+      throw new TutorInfrastructureError(finalError);
     },
     dispose(): void { session.dispose(); }
   };
+}
+
+export async function compactWithTutorRetries<T>(
+  compact: () => Promise<T>,
+  log: TutorialLogger,
+  label: string,
+  options: ResilientTutorCompactionOptions = {}
+): Promise<T> {
+  const wait = options.wait ?? defaultWait;
+  const operationStartedAtMs = Date.now();
+  let finalError: unknown;
+  for (let attempt = 1; attempt <= TUTOR_PROVIDER_ATTEMPTS; attempt += 1) {
+    const attemptStartedAtMs = Date.now();
+    try {
+      const result = await compact();
+      log.info(`${label} compact completed (attempt ${attempt}/${TUTOR_PROVIDER_ATTEMPTS}; durationMs=${durationMs(attemptStartedAtMs)}; outcome=success).`);
+      return result;
+    } catch (error) {
+      if (options.isExpectedNoop?.(error)) throw error;
+      finalError = error;
+      log.error(`${label} compact failed (attempt ${attempt}/${TUTOR_PROVIDER_ATTEMPTS}; durationMs=${durationMs(attemptStartedAtMs)}): ${errorReason(error)}`);
+      if (attempt < TUTOR_PROVIDER_ATTEMPTS) await wait(attempt * 250);
+    }
+  }
+  log.error(`${label} compact exhausted (attempts=${TUTOR_PROVIDER_ATTEMPTS}; durationMs=${durationMs(operationStartedAtMs)}; outcome=infrastructure_failure).`);
+  throw new TutorInfrastructureError(finalError);
 }

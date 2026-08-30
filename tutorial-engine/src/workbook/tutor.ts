@@ -13,7 +13,7 @@ import { TUTOR_MODEL_ENV, resolveTutorModel, snapshotWorkbookModelEnvironment, t
 import { createTutorialLogger, type TutorialLogger } from "./runtime-log.js";
 import type { Attempt } from "./attempts.js";
 import { projectMainTutorHistory, type ActiveBlockContext, type MainTutorHistoryProjection } from "./pi-history.js";
-import { createResilientTutorSession, type ResilientTutorPromptOptions } from "./pi-tutor-session.js";
+import { compactWithTutorRetries, createResilientTutorSession } from "./pi-tutor-session.js";
 import { createTutorWorkspaceTools } from "./tutor-workspace-tools.js";
 import type { TimelineMessage, WorkbookTimelineRecord } from "./timeline.js";
 
@@ -42,7 +42,7 @@ export interface MainWorkbookTutor {
 }
 
 export interface WorkbookTutorSession {
-  prompt(prompt: string, options?: ResilientTutorPromptOptions): Promise<string>;
+  prompt(prompt: string, options?: { failureLog?: "detailed" | "generic" }): Promise<string>;
   compact(instruction: string): Promise<{ summary: string }>;
   dispose(): void;
 }
@@ -286,8 +286,10 @@ async function createPiWorkbookTutorSession(workspace: string, request: Workbook
       ...resilient,
       async compact(instruction: string): Promise<{ summary: string }> {
         log.info("Compacting workbook tutor context after accepted checkpoint continuation.");
-        const result = await session.compact(instruction);
-        return { summary: result.summary };
+        return await compactWithTutorRetries(async () => {
+          const result = await session.compact(instruction);
+          return { summary: result.summary };
+        }, log, "Workbook tutor", { isExpectedNoop: isNothingToCompactError });
       }
     };
   } catch (error) {
@@ -388,10 +390,7 @@ export class DefaultMainWorkbookTutor implements MainWorkbookTutor {
 
       try {
         return await this.#withFreshSession(input, [accept], async (session) => {
-          const promptOptions: ResilientTutorPromptOptions | undefined = input.attempt.evidence.kind === "terminal"
-            ? { attempts: 1, failureLog: "generic" }
-            : undefined;
-          const text = await session.prompt(reviewPrompt(input), promptOptions);
+          const text = await session.prompt(reviewPrompt(input), input.attempt.evidence.kind === "terminal" ? { failureLog: "generic" } : undefined);
           if (acceptedAttemptId === boundAttemptId) return { outcome: "accepted", message: acceptedText(text) };
           return { outcome: "feedback", message: publicText(text) };
         });

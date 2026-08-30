@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isPublicWorkbookState, parsePublicWorkbookState } from "../src/workbook/public-contract.js";
+import { TUTOR_INFRASTRUCTURE_FATAL_MESSAGE } from "../src/workbook/tutor-infrastructure.js";
 import type { PublicWorkbookState } from "../src/workbook/public-contract.js";
 
 /**
@@ -43,10 +44,18 @@ describe("public workbook state contract", () => {
     expect(isPublicWorkbookState({ ...validState(), timeline: [] })).toBe(true);
   });
 
-  it("accepts terminal-local retry review failure IDs only on safe terminal state", () => {
-    const retryable = validState();
-    retryable.progress.blocks = [{ id: "terminal", ready: false, active: true, completed: false, verified: false, emerged: true, terminal: { phase: "feedback", message: "Review is temporarily unavailable.", retryFailureId: "failure-1" } }];
-    expect(isPublicWorkbookState(retryable)).toBe(true);
+  it("rejects terminal retry IDs and accepts the local fatal contract", () => {
+    const withRetryId = validState();
+    withRetryId.progress.blocks = [{ id: "terminal", ready: false, active: true, completed: false, verified: false, emerged: true, terminal: { phase: "feedback", message: "Review is temporarily unavailable.", retryFailureId: "failure-1" } as any }];
+    expect(isPublicWorkbookState(withRetryId)).toBe(false);
+
+    const fatal = validState();
+    fatal.fatal = { kind: "tutor-infrastructure", message: TUTOR_INFRASTRUCTURE_FATAL_MESSAGE };
+    expect(isPublicWorkbookState(fatal)).toBe(true);
+
+    const unsafeFatal = validState();
+    unsafeFatal.fatal = { kind: "tutor-infrastructure", message: "provider token leaked" };
+    expect(isPublicWorkbookState(unsafeFatal)).toBe(false);
   });
 
   it("rejects a state whose timeline is missing", () => {
@@ -81,20 +90,10 @@ describe("public workbook state contract", () => {
     }
   });
 
-  it("accepts public tutor failure records and rejects raw private timeline event types", () => {
+  it("rejects tutor failure records and raw private timeline event types", () => {
     const failureState = validState();
-    failureState.timeline = [{
-      type: "tutor_failed",
-      id: "failure-row",
-      sequence: 2,
-      at: "2026-08-21T00:00:01.000Z",
-      lessonId: "001-first-lesson",
-      blockId: "lesson--001-first-lesson--practice",
-      failureId: "failure-row",
-      operation: "review",
-      publicMessage: "Review is temporarily unavailable.",
-    }];
-    expect(isPublicWorkbookState(failureState)).toBe(true);
+    failureState.timeline = [{ type: "tutor_failed", id: "failure-row", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "001-first-lesson", blockId: "lesson--001-first-lesson--practice", failureId: "failure-row", operation: "review", publicMessage: "Review is temporarily unavailable." } as any];
+    expect(isPublicWorkbookState(failureState)).toBe(false);
 
     const raw = validState();
     raw.timeline = [{

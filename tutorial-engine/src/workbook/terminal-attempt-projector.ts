@@ -1,6 +1,5 @@
 import { validateTerminalEvidence, type TerminalEvidence } from "./terminal-evidence.js";
 import type { WorkbookTimelineRecord } from "./timeline.js";
-import { canStartManualTerminalReview, terminalReviewCallCounts, type TerminalReviewRequestLike } from "./terminal-review-policy.js";
 
 /** The only terminal lifecycle phases that a browser can receive from the server. */
 export type TerminalAttemptState = "running" | "checking" | "feedback" | "complete";
@@ -11,8 +10,6 @@ export type ProjectedTerminalAttempt = {
   revision: number;
   feedback?: string;
   successMessage?: string;
-  /** Browser-safe entitlement for terminal-local review retry; never an attempt/evidence id. */
-  retryFailureId?: string;
 };
 
 type Attempt = {
@@ -25,9 +22,6 @@ type Attempt = {
   finished: boolean;
   evidence?: TerminalEvidence;
   feedback?: string;
-  reviewFailure?: { message: string; failureId?: string };
-  reviewRequests: TerminalReviewRequestLike[];
-  latestReviewRequestId?: string;
   accepted?: string;
 };
 
@@ -38,9 +32,8 @@ function inlineEvidence(record: Extract<WorkbookTimelineRecord, { type: "termina
 
 /**
  * Replays private terminal records without I/O. Finished evidence is checked only to establish
- * lifecycle consistency; no evidence, command, attempt identity, or request identity reaches the
- * result. An unfinished command from another terminal session is deliberately idle on
- * reopen.
+ * lifecycle consistency; no evidence, command, or attempt identity reaches the result. An unfinished
+ * command from another terminal session is deliberately idle on reopen.
  */
 export function projectTerminalAttempts(
   records: readonly WorkbookTimelineRecord[],
@@ -63,7 +56,6 @@ export function projectTerminalAttempts(
           terminalSessionId: record.terminalSessionId,
           revision,
           finished: false,
-          reviewRequests: [],
         });
         currentAttemptByBlock.set(record.blockId, record.attemptId);
         break;
@@ -76,28 +68,9 @@ export function projectTerminalAttempts(
         attempt.evidence = evidence;
         break;
       }
-      case "terminal-review-requested": {
-        const attempt = attempts.get(record.attemptId);
-        if (!attempt?.finished || attempt.lessonId !== record.lessonId || attempt.blockId !== record.blockId) break;
-        attempt.reviewRequests.push(record);
-        attempt.latestReviewRequestId = record.requestId;
-        attempt.reviewFailure = undefined;
-        break;
-      }
-      case "terminal-review-failed": {
-        const attempt = attempts.get(record.attemptId);
-        if (!attempt?.finished || attempt.lessonId !== record.lessonId || attempt.blockId !== record.blockId) break;
-        if (attempt.latestReviewRequestId !== record.requestId) break;
-        const counts = terminalReviewCallCounts(attempt.reviewRequests, { attemptId: record.attemptId });
-        attempt.reviewFailure = { message: record.publicMessage, ...(canStartManualTerminalReview(counts) ? { failureId: record.failureId } : {}) };
-        break;
-      }
       case "terminal-feedback-recorded": {
         const attempt = attempts.get(record.attemptId);
-        if (attempt?.finished && record.text.trim()) {
-          attempt.feedback = record.text;
-          attempt.reviewFailure = undefined;
-        }
+        if (attempt?.finished && record.text.trim()) attempt.feedback = record.text;
         break;
       }
       case "attempt_accepted": {
@@ -111,7 +84,6 @@ export function projectTerminalAttempts(
           && attempt.blockId === record.blockId
         ) {
           attempt.accepted = record.summary;
-          attempt.reviewFailure = undefined;
         }
         break;
       }
@@ -124,12 +96,11 @@ export function projectTerminalAttempts(
   for (const [blockId, attemptId] of currentAttemptByBlock) {
     const attempt = attempts.get(attemptId);
     if (!attempt) continue;
-    // A running shell cannot survive workflow restart. Keep completed evidence available for
-    // review recovery, but do not resurrect an old in-flight command as a perpetual status.
+    // A running shell cannot survive workflow restart. Finished evidence remains projected as
+    // checking, but no model review is recovered from it after restart.
     if (!attempt.finished && activeTerminalSessionId && attempt.terminalSessionId !== activeTerminalSessionId) continue;
     if (attempt.accepted !== undefined) projection.set(blockId, { state: "complete", revision: attempt.revision, successMessage: attempt.accepted });
     else if (attempt.feedback !== undefined) projection.set(blockId, { state: "feedback", revision: attempt.revision, feedback: attempt.feedback });
-    else if (attempt.reviewFailure !== undefined) projection.set(blockId, { state: "feedback", revision: attempt.revision, feedback: attempt.reviewFailure.message, ...(attempt.reviewFailure.failureId ? { retryFailureId: attempt.reviewFailure.failureId } : {}) });
     else projection.set(blockId, { state: attempt.finished ? "checking" : "running", revision: attempt.revision });
   }
   return projection;

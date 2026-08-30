@@ -23,18 +23,14 @@ export class UnsupportedWorkbookSessionError extends Error {
 }
 
 /**
- * The durable terminal lifecycle. Commands, inline finished evidence, and review requests/failures stay
- * private. A bounded, sanitized terminal transcript is the sole browser-safe terminal payload: it is
+ * The durable terminal lifecycle. Commands and inline finished evidence stay private. A bounded,
+ * sanitized terminal transcript is the sole browser-safe terminal payload: it is
  * written only when an attempt is accepted and is projected as historical output for that authored
  * block.
  */
-export type TerminalReviewRequestMode = "automatic" | "manual";
-
 export type TerminalLifecycleInput =
   | { type: "terminal-command-submitted"; attemptId: string; lessonId: string; blockId: string; command: string; terminalSessionId: string }
   | { type: "terminal-command-finished"; attemptId: string; evidence: TerminalEvidence }
-  | { type: "terminal-review-requested"; attemptId: string; lessonId: string; blockId: string; requestId: string; mode: TerminalReviewRequestMode; callNumber: number }
-  | { type: "terminal-review-failed"; attemptId: string; lessonId: string; blockId: string; requestId: string; failureId: string; publicMessage: string }
   | { type: "terminal-transcript-snapshotted"; attemptId: string; lessonId: string; blockId: string; transcript: string }
   | { type: "terminal-feedback-recorded"; attemptId: string; text: string };
 
@@ -86,28 +82,18 @@ export type LessonSummary = TimelineMetadata & {
   coveredThroughId: string;
 };
 
-export type TutorFailure = TimelineMetadata & {
-  type: "tutor_failed";
-  lessonId: string;
-  blockId: string;
-  requestId: string;
-  operation: "reply" | "review" | "restore" | "block_summary" | "lesson_summary" | "completion_summary";
-  publicMessage: string;
-};
-
 export type WorkbookCompletionSummary = TimelineMetadata & {
   type: "workbook_completion_summary";
   text: string;
 };
 
-export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TerminalLifecycleEvent | TimelineMessage | BlockSummary | LessonSummary | TutorFailure | WorkbookCompletionSummary;
+export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TerminalLifecycleEvent | TimelineMessage | BlockSummary | LessonSummary | WorkbookCompletionSummary;
 export type TimelineAppendInput =
   | WorkbookWorkflowInput
   | TerminalLifecycleInput
   | Omit<TimelineMessage, keyof TimelineMetadata>
   | Omit<BlockSummary, keyof TimelineMetadata>
   | Omit<LessonSummary, keyof TimelineMetadata>
-  | Omit<TutorFailure, keyof TimelineMetadata>
   | Omit<WorkbookCompletionSummary, keyof TimelineMetadata>;
 
 const CURRENT_RECORD_TYPES = new Set<string>([
@@ -122,14 +108,11 @@ const CURRENT_RECORD_TYPES = new Set<string>([
   "reflection_reply_recorded",
   "terminal-command-submitted",
   "terminal-command-finished",
-  "terminal-review-requested",
-  "terminal-review-failed",
   "terminal-transcript-snapshotted",
   "terminal-feedback-recorded",
   "message",
   "block_summarized",
   "lesson_summarized",
-  "tutor_failed",
   "workbook_completion_summary",
 ]);
 
@@ -141,6 +124,9 @@ const LEGACY_RECORD_TYPES = new Set<string>([
   "reflection_completed",
   "editor_practice_unlocked",
   "lesson_transitioned",
+  "terminal-review-requested",
+  "terminal-review-failed",
+  "tutor_failed",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -201,31 +187,6 @@ function normalizeTerminalLifecycleRecord(value: Record<string, unknown>, line: 
       }
       return { ...metadata, type: "terminal-command-finished", attemptId: assertStringField(value, "attemptId", line), evidence };
     }
-    case "terminal-review-requested":
-      assertExactKeys(value, line, ["type", "id", "sequence", "at", "attemptId", "lessonId", "blockId", "requestId", "mode", "callNumber"]);
-      if (value.mode !== "automatic" && value.mode !== "manual") throw new Error(`Invalid workbook timeline record at line ${line}: mode is required.`);
-      return {
-        ...metadata,
-        type: "terminal-review-requested",
-        attemptId: assertStringField(value, "attemptId", line),
-        lessonId: assertStringField(value, "lessonId", line),
-        blockId: assertStringField(value, "blockId", line),
-        requestId: assertStringField(value, "requestId", line),
-        mode: value.mode,
-        callNumber: assertPositiveIntegerField(value, "callNumber", line),
-      };
-    case "terminal-review-failed":
-      assertExactKeys(value, line, ["type", "id", "sequence", "at", "attemptId", "lessonId", "blockId", "requestId", "failureId", "publicMessage"]);
-      return {
-        ...metadata,
-        type: "terminal-review-failed",
-        attemptId: assertStringField(value, "attemptId", line),
-        lessonId: assertStringField(value, "lessonId", line),
-        blockId: assertStringField(value, "blockId", line),
-        requestId: assertStringField(value, "requestId", line),
-        failureId: assertStringField(value, "failureId", line),
-        publicMessage: assertStringField(value, "publicMessage", line),
-      };
     case "terminal-transcript-snapshotted": {
       assertExactKeys(value, line, ["type", "id", "sequence", "at", "attemptId", "lessonId", "blockId", "transcript"]);
       if (typeof value.transcript !== "string") throw new Error(`Invalid workbook timeline record at line ${line}: transcript is required.`);

@@ -252,10 +252,6 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
         return sendJson(response, 202, await workflow.sendMessage({ blockId: typeof body.blockId === "string" ? body.blockId : "", text, blockInView: typeof body.blockInView === "string" ? body.blockInView : undefined }));
       } catch (error) { return sendJson(response, errorStatus(error), { error: errorMessage(error) }); }
     }
-    if (request.method === "POST" && isRoute(url.pathname, "retry")) {
-      try { const body = await readJson(request); return sendJson(response, 202, await workflow.retry(typeof body.failureId === "string" ? body.failureId : "")); }
-      catch (error) { return sendJson(response, errorStatus(error), { error: errorMessage(error) }); }
-    }
     if (request.method === "POST" && isRoute(url.pathname, "editor")) {
       try {
         const body = await readJson(request); const text = typeof body.text === "string" ? body.text : undefined;

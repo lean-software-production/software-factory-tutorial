@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { TUTOR_MODEL_ENV, resolveTutorModel, snapshotWorkbookModelEnvironment, type WorkbookModelEnvironment } from "./model.js";
 import { createResilientTutorSession, type PiTutorSession, type ResilientTutorSession } from "./pi-tutor-session.js";
+import { isTutorInfrastructureError } from "./tutor-infrastructure.js";
 import type { TutorialLogger } from "./runtime-log.js";
 
 export type WorkbookModelBackedRole = "Main Tutor";
@@ -30,6 +31,7 @@ export interface WorkbookModelPreflightErrorDetails extends WorkbookModelPreflig
 }
 
 function reason(cause: unknown): string {
+  if (isTutorInfrastructureError(cause) && cause.cause instanceof Error) return cause.cause.message;
   return cause instanceof Error ? cause.message : String(cause);
 }
 
@@ -189,7 +191,7 @@ export async function probePiWorkbookRoleModel(request: WorkbookRolePreflightReq
       throwIfAborted(request.signal);
     }
     selectedModel = identity(createdSession.state.model ?? choice.model);
-    resilient = createResilientTutorSession(createdSession, request.logger, `${request.role} preflight`, { attempts: 1 });
+    resilient = createResilientTutorSession(createdSession, request.logger, `${request.role} preflight`);
     const response = await withModelPreflightTimeout(resilient.prompt(PREFLIGHT_PROMPT), request.signal);
     throwIfAborted(request.signal);
     if (!response.trim()) throw new Error(`${request.role} preflight returned an empty assistant completion.`);
