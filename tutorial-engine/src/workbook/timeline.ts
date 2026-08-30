@@ -157,9 +157,11 @@ function parseJsonLine(line: string, lineNumber: number): unknown {
   catch { throw new Error(`Invalid workbook timeline record at line ${lineNumber}: invalid JSONL event`); }
 }
 
-function requireFormatRecord(value: unknown): void {
+export function assertCurrentWorkbookSessionFormatRecord(value: unknown): asserts value is WorkbookSessionFormatRecord {
   if (!isRecord(value) || value.type !== WORKBOOK_SESSION_FORMAT_RECORD_TYPE) throw new UnsupportedWorkbookSessionError(unsupportedVersionDetail(undefined));
   if (value.version !== CURRENT_WORKBOOK_SESSION_FORMAT_VERSION) throw new UnsupportedWorkbookSessionError(unsupportedVersionDetail(value.version));
+  const keys = Object.keys(value).sort();
+  if (keys.length !== 2 || keys[0] !== "type" || keys[1] !== "version") throw new UnsupportedWorkbookSessionError(`format header must contain only type and version; current version is ${CURRENT_WORKBOOK_SESSION_FORMAT_VERSION}`);
 }
 
 export function normalizeWorkbookTimelineRecord(value: unknown, line: number): WorkbookTimelineRecord {
@@ -215,17 +217,20 @@ export class WorkbookTimeline {
     let first: unknown;
     try { first = parseJsonLine(rawLines[0]!, 1); }
     catch { throw new UnsupportedWorkbookSessionError(unsupportedVersionDetail(undefined)); }
-    requireFormatRecord(first);
-    return rawLines.slice(1).filter(Boolean).map((line, index) => {
+    assertCurrentWorkbookSessionFormatRecord(first);
+    const records: WorkbookTimelineRecord[] = [];
+    for (const [index, line] of rawLines.slice(1).entries()) {
       const lineNumber = index + 2;
+      if (line === "") continue;
       try {
-        return normalizeWorkbookTimelineRecord(parseJsonLine(line, lineNumber), lineNumber);
+        records.push(normalizeWorkbookTimelineRecord(parseJsonLine(line, lineNumber), lineNumber));
       } catch (error) {
         if (error instanceof UnsupportedWorkbookSessionError) throw error;
         const message = error instanceof Error ? error.message : "invalid JSONL event";
         throw new Error(`${this.eventPath}:${lineNumber}: ${message.includes("invalid JSONL event") ? "invalid JSONL event" : message}`);
       }
-    });
+    }
+    return records;
   }
 
   initialize(): Promise<void> {

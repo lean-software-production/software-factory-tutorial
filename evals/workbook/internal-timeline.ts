@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
-import { normalizeWorkbookTimelineRecord, type WorkbookTimelineRecord } from "../../tutorial-engine/src/workbook/timeline.js";
+import { UnsupportedWorkbookSessionError, assertCurrentWorkbookSessionFormatRecord, normalizeWorkbookTimelineRecord, type WorkbookTimelineRecord } from "../../tutorial-engine/src/workbook/timeline.js";
 
 const MAX_TIMELINE_BYTES = 4 * 1024 * 1024;
 const MAX_TIMELINE_LINES = 20_000;
@@ -17,14 +17,17 @@ export async function readAuthoredWorkbookTimeline(sessionRoot: string): Promise
   const parent = resolve(eventPath, "..");
   let parentMetadata;
   try { parentMetadata = await lstat(parent); }
-  catch { return []; }
+  catch (error: any) {
+    if (error?.code === "ENOENT") throw unsupportedAuthoredTimeline();
+    throw new Error("Unable to read workbook timeline events.");
+  }
   if (parentMetadata.isSymbolicLink() || !parentMetadata.isDirectory()) throw new Error("Workbook timeline events parent is not an ordinary directory.");
   const realParent = await realpath(parent);
   if (realParent !== parent || !inside(root, realParent)) throw new Error("Workbook timeline events parent is an alias.");
 
   let metadata;
   try { metadata = await lstat(eventPath); }
-  catch (error: any) { if (error?.code === "ENOENT") return []; throw new Error("Unable to read workbook timeline events."); }
+  catch (error: any) { if (error?.code === "ENOENT") throw unsupportedAuthoredTimeline(); throw new Error("Unable to read workbook timeline events."); }
   if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.nlink !== 1) throw new Error("Workbook timeline events are not a single ordinary file.");
   if (metadata.size > MAX_TIMELINE_BYTES) throw new Error("Workbook timeline events exceed the evaluator read limit.");
 
@@ -40,13 +43,29 @@ export async function readAuthoredWorkbookTimeline(sessionRoot: string): Promise
     const after = await handle.stat();
     if (!after.isFile() || after.nlink !== 1 || after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size) throw new Error("Workbook timeline events changed during read.");
     const text = buffer.toString("utf8");
-    const lines = text.split(/\r?\n/).filter(Boolean);
+    const lines = text.split(/\r?\n/);
+    while (lines.at(-1) === "") lines.pop();
+    if (lines.length === 0) throw unsupportedAuthoredTimeline();
     if (lines.length > MAX_TIMELINE_LINES) throw new Error("Workbook timeline events exceed the evaluator line limit.");
-    return lines.map((line, index) => {
+    for (const [index, line] of lines.entries()) {
       if (Buffer.byteLength(line, "utf8") > MAX_TIMELINE_LINE_BYTES) throw new Error(`workbook/events.jsonl:${index + 1}: event line exceeds the evaluator read limit.`);
-      try { return normalizeWorkbookTimelineRecord(JSON.parse(line), index + 1); }
-      catch { throw new Error(`workbook/events.jsonl:${index + 1}: invalid timeline event.`); }
-    });
+    }
+    let header: unknown;
+    try { header = JSON.parse(lines[0]!); }
+    catch { throw unsupportedAuthoredTimeline(); }
+    assertCurrentWorkbookSessionFormatRecord(header);
+
+    const records: WorkbookTimelineRecord[] = [];
+    for (const [index, line] of lines.slice(1).entries()) {
+      const lineNumber = index + 2;
+      if (line === "") continue;
+      try { records.push(normalizeWorkbookTimelineRecord(JSON.parse(line), lineNumber)); }
+      catch (error) {
+        if (error instanceof UnsupportedWorkbookSessionError) throw error;
+        throw new Error(`workbook/events.jsonl:${lineNumber}: invalid timeline event.`);
+      }
+    }
+    return records;
   } finally {
     await handle.close();
   }
@@ -55,4 +74,12 @@ export async function readAuthoredWorkbookTimeline(sessionRoot: string): Promise
 function inside(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" || (!rel.startsWith("..") && !rel.startsWith(`..${sep}`));
+}
+
+function unsupportedAuthoredTimeline(): UnsupportedWorkbookSessionError {
+  try { assertCurrentWorkbookSessionFormatRecord(undefined); }
+  catch (error) {
+    if (error instanceof UnsupportedWorkbookSessionError) return error;
+  }
+  return new UnsupportedWorkbookSessionError("missing format version");
 }

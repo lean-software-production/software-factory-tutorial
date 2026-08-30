@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PublicWorkbookState } from "../../../tutorial-engine/src/workbook/public-contract.js";
-import type { WorkbookTimelineRecord } from "../../../tutorial-engine/src/workbook/timeline.js";
+import { workbookSessionFormatRecord, type WorkbookTimelineRecord } from "../../../tutorial-engine/src/workbook/timeline.js";
 import {
   copyAuthoredWorkbookEvalTrace,
   createEmptyAuthoredWorkbookEvalSessionTrace,
@@ -268,9 +268,9 @@ describe("authored workbook public eval trace projection", () => {
     const root = await mkdtemp(join(tmpdir(), "authored-eval-timeline-"));
     tempRoots.push(root);
     await mkdir(resolve(root, "workbook"), { recursive: true });
-    await writeFile(resolve(root, "workbook/events.jsonl"), "{not-json with private-snippet}\n", "utf8");
+    await writeFile(resolve(root, "workbook/events.jsonl"), `${JSON.stringify(workbookSessionFormatRecord())}\n{not-json with private-snippet}\n`, "utf8");
 
-    await expect(readAuthoredWorkbookTimeline(root)).rejects.toThrow("workbook/events.jsonl:1: invalid timeline event.");
+    await expect(readAuthoredWorkbookTimeline(root)).rejects.toThrow("workbook/events.jsonl:2: invalid timeline event.");
     await expect(readAuthoredWorkbookTimeline(root)).rejects.not.toThrow(root);
     await expect(readAuthoredWorkbookTimeline(root)).rejects.not.toThrow(/private-snippet/);
   });

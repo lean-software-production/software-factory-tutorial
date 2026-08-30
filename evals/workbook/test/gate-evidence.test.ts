@@ -22,6 +22,7 @@ import {
 import { authoredWorkbookScenarioById, type AuthoredWorkbookScenarioDescriptor } from "../scenarios.js";
 import type { AuthoredWorkbookEvalSessionTrace } from "../types.js";
 import { createEmptyAuthoredWorkbookEvalSessionTrace } from "../public-trace.js";
+import { workbookSessionFormatRecord } from "../../../tutorial-engine/src/workbook/timeline.js";
 
 const execFileAsync = promisify(execFile);
 const tempRoots: string[] = [];
@@ -191,11 +192,14 @@ describe("authored workbook gate evidence", () => {
   it("cross-checks command-stub evidence against the current handle runId and enforces Lesson001 no stubs", async () => {
     const lesson001 = authoredWorkbookScenarioById("lesson-001-headless-boundary");
     const base = await tempWorkspace();
+    const noStubTrace = lesson001Trace();
+    const noStubSession = sessionFor(base.root);
+    await writeSessionEvents(noStubSession.sessionRoot, noStubTrace.internalEvents);
     const collector = createAuthoredWorkbookScenarioGateEvidenceCollector({
       scenario: lesson001,
       workspace: fakeGuardedWorkspace(),
-      session: sessionFor(base.root),
-      trace: lesson001Trace(),
+      session: noStubSession,
+      trace: noStubTrace,
       commandStubHandle: { hostEvidencePath: join(base.root, "factory/.tmp/authored-eval-command-stubs/invocations.jsonl"), runId: RUN_ID },
       probe: fakeProbe()
     });
@@ -330,14 +334,14 @@ function sessionFor(root: string) {
 
 async function writeSessionEvents(sessionRoot: string, events: readonly unknown[]): Promise<void> {
   await mkdir(join(sessionRoot, "workbook"), { recursive: true });
-  await writeFile(join(sessionRoot, "workbook/events.jsonl"), events.map((event, index) => JSON.stringify(timelineRecord(event, index + 1))).join("\n") + (events.length ? "\n" : ""));
+  const rows = [workbookSessionFormatRecord(), ...events.map((event, index) => timelineRecord(event, index + 1))];
+  await writeFile(join(sessionRoot, "workbook/events.jsonl"), rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
 }
 
 async function tempSessionRoot(events: unknown[]): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "authored-gate-test-session-"));
   tempRoots.push(root);
-  await mkdir(join(root, "workbook"), { recursive: true });
-  if (events.length) await writeFile(join(root, "workbook/events.jsonl"), events.map((event, index) => JSON.stringify(timelineRecord(event, index + 1))).join("\n") + "\n");
+  await writeSessionEvents(root, events);
   return root;
 }
 

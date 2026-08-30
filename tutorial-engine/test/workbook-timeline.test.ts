@@ -158,15 +158,16 @@ describe("WorkbookTimeline", () => {
     await expect(timeline.read()).rejects.toThrow(/terminal-coach-handoff-recorded.*start fresh/i);
   });
 
-  it("still reports malformed current rows as invalid JSONL events", async () => {
+  it("still reports malformed current rows as invalid JSONL events with physical line numbers", async () => {
     const timeline = new WorkbookTimeline(await workspace());
     await mkdir(resolve(timeline.eventPath, ".."), { recursive: true });
     await writeFile(timeline.eventPath, [
       JSON.stringify(workbookSessionFormatRecord()),
+      "",
       "not-json",
       "",
     ].join("\n"), "utf8");
 
-    await expect(timeline.read()).rejects.toThrow(/events\.jsonl:2: invalid JSONL event/i);
+    await expect(timeline.read()).rejects.toThrow(/events\.jsonl:3: invalid JSONL event/i);
   });
 });
