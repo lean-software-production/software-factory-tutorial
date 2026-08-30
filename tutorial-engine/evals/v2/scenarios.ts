@@ -50,7 +50,7 @@ const clueOnlyActions: V2ScenarioAction[] = [
   { type: "terminal", blockId: "clue-only", command: clueDisplayCommand }
 ];
 const reflectionResponse = "I noticed the two terminal blocks were different, but I need help explaining the distinction and what the evaluator should record.";
-const reflectionFollowUp = "The clue-only prompt was public guidance, but the hidden tutor instructions stayed out of the workbook state. The evaluator should record only learner-visible state because hidden guidance was not something the learner could act on; visible state keeps judging grounded in observable prompts and actions.";
+const reflectionFollowUp = "The exact-command block was command-led because its public instructions supplied the shell command. The clue-only block was clue-led because its public prompt supplied the goal and I chose separate commands. Hidden tutor instructions stayed out of workbook state, so the evaluator should record only learner-visible prompts, state, and actions rather than guidance the learner could not see or act on.";
 const reflectionActions: V2ScenarioAction[] = [
   ...clueOnlyActions,
   { type: "reflection-submit", blockId: "reflection", response: reflectionResponse },
