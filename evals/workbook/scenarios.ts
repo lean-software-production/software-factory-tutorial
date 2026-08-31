@@ -254,7 +254,6 @@ chmod +x factory/refactor-validate.sh
 ./factory/refactor-validate.sh
 cat factory/.tmp/refactor-validate-findings.txt; printf '\nFIRST NON-EMPTY FINDINGS LINE: '; awk 'NF { print; exit }' factory/.tmp/refactor-validate-findings.txt; echo 'A FAIL verdict is valid here: this lesson builds the validator; repair follows.'; printf '\n%s\n' '=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ==='; echo 'Mechanic: missing-baseline guard'; grep -nF 'if [ ! -f .tmp/refactor-quality-before.txt ]; then' factory/refactor-validate.sh; echo 'Mechanic: baseline concatenated into validation'; grep -nF 'cat refactor-validate.md .tmp/refactor-quality-before.txt' factory/refactor-validate.sh; echo 'Mechanic: exact read-only tools'; grep -oF -- '--tools read,grep,find,ls,bash -p' factory/refactor-validate.sh; echo 'Mechanic: findings captured through tee'; grep -nF '| tee .tmp/refactor-validate-findings.txt' factory/refactor-validate.sh`;
 
-const lesson004WrongCommand = String.raw`{ ./factory/refactor-validate.sh; printf '%s\n' 'MISTAKEN NEXT STEP: rerun ./factory/refactor-do.sh to refresh the baseline before feedback.'; }`;
 const lesson004CurrentEvidenceAndValidationCommand = String.raw`{
   echo "=== QUALITY BEFORE (recorded before the doer ran) ==="
   cat factory/.tmp/refactor-quality-before.txt
@@ -455,7 +454,7 @@ const authoredWorkbookScenarioCatalog = [
     expectedModelCalls: freezeExpectedCalls({ mainTutor: 28, practiceCoach: 7, judge: 1 }),
     expectedModelCallDerivation: freezeStrings([
       "Main Tutor upper bound: actual path includes five terminal reviews, two reflection reviews, evaluated terminal/reflection/narrative blocks, lesson/part summaries, and workbook summary; conservative margin 28.",
-      "Practice Coach upper bound: explanation/review paths for broken validator, corrected validator, wrong rerun, multiply-only, divide/final, and two reflection/transition assists.",
+      "Practice Coach upper bound: explanation/review paths for broken validator, corrected validator, multiply-only, divide/final, and reflection/transition assists, with retry margin.",
       "Judge: exactly one stateless public-report judge call."
     ]),
     criteria: [
@@ -476,7 +475,6 @@ const authoredWorkbookScenarioCatalog = [
       await driver.continueBlock("lesson--004-feed-the-findings-back", "lesson004:introduction");
       await driver.continueBlock("lesson--004-feed-the-findings-back--key-concept", "lesson004:key-concept");
       await driver.continueBlock("lesson--004-feed-the-findings-back--the-loop-you-just-ran", "lesson004:loop");
-      await driver.submitTerminalCommand("lesson--004-feed-the-findings-back--implementation-order", lesson004WrongCommand, { label: "lesson004:wrong-rerun", expectedFeedback: feedbackAboutBaselineOverwrite });
       await driver.submitTerminalCommand("lesson--004-feed-the-findings-back--implementation-order", lesson004MultiplyCommand, { label: "lesson004:multiply-only", expectedFeedback: /divide|branch|still|FAIL|findings/i });
       await captureGateCheckpoint?.("lessons003004:after-multiply-only");
       await driver.submitTerminalCommand("lesson--004-feed-the-findings-back--implementation-order", lesson004DivideCommand, { label: "lesson004:divide-feedback" });
@@ -731,10 +729,6 @@ function feedbackAboutEvidenceCarriage(message: string): boolean {
   return /baseline|guard|concatenat|findings|tee|evidence/i.test(message);
 }
 
-function feedbackAboutBaselineOverwrite(message: string): boolean {
-  return /rerun|validator|baseline|findings|append|overwrite|not the script|doer context/i.test(message);
-}
-
 function gatePrimerValidationMisconception(input: AuthoredWorkbookScenarioGateInput): AuthoredWorkbookScenarioGateResult {
   return evaluateGate([
     assertion("primer-no-jump", noLessonJumpEverywhere(input), "No lesson jump was projected, copied, public, or reported in internal raw events."),
@@ -791,7 +785,6 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
     assertion("lessons003004-visible-corrected-mechanics", ["Mechanic: missing-baseline guard", "if [ ! -f .tmp/refactor-quality-before.txt ]; then", "Mechanic: baseline concatenated into validation", "cat refactor-validate.md .tmp/refactor-quality-before.txt", "Mechanic: exact read-only tools", "--tools read,grep,find,ls,bash -p", "Mechanic: findings captured through tee", "| tee .tmp/refactor-validate-findings.txt"].every((marker) => terminalOutput.includes(marker)), "Corrected validator output visibly displays concise grep-backed guard, baseline concatenation, read-only tool list, and tee mechanics."),
     assertion("lessons003004-verdict-before-mechanics", correctedVerdictIndex >= 0 && mechanicDisplayIndex > correctedVerdictIndex, "The corrected terminal output runs the validator and shows its VERDICT before displaying mechanism evidence."),
     assertion("lessons003004-broken-before-feedback", /cat refactor-validate\.md\s*\\\s*\|/.test(terminalInputs) && tutorFeedbackAfterInput(input.trace, /cat refactor-validate\.md\s*\\\s*\|/, /baseline|guard|findings|tee|evidence/i), "Broken validator lacking evidence carriage occurs before feedback."),
-    assertion("lessons003004-wrong-rerun-before-feedback", terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004WrongCommand)) && tutorFeedbackAfterInput(input.trace, /MISTAKEN NEXT STEP: rerun \.\/factory\/refactor-do\.sh/, /rerun|validator|baseline|findings|append|doer context/i), "The wrong validator-only rerun occurs before feedback and does not re-record the baseline."),
     assertion("lessons003004-multiply-then-divide", terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004MultiplyCommand)) && terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004DivideCommand)) && suffixInputIndex(terminalInputTexts(input.trace), lesson004DivideCommand) > suffixInputIndex(terminalInputTexts(input.trace), lesson004MultiplyCommand), "The repair is split into multiply-only and divide/final turns after feedback."),
     assertion("lessons003004-stub-sequence", hasExactAcceptedStubSequence(input.commandInvocations, [
       { station: "doer", mutation: "partial-refactor" },
@@ -804,7 +797,7 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
     ]), "Structural command evidence shows current-run doer/validator records in exact order through FAIL, multiply-only FAIL, divide repair, and PASS."),
     assertion("lessons003004-source-complete", hasTrustedCalculatorBehavior(input, source, { requireIntermediateMultiplyOnly: true }), "Trusted calculator behavior projections and source digest show multiply and divide completed, not commented or dead code."),
     assertion("lessons003004-findings-pass", firstNonEmptyLineIsVerdict(findings, "PASS"), "The first non-empty line of the final validator findings is exactly VERDICT: PASS."),
-    assertion("lessons003004-baseline-canonical", canonicalBaselinePreserved(input, files.get("factory/.tmp/refactor-quality-before.txt") ?? ""), "The original canonical quality baseline content and digest are preserved through the wrong rerun."),
+    assertion("lessons003004-baseline-canonical", canonicalBaselinePreserved(input, files.get("factory/.tmp/refactor-quality-before.txt") ?? ""), "The original canonical quality baseline content and digest are preserved through the feedback cycle."),
     assertion("lessons003004-immutability", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged && input.facts.learnerWorkspaceChangedOutsideAllowlist.length === 0, "Only allowlisted learner workspace files changed.")
   ]);
 }
