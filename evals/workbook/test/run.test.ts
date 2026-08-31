@@ -249,7 +249,7 @@ describe("authored workbook eval orchestration", () => {
     expect(accepted.costBudget).toEqual({ maxPaidModelCalls: derived.maxPaidModelCalls + 2, maxEstimatedTokens: (derived.maxPaidModelCalls + 2) * AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL });
   });
 
-  it("creates no stubs for primer/L001 and creates current stubs plus checkpoint activation for post-L001", async () => {
+  it("creates current post-L001 stubs without undeclared gate checkpoints", async () => {
     const l001 = makeDeps();
     await runAuthoredWorkbookEvalBatch(invocation(["lesson-001-headless-boundary"], 1), { dependencies: l001.deps });
     expect(l001.events).toContain("stubs:lesson-001-headless-boundary");
@@ -258,7 +258,7 @@ describe("authored workbook eval orchestration", () => {
     const post = makeDeps();
     await runAuthoredWorkbookEvalBatch(invocation(["lessons-003-004-evidence-feedback"], 1), { dependencies: post.deps });
     expect(post.events).toContain("stubs:lessons-003-004-evidence-feedback");
-    expect(post.events).toContain("checkpoint:lessons003004:after-multiply-only");
+    expect(post.events.some((event) => event.startsWith("checkpoint:"))).toBe(false);
     expect(post.events.indexOf("baseline")).toBeLessThan(post.events.indexOf("drive:intro"));
   });
 
