@@ -650,7 +650,7 @@ function lesson004DivideCommand(): string { return String.raw`(cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
 ${lesson004CurrentEvidenceAndValidationCommand()}
-printf '%s\n' 'FEEDBACK TURN COMPLETED: prior validator findings were appended to the doer context; current findings follow.'; cat factory/.tmp/refactor-validate-findings.txt`; }
+printf '%s\n' '=== COMMANDS EXECUTED IN THIS TURN ===' '(cd factory && cat refactor.md .tmp/refactor-validate-findings.txt | doer)' 'cat refactor-validate.md current-evidence | validator | tee refactor-validate-findings.txt' '=== CURRENT VALIDATOR OUTPUT ==='; cat factory/.tmp/refactor-validate-findings.txt`; }
 
 function multiplyOnlySource(source: string): string {
   return refactorSource(source, false);
