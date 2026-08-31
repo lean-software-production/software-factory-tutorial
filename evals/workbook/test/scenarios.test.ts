@@ -131,6 +131,16 @@ const lesson001SuppliedCommand = `echo "Describe what this calculator does, in t
 const lesson001ChangedJobCommand = `echo "What files make up this calculator, and what does each one appear to do?" \\\n  | (cd calculator && pi --no-session --tools read,grep,find,ls -p)`;
 
 const lesson004DivideCommand = String.raw`{
+node <<'NODE'
+const { readFileSync, writeFileSync } = require('node:fs');
+const path = 'calculator/src/index.ts';
+let source = readFileSync(path, 'utf8');
+source = source.replace(
+  '    if (word === "divide") {\n      const first = readFirstOperand("by");',
+  '    if (word === "divide") {\n      const first = read();\n      if (pieces[place++] !== "by") fail();'
+);
+writeFileSync(path, source);
+NODE
 (cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
@@ -738,7 +748,7 @@ describe("authored scenario shell commands", () => {
       expect(correctedVerdictIndex).toBeGreaterThanOrEqual(0);
       expect(correctedMechanicsIndex).toBeGreaterThan(correctedVerdictIndex);
       expect(correctedOutput).toMatch(/^Starting validation\.\.\.\nVERDICT: FAIL/m);
-      expect(correctedOutput).toContain("Current quality still reports: calculator/src/index.ts duplicated operator branch parser.");
+      expect(correctedOutput).toContain("No duplicated operator branch parser finding remains in deterministic source inspection.");
       expect(correctedOutput).not.toMatch(/exact labelled TESTS|complete QUALITY\/TESTS\/DIFF|current PASS/i);
       const baseline = await readFile(baselinePath, "utf8");
       const baselineDigest = sha256Text(baseline);
@@ -751,6 +761,7 @@ describe("authored scenario shell commands", () => {
       expect(evidence.filter((entry) => entry.accepted && entry.kind === "pi").map((entry) => [entry.station, entry.verdict ?? entry.mutation])).toEqual([
         ["doer", "partial-refactor"],
         ["validator", "FAIL"],
+        ["repair", "complete-refactor"],
         ["validator", "FAIL"],
         ["repair", "complete-refactor"],
         ["validator", "FAIL"]
@@ -1086,6 +1097,7 @@ async function lessons003004Fixture(input: AuthoredWorkbookScenarioGateInput): P
   input.commandInvocations = [
     stub("doer", { mutation: "partial-refactor" }),
     stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }),
+    stub("repair", { mutation: "complete-refactor" }),
     stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }),
     stub("repair", { mutation: "complete-refactor" }),
     stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" })

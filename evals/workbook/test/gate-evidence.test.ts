@@ -603,7 +603,7 @@ async function writeLesson013Final(root: string, options: { dirtyAfterCommit?: b
 }
 
 function lessons003004Evidence(): AuthoredCommandInvocationEvidence[] {
-  return [stub("doer", { mutation: "partial-refactor" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("repair", { mutation: "complete-refactor" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" })];
+  return [stub("doer", { mutation: "partial-refactor" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("repair", { mutation: "complete-refactor" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("repair", { mutation: "complete-refactor" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" })];
 }
 
 function lesson013Evidence(): AuthoredCommandInvocationEvidence[] {
@@ -649,6 +649,16 @@ ${lesson004CurrentEvidenceAndValidationCommand()}
 printf '%s\n' 'MISTAKEN STOP: multiply is fixed, so I will stop even though divide remains duplicated.'; cat factory/.tmp/refactor-validate-findings.txt
 }`; }
 function lesson004DivideCommand(): string { return String.raw`{
+node <<'NODE'
+const { readFileSync, writeFileSync } = require('node:fs');
+const path = 'calculator/src/index.ts';
+let source = readFileSync(path, 'utf8');
+source = source.replace(
+  '    if (word === "divide") {\n      const first = readFirstOperand("by");',
+  '    if (word === "divide") {\n      const first = read();\n      if (pieces[place++] !== "by") fail();'
+);
+writeFileSync(path, source);
+NODE
 (cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
