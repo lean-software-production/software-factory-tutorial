@@ -133,26 +133,27 @@ function makeDeps(options: { failGate?: boolean; judgePass?: boolean; abortOnDri
 
 function fakeDriver(trace: AuthoredWorkbookEvalSessionTrace, events: string[], abortOnDrive?: AbortController): any {
   let sequence = 0;
-  const lessonIdFor = (blockId: string) => /^lesson--(.+?)--/.exec(blockId)?.[1] ?? "what-is-a-factory";
+  const canonical = (blockId: string) => blockId.includes("--") ? blockId : `lesson--what-is-a-factory--${blockId}`;
+  const lessonIdFor = (blockId: string) => /^lesson--(.+?)--/.exec(canonical(blockId))?.[1] ?? "what-is-a-factory";
   const append = (event: Record<string, unknown>) => {
     sequence += 1;
     trace.internalEvents.push({ id: `fake-event-${sequence}`, sequence, at: new Date(Date.UTC(2026, 7, 30, 0, 0, sequence)).toISOString(), ...event } as any);
   };
   const push = (type: string, blockId = "factory-vs-repl", extra: Record<string, unknown> = {}) => {
     if (type === "workbook_introduction_completed") append({ type });
-    else append({ type, lessonId: lessonIdFor(blockId), blockId, ...extra });
+    else append({ type, lessonId: lessonIdFor(blockId), blockId: canonical(blockId), ...extra });
   };
   const reflectionTurn = (blockId: string, role: "learner" | "tutor", text: string) => {
-    trace.reflections.push({ blockId, role, text });
-    append({ type: "message", lessonId: lessonIdFor(blockId), blockId, role: role === "learner" ? "user" : "assistant", source: role === "learner" ? "learner" : "main_tutor", presentation: role === "learner" ? "chat" : "review", text });
+    trace.reflections.push({ blockId: canonical(blockId), role, text });
+    append({ type: "message", lessonId: lessonIdFor(blockId), blockId: canonical(blockId), role: role === "learner" ? "user" : "assistant", source: role === "learner" ? "learner" : "main_tutor", presentation: role === "learner" ? "chat" : "review", text });
   };
-  const state = (blockId = "factory-vs-repl", status = "accepted") => ({ progress: { blocks: [{ id: blockId, checkpoint: { status } }] } });
+  const state = (blockId = "factory-vs-repl", status = "accepted") => ({ progress: { blocks: [{ id: canonical(blockId), checkpoint: { status } }] } });
   return {
     completeIntroduction: async () => { events.push("drive:intro"); push("workbook_introduction_completed"); return state(); },
     continueBlock: async (blockId: string) => { events.push(`drive:continue:${blockId}`); push("block_completed", blockId); return state(blockId); },
-    submitReflection: async (blockId: string, response: string) => { events.push(`drive:reflection:${blockId}`); reflectionTurn(blockId, "learner", response); reflectionTurn(blockId, "tutor", "Tutor feedback: use validation rather than trust."); if (abortOnDrive) { abortOnDrive.abort(); throw new Error("aborted by test"); } return state(blockId, "feedback"); },
-    submitReflectionFollowUp: async (blockId: string, response: string) => { reflectionTurn(blockId, "learner", response); push("attempt_accepted", blockId, { kind: "reflection", attemptId: `${blockId}:reflection-attempt`, version: 1, summary: "accepted" }); reflectionTurn(blockId, "tutor", "accepted"); return state(blockId, "accepted"); },
-    completeReflection: async (blockId: string) => { push("block_completed", blockId); return state(blockId); },
+    submitReflection: async (blockId: string, response: string) => { events.push(`drive:reflection:${blockId}`); reflectionTurn(blockId, "learner", response); push("reflection_submitted", blockId); reflectionTurn(blockId, "tutor", "Tutor feedback: use validation rather than trust."); push("reflection_reply_recorded", blockId); if (abortOnDrive) { abortOnDrive.abort(); throw new Error("aborted by test"); } return state(blockId, "feedback"); },
+    submitReflectionFollowUp: async (blockId: string, response: string) => { reflectionTurn(blockId, "learner", response); push("reflection_follow_up_submitted", blockId); push("attempt_accepted", blockId, { kind: "reflection", attemptId: `${blockId}:reflection-attempt`, version: 1, summary: "accepted" }); reflectionTurn(blockId, "tutor", "accepted"); push("reflection_reply_recorded", blockId); return state(blockId, "accepted"); },
+    completeReflection: async (blockId: string) => { push("reflection_completed", blockId); return state(blockId); },
     submitTerminalCommand: async (blockId: string, command: string) => { trace.terminalTranscript.push({ blockId, direction: "input", text: command }); trace.terminalTranscript.push({ blockId, direction: "output", text: "ok" }); push("attempt_accepted", blockId, { kind: "terminal", attemptId: `${blockId}:terminal-attempt`, version: 1, summary: "accepted" }); return state(blockId, "feedback"); },
     completeTerminalBlock: async (blockId: string) => { push("block_completed", blockId); return state(blockId); }
   };
@@ -246,7 +247,7 @@ describe("authored workbook eval orchestration", () => {
     expect(accepted.costBudget).toEqual({ maxPaidModelCalls: derived.maxPaidModelCalls + 2, maxEstimatedTokens: (derived.maxPaidModelCalls + 2) * AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL });
   });
 
-  it("creates no stubs for primer/L001 and creates current stubs plus checkpoint activation for post-L001", async () => {
+  it("creates current post-L001 stubs without undeclared gate checkpoints", async () => {
     const l001 = makeDeps();
     await runAuthoredWorkbookEvalBatch(invocation(["lesson-001-headless-boundary"], 1), { dependencies: l001.deps });
     expect(l001.events).toContain("stubs:lesson-001-headless-boundary");
@@ -255,7 +256,7 @@ describe("authored workbook eval orchestration", () => {
     const post = makeDeps();
     await runAuthoredWorkbookEvalBatch(invocation(["lessons-003-004-evidence-feedback"], 1), { dependencies: post.deps });
     expect(post.events).toContain("stubs:lessons-003-004-evidence-feedback");
-    expect(post.events).toContain("checkpoint:lessons003004:after-multiply-only");
+    expect(post.events.some((event) => event.startsWith("checkpoint:"))).toBe(false);
     expect(post.events.indexOf("baseline")).toBeLessThan(post.events.indexOf("drive:intro"));
   });
 
@@ -271,6 +272,22 @@ describe("authored workbook eval orchestration", () => {
     expect(code).toBe(1);
     expect(bad.judgeCalls).toBe(0);
     expect(bad.writes[0]).toMatchObject({ kind: "failure", status: "gate" });
+  });
+
+  it("writes a private failure diagnostic when gate evidence collection throws before gate.json exists", async () => {
+    const fakes = makeDeps();
+    fakes.deps.createGateEvidenceCollector = () => ({
+      captureBaseline: async () => { fakes.events.push("baseline"); return {}; },
+      captureGateCheckpoint: async () => undefined,
+      collectGateInput: async () => { fakes.events.push("gate-input"); throw new Error("private collector detail /tmp/secret-workspace"); }
+    } as any);
+
+    const code = await runAuthoredWorkbookEvalBatch(invocation(), { dependencies: fakes.deps });
+    expect(code).toBe(1);
+    expect(fakes.writes[0]).toMatchObject({ kind: "failure", status: "gate" });
+    expect(fakes.events).toContain("failure-diagnostic");
+    expect(fakes.events).not.toContain("gate-diagnostic");
+    expect(fakes.judgeCalls).toBe(0);
   });
 
   it("cleans up in strict order, lets cleanup override only success, and warns privately for keep-workspace", async () => {

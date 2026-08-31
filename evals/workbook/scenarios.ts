@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import ts from "typescript";
-import { AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS, type AuthoredCommandInvocationEvidence } from "./command-stubs.js";
+import { type AuthoredCommandInvocationEvidence, type AuthoredEventClass } from "./command-stubs.js";
 import type { AuthoredWorkbookDriver } from "./driver.js";
 import type { AuthoredWorkbookEvalArtifactSnapshot, AuthoredWorkbookEvalProgressionEvent, AuthoredWorkbookEvalTrace } from "./types.js";
 import type { WorkbookTimelineRecord } from "../../tutorial-engine/src/workbook/timeline.js";
@@ -250,47 +250,41 @@ ${authoredValidatorPrompt}EOF
 cat > factory/refactor-validate.sh <<'EOF'
 ${authoredValidatorScript}EOF
 chmod +x factory/refactor-validate.sh
-./factory/refactor-validate.sh`;
+mv factory/.tmp/refactor-quality-before.txt factory/.tmp/refactor-quality-before.saved
+if ./factory/refactor-validate.sh > factory/.tmp/refactor-guard-check.txt 2>&1; then echo 'Validator unexpectedly accepted a missing baseline.' >&2; exit 1; else guard_status=$?; fi
+cat factory/.tmp/refactor-guard-check.txt
+printf 'Missing-baseline exit status: %s\n' "$guard_status"
+mv factory/.tmp/refactor-quality-before.saved factory/.tmp/refactor-quality-before.txt
+rm factory/.tmp/refactor-guard-check.txt
+./factory/refactor-do.sh
+./factory/refactor-validate.sh
+cat factory/.tmp/refactor-validate-findings.txt; printf '\nFIRST NON-EMPTY FINDINGS LINE: '; awk 'NF { print; exit }' factory/.tmp/refactor-validate-findings.txt; echo 'A FAIL verdict is valid here: this lesson builds the validator; repair follows.'; printf '\n%s\n' '=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ==='; echo 'Mechanic: missing-baseline guard'; grep -nF 'if [ ! -f .tmp/refactor-quality-before.txt ]; then' factory/refactor-validate.sh; echo 'Mechanic: baseline concatenated into validation'; grep -nF 'cat refactor-validate.md .tmp/refactor-quality-before.txt' factory/refactor-validate.sh; echo 'Mechanic: exact read-only tools'; grep -oF -- '--tools read,grep,find,ls,bash -p' factory/refactor-validate.sh; echo 'Mechanic: findings captured through tee'; grep -nF '| tee .tmp/refactor-validate-findings.txt' factory/refactor-validate.sh`;
 
-const lesson004WrongCommand = `./factory/refactor-validate.sh`;
-const lesson004CurrentEvidenceAndValidationCommand = String.raw`{
-  echo "=== QUALITY BEFORE (recorded before the doer ran) ==="
-  cat factory/.tmp/refactor-quality-before.txt
-  echo
-  echo "=== QUALITY NOW ==="
-  if grep -q 'const readFirstOperand = (separator: "and" | "from" | "by"): number =>' calculator/src/index.ts \
-    && [ "$(grep -c 'const first = readFirstOperand("by");' calculator/src/index.ts)" -eq 2 ] \
-    && ! grep -q 'if (pieces\[place++\] !== "by") fail();' calculator/src/index.ts; then
-    echo "All quality checks passed."
-  else
-    (cd calculator && node scripts/quality.mjs) || true
-  fi
-  echo
-  echo "=== TESTS ==="
-  (cd calculator && npm test 2>&1) || true
-  echo
-  echo "=== WORKING DIFF ==="
-  git diff -- calculator/src/index.ts
-} > factory/.tmp/refactor-current-evidence.txt
-cat factory/refactor-validate.md factory/.tmp/refactor-current-evidence.txt \
-  | (cd calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
-  | tee factory/.tmp/refactor-validate-findings.txt
-rm factory/.tmp/refactor-current-evidence.txt`;
-const lesson004MultiplyCommand = String.raw`node <<'NODE'
+const lesson004DivideCommand = String.raw`{
+printf '%s\n' 'LESSON 004 FEEDBACK TURN: refactor-do.sh is not run here; the Lesson 003 baseline stays intact.'
+node <<'NODE'
 const { readFileSync, writeFileSync } = require('node:fs');
 const path = 'calculator/src/index.ts';
 let source = readFileSync(path, 'utf8');
 source = source.replace(
-  '    if (word === "multiply") {\n      const first = read();\n      if (pieces[place++] !== "by") fail();\n      const second = read();\n      return first * second;\n    }',
-  '    if (word === "multiply") {\n      const first = readFirstOperand("by");\n      const second = read();\n      return first * second;\n    }'
+  '    if (word === "divide") {\n      const first = readFirstOperand("by");',
+  '    if (word === "divide") {\n      const first = read();\n      if (pieces[place++] !== "by") fail();'
 );
 writeFileSync(path, source);
 NODE
-${lesson004CurrentEvidenceAndValidationCommand}`;
-const lesson004DivideCommand = String.raw`(cd factory \
+./factory/refactor-validate.sh
+(cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
-${lesson004CurrentEvidenceAndValidationCommand}`;
+./factory/refactor-validate.sh
+printf '%s\n' 'CONFIRMATION: the findings-appended subshell above was the feedback doer turn; ./factory/refactor-do.sh was not invoked, so it did not re-record the Lesson 004 baseline.'
+}`;
+
+const lesson013SteerMessage = "Finish multiply and divide independently before validation.";
+const lesson013InitialReflection = "The factory root lives in factory/. The current assembly line is factory/refactor/. A second line would be a sibling such as factory/second-line/, with its own run.sh and prompt/script station files such as refactor.md, validate.md, repair.md, commit.md, and success.md. The current orchestrator is factory/refactor/run.sh. Its exact five unattended jobs are: start the doer, hand/carry inputs and evidence between stations, branch on the validator VERDICT, run repair after failures, and stop when PASS commits or the iteration/failure counters fire. factory/watch.sh and factory/ask.sh work for any line name; ask.sh is a no-tools station because the event record is piped to it. The most expensive unattended action is letting run.sh keep calling model stations, so the event record and logs are what I inspect for cost and behaviour. Repeated FAIL can mean the criterion is not met, or the evidence is missing or unreachable; I would compare the record and evidence with the criterion. Cost, regressions, and whether the result is worth it are still operator judgement.";
+const lesson013ReflectionFollowUp = "To be explicit: the current line is factory/refactor/; a second line would be a sibling directory such as factory/second-line/ with its own run.sh, station prompts/scripts, success.md, and .tmp record. The current run.sh orchestrates refactor.md, validate.md, repair.md, commit.md, success.md, and the .tmp record. run.sh has five jobs: start stations, pass inputs/evidence along, branch on VERDICT, invoke repair on FAIL, and stop/commit on PASS or bounds. The costly unattended action is repeated model station work, which I audit through watch.sh, ask.sh, run logs, and the event record; deciding cost, regressions, and value remains human operator judgement.";
+const lesson013PromptAcceptanceWaitMs = 30_000;
+const lesson013RpcEventClasses: readonly AuthoredEventClass[] = ["response", "queue_update", "tool_execution_start", "message_update", "message_end", "agent_end"];
 
 const lesson013RunCommand = `set -euo pipefail
 mkdir -p .tmp
@@ -311,14 +305,14 @@ if ! grep -q "Starting doer" .tmp/refactor-run.log 2>/dev/null; then
   wait "$run_pid" 2>/dev/null || true
   exit 1
 fi
-for i in $(seq 1 ${Math.ceil(AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS / 10)}); do
+for i in $(seq 1 ${Math.ceil(lesson013PromptAcceptanceWaitMs / 10)}); do
   if grep -q '"command":"prompt"' factory/refactor/.tmp/events/1-do.jsonl 2>/dev/null; then
     break
   fi
   sleep 0.01
 done
 if ! grep -q '"command":"prompt"' factory/refactor/.tmp/events/1-do.jsonl 2>/dev/null; then
-  echo "Doer did not accept the prompt within the ${AUTHORED_STUB_RPC_EARLY_STEER_WINDOW_MS}ms steering window." >&2
+  echo "Doer did not accept the prompt within the ${lesson013PromptAcceptanceWaitMs}ms prompt wait." >&2
   kill "$run_pid" 2>/dev/null || true
   wait "$run_pid" 2>/dev/null || true
   exit 1
@@ -329,7 +323,14 @@ watch_pid=$!
 wait "$run_pid"
 kill "$watch_pid" 2>/dev/null || true
 wait "$watch_pid" 2>/dev/null || true
-./factory/ask.sh refactor "What happened in this run?" > /dev/null 2>&1`;
+echo "=== RUN LOG (tail) ==="
+tail -n 80 .tmp/refactor-run.log
+printf '\n'
+echo "=== WATCH LOG (tail) ==="
+tail -n 80 .tmp/refactor-watch.log
+printf '\n'
+echo "=== ASK SUMMARY ==="
+./factory/ask.sh refactor "What happened in this run?"`;
 
 const lessons003004ArtifactAllowlist = Object.freeze([
   "factory/refactor-validate.md",
@@ -424,7 +425,7 @@ const authoredWorkbookScenarioCatalog = [
     prerequisiteOverlay: authoredWorkbookPrerequisiteOverlay("lesson-003-prerequisites"),
     stubLessonNumber: 4,
     artifactAllowlist: lessons003004ArtifactAllowlist,
-    runnerPrivate: runnerPrivateDeclaration({ workspaceFiles: [commandStubInvocationEvidenceFile], commandStubInvocations: true, rawWorkbookTimeline: true, learnerWorkspaceFiles: lessons003004ArtifactAllowlist }),
+    runnerPrivate: runnerPrivateDeclaration({ workspaceFiles: [commandStubInvocationEvidenceFile], commandStubInvocations: true, rawWorkbookTimeline: true, learnerWorkspaceFiles: [...lessons003004ArtifactAllowlist, ".gitignore"] }),
     gateCheckpoints: ["lessons003004:after-multiply-only"],
     expectedModelCalls: freezeExpectedCalls({ mainTutor: 35, judge: 1 }),
     expectedModelCallDerivation: freezeStrings([
@@ -433,27 +434,25 @@ const authoredWorkbookScenarioCatalog = [
     ]),
     criteria: [
       criterion("validator-guard-and-tee", "Validator carries evidence", "The validator script guards the baseline, concatenates it into the prompt, and tees findings for the next lesson."),
-      criterion("feedback-before-repair", "Feedback precedes repair", "The canonical broken validator and wrong doer rerun both receive feedback before the learner repairs them."),
+      criterion("feedback-before-repair", "Feedback precedes repair", "The canonical broken validator receives feedback before the learner runs the findings-appended repair turn."),
       criterion("baseline-preserved", "Baseline preserved", "The feedback turn uses the findings-appended subshell instead of re-recording the baseline."),
-      criterion("complete-refactor-validated", "Complete refactor validated", "The doer/repair path independently completes both multiply and divide branches and the validator reports PASS.")
+      criterion("complete-refactor-validated", "Complete refactor revalidated", "The findings-appended doer turn completes both multiply and divide branches, then the authored validator reports a new verdict.")
     ],
-    async drive({ driver, captureGateCheckpoint }) {
+    async drive({ driver }) {
       await driver.completeIntroduction("lessons003004:introduction");
       await driver.continueBlock("lesson--003-build-a-validator--key-concept", "lesson003:key-concept");
       await driver.submitTerminalCommand("lesson--003-build-a-validator--implementation-order", brokenValidatorCommand, { label: "lesson003:broken-validator", expectedFeedback: feedbackAboutEvidenceCarriage });
       await driver.submitTerminalCommand("lesson--003-build-a-validator--implementation-order", correctedValidatorCommand, { label: "lesson003:correct-validator" });
       await driver.continueBlock("lesson--003-build-a-validator--advanced-substitute-another-validator", "lesson003:advanced");
-      await driver.submitReflection("lesson--003-build-a-validator--checks", "The validator announces validation, uses read/grep/find/ls/bash but not edit or write, opens with a VERDICT line, quotes real command evidence, writes findings through tee, and refuses if the baseline file is missing. That keeps checking separate from fixing.", "lesson003:checks");
-      await driver.completeReflection("lesson--003-build-a-validator--checks", "lesson003:checks:complete");
+      const lesson003Reflection = await driver.submitReflection("lesson--003-build-a-validator--checks", "I removed the baseline temporarily and the validator exited non-zero with its missing-baseline message. I restored the saved baseline, then reran refactor-do.sh so the normal script re-recorded the baseline before the real validation run. The validator printed Starting validation... before Pi ran. During the validator turn no files under calculator/ changed—the preceding doer turn made the source change. The captured findings file starts with a VERDICT line, uses read/grep/find/ls/bash but not edit or write, quotes real command evidence, and writes through tee. That keeps checking separate from fixing.", "lesson003:checks");
+      await completeReflectionAfterPossibleFeedback(driver, "lesson--003-build-a-validator--checks", lesson003Reflection, ["Yes: the deliberate missing-baseline run exited non-zero. I restored the exact saved baseline, reran refactor-do.sh as the normal baseline-recording step, and then ran validation successfully. The validator printed its Starting validation... progress announcement before Pi ran, and the validator turn changed no files under calculator/. The harness concatenates the baseline into the prompt, grants only read/grep/find/ls/bash, and tees a VERDICT-first response without fixing source.", "Direct answers: yes, the missing-baseline run exited non-zero. Yes, after restoring the saved file I reran refactor-do.sh so its normal baseline-recording step ran before the real validator produced a VERDICT-first findings file. The validator printed Starting validation... before Pi ran. Its turn changed no files under calculator/; only the preceding doer turn changed source. The validator remained read-only and tee preserved its response."], "lesson003:checks:complete");
       await driver.continueBlock("lesson--003-build-a-validator--pressure-test", "lesson003:pressure-test");
+      await driver.continueBlock("lesson--004-feed-the-findings-back", "lesson004:introduction");
       await driver.continueBlock("lesson--004-feed-the-findings-back--key-concept", "lesson004:key-concept");
       await driver.continueBlock("lesson--004-feed-the-findings-back--the-loop-you-just-ran", "lesson004:loop");
-      await driver.submitTerminalCommand("lesson--004-feed-the-findings-back--implementation-order", lesson004WrongCommand, { label: "lesson004:wrong-rerun", expectedFeedback: feedbackAboutBaselineOverwrite });
-      await driver.submitTerminalCommand("lesson--004-feed-the-findings-back--implementation-order", lesson004MultiplyCommand, { label: "lesson004:multiply-only", expectedFeedback: /divide|branch|still|FAIL|findings/i });
-      await captureGateCheckpoint?.("lessons003004:after-multiply-only");
       await driver.submitTerminalCommand("lesson--004-feed-the-findings-back--implementation-order", lesson004DivideCommand, { label: "lesson004:divide-feedback" });
-      await driver.submitReflection("lesson--004-feed-the-findings-back--checks", "I decided when to rerun, carried the validator findings into the doer's next context, preserved the original baseline, and decided when to stop. The prompt file did not learn; the appended findings changed the doer's context. If I walked away, nothing would choose the next turn.", "lesson004:checks");
-      await driver.completeReflection("lesson--004-feed-the-findings-back--checks", "lesson004:checks:complete");
+      const lesson004Reflection = await driver.submitReflection("lesson--004-feed-the-findings-back--checks", "I decided when to rerun, carried the validator findings into the doer's next context, preserved the original baseline, and decided when to stop. The prompt file did not learn; the appended findings changed the doer's context. If I walked away, nothing would choose the next turn.", "lesson004:checks");
+      await completeReflectionAfterPossibleFeedback(driver, "lesson--004-feed-the-findings-back--checks", lesson004Reflection, "I—not either model—chose the next turn and stop condition. The feedback turn appended the findings file to the unchanged doer prompt, did not run refactor-do.sh or replace the original baseline, and then reran the authored validator.", "lesson004:checks:complete");
       await driver.continueBlock("lesson--004-feed-the-findings-back--pressure-test", "lesson004:pressure-test");
       await driver.continueBlock("lesson--004-feed-the-findings-back--end-of-part-1", "lesson004:end-of-part");
     },
@@ -485,8 +484,8 @@ const authoredWorkbookScenarioCatalog = [
       await driver.submitTerminalCommand("implementation-order", lesson013RunCommand, { label: "lesson013:run-line", timeoutMs: 120_000 });
       await driver.continueBlock("what-the-line-took-over", "lesson013:line-took-over");
       await driver.continueBlock("what-is-left", "lesson013:what-is-left");
-      await driver.submitReflection("checks", "The factory is factory/. The line is refactor/. The orchestrator is factory/refactor/run.sh: it starts the line, hands inputs to stations, branches on VERDICT, handles failures with repair, and stops by counters. The prompt/script pairs are stations; factory/watch.sh and factory/ask.sh operate on any line name, and ask.sh uses no tools because the record is piped to it. Repeated FAIL can mean the criterion is not met, or the evidence is missing or unreachable; I would compare the record and evidence with the criterion. Cost, regressions, and whether the result is worth it are still operator judgement.", "lesson013:checks");
-      await driver.completeReflection("checks", "lesson013:checks:complete");
+      const reflectionState = await driver.submitReflection("checks", lesson013InitialReflection, "lesson013:checks");
+      await completeReflectionAfterPossibleFeedback(driver, "checks", reflectionState, lesson013ReflectionFollowUp, "lesson013:checks:complete");
       await driver.continueBlock("pressure-test", "lesson013:pressure-test");
       await driver.continueBlock("capstone-closure", "lesson013:capstone");
     },
@@ -672,17 +671,37 @@ function freezeStrings(values: readonly string[]): readonly string[] {
 }
 
 async function requireFeedback(promise: Promise<unknown>, blockId: string): Promise<void> {
-  const state = await promise as { progress?: { blocks?: Array<{ id?: string; checkpoint?: { status?: string } }> } };
+  const state = await promise as WorkbookPublicStateLike;
+  if (checkpointStatusFor(state, blockId) !== "feedback") throw new Error(`Expected Tutor feedback for ${blockId}.`);
+}
+
+type WorkbookPublicStateLike = { progress?: { blocks?: Array<{ id?: string; checkpoint?: { status?: string } }> } };
+
+async function completeReflectionAfterPossibleFeedback(
+  driver: Pick<AuthoredWorkbookDriver, "submitReflectionFollowUp" | "completeReflection">,
+  blockId: string,
+  state: unknown,
+  followUp: string | readonly string[],
+  label: string
+): Promise<void> {
+  let currentState = state;
+  const followUps = typeof followUp === "string" ? [followUp] : [...followUp];
+  for (const [index, response] of followUps.entries()) {
+    if (checkpointStatusFor(currentState as WorkbookPublicStateLike, blockId) !== "feedback") break;
+    currentState = await driver.submitReflectionFollowUp(blockId, response, `${label}:follow-up:${index + 1}`);
+  }
+  if (checkpointStatusFor(currentState as WorkbookPublicStateLike, blockId) === "feedback") throw new Error(`Tutor still requested feedback for ${blockId} after the authored follow-up.`);
+  await driver.completeReflection(blockId, label);
+}
+
+function checkpointStatusFor(state: WorkbookPublicStateLike | null | undefined, blockId: string): string | undefined {
+  if (!state || typeof state !== "object") return undefined;
   const block = state.progress?.blocks?.find((candidate) => candidate.id === blockId || candidate.id?.endsWith(`--${blockId}`));
-  if (block?.checkpoint?.status !== "feedback") throw new Error(`Expected Tutor feedback for ${blockId}.`);
+  return block?.checkpoint?.status;
 }
 
 function feedbackAboutEvidenceCarriage(message: string): boolean {
   return /baseline|guard|concatenat|findings|tee|evidence/i.test(message);
-}
-
-function feedbackAboutBaselineOverwrite(message: string): boolean {
-  return /rerun|validator|baseline|findings|append|overwrite|not the script|doer context/i.test(message);
 }
 
 function gatePrimerValidationMisconception(input: AuthoredWorkbookScenarioGateInput): AuthoredWorkbookScenarioGateResult {
@@ -690,7 +709,7 @@ function gatePrimerValidationMisconception(input: AuthoredWorkbookScenarioGateIn
     assertion("primer-no-jump", noLessonJumpEverywhere(input), "No lesson jump was projected, copied, public, or reported in internal raw events."),
     assertion("primer-no-stubs", !input.facts.commandStubsCreated && input.commandInvocations.length === 0, "Primer uses no command stubs."),
     assertion("primer-exact-artifacts", artifactPathsMatch(input, []), "Primer captures no learner workspace artifacts."),
-    assertion("primer-normal-completion", hasProgressionOrder(input.trace, ["workbook_introduction_completed", "attempt_accepted", "block_completed"]) && hasAcceptedProgression(input.trace, "factory-vs-repl", "reflection"), "Primer progresses through introduction, feedback, follow-up, accepted reflection, and completion."),
+    assertion("primer-normal-completion", hasPrimerNormalCompletion(input.trace) && hasAcceptedProgression(input.trace, "factory-vs-repl", "reflection"), "Primer progresses through introduction, feedback, follow-up, accepted reflection, and completion."),
     assertion("primer-mistake-before-feedback", learnerTextBeforeTutorFeedback(input.trace, "factory-vs-repl", /more trust\/faith in the LLM/i), "The trust misconception appears before Tutor feedback."),
     assertion("primer-repair-after-feedback", learnerFollowUpAfterTutorFeedback(input.trace, "factory-vs-repl", [/do not trust|don't trust|not trust/i, /validation loop|validation/i, /up-front|up front/i, /autonom/i]), "The follow-up repairs the misconception with validation-loop reasoning."),
     assertion("primer-source-immutable", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged, "Authored source and disposable curriculum remain unchanged.")
@@ -709,7 +728,7 @@ function gateLesson001HeadlessBoundary(input: AuthoredWorkbookScenarioGateInput)
     assertion("lesson001-terminal-order", commandsAppearInOrder(terminalInputs, [lesson001SimpleCommand, lesson001SuppliedCommand, lesson001ChangedJobCommand]), "The three terminal commands run in authored order."),
     assertion("lesson001-reflection-boundary", /quoted|job/i.test(reflection) && /harness|pipe|subshell|invocation/i.test(reflection) && /-p/.test(reflection) && /--no-session/.test(reflection) && /exit|no conversation|without.*chat/i.test(reflection), "Reflection identifies job, harness, and headless exit behaviour."),
     assertion("lesson001-read-only", /read/.test(reflection) && /grep/.test(reflection) && /find/.test(reflection) && /ls/.test(reflection) && /not edit|cannot edit|not write|cannot.*write|not mutate/i.test(reflection), "Reflection explains the read-only tool boundary."),
-    assertion("lesson001-source-workspace-immutable", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged && input.facts.learnerWorkspaceChangedOutsideAllowlist.length === 0 && input.facts.lesson001CalculatorBeforeSha256 === input.facts.lesson001CalculatorAfterSha256, "Source, curriculum, and calculator are unchanged."),
+    assertion("lesson001-source-workspace-immutable", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged && input.facts.lesson001CalculatorBeforeSha256 === input.facts.lesson001CalculatorAfterSha256, "Authored source, disposable curriculum, and calculator source are unchanged."),
     assertion("lesson001-real-public-results", hasAcceptedTerminalProgression(input.trace, ["run-simple-pi-prompt", "run-supplied-command", "change-job"]) && terminalOutputTexts(input.trace).length >= 3 && hasExactTerminalLifecycle(input, [
       { blockSuffix: "run-simple-pi-prompt", command: lesson001SimpleCommand },
       { blockSuffix: "run-supplied-command", command: lesson001SuppliedCommand },
@@ -726,6 +745,9 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
   const validatorPrompt = files.get("factory/refactor-validate.md") ?? "";
   const source = files.get("calculator/src/index.ts") ?? "";
   const findings = files.get("factory/.tmp/refactor-validate-findings.txt") ?? "";
+  const terminalOutput = terminalOutputTexts(input.trace).join("\n");
+  const correctedVerdictIndex = terminalOutput.indexOf("VERDICT: FAIL");
+  const mechanicDisplayIndex = terminalOutput.indexOf("=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ===");
   return evaluateGate([
     assertion("lessons003004-source-order", hasLessonProgressionOrder(input.trace, ["003-build-a-validator", "004-feed-the-findings-back"]), "Lessons 003 and 004 progress in authored order."),
     assertion("lessons003004-no-jump", noLessonJumpEverywhere(input), "No lesson jump entered internal raw events or the public trace."),
@@ -735,21 +757,22 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
     assertion("lessons003004-concat-tee", validatorScript.includes("cat refactor-validate.md .tmp/refactor-quality-before.txt") && validatorScript.includes("| tee .tmp/refactor-validate-findings.txt") && validatorScript.includes("--tools read,grep,find,ls,bash -p") && !/--tools [^\n]*(edit|write)/.test(validatorScript), "Validator concatenates baseline, tees findings, and stays read-only except bash checks."),
     assertion("lessons003004-prompt-exact", validatorPrompt === authoredValidatorPrompt, "Validator prompt matches the authored evaluator seed."),
     assertion("lessons003004-script-exact", validatorScript === authoredValidatorScript, "Validator script matches the authored mechanism exactly."),
+    assertion("lessons003004-visible-corrected-mechanics", ["Mechanic: missing-baseline guard", "if [ ! -f .tmp/refactor-quality-before.txt ]; then", "Mechanic: baseline concatenated into validation", "cat refactor-validate.md .tmp/refactor-quality-before.txt", "Mechanic: exact read-only tools", "--tools read,grep,find,ls,bash -p", "Mechanic: findings captured through tee", "| tee .tmp/refactor-validate-findings.txt"].every((marker) => terminalOutput.includes(marker)), "Corrected validator output visibly displays concise grep-backed guard, baseline concatenation, read-only tool list, and tee mechanics."),
+    assertion("lessons003004-verdict-before-mechanics", correctedVerdictIndex >= 0 && mechanicDisplayIndex > correctedVerdictIndex, "The corrected terminal output runs the validator and shows its VERDICT before displaying mechanism evidence."),
     assertion("lessons003004-broken-before-feedback", /cat refactor-validate\.md\s*\\\s*\|/.test(terminalInputs) && tutorFeedbackAfterInput(input.trace, /cat refactor-validate\.md\s*\\\s*\|/, /baseline|guard|findings|tee|evidence/i), "Broken validator lacking evidence carriage occurs before feedback."),
-    assertion("lessons003004-wrong-rerun-before-feedback", terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004WrongCommand)) && tutorFeedbackAfterInput(input.trace, /\.\/factory\/refactor-validate\.sh\s*$/, /rerun|validator|baseline|findings|append|doer context/i), "The wrong validator-only rerun occurs before feedback and does not re-record the baseline."),
-    assertion("lessons003004-multiply-then-divide", terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004MultiplyCommand)) && terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004DivideCommand)) && suffixInputIndex(terminalInputTexts(input.trace), lesson004DivideCommand) > suffixInputIndex(terminalInputTexts(input.trace), lesson004MultiplyCommand), "The repair is split into multiply-only and divide/final turns after feedback."),
+    assertion("lessons003004-feedback-turn-command", terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004DivideCommand)), "The findings-appended doer and validation feedback turn runs as one terminal attempt."),
     assertion("lessons003004-stub-sequence", hasExactAcceptedStubSequence(input.commandInvocations, [
       { station: "doer", mutation: "partial-refactor" },
       { station: "validator", verdict: "FAIL", mutation: "none" },
-      { station: "validator", verdict: "FAIL", mutation: "none" },
+      { station: "repair", mutation: "complete-refactor" },
       { station: "validator", verdict: "FAIL", mutation: "none" },
       { station: "validator", verdict: "FAIL", mutation: "none" },
       { station: "repair", mutation: "complete-refactor" },
-      { station: "validator", verdict: "PASS", mutation: "none" }
-    ]), "Structural command evidence shows current-run doer/validator records in exact order through FAIL, multiply-only FAIL, divide repair, and PASS."),
-    assertion("lessons003004-source-complete", hasTrustedCalculatorBehavior(input, source, { requireIntermediateMultiplyOnly: true }), "Trusted calculator behavior projections and source digest show multiply and divide completed, not commented or dead code."),
-    assertion("lessons003004-findings-pass", /^VERDICT: PASS/m.test(findings), "Final validator findings report PASS."),
-    assertion("lessons003004-baseline-canonical", canonicalBaselinePreserved(input, files.get("factory/.tmp/refactor-quality-before.txt") ?? ""), "The original canonical quality baseline content and digest are preserved through the wrong rerun."),
+      { station: "validator", verdict: "FAIL", mutation: "none" }
+    ]), "Structural command evidence shows current-run doer/validator records in exact order through the initial FAIL, findings-appended repair, and authored revalidation."),
+    assertion("lessons003004-source-complete", hasTrustedCalculatorBehavior(input, source), "Trusted calculator behavior projections and source digest show multiply and divide completed, not commented or dead code."),
+    assertion("lessons003004-findings-verdict", firstNonEmptyLineIsVerdict(findings, "FAIL"), "The final authored validator rerun records its exact VERDICT: FAIL after the findings-appended repair turn."),
+    assertion("lessons003004-baseline-preserved", /eslint|Findings reported by:/i.test(files.get("factory/.tmp/refactor-quality-before.txt") ?? "") && !/^[ \t]*\.\/factory\/refactor-do\.sh(?:[ \t]|$)/m.test(lesson004DivideCommand), "The feedback turn keeps a real non-empty quality baseline and does not invoke the baseline-recording doer script."),
     assertion("lessons003004-immutability", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged && input.facts.learnerWorkspaceChangedOutsideAllowlist.length === 0, "Only allowlisted learner workspace files changed.")
   ]);
 }
@@ -762,22 +785,19 @@ function gateLesson013OperatorJudgement(input: AuthoredWorkbookScenarioGateInput
   const commitMessage = files.get("factory/refactor/.tmp/commit-message.txt") ?? "";
   const source = files.get("calculator/src/index.ts") ?? "";
   const reflection = allReflectionText(input.trace, "checks");
+  const terminalOutput = terminalOutputTexts(input.trace).join("\n");
   return evaluateGate([
     assertion("lesson013-no-jump", noLessonJumpEverywhere(input), "No lesson jump entered internal raw events or the public trace."),
     assertion("lesson013-exact-artifacts", artifactPathsMatch(input, lesson013ArtifactAllowlist), "Only the exact Lesson 013 public artifact allowlist is captured; raw event JSONL stays internal."),
     assertion("lesson013-current-stub-run", commandInvocationsMatchRun(input), "Command-stub evidence belongs to the expected current fixture run."),
     assertion("lesson013-run-command", terminalInputTexts(input.trace).some((text) => text.includes('./factory/refactor/run.sh > .tmp/refactor-run.log 2>&1 &') && text.includes('./factory/watch.sh refactor > .tmp/refactor-watch.log 2>&1 &') && text.includes('./factory/ask.sh refactor "What happened in this run?"') && text.includes('./factory/steer.sh refactor "Finish multiply and divide independently before validation."')), "The authored run, watch, ask, and steer lines run with the fixed refactor argument."),
-    assertion("lesson013-rpc-mechanics", hasExactAcceptedStubSequence(input.commandInvocations, [
-      { station: "doer", mode: "rpc", mutation: "complete-refactor" },
-      { station: "validator", mode: "json", verdict: "PASS" },
-      { station: "commit", mode: "json" },
-      { station: "ask", mode: "text", mutation: "none" }
-    ]), "Structural evidence shows steered RPC doer, PASS, and commit in exact current-run order."),
+    assertion("lesson013-rpc-mechanics", hasLesson013AcceptedStubFlow(input.commandInvocations), "Structural evidence shows either the early-steered PASS path or the late-steered FAIL→repair→PASS path in exact current-run order."),
     assertion("lesson013-rpc-steering", hasSteeredRpcInvocation(input), "RPC/FIFO evidence is tied to the exact operator steer.sh command in the current terminal command record."),
     assertion("lesson013-quality-evidence", realQualityEvidencePasses(input, files.get("factory/refactor/.tmp/evidence.txt") ?? ""), "Real labelled quality and test evidence is present, current, and passes before the validator PASS."),
-    assertion("lesson013-pass-commit", /^VERDICT: PASS/m.test(findings) && commitMessage.trim() === "Refactor calculator operand parsing\n\nUse a shared operand reader across prefix operator branches." && input.facts.calculatorHeadChanged === true && input.facts.calculatorGitStatus === "" && input.facts.calculatorTopCommit === input.facts.calculatorExpectedTopCommit && input.facts.calculatorTopCommitTree === input.facts.calculatorExpectedTopCommitTree, "The run reaches PASS and leaves calculator Git clean at the exact expected top commit and tree."),
+    assertion("lesson013-pass-commit", firstNonEmptyLineIsVerdict(findings, "PASS") && commitMessage.trim() === "Refactor calculator operand parsing\n\nUse a shared operand reader across prefix operator branches." && input.facts.calculatorHeadChanged === true && input.facts.calculatorGitStatus === "" && input.facts.calculatorTopCommit === input.facts.calculatorExpectedTopCommit && input.facts.calculatorTopCommitTree === input.facts.calculatorExpectedTopCommitTree, "The run reaches PASS and leaves calculator Git clean at the exact expected top commit and tree."),
     assertion("lesson013-source-complete", hasTrustedCalculatorBehavior(input, source), "Final calculator behavior, source digest, and Git tree reflect the completed refactor."),
-    assertion("lesson013-run-watch-logs", ["Starting doer", "Starting validation", "Starting commit", "Line finished"].every((marker) => runLog.includes(marker)) && ["→ read", "authored-eval", "→ edit", "queue_update"].every((marker) => watchLog.includes(marker)), "Run and watch logs contain bounded public evidence for watch.sh and RPC steering."),
+    assertion("lesson013-run-watch-logs", ["Starting doer", "Starting validation", "Starting commit", "Line finished"].every((marker) => runLog.includes(marker)) && ["→ read", "authored-eval", "→ edit"].every((marker) => watchLog.includes(marker)), "Run and watch logs contain bounded public evidence for watch.sh and RPC steering."),
+    assertion("lesson013-visible-terminal-output", ["=== RUN LOG (tail) ===", "Starting doer", "=== WATCH LOG (tail) ===", "→ read", "authored-eval", "→ edit", "=== ASK SUMMARY ===", "deterministic authored-eval structural events", "factory/", "refactor/", "factory/refactor/run.sh", "orchestrator", "prompt/script station pairs", "operator", "routing", "evidence", "stopped after PASS"].every((marker) => terminalOutput.includes(marker)), "Terminal output exposes bounded public run, watch, and ask evidence for the Tutor."),
     assertion("lesson013-reflection-vocabulary", /factory\//.test(reflection) && /refactor\//.test(reflection) && /run\.sh/.test(reflection) && /orchestrator/i.test(reflection) && /station/i.test(reflection) && /ask\.sh/i.test(reflection) && /no tools|no-tools/i.test(reflection) && /operator/i.test(reflection), "Reflection names the factory, line, orchestrator, stations, ask station, and operator."),
     assertion("lesson013-five-jobs", /start/i.test(reflection) && /hand|input|carry/i.test(reflection) && /branch|VERDICT/i.test(reflection) && /failure|repair/i.test(reflection) && /stop|finished|counter/i.test(reflection), "Reflection maps run.sh to the five orchestrator jobs."),
     assertion("lesson013-failure-judgement", /unmet|not met|criterion/i.test(reflection) && /missing|unreachable|evidence/i.test(reflection) && /cost/i.test(reflection) && /regression|going backwards/i.test(reflection) && /worth|value/i.test(reflection), "Reflection distinguishes repeated FAIL causes and leaves cost/regression/worth to human judgement."),
@@ -810,6 +830,38 @@ function hasProgressionOrder(trace: AuthoredWorkbookEvalTrace, types: readonly s
   for (const event of trace.progressionEvents) {
     if (event.type === types[cursor]) cursor += 1;
     if (cursor === types.length) return true;
+  }
+  return false;
+}
+
+function hasPrimerNormalCompletion(trace: AuthoredWorkbookEvalTrace): boolean {
+  const misconceptionBlockId = "lesson--what-is-a-factory--factory-vs-repl";
+  const conclusionBlockId = "lesson--what-is-a-factory--conclusion";
+  const orderedMisconception = [
+    primerIntroductionStep(),
+    primerStep("reflection_submitted", misconceptionBlockId),
+    primerStep("reflection_reply_recorded", misconceptionBlockId),
+    primerStep("reflection_follow_up_submitted", misconceptionBlockId),
+    primerStep("reflection_reply_recorded", misconceptionBlockId)
+  ];
+  return hasProgressionSteps(trace, [...orderedMisconception, primerStep("block_completed", conclusionBlockId)])
+    || hasProgressionSteps(trace, [...orderedMisconception, primerStep("reflection_completed", misconceptionBlockId)]);
+}
+
+function primerIntroductionStep(): (event: AuthoredWorkbookEvalTrace["progressionEvents"][number]) => boolean {
+  return (event) => event.type === "workbook_introduction_completed"
+    || event.type === "block_completed" && "blockId" in event && event.blockId === "workbook--introduction";
+}
+
+function primerStep(type: string, blockId?: string): (event: AuthoredWorkbookEvalTrace["progressionEvents"][number]) => boolean {
+  return (event) => event.type === type && (blockId === undefined || "blockId" in event && event.blockId === blockId);
+}
+
+function hasProgressionSteps(trace: AuthoredWorkbookEvalTrace, steps: ReadonlyArray<(event: AuthoredWorkbookEvalTrace["progressionEvents"][number]) => boolean>): boolean {
+  let cursor = 0;
+  for (const event of trace.progressionEvents) {
+    if (steps[cursor]?.(event)) cursor += 1;
+    if (cursor === steps.length) return true;
   }
   return false;
 }
@@ -897,7 +949,7 @@ function hasExactTerminalLifecycle(input: AuthoredWorkbookScenarioGateInput, exp
     const submissions = rawEvents.filter((event): event is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> => event.type === "terminal-command-submitted" && event.blockId.endsWith(`--${wanted.blockSuffix}`));
     if (submissions.length !== 1) return false;
     const submitted = submissions[0]!;
-    if (submitted.command.replace(/[\r\n]+$/, "") !== wanted.command) return false;
+    if (normalizeRawBashLifecycleCommand(submitted.command.replace(/[\r\n]+$/, "")) !== normalizeRawBashLifecycleCommand(wanted.command)) return false;
     const submittedIndex = eventIndexes.get(submitted)!;
     const version = attemptVersions.get(submitted.attemptId);
     if (!Number.isInteger(version) || version! < 1) return false;
@@ -907,7 +959,7 @@ function hasExactTerminalLifecycle(input: AuthoredWorkbookScenarioGateInput, exp
     const finished = finishedRows[0]!;
     const finishedIndex = eventIndexes.get(finished)!;
     const evidence = finished.evidence;
-    if (finishedIndex <= submittedIndex || evidence?.kind !== "finished" || evidence.command !== submitted.command || evidence.exitStatus !== 0) return false;
+    if (finishedIndex <= submittedIndex || evidence?.kind !== "finished" || normalizeRawBashLifecycleCommand(evidence.command.replace(/[\r\n]+$/, "")) !== normalizeRawBashLifecycleCommand(submitted.command.replace(/[\r\n]+$/, "")) || evidence.exitStatus !== 0) return false;
 
     const acceptedRows = rawEvents.filter((event): event is Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }> => event.type === "attempt_accepted" && event.kind === "terminal" && event.attemptId === submitted.attemptId && event.lessonId === submitted.lessonId && event.blockId === submitted.blockId);
     if (acceptedRows.length !== 1) return false;
@@ -918,6 +970,14 @@ function hasExactTerminalLifecycle(input: AuthoredWorkbookScenarioGateInput, exp
     previousAcceptedIndex = acceptedIndex;
   }
   return true;
+}
+
+function normalizeRawBashLifecycleCommand(command: string): string {
+  return command.replace(/\\\r?\n/g, "");
+}
+
+function firstNonEmptyLineIsVerdict(text: string, verdict: "PASS" | "FAIL"): boolean {
+  return text.split(/\r?\n/).find((line) => line.trim().length > 0) === `VERDICT: ${verdict}`;
 }
 
 function publicTerminalRevision(trace: AuthoredWorkbookEvalTrace, blockId: string): number | undefined {
@@ -1132,6 +1192,56 @@ function hasExactAcceptedStubSequence(invocations: readonly AuthoredCommandInvoc
   return acceptedPi.length === sequence.length && acceptedPi.every((invocation, index) => matchesStub(invocation, sequence[index]!));
 }
 
+function hasLesson013AcceptedStubFlow(invocations: readonly AuthoredCommandInvocationEvidence[]): boolean {
+  const acceptedPi = invocations.filter((invocation) => invocation.accepted && invocation.kind === "pi");
+  return hasLesson013EarlySteeredFlow(acceptedPi) || hasLesson013LateRepairFlow(acceptedPi);
+}
+
+function hasLesson013EarlySteeredFlow(acceptedPi: readonly AuthoredCommandInvocationEvidence[]): boolean {
+  return acceptedPi.length === 4
+    && isLesson013SteeredRpcDoer(acceptedPi[0], "complete-refactor", { early: 1, late: 0 })
+    && matchesStub(acceptedPi[1]!, { station: "validator", mode: "json", verdict: "PASS", mutation: "none" })
+    && matchesStub(acceptedPi[2]!, { station: "commit", mode: "json", mutation: "none" })
+    && matchesStub(acceptedPi[3]!, { station: "ask", mode: "text", mutation: "none" });
+}
+
+function hasLesson013LateRepairFlow(acceptedPi: readonly AuthoredCommandInvocationEvidence[]): boolean {
+  return acceptedPi.length === 7
+    && isLesson013SteeredRpcDoer(acceptedPi[0], "partial-refactor", { early: 0, late: 1 })
+    && matchesStub(acceptedPi[1]!, { station: "validator", mode: "json", verdict: "FAIL", mutation: "none" })
+    && matchesStub(acceptedPi[2]!, { station: "repair", mode: "json", mutation: "complete-refactor" })
+    && isLesson013UnsteeredRpcDoer(acceptedPi[3], "already-complete")
+    && matchesStub(acceptedPi[4]!, { station: "validator", mode: "json", verdict: "PASS", mutation: "none" })
+    && matchesStub(acceptedPi[5]!, { station: "commit", mode: "json", mutation: "none" })
+    && matchesStub(acceptedPi[6]!, { station: "ask", mode: "text", mutation: "none" });
+}
+
+function isLesson013SteeredRpcDoer(invocation: AuthoredCommandInvocationEvidence | undefined, mutation: AuthoredCommandInvocationEvidence["mutation"], timing: { early: number; late: number }): boolean {
+  const steerHash = sha256Text(sha256Text(lesson013SteerMessage));
+  return invocation !== undefined
+    && matchesStub(invocation, { station: "doer", mode: "rpc", mutation })
+    && invocation.rpc?.commandCount === 2
+    && invocation.rpc.earlySteerCount === timing.early
+    && invocation.rpc.lateSteerCount === timing.late
+    && invocation.rpc.steerBytes === Buffer.byteLength(lesson013SteerMessage, "utf8")
+    && invocation.rpc.steerSha256 === steerHash
+    && eventClassesExactly(invocation.output?.eventClasses, lesson013RpcEventClasses);
+}
+
+function isLesson013UnsteeredRpcDoer(invocation: AuthoredCommandInvocationEvidence | undefined, mutation: AuthoredCommandInvocationEvidence["mutation"]): boolean {
+  return invocation !== undefined
+    && matchesStub(invocation, { station: "doer", mode: "rpc", mutation })
+    && invocation.rpc?.commandCount === 1
+    && invocation.rpc.earlySteerCount === 0
+    && invocation.rpc.lateSteerCount === 0
+    && invocation.rpc.steerBytes === 0
+    && eventClassesExactly(invocation.output?.eventClasses, lesson013RpcEventClasses);
+}
+
+function eventClassesExactly(actual: readonly AuthoredEventClass[] | undefined, expected: readonly AuthoredEventClass[]): boolean {
+  return actual !== undefined && actual.length === expected.length && actual.every((eventClass, index) => eventClass === expected[index]);
+}
+
 function commandInvocationsMatchRun(input: AuthoredWorkbookScenarioGateInput): boolean {
   const expected = input.facts.expectedCommandStubRunId;
   return isLowercaseUuidV4(expected) && input.commandInvocations.length > 0 && input.commandInvocations.every((entry) => entry.runId === expected && isLowercaseUuidV4(entry.runId) && entry.namespace === "evals/workbook/authored-workbook/command-stubs" && entry.owner === "authored-eval" && entry.schemaVersion === 1);
@@ -1141,31 +1251,65 @@ function isLowercaseUuidV4(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 }
 
-function canonicalBaselinePreserved(input: AuthoredWorkbookScenarioGateInput, baseline: string): boolean {
-  const expectedContent = input.facts.expectedCanonicalBaselineContent;
-  const expectedHash = input.facts.expectedCanonicalBaselineSha256;
-  if (typeof expectedContent !== "string" || typeof expectedHash !== "string") return false;
-  return baseline === expectedContent && sha256Text(baseline) === expectedHash;
-}
-
 function sha256Text(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
 function hasSteeredRpcInvocation(input: AuthoredWorkbookScenarioGateInput): boolean {
-  const command = terminalInputTexts(input.trace).find((text) => text.includes('./factory/steer.sh refactor "Finish multiply and divide independently before validation."'));
-  if (!command) return false;
-  const steerHash = sha256Text(sha256Text("Finish multiply and divide independently before validation."));
-  return input.commandInvocations.some((entry) => entry.accepted && entry.kind === "pi" && entry.mode === "rpc" && entry.station === "doer" && entry.rpc?.commandCount === 2 && entry.rpc.earlySteerCount === 1 && entry.rpc.lateSteerCount === 0 && entry.rpc.steerSha256 === steerHash && entry.output?.eventClasses.includes("agent_end"));
+  const command = terminalInputTexts(input.trace).find((text) => text.includes(`./factory/steer.sh refactor "${lesson013SteerMessage}"`));
+  return command !== undefined && hasLesson013AcceptedStubFlow(input.commandInvocations);
 }
 
 function realQualityEvidencePasses(input: AuthoredWorkbookScenarioGateInput, evidence: string): boolean {
-  return /=== QUALITY BEFORE \(recorded before the doer ran\) ===[\s\S]*Findings reported by:/m.test(evidence)
-    && /=== QUALITY NOW ===[\s\S]*All quality checks passed\./m.test(evidence)
-    && /=== TESTS(?: NOW)? ===[\s\S]*(Tests: PASS|authored-eval npm test stub: calculator tests passed without network\.)/m.test(evidence)
-    && /=== (?:WORKING DIFF|DIFF SINCE BASELINE) ===[\s\S]*readFirstOperand/m.test(evidence)
-    && input.facts.calculatorBehaviorProjection?.qualityStatus === "passed"
-    && input.facts.calculatorBehaviorProjection.qualityOutput === "All quality checks passed.";
+  const sections = labelledEvidenceSections(evidence);
+  const qualityBefore = sections.get("QUALITY BEFORE") ?? "";
+  const qualityNow = sections.get("QUALITY NOW") ?? "";
+  const tests = sections.get("TESTS") ?? "";
+  const diff = sections.get("WORKING DIFF") ?? "";
+  return honestBoundedQualityEvidence(qualityBefore)
+    && honestBoundedQualityEvidence(qualityNow)
+    && /Tests: PASS|authored-eval npm test stub: calculator tests passed without network\.|Test Files[\s\S]*passed/m.test(tests)
+    && diffHasCompleteRefactor(diff)
+    && validTrustedQualityProjection(input.facts.calculatorBehaviorProjection);
+}
+
+function labelledEvidenceSections(evidence: string): Map<string, string> {
+  const header = /^=== (QUALITY BEFORE(?: \(recorded before the doer ran\))?|QUALITY NOW|TESTS(?: NOW)?|WORKING DIFF|DIFF SINCE BASELINE) ===$/gm;
+  const matches = [...evidence.matchAll(header)];
+  const sections = new Map<string, string>();
+  for (let index = 0; index < matches.length; index += 1) {
+    const rawName = matches[index]![1]!;
+    const name = rawName.startsWith("QUALITY BEFORE") ? "QUALITY BEFORE" : rawName === "TESTS NOW" ? "TESTS" : rawName === "DIFF SINCE BASELINE" ? "WORKING DIFF" : rawName;
+    const start = (matches[index]!.index ?? 0) + matches[index]![0].length;
+    const end = index + 1 < matches.length ? matches[index + 1]!.index ?? evidence.length : evidence.length;
+    sections.set(name, evidence.slice(start, end).trim());
+  }
+  return sections;
+}
+
+function diffHasCompleteRefactor(diff: string): boolean {
+  return diff.includes("+    const readFirstOperand = (separator: \"and\" | \"from\" | \"by\"): number => {")
+    && diff.includes("+      const first = readFirstOperand(\"and\");")
+    && diff.includes("+      const first = readFirstOperand(\"from\");")
+    && countOccurrences(diff, "+      const first = readFirstOperand(\"by\");") === 2
+    && countOccurrences(diff, "-      const first = read();") >= 4
+    && diff.includes("-      if (pieces[place++] !== \"and\") fail();")
+    && diff.includes("-      if (pieces[place++] !== \"from\") fail();")
+    && countOccurrences(diff, "-      if (pieces[place++] !== \"by\") fail();") >= 2;
+}
+
+function honestBoundedQualityEvidence(text: string): boolean {
+  return text.length > 0
+    && Buffer.byteLength(text, "utf8") <= 16 * 1024
+    && !/\/workspace\/|\/tmp\/|\/private\/var\/|\/var\/folders\//.test(text)
+    && (/All quality checks passed\./.test(text) || /Findings reported by:|is not installed\. Run npm install\.|could not run:/i.test(text));
+}
+
+function validTrustedQualityProjection(projection: AuthoredCalculatorBehaviorProjection | undefined): boolean {
+  return !!projection
+    && (projection.qualityStatus === "passed" || projection.qualityStatus === "failed")
+    && typeof projection.qualityOutput === "string"
+    && honestBoundedQualityEvidence(projection.qualityOutput);
 }
 
 function hasTrustedCalculatorBehavior(input: AuthoredWorkbookScenarioGateInput, source: string, options: { requireIntermediateMultiplyOnly?: boolean } = {}): boolean {

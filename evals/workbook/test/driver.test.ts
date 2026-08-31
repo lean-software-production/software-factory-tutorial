@@ -37,6 +37,69 @@ function stateWithTerminal(phase: "running" | "checking" | "feedback" | "complet
   };
 }
 
+function stateAfterTerminalAdvanced(message = "Accepted."): PublicWorkbookState {
+  const nextBlockId = "lesson--001-public-contract--next";
+  return {
+    ...stateWithTerminal("complete", message, 2),
+    progress: {
+      ...stateWithTerminal("complete", message, 2).progress,
+      activeBlockId: nextBlockId,
+      blocks: [
+        {
+          id: blockId,
+          type: "terminal-practice",
+          ready: true,
+          active: false,
+          completed: true,
+          verified: true,
+          emerged: true,
+          workAccepted: true,
+          terminal: { phase: "complete", message },
+          terminalRevision: 2
+        },
+        {
+          id: nextBlockId,
+          type: "narrative",
+          ready: true,
+          active: true,
+          completed: false,
+          verified: false,
+          emerged: true
+        }
+      ]
+    },
+    currentBlock: { id: nextBlockId, anchorId: nextBlockId, origin: "lesson", kind: "narrative", title: "Next", lessonId: "001-public-contract", declaredId: "next" },
+    orderedBlocks: [
+      { id: blockId, anchorId: blockId, origin: "lesson", kind: "terminal-practice", title: "Terminal", lessonId: "001-public-contract", declaredId: "terminal" },
+      { id: nextBlockId, anchorId: nextBlockId, origin: "lesson", kind: "narrative", title: "Next", lessonId: "001-public-contract", declaredId: "next" }
+    ]
+  };
+}
+
+function stateWithStructural(activeBlockId: string, completed = false): PublicWorkbookState {
+  const nextBlockId = "lesson--004-public-contract--key-concept";
+  return {
+    ...stateWithTerminal("running"),
+    progress: {
+      ...stateWithTerminal("running").progress,
+      activeLessonId: "004-public-contract",
+      activeBlockId: completed ? nextBlockId : activeBlockId,
+      canComplete: completed ? { blockId: nextBlockId, eligible: true } : { blockId: activeBlockId, eligible: true },
+      blocks: [
+        { id: activeBlockId, type: "lesson-preamble", ready: false, active: !completed, completed, verified: completed, emerged: true, workAccepted: true },
+        { id: nextBlockId, type: "narrative", ready: completed, active: completed, completed: false, verified: false, emerged: true, workAccepted: false }
+      ]
+    },
+    currentBlock: completed
+      ? { id: nextBlockId, anchorId: nextBlockId, origin: "lesson", kind: "narrative", title: "Key concept", lessonId: "004-public-contract", declaredId: "key-concept" }
+      : { id: activeBlockId, anchorId: activeBlockId, origin: "structural", kind: "lesson-preamble", title: "Lesson", lessonId: "004-public-contract" },
+    orderedBlocks: [
+      { id: activeBlockId, anchorId: activeBlockId, origin: "structural", kind: "lesson-preamble", title: "Lesson", lessonId: "004-public-contract" },
+      { id: nextBlockId, anchorId: nextBlockId, origin: "lesson", kind: "narrative", title: "Key concept", lessonId: "004-public-contract", declaredId: "key-concept" }
+    ]
+  };
+}
+
 function stateWithEditor(revision: number, status: "reviewing" | "feedback" | "accepted", feedback?: string): PublicWorkbookState {
   return {
     ...stateWithTerminal("running"),
@@ -264,6 +327,27 @@ describe("authored workbook public driver", () => {
     await expect(driver.continueBlock("checks")).rejects.toThrow(/Ambiguous workbook block id 'checks'/);
   });
 
+  it("continues active structural lesson preambles through the complete-block endpoint", async () => {
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("structural-lesson-preamble");
+    const structuralBlockId = "lesson--004-public-contract";
+    const posted: Array<{ path: string; body: unknown }> = [];
+    const states = [stateWithStructural(structuralBlockId), stateWithStructural(structuralBlockId, true)];
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      fetch: async (input, init) => {
+        if (init?.method === "POST") posted.push({ path: new URL(String(input)).pathname, body: JSON.parse(String(init.body)) });
+        return new Response(JSON.stringify(states.shift() ?? stateWithStructural(structuralBlockId, true)), { status: 200 });
+      }
+    });
+
+    const state = await driver.continueBlock(structuralBlockId, "lesson004:introduction");
+
+    expect(state.progress.activeBlockId).toBe("lesson--004-public-contract--key-concept");
+    expect(posted).toEqual([{ path: "/api/workbook/complete-block", body: { blockId: structuralBlockId } }]);
+    expect(trace.publicStates.map((entry) => entry.label)).toEqual(["lesson004:introduction:active", "lesson004:introduction"]);
+  });
+
   it("parses public terminal frames, drops socket extras, and supports expected feedback followed by a corrected command", async () => {
     const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-feedback-correction");
     const states = [stateWithTerminal("complete", "At rest."), stateWithTerminal("checking"), stateWithTerminal("feedback", "Try again with the visible filename."), stateWithTerminal("feedback", "Try again with the visible filename."), stateWithTerminal("checking"), stateWithTerminal("complete", "Accepted.")];
@@ -292,6 +376,25 @@ describe("authored workbook public driver", () => {
     ]);
     expect(JSON.stringify(trace.terminalTranscript)).not.toContain("socket-extra-secret");
     expect(trace.publicStates.map((entry) => entry.label)).toEqual(["terminal:bad:baseline", "terminal:bad:reviewed:1", "terminal:bad:reviewed:2", "terminal:corrected:reviewed:1", "terminal:corrected:reviewed:2"]);
+  });
+
+  it("does not treat a canonical-looking terminal feedback message without a failure row as retryable", async () => {
+    const transient = "Review is temporarily unavailable. Please run the command again in a moment.";
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-transient-no-failure-row");
+    const states = [stateWithTerminal("checking", undefined, 0), stateWithTerminal("feedback", transient, 1)];
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      WebSocket: ReplayWebSocket as any,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async (_input, init) => {
+        if (init?.method === "POST") throw new Error("retry should not be called");
+        return new Response(JSON.stringify(states.shift() ?? stateWithTerminal("feedback", transient, 1)), { status: 200 });
+      }
+    });
+
+    await expect(driver.submitTerminalCommand(blockId, "bad command", { complete: false })).rejects.toThrow(`Terminal attempt for ${blockId} received tutor feedback: ${transient}`);
   });
 
   it("applies private terminal activation only to socket bytes and redacts it from trace/state", async () => {
@@ -454,6 +557,53 @@ describe("authored workbook public driver", () => {
     });
 
     await expect(driver.submitTerminalCommand(blockId, "good command")).rejects.toThrow("Timed out waiting for workbook HTTP response.");
+  });
+
+  it("treats a 409 terminal completion race as success only after the same accepted block advanced", async () => {
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-complete-409-applied");
+    const states = [stateWithTerminal("running"), stateWithTerminal("complete", "Accepted."), stateAfterTerminalAdvanced("Accepted.")];
+    const posted: unknown[] = [];
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      WebSocket: ReplayWebSocket as any,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async (_input, init) => {
+        if (init?.method === "POST") {
+          posted.push(JSON.parse(String(init.body)));
+          return new Response(JSON.stringify({ error: "private active-block race diagnostic" }), { status: 409 });
+        }
+        return new Response(JSON.stringify(states.shift() ?? stateAfterTerminalAdvanced("Accepted.")), { status: 200 });
+      }
+    });
+
+    const continued = await driver.submitTerminalCommand(blockId, "good command");
+
+    expect(continued.progress.activeBlockId).toBe("lesson--001-public-contract--next");
+    expect(posted).toEqual([{ blockId, action: "continue" }]);
+    expect(JSON.stringify(trace.publicStates)).not.toContain("private active-block race diagnostic");
+    expect(trace.publicStates.map((entry) => entry.label)).toContain(`terminal:${blockId}:complete:conflict-state`);
+  });
+
+  it("does not swallow a genuine 409 terminal completion conflict", async () => {
+    const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-complete-409-conflict");
+    const states = [stateWithTerminal("running"), stateWithTerminal("complete", "Accepted."), stateWithTerminal("feedback", "Still active feedback.", 2)];
+    const driver = new AuthoredWorkbookDriver({
+      serverUrl: "http://workbook.invalid",
+      trace,
+      WebSocket: ReplayWebSocket as any,
+      terminalTimeoutMs: 100,
+      terminalReviewTimeoutMs: 1_000,
+      fetch: async (_input, init) => {
+        if (init?.method === "POST") return new Response(JSON.stringify({ error: "private body" }), { status: 409, statusText: "private status" });
+        return new Response(JSON.stringify(states.shift() ?? stateWithTerminal("feedback", "Still active feedback.", 2)), { status: 200 });
+      }
+    });
+
+    const pending = driver.submitTerminalCommand(blockId, "good command");
+    await expect(pending).rejects.toThrow("POST /api/workbook/events failed with HTTP 409.");
+    await expect(pending).rejects.not.toThrow(/private body|private status/);
   });
 
   it("accepts identical repeated terminal feedback when the public revision advances", async () => {

@@ -1,0 +1,10 @@
+.worktrees
+.git
+node_modules
+**/node_modules
+.tmp
+**/.tmp
+tutorial/.tutorial
+evals/workbook/reports
+tutorial-engine/reports
+reports

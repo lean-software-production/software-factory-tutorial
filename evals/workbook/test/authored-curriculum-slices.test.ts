@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
-import { chmod, cp, link, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, cp, link, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkbook } from "../../../tutorial-engine/src/workbook/load.js";
@@ -12,6 +12,7 @@ import { createAuthoredCurriculumSliceWorkspace, sha256File, type AuthoredCurric
 const execFileAsync = promisify(execFile);
 const tempRoots: string[] = [];
 const sourceTutorialRoot = resolve(import.meta.dirname, "../../../tutorial");
+const sourceCopyExcludedEntryNames = new Set([".tutorial", ".tmp", ".git", "node_modules", ".DS_Store"]);
 const twoLessonKeyConceptSlice: AuthoredCurriculumSliceSelection = {
   parts: [{
     id: "validation-loop",
@@ -63,11 +64,16 @@ function frontMatterBody(text: string): string {
   return lines.slice(closing + 1).join("\n");
 }
 
-async function makeSourceCopy(): Promise<string> {
+async function makeSourceCopy(sourceRoot = sourceTutorialRoot): Promise<string> {
   const root = await mkdtemp(resolve(tmpdir(), "authored-source-copy-"));
   tempRoots.push(root);
   const tutorial = resolve(root, "tutorial");
-  await cp(sourceTutorialRoot, tutorial, { recursive: true });
+  const resolvedSourceRoot = resolve(sourceRoot);
+  await cp(resolvedSourceRoot, tutorial, {
+    recursive: true,
+    dereference: false,
+    filter: (source) => source === resolvedSourceRoot || !sourceCopyExcludedEntryNames.has(basename(source))
+  });
   return tutorial;
 }
 
@@ -119,6 +125,40 @@ async function expectRejectedError(promise: Promise<unknown>): Promise<Error> {
 }
 
 describe("authored curriculum slice materialization", () => {
+  it("makeSourceCopy excludes generated/private entries while retaining authored files and symlinks", async () => {
+    const sourceParent = await mkdtemp(resolve(tmpdir(), "authored-source-fixture-"));
+    tempRoots.push(sourceParent);
+    const source = resolve(sourceParent, "source");
+    await mkdir(resolve(source, "lessons"), { recursive: true });
+    await writeFile(resolve(source, "lessons/authored-sentinel.md"), "copy me\n");
+    await symlink("authored-sentinel.md", resolve(source, "lessons/authored-link.md"));
+
+    const excludedSentinels = [
+      ".tutorial/session/state.json",
+      ".tmp/cache.txt",
+      ".git/config",
+      "node_modules/pkg/index.js",
+      ".DS_Store",
+      "lessons/.tutorial/session/state.json",
+      "lessons/.tmp/cache.txt",
+      "lessons/.git/config",
+      "lessons/node_modules/pkg/index.js",
+      "lessons/.DS_Store"
+    ];
+    for (const relativePath of excludedSentinels) {
+      await mkdir(dirname(resolve(source, relativePath)), { recursive: true });
+      await writeFile(resolve(source, relativePath), `do not copy ${relativePath}\n`);
+    }
+
+    const copy = await makeSourceCopy(source);
+
+    await expect(readFile(resolve(copy, "lessons/authored-sentinel.md"), "utf8")).resolves.toBe("copy me\n");
+    expect((await lstat(resolve(copy, "lessons/authored-link.md"))).isSymbolicLink()).toBe(true);
+    for (const relativePath of excludedSentinels) {
+      await expect(stat(resolve(copy, relativePath))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
   it("materializes the Tetris primer with its exact workspace fixture and practice blocks", async () => {
     const workspace = await createAuthoredCurriculumSliceWorkspace({
       tempParent: tmpdir(),

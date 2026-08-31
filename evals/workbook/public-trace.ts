@@ -5,6 +5,12 @@ import type {
   AuthoredWorkbookEvalArtifactSnapshot,
   AuthoredWorkbookEvalCitation,
   AuthoredWorkbookEvalEditorEntry,
+  AuthoredWorkbookEvalJudgeBlockReference,
+  AuthoredWorkbookEvalJudgeCheckpoint,
+  AuthoredWorkbookEvalJudgePublicState,
+  AuthoredWorkbookEvalJudgeRecordedPublicState,
+  AuthoredWorkbookEvalJudgeTimelineRecord,
+  AuthoredWorkbookEvalJudgeTrace,
   AuthoredWorkbookEvalProgressionEvent,
   AuthoredWorkbookEvalRecordedPublicState,
   AuthoredWorkbookEvalReflectionEntry,
@@ -24,6 +30,9 @@ export type {
   AuthoredWorkbookEvalArtifactSnapshot,
   AuthoredWorkbookEvalCitation,
   AuthoredWorkbookEvalEditorEntry,
+  AuthoredWorkbookEvalJudgePublicState,
+  AuthoredWorkbookEvalJudgeRecordedPublicState,
+  AuthoredWorkbookEvalJudgeTrace,
   AuthoredWorkbookEvalProgressionEvent,
   AuthoredWorkbookEvalRecordedPublicState,
   AuthoredWorkbookEvalReflectionEntry,
@@ -87,6 +96,29 @@ export function projectAuthoredWorkbookEvalTrace(trace: AuthoredWorkbookEvalSess
   });
 }
 
+export function projectAuthoredWorkbookEvalTraceForJudge(trace: AuthoredWorkbookEvalTrace): AuthoredWorkbookEvalJudgeTrace {
+  const safeTrace = copyAuthoredWorkbookEvalTrace(trace);
+  const seenTimelineRecords = new Set<string>();
+  const publicStates: AuthoredWorkbookEvalJudgeRecordedPublicState[] = [];
+  let previousProjectedState = "";
+  for (const entry of safeTrace.publicStates) {
+    const state = projectPublicWorkbookStateForJudge(entry.state, seenTimelineRecords);
+    const serialized = JSON.stringify(state);
+    if (serialized === previousProjectedState) continue;
+    publicStates.push({ label: entry.label, state });
+    previousProjectedState = serialized;
+  }
+  return {
+    scenarioId: safeTrace.scenarioId,
+    publicStates,
+    terminalTranscript: safeTrace.terminalTranscript,
+    reflections: safeTrace.reflections,
+    editors: safeTrace.editors,
+    progressionEvents: safeTrace.progressionEvents,
+    artifacts: safeTrace.artifacts
+  };
+}
+
 export function copyAuthoredWorkbookEvalTrace(value: unknown): AuthoredWorkbookEvalTrace {
   if (!isPlainRecord(value)) throw new Error("Invalid authored workbook public eval trace.");
   assertNoKnownLessonJumpFields(value);
@@ -113,6 +145,11 @@ export function projectAuthoredWorkbookProgressionEvent(record: unknown): Author
       return { type: "workbook_introduction_completed" };
     case "attempt_accepted":
       return typeof record.lessonId === "string" && typeof record.blockId === "string" && isPublicAttemptKind(record.kind) ? { type: "attempt_accepted", lessonId: record.lessonId, blockId: record.blockId, kind: record.kind } : undefined;
+    case "reflection_submitted":
+    case "reflection_follow_up_submitted":
+    case "reflection_reply_recorded":
+    case "reflection_completed":
+      return typeof record.lessonId === "string" && typeof record.blockId === "string" ? { type: record.type, lessonId: record.lessonId, blockId: record.blockId } : undefined;
     case "block_completed": {
       if (typeof record.blockId !== "string") return undefined;
       const lessonId = record.lessonId;
@@ -126,6 +163,14 @@ export function projectAuthoredWorkbookProgressionEvent(record: unknown): Author
 
 export function enumerateAuthoredWorkbookEvalCitations(trace: AuthoredWorkbookEvalTrace): AuthoredWorkbookEvalCitation[] {
   const safeTrace = copyAuthoredWorkbookEvalTrace(trace);
+  return enumerateTraceCitations(safeTrace);
+}
+
+export function enumerateAuthoredWorkbookEvalJudgeCitations(trace: AuthoredWorkbookEvalJudgeTrace): AuthoredWorkbookEvalCitation[] {
+  return enumerateTraceCitations(trace);
+}
+
+function enumerateTraceCitations(trace: Omit<AuthoredWorkbookEvalTrace | AuthoredWorkbookEvalJudgeTrace, "scenarioId">): AuthoredWorkbookEvalCitation[] {
   const citations: AuthoredWorkbookEvalCitation[] = [];
   const seen = new Set<string>();
   const push = (kind: AuthoredWorkbookEvalCitation["kind"], ref: AuthoredWorkbookEvalCitation["ref"], keyValue: unknown) => {
@@ -134,13 +179,54 @@ export function enumerateAuthoredWorkbookEvalCitations(trace: AuthoredWorkbookEv
     seen.add(key);
     citations.push({ id: citations.length, kind, ref } as AuthoredWorkbookEvalCitation);
   };
-  safeTrace.publicStates.forEach((value, index) => push("publicState", { index, label: value.label }, value.state));
-  safeTrace.terminalTranscript.forEach((value, index) => push("terminalTranscript", { index, blockId: value.blockId }, value));
-  safeTrace.reflections.forEach((value, index) => push("reflection", { index, blockId: value.blockId }, value));
-  safeTrace.editors.forEach((value, index) => push("editor", { index, blockId: value.blockId, revision: value.revision }, value));
-  safeTrace.progressionEvents.forEach((value, index) => push("progressionEvent", { index, type: value.type }, value));
-  safeTrace.artifacts.forEach((value, index) => push("artifact", { index, path: value.path }, value));
+  trace.publicStates.forEach((value, index) => push("publicState", { index, label: value.label }, value.state));
+  trace.terminalTranscript.forEach((value, index) => push("terminalTranscript", { index, blockId: value.blockId }, value));
+  trace.reflections.forEach((value, index) => push("reflection", { index, blockId: value.blockId }, value));
+  trace.editors.forEach((value, index) => push("editor", { index, blockId: value.blockId, revision: value.revision }, value));
+  trace.progressionEvents.forEach((value, index) => push("progressionEvent", { index, type: value.type }, value));
+  trace.artifacts.forEach((value, index) => push("artifact", { index, path: value.path }, value));
   return citations;
+}
+
+function projectPublicWorkbookStateForJudge(state: PublicWorkbookState, seenTimelineRecords: Set<string>): AuthoredWorkbookEvalJudgePublicState {
+  return omitUndefined({
+    workbook: { title: state.workbook.title },
+    introductionComplete: state.introductionComplete,
+    active: omitUndefined({ lessonId: state.progress.activeLessonId, blockId: state.progress.activeBlockId, anchorId: state.progress.activeAnchorId }),
+    completedLessons: [...state.progress.completedLessons],
+    completedBlocks: optionalStrings(state.progress.completedBlocks),
+    workAcceptedBlocks: optionalStrings(state.progress.workAcceptedBlocks),
+    readyBlocks: optionalStrings(state.progress.readyBlocks),
+    revealedBlockIds: optionalStrings(state.revealedBlockIds),
+    renderedBlockIds: optionalStrings(state.renderedBlockIds),
+    readyBlockIds: optionalStrings(state.readyBlockIds),
+    currentBlock: state.currentBlock === undefined ? undefined : projectBlockReference(state.currentBlock),
+    completion: state.completion === undefined ? undefined : omitUndefined({ complete: true as const, anchorId: state.completion.anchorId, summary: textMetadata(state.completion.summary) }),
+    chapters: state.chapters.map((chapter) => omitUndefined({
+      id: chapter.id,
+      title: chapter.title,
+      partId: chapter.partId,
+      part: chapter.part,
+      partNumber: chapter.partNumber,
+      lessonNumber: chapter.lessonNumber,
+      lesson: chapter.lesson === undefined ? undefined : {
+        id: chapter.lesson.id,
+        title: chapter.lesson.title,
+        durationMinutes: chapter.lesson.durationMinutes,
+        outcomes: [...chapter.lesson.outcomes],
+        blockCount: chapter.lesson.blocks.length,
+        blocks: chapter.lesson.blocks.map(projectBlockReference).filter((block): block is AuthoredWorkbookEvalJudgeBlockReference => block !== undefined)
+      }
+    })),
+    orderedBlocks: state.orderedBlocks?.map(projectBlockReference).filter((block): block is AuthoredWorkbookEvalJudgeBlockReference => block !== undefined),
+    progressBlocks: state.progress.blocks.map(projectProgressBlockForJudge),
+    reflectionBlocks: Object.keys(state.progress.reflections).sort(),
+    reflectionConversations: Object.entries(state.progress.reflectionConversations).sort(([left], [right]) => left.localeCompare(right)).map(([blockId, turns]) => ({ blockId, turns: turns.length, roles: turns.map((turn) => turn.role) })),
+    canComplete: state.progress.canComplete === undefined ? undefined : omitUndefined({ blockId: state.progress.canComplete.blockId, eligible: state.progress.canComplete.eligible, reason: state.progress.canComplete.reason }),
+    workbookComplete: state.progress.workbookComplete,
+    adapter: omitUndefined({ modelBackedHelp: state.adapter.modelBackedHelp, note: textMetadata(state.adapter.note) }),
+    timelineNewRecords: state.timeline.map((record) => projectTimelineRecordForJudge(record, seenTimelineRecords)).filter((record): record is AuthoredWorkbookEvalJudgeTimelineRecord => record !== undefined)
+  });
 }
 
 export async function snapshotAuthoredWorkbookEvalArtifacts(workspaceRoot: string, options: AuthoredWorkbookEvalArtifactOptions): Promise<AuthoredWorkbookEvalArtifactSnapshot[]> {
@@ -180,6 +266,94 @@ export async function snapshotAuthoredWorkbookEvalArtifacts(workspaceRoot: strin
     seen.add(stableRelativePath);
   }
   return snapshots.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function projectBlockReference(value: unknown): AuthoredWorkbookEvalJudgeBlockReference | undefined {
+  if (!isPlainRecord(value) || typeof value.id !== "string") return undefined;
+  return omitUndefined({
+    id: value.id,
+    anchorId: typeof value.anchorId === "string" ? value.anchorId : undefined,
+    origin: typeof value.origin === "string" ? value.origin : undefined,
+    kind: typeof value.kind === "string" ? value.kind : undefined,
+    type: typeof value.type === "string" ? value.type : undefined,
+    title: typeof value.title === "string" ? value.title : undefined,
+    lessonId: typeof value.lessonId === "string" ? value.lessonId : undefined,
+    declaredId: typeof value.declaredId === "string" ? value.declaredId : undefined,
+    order: typeof value.order === "number" ? value.order : undefined,
+    path: typeof value.path === "string" ? value.path : undefined,
+    workAccepted: typeof value.workAccepted === "boolean" ? value.workAccepted : undefined
+  });
+}
+
+function projectProgressBlockForJudge(block: PublicWorkbookState["progress"]["blocks"][number]): AuthoredWorkbookEvalJudgeTrace["publicStates"][number]["state"]["progressBlocks"][number] {
+  return omitUndefined({
+    id: block.id,
+    type: block.type,
+    anchorId: block.anchorId,
+    origin: block.origin,
+    kind: block.kind,
+    title: block.title,
+    ready: block.ready,
+    active: block.active,
+    completed: block.completed,
+    completedAt: block.completedAt,
+    verified: block.verified,
+    emerged: block.emerged,
+    workAccepted: block.workAccepted,
+    checkpoint: projectCheckpointForJudge(block.checkpoint),
+    terminal: block.terminal,
+    terminalRevision: block.terminalRevision,
+    terminalSnapshot: textMetadata(block.terminalSnapshot?.transcript),
+    revision: block.revision,
+    editorStatus: block.editorStatus
+  });
+}
+
+function projectCheckpointForJudge(checkpoint: PublicWorkbookState["progress"]["blocks"][number]["checkpoint"]): AuthoredWorkbookEvalJudgeCheckpoint | undefined {
+  if (checkpoint === undefined) return undefined;
+  return omitUndefined({
+    status: checkpoint.status,
+    feedback: textMetadata(checkpoint.feedback),
+    successMessage: textMetadata(checkpoint.successMessage),
+    summary: textMetadata(checkpoint.summary),
+    evidence: checkpoint.evidence === undefined ? undefined : omitUndefined({
+      kind: checkpoint.evidence.kind,
+      text: textMetadata(checkpoint.evidence.text),
+      conversationTurns: checkpoint.evidence.conversation?.length
+    })
+  });
+}
+
+function projectTimelineRecordForJudge(record: PublicWorkbookState["timeline"][number], seen: Set<string>): AuthoredWorkbookEvalJudgeTimelineRecord | undefined {
+  const key = `${record.type}:${record.id}:${record.sequence}`;
+  if (seen.has(key)) return undefined;
+  seen.add(key);
+  if (record.type === "message") return omitUndefined({
+    type: record.type,
+    id: record.id,
+    sequence: record.sequence,
+    lessonId: record.lessonId,
+    blockId: record.blockId,
+    role: record.role,
+    source: record.source,
+    presentation: record.presentation,
+    blockInView: record.blockInView,
+    text: textMetadata(record.text)!
+  });
+  return undefined;
+}
+
+function optionalStrings(value: string[] | undefined): string[] | undefined {
+  return value === undefined ? undefined : [...value];
+}
+
+function textMetadata(text: string | undefined): AuthoredWorkbookEvalJudgeTrace["publicStates"][number]["state"]["adapter"]["note"] | undefined {
+  return text === undefined ? undefined : { bytes: Buffer.byteLength(text, "utf8") };
+}
+
+function omitUndefined<T extends Record<string, unknown>>(value: T): T {
+  for (const key of Object.keys(value)) if (value[key] === undefined) delete value[key];
+  return value;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

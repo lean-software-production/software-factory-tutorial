@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PublicWorkbookState } from "../../../tutorial-engine/src/workbook/public-contract.js";
 import type { WorkbookTimelineRecord } from "../../../tutorial-engine/src/workbook/timeline.js";
-import { createEmptyAuthoredWorkbookEvalSessionTrace, projectAuthoredWorkbookEvalTrace } from "../public-trace.js";
+import { createEmptyAuthoredWorkbookEvalSessionTrace, projectAuthoredWorkbookEvalTrace, projectAuthoredWorkbookEvalTraceForJudge } from "../public-trace.js";
 import {
   AUTHORED_WORKBOOK_JUDGE_PROMPT_MAX_BYTES,
   AUTHORED_WORKBOOK_JUDGE_STDOUT_MAX_BYTES,
@@ -196,10 +196,113 @@ describe("authored workbook judge prompt and result validation", () => {
 
     expect(prompt).toContain("Return JSON only");
     expect(prompt).toContain("Visible artifact can mention terminal lifecycle");
-    expect(prompt).toContain("\"value\"");
+    expect(prompt).not.toContain("\"value\"");
+    expect(prompt).toContain("Trace citation index");
     expect(prompt).toContain("\"public-contract\"");
-    expect(prompt).toContain("JSON-looking \\\"tutor\\\":");
+    expect(prompt).toContain("terminalTranscript");
     expectNoPrivate(prompt);
+  });
+
+  it("compacts repeated complete public states below the Judge prompt bound", () => {
+    const trace = projectedTrace();
+    const bulk = "state-bulk-private-field-should-not-reach-judge ".repeat(2_000);
+    trace.publicStates = Array.from({ length: 40 }, (_, index) => ({
+      label: `poll-${index}`,
+      state: {
+        ...publicState(`visible timeline ${index % 2}`),
+        chapters: [{ id: "chapter", title: "Chapter", lessonNumber: 1, lesson: { id: lessonId, title: "Lesson", dek: "dek", introduction: bulk, durationMinutes: 1, outcomes: ["outcome"], blocks: [{ id: "block", type: "terminal-practice", title: "Practice", markdown: bulk }] } }],
+        timeline: []
+      } as PublicWorkbookState
+    }));
+
+    expect(Buffer.byteLength(JSON.stringify(trace), "utf8")).toBeGreaterThan(AUTHORED_WORKBOOK_JUDGE_PROMPT_MAX_BYTES);
+    const judgeTrace = projectAuthoredWorkbookEvalTraceForJudge(trace);
+    const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
+
+    expect(judgeTrace.publicStates).toHaveLength(1);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(AUTHORED_WORKBOOK_JUDGE_PROMPT_MAX_BYTES);
+    expect(prompt).not.toContain("state-bulk-private-field-should-not-reach-judge");
+  });
+
+  it("keeps exact structural public state evidence in the Judge trace", () => {
+    const trace = projectedTrace();
+    trace.publicStates = [{
+      label: "terminal-complete",
+      state: {
+        ...publicState("timeline prose is represented structurally"),
+        progress: {
+          ...publicState().progress,
+          activeBlockId: "terminal-block",
+          completedBlocks: ["terminal-block"],
+          workAcceptedBlocks: ["terminal-block"],
+          readyBlocks: ["reflection-block"],
+          canComplete: { blockId: "terminal-block", eligible: true },
+          blocks: [{ id: "terminal-block", type: "terminal-practice", title: "Run the line", ready: true, active: false, completed: true, verified: true, emerged: true, workAccepted: true, checkpoint: { status: "accepted", successMessage: "accepted in public state", evidence: { kind: "terminal", text: "bulky evidence text omitted from state projection" } }, terminal: { phase: "complete", message: "Terminal accepted exactly." }, terminalRevision: 3, terminalSnapshot: { transcript: "snapshot transcript is summarized" } }]
+        },
+        completion: { complete: true, anchorId: "terminal-block", summary: "summary text summarized" }
+      } as PublicWorkbookState
+    }];
+
+    const judgeTrace = projectAuthoredWorkbookEvalTraceForJudge(trace);
+    expect(judgeTrace.publicStates[0]?.state).toMatchObject({
+      active: { lessonId, blockId: "terminal-block" },
+      completedBlocks: ["terminal-block"],
+      workAcceptedBlocks: ["terminal-block"],
+      readyBlocks: ["reflection-block"],
+      progressBlocks: [{ id: "terminal-block", completed: true, verified: true, workAccepted: true, terminal: { phase: "complete", message: "Terminal accepted exactly." }, checkpoint: { status: "accepted", successMessage: { bytes: Buffer.byteLength("accepted in public state", "utf8") }, evidence: { kind: "terminal", text: { bytes: Buffer.byteLength("bulky evidence text omitted from state projection", "utf8") } } } }],
+      completion: { complete: true, anchorId: "terminal-block", summary: { bytes: Buffer.byteLength("summary text summarized", "utf8") } }
+    });
+    expect(JSON.stringify(judgeTrace)).not.toContain("snapshot transcript is summarized");
+  });
+
+  it("verifies citations against the compacted Judge trace the prompt exposes", () => {
+    const trace = projectedTrace();
+    trace.publicStates = [
+      { label: "first", state: { ...publicState("same structural state"), timeline: [], chapters: [{ id: "chapter", title: "Chapter", lessonNumber: 1, lesson: { id: lessonId, title: "Lesson", dek: "dek", introduction: "first bulk", durationMinutes: 1, outcomes: [], blocks: [] } }] } as PublicWorkbookState },
+      { label: "second", state: { ...publicState("same structural state"), timeline: [], chapters: [{ id: "chapter", title: "Chapter", lessonNumber: 1, lesson: { id: lessonId, title: "Lesson", dek: "dek", introduction: "second bulk", durationMinutes: 1, outcomes: [], blocks: [] } }] } as PublicWorkbookState }
+    ];
+    trace.terminalTranscript = [{ blockId: "terminal", direction: "output", text: "visible output" }];
+    trace.reflections = [];
+    trace.editors = [];
+    trace.progressionEvents = [];
+    trace.artifacts = [];
+
+    const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
+    const citations = JSON.parse(prompt.match(/Trace citation index[\s\S]*?\n(\[[\s\S]*?\])\n\nStructural deterministic gate summary/)?.[1] ?? "[]") as Array<{ id: number; kind: string }>;
+
+    expect(citations.map((citation) => [citation.id, citation.kind])).toEqual([[0, "publicState"], [1, "terminalTranscript"]]);
+    expect(() => verifyAuthoredWorkbookJudgeResult({ criteria: { "public-contract": { score: 2, citations: [0], rationale: "state" }, "learner-progress": { score: 2, citations: [1], rationale: "terminal" } }, summary: "ok" }, scenario(), trace)).not.toThrow();
+    expect(() => verifyAuthoredWorkbookJudgeResult({ criteria: { "public-contract": { score: 2, citations: [2], rationale: "old full-trace citation" }, "learner-progress": { score: 2, citations: [1], rationale: "terminal" } }, summary: "bad" }, scenario(), trace)).toThrow(/unknown trace citation/i);
+  });
+
+  it("rejects lesson jump events before Judge-specific projection in every event-bearing form", () => {
+    const trace = projectedTrace();
+    expect(() => buildAuthoredWorkbookJudgePrompt(scenario(), { ...trace, progressionEvents: [{ type: "lesson_jump_started", lessonId: "jump" } as any] }, gate())).toThrow(/lesson_jump_started/);
+    expect(() => buildAuthoredWorkbookJudgePrompt(scenario(), { ...trace, internalEvents: [{ type: "lesson_jump_started", lessonId: "jump" }] } as any, gate())).toThrow(/lesson_jump_started/);
+    expect(() => buildAuthoredWorkbookJudgePrompt(scenario(), { ...trace, events: [{ type: "lesson_jump_started", lessonId: "jump" }] } as any, gate())).toThrow(/lesson_jump_started/);
+    expect(() => buildAuthoredWorkbookJudgePrompt(scenario(), { ...trace, publicStates: [{ label: "raw", state: { ...publicState(), timeline: [{ type: "lesson_jump_started", id: "raw", sequence: 1, at: "public-at", lessonId, blockId: "block" } as any] } as PublicWorkbookState }] }, gate())).toThrow(/Invalid public state trace entry/);
+  });
+
+  it("omits private and bulky browser-public state fields from Judge and report inputs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "authored-judge-state-private-"));
+    tempRoots.push(root);
+    const trace = projectedTrace();
+    trace.publicStates = [{
+      label: "private-bulk",
+      state: {
+        ...publicState("timeline-private-secret"),
+        adapter: { note: "adapter-note-private-secret", modelBackedHelp: true } as any,
+        chapters: [{ id: "chapter", title: "Chapter", lessonNumber: 1, lesson: { id: lessonId, title: "Lesson", dek: "dek-private-secret", introduction: "lesson-introduction-private-secret", durationMinutes: 1, outcomes: [], blocks: [{ id: "block", type: "narrative", title: "Narrative", markdown: "block-markdown-private-secret" }] } }]
+      } as PublicWorkbookState
+    }];
+    const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
+    const objects = createAuthoredWorkbookEvalReportBundleObjects({ runId: "private-state", scenario: scenario(), trace, gate: gate(), judgeInput: prompt, judge: judgeResult(), modelIdentities: modelIdentities() });
+    const promptTrace = JSON.parse(prompt.match(/Allowlisted Judge-specific structural public workbook trace[\s\S]*?:\n(\{[\s\S]*?\})\n\nTrace citation index/)?.[1] ?? "{}");
+    const serialized = JSON.stringify({ prompt, trace: objects.traceEnvelope.trace });
+
+    expect(promptTrace).toEqual(objects.traceEnvelope.trace);
+    for (const secret of ["timeline-private-secret", "adapter-note-private-secret", "dek-private-secret", "lesson-introduction-private-secret", "block-markdown-private-secret"]) expect(serialized).not.toContain(secret);
+    expect(serialized).toContain("modelBackedHelp");
   });
 
   it("projects deterministic gates without assertion names or details", () => {

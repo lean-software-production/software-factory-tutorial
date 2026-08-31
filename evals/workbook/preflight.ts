@@ -809,6 +809,7 @@ function terminalReadinessShell(stubs: AuthoredWorkbookEvalCommandStubFixture): 
     "test -f /workspace/calculator/package.json",
     "test -d /workspace/factory/.tmp",
     exactStubLayoutCheck(stubs),
+    "command -v jq >/dev/null",
     stubs.containerShellActivation,
     `test \"$(command -v pi)\" = ${shellQuote(stubs.containerBinPath + "/pi")}`,
     `cd /workspace/calculator && printf %s ${shellQuote(validatorPrompt)} | pi --no-session --tools read,grep,find,ls,bash -p >/tmp/authored-preflight-validator.out`,

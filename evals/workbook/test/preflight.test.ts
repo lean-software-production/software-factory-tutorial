@@ -687,8 +687,10 @@ describe("authored workbook eval preflight", () => {
       ["exec", "-i", "workbook-terminal-preflight-test", "sh"],
       ["exec", "-i", "workbook-terminal-preflight-test", "sh"]
     ]);
+    expect(calls[0]?.stdin).toContain("command -v jq >/dev/null");
     expect(calls[0]?.stdin).toContain("AUTHORED_EVAL_COMMAND_STUB_CONFIG");
     expect(calls[0]?.stdin).toContain(stubFixture().commandStubs.containerConfigPath);
+    expect(calls[0]?.stdin!.indexOf("command -v jq >/dev/null")).toBeLessThan(calls[0]?.stdin!.indexOf("| pi --no-session") ?? 0);
     expect(calls[1]?.stdin).toContain("ModelRuntime");
     for (const call of calls) {
       expect(call.args.join(" ")).not.toContain("AUTHORED_EVAL_COMMAND_STUB_CONFIG");

@@ -1,12 +1,15 @@
 ---
 type: terminal-practice
-outcome: "Write the validator prompt and script, then run a doer turn followed by a validator turn and inspect the verdict format."
+outcome: >-
+  Write the validator prompt and script, then run a doer turn followed by a validator turn and
+  inspect the verdict format.
 tutor: |-
   Guide the learner through writing factory/refactor-validate.md and factory/refactor-validate.sh,
   then running chmod, ./factory/refactor-do.sh, and ./factory/refactor-validate.sh. Success means
   the validator refuses when .tmp/refactor-quality-before.txt is absent, runs from calculator with
-  read/grep/find/ls/bash and no edit/write tools, tees findings to
-  .tmp/refactor-validate-findings.txt, and starts with VERDICT: PASS or VERDICT: FAIL. Accept
+  read/grep/find/ls/bash and no edit/write tools, and tees its response to
+  .tmp/refactor-validate-findings.txt. The response file's first non-empty line must be exactly
+  VERDICT: PASS or VERDICT: FAIL; the terminal may print Starting validation... before it. Accept
   validator wording that quotes actual evidence and preserves the required first line. Clue toward
   the baseline guard and tee if the next lesson would have no findings to carry. The point is to
   separate the station that changes files from the station that judges evidence.
@@ -55,8 +58,10 @@ order:
    ```
 
    The validator gets `bash` so it can run the quality check, and no `edit` or `write` so it cannot
-   repair what it finds. It stops rather than invent a comparison when there is no baseline. Its
-   findings go to the terminal and to a file, because the next lesson needs them.
+   repair what it finds. It stops rather than invent a comparison when there is no baseline. The
+   terminal announces `Starting validation...` before Pi runs. The pipeline then sends Pi's response
+   to the terminal and to `.tmp/refactor-validate-findings.txt`; that file's first non-empty line is
+   the `VERDICT`, and the next lesson reads it.
 
    Notice that the script concatenates the baseline onto the prompt rather than telling the
    validator

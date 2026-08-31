@@ -64,11 +64,14 @@ function setup(options: { initialActiveBlock?: ActiveObservedTerminalBlock } = {
 }
 
 describe("workbook terminal image", () => {
-  it("installs Git without recommendations and isolates its ambient configuration", async () => {
+  it("installs Git and jq without recommendations and isolates its ambient configuration", async () => {
     const dockerfile = await readFile(resolve("docker/workbook-terminal.Dockerfile"), "utf8");
 
-    expect(dockerfile).toMatch(/apt-get install\s+--yes\s+--no-install-recommends\s+git/);
+    expect(dockerfile).toMatch(/apt-get install\s+--yes\s+--no-install-recommends\s+git\s+jq/);
     expect(dockerfile).toContain("rm -rf /var/lib/apt/lists/*");
+    expect(dockerfile).toContain("COPY package.json package-lock.json ./");
+    expect(dockerfile).toContain("npm ci --workspace=tutorial/workspaces/refactor-line/calculator --include=dev --ignore-scripts");
+    expect(dockerfile).toContain("ln -s /opt/workbook/node_modules /workspace/node_modules");
     expect(dockerfile).toMatch(/ENV GIT_CONFIG_NOSYSTEM=1/);
     expect(dockerfile).toMatch(/ENV GIT_CONFIG_GLOBAL=\/dev\/null/);
     expect(dockerfile).toMatch(/ENV GIT_TERMINAL_PROMPT=0/);

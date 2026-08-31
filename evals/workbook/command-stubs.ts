@@ -966,7 +966,7 @@ function parseLabelledSections(prompt) {
 }
 function sectionMap(prompt) { return parseLabelledSections(prompt).sections; }
 function currentQualityFromSource(source) {
-  return sourceState(source).complete ? QUALITY_PASS : "Findings reported by: eslint.\n- " + DUPLICATION_FINDING;
+  return sourceState(source).complete ? "No duplicated operator branch parser finding remains in deterministic source inspection." : "Findings reported by: eslint.\n- " + DUPLICATION_FINDING;
 }
 function diffHasCompleteRefactor(diff) {
   return diff.includes("+    const readFirstOperand = (separator: \"and\" | \"from\" | \"by\"): number => {")
@@ -983,28 +983,60 @@ function nonPassingQualityBaseline(text) {
     || text.includes(DUPLICATION_FINDING)
     || /duplicated operator branch parser|no duplication|duplication/i.test(text) && !text.includes(QUALITY_PASS);
 }
+function honestQualityEvidence(text) {
+  return text.length > 0
+    && byteLength(text) <= 16 * 1024
+    && !/\/workspace\/|\/tmp\/|\/private\/var\/|\/var\/folders\//.test(text)
+    && (text.includes(QUALITY_PASS) || /Findings reported by:|is not installed\. Run npm install\.|could not run:/i.test(text));
+}
 function labelledEvidence(prompt) {
   const parsed = parseLabelledSections(prompt);
   const qualityBefore = parsed.sections.get("QUALITY BEFORE") || "";
   const qualityNow = parsed.sections.get("QUALITY NOW") || "";
   const tests = parsed.sections.get("TESTS") || "";
   const diff = parsed.sections.get("WORKING DIFF") || "";
-  const currentQuality = currentQualityFromSource(readSource());
   const testsPassed = tests.includes(DETERMINISTIC_NPM_MARKER);
-  const qualityPassed = qualityNow.includes(QUALITY_PASS);
-  const qualityCorroborates = qualityNow.includes(currentQuality);
-  const baselineReduction = nonPassingQualityBaseline(qualityBefore) && !qualityBefore.includes(QUALITY_PASS) && qualityBefore !== qualityNow;
+  const qualityHonest = honestQualityEvidence(qualityNow);
+  const baselinePresent = qualityBefore.length > 0;
   const diffComplete = diffHasCompleteRefactor(diff);
-  return { sections: parsed.sections, qualityBefore, qualityNow, tests, diff, testsPassed, qualityPassed, qualityCorroborates, baselineReduction, diffComplete, complete: parsed.complete, present: parsed.present, valid: parsed.valid, invalidReason: parsed.invalidReason };
+  return { sections: parsed.sections, qualityBefore, qualityNow, tests, diff, testsPassed, qualityHonest, baselinePresent, diffComplete, complete: parsed.complete, present: parsed.present, valid: parsed.valid, invalidReason: parsed.invalidReason };
 }
 function validatorVerdict(prompt) {
   const sourceText = readSource();
   const source = sourceState(sourceText);
   if (!source.complete) return "FAIL";
   const evidence = labelledEvidence(prompt);
-  const currentQuality = currentQualityFromSource(sourceText);
-  const baselineOk = evidence.qualityBefore.includes(QUALITY_PASS) || evidence.baselineReduction;
-  return evidence.complete && evidence.testsPassed && evidence.qualityPassed && evidence.qualityCorroborates && baselineOk && evidence.diffComplete ? "PASS" : "FAIL";
+  return evidence.complete && evidence.testsPassed && evidence.qualityHonest && evidence.baselinePresent && evidence.diffComplete ? "PASS" : "FAIL";
+}
+function baselineSummaryFromPrompt(prompt) {
+  if (prompt.includes(DUPLICATION_FINDING)) return "calculator/src/index.ts duplicated operator branch parser";
+  if (/Findings reported by:/i.test(prompt)) return "quality findings were supplied in the raw lesson-stage baseline";
+  return "no recorded quality finding was visible in the prompt";
+}
+function currentQualitySummary(sourceText) {
+  const quality = currentQualityFromSource(sourceText);
+  return quality.includes(DUPLICATION_FINDING) ? "calculator/src/index.ts duplicated operator branch parser" : quality.trim();
+}
+function lessonStageValidatorText(prompt) {
+  const sourceText = readSource();
+  const source = sourceState(sourceText);
+  const criterion = source.partial
+    ? "the refactor is partial; one or more operator branches still duplicate parser work"
+    : source.complete
+      ? "the source now has the shared operand reader across all operator branches"
+      : "the expected duplication-reduction edit is incomplete";
+  return "VERDICT: FAIL\n\nEVIDENCE:\n"
+    + "- Validator ran read-only over the calculator and compared the current quality result with the recorded baseline supplied in the prompt.\n"
+    + "- Recorded baseline reports: " + baselineSummaryFromPrompt(prompt) + ".\n"
+    + "- Current quality still reports: " + currentQualitySummary(sourceText) + ".\n"
+    + "- Criterion not yet met: " + criterion + ".\n";
+}
+function askSummaryText() {
+  return "The supplied record contains deterministic authored-eval structural events with zero recorded cost.\n\n"
+    + "From the supplied record: factory/ is the factory root, refactor/ is the assembly line, and factory/refactor/run.sh is the orchestrator. "
+    + "The line uses prompt/script station pairs for doer, validator, repair, and commit work, while ask.sh is a no-tools station that answers from the event record. "
+    + "run.sh handles routing between stations, carries TESTS/QUALITY/DIFF evidence into validation, branches on VERDICT to repair or commit, and stopped after PASS or its failure/iteration bounds. "
+    + "The operator starts the line, watches the bounded record, asks what happened, and keeps judgement over cost, regressions, and whether the result is worth it.\n";
 }
 function stationText(station, prompt) {
   if (station === "doer") {
@@ -1016,16 +1048,18 @@ function stationText(station, prompt) {
     return { text: "Stub repair completed the deterministic calculator refactoring.\n", mutation: plan.mutation, sourcePlan: plan };
   }
   if (station === "validator") {
+    const parsed = parseLabelledSections(prompt);
+    if (!parsed.present) return { text: lessonStageValidatorText(prompt), verdict: "FAIL", mutation: "none" };
     const verdict = validatorVerdict(prompt);
     const source = sourceState();
     const evidence = labelledEvidence(prompt);
     const text = verdict === "PASS"
-      ? "VERDICT: PASS\n\nFINDINGS:\n- [PASS] passes its tests: labelled TESTS evidence contains the exact deterministic npm marker.\n- [PASS] reveals intention: src/index.ts has a named readFirstOperand helper.\n- [PASS] no duplication: all four operator branches use the shared operand reader.\n- [PASS] fewest elements: WORKING DIFF demonstrates the helper and all four branch replacements.\n"
-      : "VERDICT: FAIL\n\nFINDINGS:\n- [FAIL] passes its tests: exact labelled TESTS evidence and '" + QUALITY_PASS + "' are required before a final pass.\n- [" + (source.helper ? "PASS" : "FAIL") + "] reveals intention: the calculator source is inspected directly for the helper seam.\n- [FAIL] no duplication: " + (source.partial ? "one or more operator branches still duplicate parser work." : "the expected duplication-reduction edit is incomplete.") + "\n- [FAIL] fewest elements: " + (evidence.complete ? "labelled evidence is present but tests, quality, source, and diff do not corroborate one another." : "complete QUALITY/TESTS/DIFF evidence has not been handed to the validator.") + "\n";
+      ? "VERDICT: PASS\n\nFINDINGS:\n- [PASS] passes its tests: labelled TESTS evidence contains the exact deterministic npm marker.\n- [PASS] reveals intention: src/index.ts has a named readFirstOperand helper.\n- [PASS] no duplication: all four operator branches use the shared operand reader.\n- [PASS] fewest elements: complete WORKING DIFF demonstrates the helper and all four branch replacements; the quality section is present as evidence, but global quality need not pass.\n"
+      : "VERDICT: FAIL\n\nFINDINGS:\n- [" + (evidence.testsPassed ? "PASS" : "FAIL") + "] passes its tests: exact labelled TESTS evidence must contain the deterministic npm marker.\n- [" + (source.helper ? "PASS" : "FAIL") + "] reveals intention: the calculator source is inspected directly for the helper seam.\n- [FAIL] no duplication: " + (source.partial ? "one or more operator branches still duplicate parser work." : "the expected duplication-reduction edit is incomplete.") + "\n- [FAIL] fewest elements: " + (evidence.complete ? "complete source, honest quality evidence, and complete diff must all be present; quality findings do not by themselves block PASS." : "complete labelled QUALITY/TESTS/DIFF evidence has not been handed to the validator.") + "\n";
     return { text, verdict, mutation: "none" };
   }
   if (station === "commit") return { text: "Refactor calculator operand parsing\n\nUse a shared operand reader across prefix operator branches.\n", mutation: "none" };
-  return { text: "The supplied record contains deterministic authored-eval structural events with zero recorded cost.\n", mutation: "none" };
+  return { text: askSummaryText(), mutation: "none" };
 }
 function assistantMessage(text) { return { role: "assistant", content: [{ type: "text", text }] }; }
 function toolArgs(toolName) {

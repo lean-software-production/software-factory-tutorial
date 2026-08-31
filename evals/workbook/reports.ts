@@ -3,7 +3,7 @@ import { constants, type Stats } from "node:fs";
 import { chmod, copyFile, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, rmdir, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { AUTHORED_WORKBOOK_EVAL_MARKERS, type AuthoredWorkbookEvalMarkers } from "./types.js";
-import { copyAuthoredWorkbookEvalTrace, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
+import { copyAuthoredWorkbookEvalTrace, projectAuthoredWorkbookEvalTraceForJudge, type AuthoredWorkbookEvalJudgeTrace, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
 import {
   authoredWorkbookJudgeVerdict,
   buildAuthoredWorkbookJudgePrompt,
@@ -70,7 +70,7 @@ export interface AuthoredWorkbookEvalModelIdentities {
 }
 
 export interface AuthoredWorkbookTraceEnvelope extends AuthoredWorkbookEvalMarkers {
-  trace: AuthoredWorkbookEvalTrace;
+  trace: AuthoredWorkbookEvalJudgeTrace;
 }
 
 export interface AuthoredWorkbookJudgeInputEnvelope extends AuthoredWorkbookEvalMarkers {
@@ -409,6 +409,7 @@ export function createAuthoredWorkbookEvalReportBundleObjects(options: CreateAut
   const repetition = validRepetition(options.repetition ?? 1);
   const scenario = copyAuthoredWorkbookEvalScenarioPublicDescriptor(options.scenario);
   const trace = copyAuthoredWorkbookEvalTrace(options.trace);
+  const judgeTrace = projectAuthoredWorkbookEvalTraceForJudge(trace);
   const publicGate = projectAuthoredWorkbookGateForPublicReport(options.gate);
   if (!publicGate.passed) throw new Error("Cannot create an authored workbook judge report when the deterministic gate failed.");
   const expectedJudgeInput = buildAuthoredWorkbookJudgePrompt(scenario, trace, options.gate);
@@ -416,7 +417,7 @@ export function createAuthoredWorkbookEvalReportBundleObjects(options: CreateAut
   const judge = verifyAuthoredWorkbookJudgeResult(options.judge, scenario, trace);
   const verdict = authoredWorkbookJudgeVerdict(judge);
   const modelIdentities = copyAuthoredWorkbookEvalModelIdentities(options.modelIdentities);
-  const traceEnvelope: AuthoredWorkbookTraceEnvelope = deepFreeze({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, trace });
+  const traceEnvelope: AuthoredWorkbookTraceEnvelope = deepFreeze({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, trace: judgeTrace });
   const judgeInputEnvelope: AuthoredWorkbookJudgeInputEnvelope = deepFreeze({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, scenario: scenario.id, traceFile: AUTHORED_WORKBOOK_REPORT_FILENAMES.trace, prompt: expectedJudgeInput });
   const judgeEnvelope: AuthoredWorkbookJudgeEnvelope = deepFreeze({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, judge, verdict });
   const report: AuthoredWorkbookReportEnvelope = deepFreeze({

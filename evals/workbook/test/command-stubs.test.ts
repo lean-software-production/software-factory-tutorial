@@ -85,7 +85,7 @@ Findings reported by: eslint.
 - calculator/src/index.ts duplicated operator branch parser
 
 === QUALITY NOW ===
-All quality checks passed.
+Findings reported by: eslint, knip.
 
 === TESTS ===
 ${testOutput}
@@ -360,11 +360,7 @@ text_of() { jq -r 'select(.type=="agent_end") | .messages[] | select(.role=="ass
 for iteration in 1 2; do
   echo "=== Iteration $iteration of 2 ==="
   echo "Recording quality baseline..."
-  if grep -q 'readFirstOperand("by")' ../../calculator/src/index.ts && [ "$(grep -c 'readFirstOperand("by")' ../../calculator/src/index.ts)" -eq 2 ]; then
-    printf 'All quality checks passed.\n' > .tmp/quality-before.txt
-  else
-    printf 'Findings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n' > .tmp/quality-before.txt
-  fi
+  printf 'Findings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n' > .tmp/quality-before.txt
   echo "Starting doer..."
   cat refactor.md success.md | (cd ../../calculator && pi --no-session --mode json --tools read,edit,write,grep,find,ls -p) > ".tmp/events/$iteration-do.jsonl"
   echo "Gathering evidence..."
@@ -373,11 +369,7 @@ for iteration in 1 2; do
     cat .tmp/quality-before.txt
     echo
     echo "=== QUALITY NOW ==="
-    if grep -q 'readFirstOperand("by")' ../../calculator/src/index.ts && [ "$(grep -c 'readFirstOperand("by")' ../../calculator/src/index.ts)" -eq 2 ]; then
-      echo "All quality checks passed."
-    else
-      printf 'Findings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n'
-    fi
+    printf 'Findings reported by: eslint, knip.\n'
     echo
     echo "=== TESTS ==="
     (cd ../../calculator && npm test 2>&1)
@@ -502,7 +494,7 @@ exit 0
     await run("pi", ["--no-session", "--tools", "read,edit,write,grep,find,ls", "-p"], { cwd: calculator, env, input: "VERDICT: FAIL repair.md" });
     const tests = await run("npm", ["test"], { cwd: calculator, env });
     const diff = await run(git, ["diff", "--", "."], { cwd: calculator, env });
-    const prefix = `validate.md\n=== QUALITY BEFORE ===\nFindings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n\n=== QUALITY NOW ===\nAll quality checks passed.\n\n=== TESTS ===\n${tests.stdout}\n=== WORKING DIFF ===\n`;
+    const prefix = `validate.md\n=== QUALITY BEFORE ===\nFindings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n\n=== QUALITY NOW ===\nFindings reported by: eslint, knip.\n\n=== TESTS ===\n${tests.stdout}\n=== WORKING DIFF ===\n`;
 
     const fabricated = await run("pi", ["--no-session", "--mode", "json", "--tools", "read,grep,find,ls", "-p"], { cwd: calculator, env, input: `${prefix}diff --git a/calculator/src/index.ts b/calculator/src/index.ts\n+ shallow readFirstOperand marker only\n` });
     expect(fabricated.stdout).toContain("VERDICT: FAIL");
@@ -523,7 +515,7 @@ exit 0
       "    if (word === \"multiply\") {\n      const first = read();\n      if (pieces[place++] !== \"by\") fail();\n      const second = read();\n      return first * second;\n    }",
       "    if (word === \"multiply\") {\n      const first = readFirstOperand(\"by\");\n      const second = read();\n      return first * second;\n    }"
     ));
-    const fakeCompleteEvidence = `=== QUALITY BEFORE ===\nFindings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n\n=== QUALITY NOW ===\nAll quality checks passed.\n\n=== TESTS ===\nauthored-eval npm test stub: calculator tests passed without network.\n\n=== WORKING DIFF ===\n+    const readFirstOperand = (separator: \"and\" | \"from\" | \"by\"): number => {\n+      const first = readFirstOperand(\"and\");\n+      const first = readFirstOperand(\"from\");\n+      const first = readFirstOperand(\"by\");\n+      const first = readFirstOperand(\"by\");\n-      const first = read();\n-      const first = read();\n-      const first = read();\n-      const first = read();\n-      if (pieces[place++] !== \"and\") fail();\n-      if (pieces[place++] !== \"from\") fail();\n-      if (pieces[place++] !== \"by\") fail();\n-      if (pieces[place++] !== \"by\") fail();\n`;
+    const fakeCompleteEvidence = `=== QUALITY BEFORE ===\nFindings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n\n=== QUALITY NOW ===\nFindings reported by: eslint, knip.\n\n=== TESTS ===\nauthored-eval npm test stub: calculator tests passed without network.\n\n=== WORKING DIFF ===\n+    const readFirstOperand = (separator: \"and\" | \"from\" | \"by\"): number => {\n+      const first = readFirstOperand(\"and\");\n+      const first = readFirstOperand(\"from\");\n+      const first = readFirstOperand(\"by\");\n+      const first = readFirstOperand(\"by\");\n-      const first = read();\n-      const first = read();\n-      const first = read();\n-      const first = read();\n-      if (pieces[place++] !== \"and\") fail();\n-      if (pieces[place++] !== \"from\") fail();\n-      if (pieces[place++] !== \"by\") fail();\n-      if (pieces[place++] !== \"by\") fail();\n`;
     const result = await run("pi", ["--no-session", "--tools", "read,grep,find,ls", "-p"], { cwd: calculator, env, input: fakeCompleteEvidence });
     expect(result.stdout).toMatch(/^VERDICT: FAIL/);
   });
@@ -636,11 +628,53 @@ exit 0
 
     const baseline = "Findings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n";
     const stillPartial = await run("pi", ["--no-session", "--tools", "read,grep,find,ls,bash", "-p"], { cwd: calculator, env: handle.hostEnv, input: baseline });
-    expect(stillPartial.stdout).toMatch(/^VERDICT: FAIL/);
+    expect(stillPartial.stdout).toBe(`VERDICT: FAIL
+
+EVIDENCE:
+- Validator ran read-only over the calculator and compared the current quality result with the recorded baseline supplied in the prompt.
+- Recorded baseline reports: calculator/src/index.ts duplicated operator branch parser.
+- Current quality still reports: calculator/src/index.ts duplicated operator branch parser.
+- Criterion not yet met: the refactor is partial; one or more operator branches still duplicate parser work.
+`);
+    expect(stillPartial.stdout).not.toMatch(/exact labelled TESTS|complete QUALITY\/TESTS\/DIFF|current PASS/i);
     const repair = await run("pi", ["--no-session", "--tools", "read,edit,write,grep,find,ls", "-p"], { cwd: calculator, env: handle.hostEnv, input: stillPartial.stdout });
     expect(repair).toMatchObject({ code: 0 });
     const repaired = await run("pi", ["--no-session", "--tools", "read,grep,find,ls,bash", "-p"], { cwd: calculator, env: handle.hostEnv, input: completeLabelledEvidence("authored-eval npm test stub: calculator tests passed without network.\n") });
     expect(repaired.stdout).toMatch(/^VERDICT: PASS/);
+  });
+
+  it("preserves strict labelled validator feedback when labelled evidence sections are present", async () => {
+    const workspace = await tempWorkspace();
+    const handle = await createAuthoredCommandStubs({ lessonNumber: 9, workspaceRoot: workspace });
+    const calculator = resolve(workspace, "calculator");
+    await run("pi", ["--no-session", "--tools", "read,edit,write,grep,find,ls", "-p"], { cwd: calculator, env: handle.hostEnv, input: "partial" });
+
+    const labelledButIncomplete = await run("pi", ["--no-session", "--tools", "read,grep,find,ls", "-p"], { cwd: calculator, env: handle.hostEnv, input: "=== QUALITY NOW ===\nAll quality checks passed.\n" });
+    expect(labelledButIncomplete.stdout).toMatch(/^VERDICT: FAIL/);
+    expect(labelledButIncomplete.stdout).toContain("exact labelled TESTS evidence");
+    expect(labelledButIncomplete.stdout).toContain("complete labelled QUALITY/TESTS/DIFF evidence");
+  });
+
+  it("answers Lesson 013 ask prompts with a concrete no-tools mechanism summary", async () => {
+    const workspace = await tempWorkspace();
+    const handle = await createAuthoredCommandStubs({ lessonNumber: 13, workspaceRoot: workspace });
+    const ask = await run("pi", ["--no-session", "--no-tools", "-p"], {
+      cwd: resolve(workspace, "factory"),
+      env: handle.hostEnv,
+      input: [
+        "What happened in this run?",
+        "Below is the record of the most recent run of the 'refactor' assembly line.",
+        "{\"type\":\"tool_execution_start\",\"toolName\":\"read\",\"args\":{\"path\":\"src/index.ts\"}}",
+        "{\"type\":\"message_end\",\"message\":{\"content\":[{\"text\":\"VERDICT: PASS\"}]}}"
+      ].join("\n")
+    });
+
+    expect(ask.code).toBe(0);
+    expect(ask.stdout).toContain("deterministic authored-eval structural events");
+    for (const term of ["factory/", "refactor/", "factory/refactor/run.sh", "orchestrator", "prompt/script station pairs", "operator", "routing", "evidence", "stopped after PASS"]) {
+      expect(ask.stdout).toContain(term);
+    }
+    expect(ask.stdout).not.toMatch(/AUTHORED_EVAL_COMMAND_STUB_CONFIG|authored-eval-command-stubs\/container-config|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|Finish multiply and divide independently/);
   });
 
   it("requires one non-empty labelled evidence block in canonical order for later lessons", async () => {
@@ -658,8 +692,8 @@ exit 0
     await run("pi", ["--no-session", "--tools", "read,edit,write,grep,find,ls", "-p"], { cwd: calculator, env, input: "VERDICT: FAIL repair.md" });
     const tests = await run("npm", ["test"], { cwd: calculator, env });
     const diff = await run(git, ["diff", "--", "."], { cwd: calculator, env });
-    const good = `=== QUALITY BEFORE ===\nFindings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n\n=== QUALITY NOW ===\nAll quality checks passed.\n\n=== TESTS ===\n${tests.stdout}\n=== WORKING DIFF ===\n${diff.stdout}`;
-    const reordered = `=== QUALITY NOW ===\nAll quality checks passed.\n\n=== QUALITY BEFORE ===\nFindings reported by: eslint.\n\n=== TESTS ===\n${tests.stdout}\n=== WORKING DIFF ===\n${diff.stdout}`;
+    const good = `=== QUALITY BEFORE ===\nFindings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n\n=== QUALITY NOW ===\nFindings reported by: eslint, knip.\n\n=== TESTS ===\n${tests.stdout}\n=== WORKING DIFF ===\n${diff.stdout}`;
+    const reordered = `=== QUALITY NOW ===\nFindings reported by: eslint, knip.\n\n=== QUALITY BEFORE ===\nFindings reported by: eslint.\n\n=== TESTS ===\n${tests.stdout}\n=== WORKING DIFF ===\n${diff.stdout}`;
     const duplicate = `${good}\n=== TESTS ===\n${tests.stdout}`;
     const empty = good.replace(/=== TESTS ===\n[\s\S]*?=== WORKING DIFF ===/, "=== TESTS ===\n\n=== WORKING DIFF ===");
     for (const prompt of [reordered, duplicate, empty]) {

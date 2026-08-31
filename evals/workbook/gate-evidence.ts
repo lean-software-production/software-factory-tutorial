@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { authoredCalculatorCanonicalRefactorSource, readAuthoredCommandStubEvidence, type AuthoredCommandInvocationEvidence, type AuthoredCommandStubHandle } from "./command-stubs.js";
+import { buildBoundedWorkspaceTar } from "./preflight.js";
 import { readAuthoredWorkbookTimeline } from "./internal-timeline.js";
 import { projectAuthoredWorkbookEvalTrace } from "./public-trace.js";
 import type { AuthoredWorkbookEvalArtifactSnapshot, AuthoredWorkbookEvalSessionTrace } from "./types.js";
@@ -49,7 +50,7 @@ export interface AuthoredGateEvidenceCommandResult {
 }
 
 export type AuthoredGateEvidenceGitRunner = (request: { cwd: string; args: readonly string[]; env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal }) => Promise<AuthoredGateEvidenceCommandResult>;
-export type AuthoredGateEvidenceDockerRunner = (request: { file: "docker"; args: readonly string[]; cwd?: string; env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal; maxStdoutBytes?: number; maxStderrBytes?: number }) => Promise<AuthoredGateEvidenceCommandResult>;
+export type AuthoredGateEvidenceDockerRunner = (request: { file: "docker"; args: readonly string[]; cwd?: string; env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal; input?: Buffer; maxStdoutBytes?: number; maxStderrBytes?: number }) => Promise<AuthoredGateEvidenceCommandResult>;
 
 export interface AuthoredGateEvidenceProbeRequest {
   workspaceRoot: string;
@@ -297,14 +298,12 @@ export class DockerAuthoredGateEvidenceProbe implements AuthoredGateEvidenceProb
   readonly #environment: NodeJS.ProcessEnv;
   readonly #tempParent: string;
   readonly #timeoutMs: number;
-  readonly #repositoryRoot: string;
 
   constructor(options: { dockerRunner?: AuthoredGateEvidenceDockerRunner; environment?: NodeJS.ProcessEnv; tempParent?: string; timeoutMs?: number; repositoryRoot?: string } = {}) {
     this.#dockerRunner = options.dockerRunner ?? defaultDockerRunner;
     this.#environment = options.environment ?? process.env;
     this.#tempParent = options.tempParent ?? tmpdir();
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_DOCKER_TIMEOUT_MS;
-    this.#repositoryRoot = resolve(options.repositoryRoot ?? resolve(import.meta.dirname, "../.."));
   }
 
   async probeCalculator(request: AuthoredGateEvidenceProbeRequest): Promise<AuthoredCalculatorBehaviorProjection> {
@@ -313,15 +312,22 @@ export class DockerAuthoredGateEvidenceProbe implements AuthoredGateEvidenceProb
     const sourceBefore = await readStrictWorkspaceFile(workspaceRoot, CALCULATOR_SOURCE, { signal: request.signal });
     const probeRoot = await mkdtemp(join(this.#tempParent, "authored-gate-calculator-probe-"));
     const name = `authored-gate-probe-${randomUUID()}`;
+    const volume = `authored-gate-probe-volume-${randomUUID()}`;
+    let containerCreated = false;
+    let volumeCreated = false;
     let primaryError: unknown;
     let result: AuthoredCalculatorBehaviorProjection | undefined;
     try {
-      const calculatorProbe = resolve(probeRoot, "workspace/calculator");
+      const calculatorProbe = resolve(probeRoot, "calculator");
       await cp(resolve(workspaceRoot, "calculator"), calculatorProbe, { recursive: true, verbatimSymlinks: false, filter: (source) => !source.split(sep).includes("node_modules") && !source.split(sep).includes(".git") });
       await chmod(resolve(calculatorProbe, "src/index.ts"), 0o444).catch(() => undefined);
-      const nodeModules = resolve(this.#repositoryRoot, "node_modules");
-      const args = dockerProbeCreateArguments({ name, probeWorkspace: resolve(probeRoot, "workspace"), nodeModules });
+      const archive = await buildBoundedWorkspaceTar(calculatorProbe);
+      await expectZero(await this.#dockerRunner({ file: "docker", args: dockerProbeVolumeCreateArguments(volume), env: dockerClientEnvironment(this.#environment), timeoutMs: this.#timeoutMs, signal: request.signal }), "volume-create");
+      volumeCreated = true;
+      await expectZero(await this.#dockerRunner({ file: "docker", args: dockerProbePopulateVolumeArguments(volume), env: dockerClientEnvironment(this.#environment), timeoutMs: this.#timeoutMs, signal: request.signal, input: archive, maxStdoutBytes: 8 * 1024, maxStderrBytes: 8 * 1024 }), "volume-populate");
+      const args = dockerProbeCreateArguments({ name, volume });
       await expectZero(await this.#dockerRunner({ file: "docker", args, env: dockerClientEnvironment(this.#environment), timeoutMs: this.#timeoutMs, signal: request.signal }), "create");
+      containerCreated = true;
       const started = await this.#dockerRunner({ file: "docker", args: ["start", "--attach", name], env: dockerClientEnvironment(this.#environment), timeoutMs: this.#timeoutMs, signal: request.signal, maxStdoutBytes: 16 * 1024, maxStderrBytes: 8 * 1024 });
       if (started.status !== 0) throw new AuthoredGateEvidenceError(AUTHORED_GATE_EVIDENCE_PUBLIC_ERROR, { stage: "start", stderr: started.stderr.slice(0, 512) });
       const parsed = parseProbeOutput(started.stdout, request.label, sourceBefore.content);
@@ -334,8 +340,8 @@ export class DockerAuthoredGateEvidenceProbe implements AuthoredGateEvidenceProb
 
     // Cleanup is part of the security boundary: a cleanup failure takes precedence over both
     // successful probe output and any earlier primary probe error so callers never accept evidence
-    // while a container removal could not be confirmed.
-    const cleanupError = await cleanupDockerProbe(this.#dockerRunner, this.#environment, name, probeRoot);
+    // while a container or volume removal could not be confirmed.
+    const cleanupError = await cleanupDockerProbe(this.#dockerRunner, this.#environment, { name, volume, probeRoot, containerCreated, volumeCreated });
     if (cleanupError !== undefined) throw new AuthoredGateEvidenceError(AUTHORED_GATE_EVIDENCE_CLEANUP_PUBLIC_ERROR, cleanupError);
     if (primaryError !== undefined) throw primaryError;
     if (result === undefined) throw new AuthoredGateEvidenceError(AUTHORED_GATE_EVIDENCE_PUBLIC_ERROR);
@@ -343,26 +349,40 @@ export class DockerAuthoredGateEvidenceProbe implements AuthoredGateEvidenceProb
   }
 }
 
-async function cleanupDockerProbe(dockerRunner: AuthoredGateEvidenceDockerRunner, environment: NodeJS.ProcessEnv, name: string, probeRoot: string): Promise<unknown> {
+async function cleanupDockerProbe(dockerRunner: AuthoredGateEvidenceDockerRunner, environment: NodeJS.ProcessEnv, input: { name: string; volume: string; probeRoot: string; containerCreated: boolean; volumeCreated: boolean }): Promise<unknown> {
   let cleanupError: unknown;
-  try {
-    const removed = await dockerRunner({ file: "docker", args: ["rm", "-f", name], env: dockerClientEnvironment(environment), timeoutMs: 10_000, signal: AbortSignal.timeout(10_000), maxStdoutBytes: 8 * 1024, maxStderrBytes: 8 * 1024 });
-    if (removed.status !== 0) cleanupError = { stage: "docker-rm", status: removed.status };
-  } catch (error) {
-    cleanupError = error;
+  if (input.containerCreated) {
+    try {
+      const removed = await dockerRunner({ file: "docker", args: ["rm", "-f", input.name], env: dockerClientEnvironment(environment), timeoutMs: 10_000, signal: AbortSignal.timeout(10_000), maxStdoutBytes: 8 * 1024, maxStderrBytes: 8 * 1024 });
+      if (removed.status !== 0) cleanupError = { stage: "docker-rm", status: removed.status };
+    } catch (error) { cleanupError = error; }
   }
-  try { await rm(probeRoot, { recursive: true, force: true }); }
+  if (input.volumeCreated) {
+    try {
+      const removed = await dockerRunner({ file: "docker", args: ["volume", "rm", "-f", input.volume], env: dockerClientEnvironment(environment), timeoutMs: 10_000, signal: AbortSignal.timeout(10_000), maxStdoutBytes: 8 * 1024, maxStderrBytes: 8 * 1024 });
+      if (removed.status !== 0) cleanupError ??= { stage: "docker-volume-rm", status: removed.status };
+    } catch (error) { cleanupError ??= error; }
+  }
+  try { await rm(input.probeRoot, { recursive: true, force: true }); }
   catch (error) { cleanupError ??= error; }
   return cleanupError;
 }
 
-export function dockerProbeCreateArguments(input: { name: string; probeWorkspace: string; nodeModules: string }): string[] {
+export function dockerProbeVolumeCreateArguments(volume: string): string[] {
+  return ["volume", "create", "--label", "authored-workbook-gate-probe=true", volume];
+}
+
+export function dockerProbePopulateVolumeArguments(volume: string): string[] {
+  return ["run", "--rm", "-i", "--user", "0:0", "--read-only", "--security-opt=no-new-privileges", "--network=none", "--mount", `type=volume,src=${volume},dst=/workspace/calculator`, "--workdir", "/workspace/calculator", WORKBOOK_TERMINAL_IMAGE, "tar", "--same-owner", "-xf", "-"];
+}
+
+export function dockerProbeCreateArguments(input: { name: string; volume: string }): string[] {
   const [uid, gid] = dockerContainerUser().split(":");
   return [
     "create", "--name", input.name, "--label", "authored-workbook-gate-probe=true", "--user", dockerContainerUser(), "--read-only",
     "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=768m", "--cpus=1", "--network=none", "--init",
     "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--tmpfs", `/home/learner/.npm:uid=${uid},gid=${gid},mode=0700`,
-    "--mount", bindMount(resolve(input.probeWorkspace), "/workspace"), "--mount", bindMount(resolve(input.nodeModules), "/workspace/calculator/node_modules", true),
+    "--mount", `type=volume,src=${input.volume},dst=/workspace/calculator`,
     "--workdir", "/workspace/calculator", WORKBOOK_TERMINAL_IMAGE, "/bin/bash", "-lc", dockerProbeScript()
   ];
 }
@@ -373,12 +393,32 @@ set +u
 set +o pipefail
 npm test >/tmp/test.out 2>/tmp/test.err
 test_status=$?
-quality_output=$(node scripts/quality.mjs 2>&1)
+node scripts/quality.mjs >/tmp/quality.out 2>&1
 quality_status=$?
-AUTHORED_PROBE_TEST_STATUS="$test_status" AUTHORED_PROBE_QUALITY_STATUS="$quality_status" AUTHORED_PROBE_QUALITY_OUTPUT="$quality_output" node --input-type=module <<'NODE'
+AUTHORED_PROBE_TEST_STATUS="$test_status" AUTHORED_PROBE_QUALITY_STATUS="$quality_status" node --input-type=module <<'NODE'
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-const source = readFileSync('src/index.ts', 'utf8');
+const MAX_SUMMARY_BYTES = 2048;
+function readText(path) {
+  try { return readFileSync(path, 'utf8'); } catch { return ''; }
+}
+function bound(text, bytes = MAX_SUMMARY_BYTES) {
+  const buffer = Buffer.from(text, 'utf8');
+  return buffer.length <= bytes ? text : buffer.subarray(0, bytes).toString('utf8').replace(/[\uFFFD\s]*$/u, '') + '\n[truncated]';
+}
+function sanitizeQuality(text) {
+  return text.replaceAll(process.cwd(), '<calculator>').replaceAll('/workspace/calculator', '<calculator>');
+}
+function summarizeQuality(text) {
+  const sanitized = sanitizeQuality(text);
+  if (sanitized.includes('All quality checks passed.')) return 'All quality checks passed.';
+  const lines = sanitized.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
+  const summary = lines.filter((line) => /Findings reported by:|is not installed\. Run npm install\.|could not run:/i.test(line));
+  if (summary.length > 0) return bound(summary.slice(0, 8).join('\n'));
+  if (lines.length === 0) return 'quality command produced no output.';
+  return bound(lines.slice(-8).join('\n'));
+}
+const source = readText('src/index.ts');
 const multiplyComplete = /if \(word === "multiply"\) \{\n\s*const first = readFirstOperand\("by"\);/.test(source);
 const divideComplete = /if \(word === "divide"\) \{\n\s*const first = readFirstOperand\("by"\);/.test(source);
 let mod;
@@ -390,14 +430,15 @@ if (mod?.evaluateSpokenExpression) {
     try { cases.push({ input, output: mod.evaluateSpokenExpression(input) }); } catch {}
   }
 }
-const quality = process.env.AUTHORED_PROBE_QUALITY_OUTPUT ?? '';
+const testOutput = readText('/tmp/test.out');
+const qualityOutput = summarizeQuality(readText('/tmp/quality.out'));
 console.log(JSON.stringify({
   marker: 'authored-gate-calculator-probe-v1',
   sourceSha256: createHash('sha256').update(source).digest('hex'),
   testStatus: Number(process.env.AUTHORED_PROBE_TEST_STATUS || '1') === 0 ? 'passed' : 'failed',
-  testMarker: readFileSync('/tmp/test.out', 'utf8').includes('Test Files') || readFileSync('/tmp/test.out', 'utf8').includes('passed'),
+  testMarker: testOutput.includes('Test Files') || testOutput.includes('passed'),
   qualityStatus: Number(process.env.AUTHORED_PROBE_QUALITY_STATUS || '1') === 0 ? 'passed' : 'failed',
-  qualityOutput: quality.includes('All quality checks passed.') ? 'All quality checks passed.' : undefined,
+  qualityOutput,
   cases
 }));
 NODE`;
@@ -408,7 +449,7 @@ function parseProbeOutput(stdout: string, label: string, expectedSource: string)
   if (!line) throw new AuthoredGateEvidenceError(AUTHORED_GATE_EVIDENCE_PUBLIC_ERROR, "Trusted probe did not return its bounded marker.");
   let parsed: unknown;
   try { parsed = JSON.parse(line); } catch { throw new AuthoredGateEvidenceError(AUTHORED_GATE_EVIDENCE_PUBLIC_ERROR, "Trusted probe returned invalid bounded JSON."); }
-  if (!isRecord(parsed) || parsed.marker !== "authored-gate-calculator-probe-v1" || (parsed.testStatus !== "passed" && parsed.testStatus !== "failed") || (parsed.qualityStatus !== "passed" && parsed.qualityStatus !== "failed") || typeof parsed.sourceSha256 !== "string" || parsed.sourceSha256 !== sha256Text(expectedSource) || !Array.isArray(parsed.cases)) {
+  if (!isRecord(parsed) || parsed.marker !== "authored-gate-calculator-probe-v1" || (parsed.testStatus !== "passed" && parsed.testStatus !== "failed") || (parsed.qualityStatus !== "passed" && parsed.qualityStatus !== "failed") || typeof parsed.qualityOutput !== "string" || parsed.qualityOutput.trim().length === 0 || Buffer.byteLength(parsed.qualityOutput, "utf8") > 2048 || containsUnsanitizedProbePath(parsed.qualityOutput) || typeof parsed.sourceSha256 !== "string" || parsed.sourceSha256 !== sha256Text(expectedSource) || !Array.isArray(parsed.cases)) {
     throw new AuthoredGateEvidenceError(AUTHORED_GATE_EVIDENCE_PUBLIC_ERROR, "Trusted probe returned an invalid projection.");
   }
   const cases = parsed.cases.map((entry) => {
@@ -421,7 +462,7 @@ function parseProbeOutput(stdout: string, label: string, expectedSource: string)
     sourceSha256: parsed.sourceSha256,
     testStatus: parsed.testStatus,
     qualityStatus: parsed.qualityStatus,
-    ...(typeof parsed.qualityOutput === "string" ? { qualityOutput: parsed.qualityOutput } : {}),
+    qualityOutput: parsed.qualityOutput,
     cases
   };
 }
@@ -466,10 +507,10 @@ function boundPossiblyTruncatedOutput(text: string): string {
   return bytes.length > MAX_GIT_OUTPUT_BYTES ? bytes.subarray(0, MAX_GIT_OUTPUT_BYTES).toString("utf8") : text;
 }
 
-async function defaultDockerRunner(request: { file: "docker"; args: readonly string[]; cwd?: string; env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal; maxStdoutBytes?: number; maxStderrBytes?: number }): Promise<AuthoredGateEvidenceCommandResult> {
+async function defaultDockerRunner(request: { file: "docker"; args: readonly string[]; cwd?: string; env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal; input?: Buffer; maxStdoutBytes?: number; maxStderrBytes?: number }): Promise<AuthoredGateEvidenceCommandResult> {
   throwIfAborted(request.signal);
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(request.file, [...request.args], { cwd: request.cwd, env: request.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(request.file, [...request.args], { cwd: request.cwd, env: request.env, stdio: [request.input ? "pipe" : "ignore", "pipe", "pipe"] });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let stdoutBytes = 0;
@@ -495,16 +536,20 @@ async function defaultDockerRunner(request: { file: "docker"; args: readonly str
     }, request.timeoutMs);
     timer.unref?.();
     request.signal?.addEventListener("abort", abort, { once: true });
-    child.stdout.on("data", (chunk: Buffer) => {
+    child.stdout!.on("data", (chunk: Buffer) => {
       stdoutBytes += chunk.length;
       if (stdoutBytes > maxStdout) abort(); else stdout.push(chunk);
     });
-    child.stderr.on("data", (chunk: Buffer) => {
+    child.stderr!.on("data", (chunk: Buffer) => {
       stderrBytes += chunk.length;
       if (stderrBytes > maxStderr) abort(); else stderr.push(chunk);
     });
     child.on("error", () => finish(() => reject(new AuthoredGateEvidenceError(AUTHORED_GATE_EVIDENCE_PUBLIC_ERROR))));
     child.on("close", (status, signal) => finish(() => resolvePromise({ status, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") })));
+    if (request.input && child.stdin) {
+      child.stdin.on("error", (error: NodeJS.ErrnoException) => { if (error.code !== "EPIPE") finish(() => reject(new AuthoredGateEvidenceError(AUTHORED_GATE_EVIDENCE_PUBLIC_ERROR))); });
+      child.stdin.end(request.input);
+    }
   });
 }
 
@@ -517,7 +562,7 @@ async function readGitSnapshot(workspaceRoot: string, runner: AuthoredGateEviden
   };
   const head = (await run(["rev-parse", "--verify", "HEAD"])).trimEnd();
   const tree = (await run(["rev-parse", "--verify", "HEAD^{tree}"])).trimEnd();
-  const treeManifest = parseGitTreeManifest(await run(["ls-tree", "-rz", "-t", "--full-tree", "HEAD"]));
+  const treeManifest = parseGitTreeManifest(await run(["ls-tree", "-rz", "-r", "-t", "--full-tree", "HEAD"]));
   const statusText = await deriveTrustedGitStatus(workspaceRoot, run, treeManifest, signal);
   const commitIds = (await run(["rev-list", "--max-count=20", "HEAD"])).trim().split("\n").filter(Boolean);
   const commitObjects = await Promise.all(commitIds.map((commit) => run(["cat-file", "commit", commit])));
@@ -748,10 +793,18 @@ async function readStrictWorkspaceFile(workspaceRoot: string, file: string, opti
   return { path: result.path, content: result.content.toString("utf8"), identity: result.identity };
 }
 
+async function readStrictWorkspaceManifestFile(workspaceRoot: string, file: string, options: { maxBytes?: number; signal?: AbortSignal } = {}): Promise<{ path: string; content: string; identity: FileIdentity }> {
+  const result = await readStrictWorkspaceFileBytesWithSafePath(workspaceRoot, safePrivateWorkspaceManifestFile(file), options);
+  return { path: result.path, content: result.content.toString("utf8"), identity: result.identity };
+}
+
 async function readStrictWorkspaceFileBytes(workspaceRoot: string, file: string, options: { maxBytes?: number; signal?: AbortSignal } = {}): Promise<{ path: string; content: Buffer; identity: FileIdentity }> {
+  return readStrictWorkspaceFileBytesWithSafePath(workspaceRoot, safeRelativeFile(file), options);
+}
+
+async function readStrictWorkspaceFileBytesWithSafePath(workspaceRoot: string, safeFile: string, options: { maxBytes?: number; signal?: AbortSignal } = {}): Promise<{ path: string; content: Buffer; identity: FileIdentity }> {
   throwIfAborted(options.signal);
   const root = await realpath(resolve(workspaceRoot));
-  const safeFile = safeRelativeFile(file);
   const absolute = resolve(root, safeFile);
   if (!inside(root, absolute)) throw new AuthoredGateEvidenceError("Workspace evidence path escaped the workspace.");
   const pathInfo = await lstat(absolute);
@@ -803,7 +856,7 @@ async function workspaceTreeManifest(workspaceRoot: string, signal?: AbortSignal
         if (info.nlink !== 1) throw new AuthoredGateEvidenceError(`Workspace contains hardlinked file at evidence boundary: ${rel}.`);
         if (info.size > MAX_PRIVATE_SNAPSHOT_FILE_BYTES) manifest.set(rel, `file:${info.dev}:${info.ino}:${info.mode}:${info.size}:oversize`);
         else {
-          const file = await readStrictWorkspaceFile(root, rel, { signal });
+          const file = await readStrictWorkspaceManifestFile(root, rel, { signal });
           manifest.set(rel, `file:${file.identity.dev}:${file.identity.ino}:${file.identity.mode}:${file.identity.size}:${sha256Text(file.content)}`);
         }
       } else {
@@ -820,11 +873,22 @@ function changedWorkspacePathsOutsideAllowlist(beforeEntries: readonly AuthoredG
   const after = new Map(afterEntries.map((entry) => [entry.path, entry.fingerprint]));
   const allowedFiles = new Set([...(scenario.runnerPrivate?.mutationAllowlist.learnerWorkspaceFiles ?? []), ...(scenario.runnerPrivate?.gateEvidence.workspaceFiles ?? [])]);
   const allowedPrefixes = [...(scenario.runnerPrivate?.mutationAllowlist.learnerWorkspacePathPrefixes ?? []), ...(scenario.runnerPrivate?.gateEvidence.workspacePathPrefixes ?? [])];
+  const allowedDirectories = allowedMutationDirectories([...allowedFiles, ...allowedPrefixes]);
   const changed = new Set([...before.keys(), ...after.keys()]);
   return [...changed]
     .filter((path) => before.get(path) !== after.get(path))
-    .filter((path) => !allowedFiles.has(path) && !allowedPrefixes.some((prefix) => path.startsWith(prefix)))
+    .filter((path) => !allowedFiles.has(path) && !allowedPrefixes.some((prefix) => path.startsWith(prefix)) && !(path.endsWith("/") && allowedDirectories.has(path)))
     .sort();
+}
+
+function allowedMutationDirectories(paths: readonly string[]): Set<string> {
+  const directories = new Set<string>([".tmp/"]);
+  for (const path of paths) {
+    const parts = path.replace(/\/$/, "").split("/").filter(Boolean);
+    for (let index = 1; index < parts.length; index += 1) directories.add(`${parts.slice(0, index).join("/")}/`);
+    if (path.endsWith("/")) directories.add(path);
+  }
+  return directories;
 }
 
 function assertExactSnapshotPaths(snapshots: readonly AuthoredWorkbookEvalArtifactSnapshot[], expected: readonly string[], label: string): void {
@@ -834,10 +898,16 @@ function assertExactSnapshotPaths(snapshots: readonly AuthoredWorkbookEvalArtifa
 }
 
 function safeRelativeFile(file: string): string {
+  const normalized = safePrivateWorkspaceManifestFile(file);
+  if (/(^|\/)events(\/|$)|(^|\/)workbook\/events\.jsonl$/i.test(normalized)) throw new AuthoredGateEvidenceError("Raw event files are not public artifacts.");
+  return normalized;
+}
+
+function safePrivateWorkspaceManifestFile(file: string): string {
   if (typeof file !== "string" || !file || isAbsolute(file) || file.includes("\0") || file.includes("\\")) throw new AuthoredGateEvidenceError("Unsafe workspace evidence path.");
   const normalized = file.split("/").filter(Boolean).join("/");
-  if (normalized !== file || normalized.split("/").some((part) => part === "." || part === "..")) throw new AuthoredGateEvidenceError("Unsafe workspace evidence path.");
-  if (/(^|\/)events(\/|$)|(^|\/)workbook\/events\.jsonl$/i.test(normalized)) throw new AuthoredGateEvidenceError("Raw event files are not public artifacts.");
+  const parts = normalized.split("/");
+  if (normalized !== file || parts.some((part) => part === "." || part === "..")) throw new AuthoredGateEvidenceError("Unsafe workspace evidence path.");
   return normalized;
 }
 
@@ -845,6 +915,10 @@ function safeGitRelativeFile(file: string): string {
   const normalized = safeRelativeFile(file);
   if (normalized.length > 4096 || /[\u0001-\u001f\u007f\ufffd]/u.test(normalized) || normalized.split("/").includes(".git")) throw new AuthoredGateEvidenceError("Unsafe Git evidence path.");
   return normalized;
+}
+
+function containsUnsanitizedProbePath(text: string): boolean {
+  return /\/workspace\/calculator|\/private\/var\/|\/var\/folders\//.test(text);
 }
 
 function bindMount(src: string, dst: string, readonly = false): string {
@@ -893,13 +967,17 @@ function computeExpectedLesson013Tree(baselineTreeManifest: readonly AuthoredGat
 
 function computeTreeObjectId(entries: readonly AuthoredGateEvidenceGitTreeEntry[], treeIds: ReadonlyMap<string, string>, parentPath: string): string {
   const chunks: Buffer[] = [];
-  const sorted = [...entries].sort((left, right) => Buffer.compare(Buffer.from(left.path, "utf8"), Buffer.from(right.path, "utf8")));
+  const sorted = [...entries].sort((left, right) => Buffer.compare(Buffer.from(gitTreeSortPath(left), "utf8"), Buffer.from(gitTreeSortPath(right), "utf8")));
   for (const entry of sorted) {
     const objectId = entry.type === "tree" ? treeIds.get(parentPath ? `${parentPath}/${entry.path}` : entry.path) : entry.objectId;
     if (!objectId) throw new AuthoredGateEvidenceError(AUTHORED_GATE_EVIDENCE_PUBLIC_ERROR, "Git tree manifest was incomplete.");
     chunks.push(Buffer.from(`${entry.type === "tree" ? "40000" : entry.mode} ${entry.path}\0`, "utf8"), Buffer.from(objectId, "hex"));
   }
   return gitObjectId("tree", Buffer.concat(chunks));
+}
+
+function gitTreeSortPath(entry: Pick<AuthoredGateEvidenceGitTreeEntry, "path" | "type">): string {
+  return entry.type === "tree" ? `${entry.path}/` : entry.path;
 }
 
 function computeExpectedLesson013Commit(rawCommit: string, expectedParent: string, expectedTree: string): string | undefined {

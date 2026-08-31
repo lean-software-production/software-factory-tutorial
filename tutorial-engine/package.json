@@ -36,7 +36,7 @@
     "dev:workbook": "npm run build:web:workbook && tsx src/workbook/cli.ts",
     "check:workbook": "tsx src/workbook/check.ts",
     "build:web:workbook": "vite build",
-    "build:workbook-terminal": "docker build --tag lean-software-production/workbook-terminal:latest --file docker/workbook-terminal.Dockerfile .",
+    "build:workbook-terminal": "docker build --tag lean-software-production/workbook-terminal:latest --file docker/workbook-terminal.Dockerfile ..",
     "check:workbook-terminal-image": "npm run build:workbook-terminal && bash scripts/check-workbook-terminal-image.sh",
     "lint": "eslint web-workbook/src",
     "format:css": "prettier --write 'web-workbook/src/**/*.css'",

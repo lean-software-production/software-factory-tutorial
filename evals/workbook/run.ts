@@ -463,7 +463,7 @@ async function publishAuthoredWorkbookRunReport(input: {
 async function writeOptionalDiagnostics(input: { directory: string; gateForDiagnostic?: AuthoredWorkbookEvalGateResult; primaryError?: unknown; cleanupError?: unknown; status: AuthoredWorkbookEvalRunLifecycleStatus; dependencies: AuthoredWorkbookRunDependencies }): Promise<void> {
   const { directory, gateForDiagnostic, primaryError, cleanupError, status, dependencies } = input;
   try { if (gateForDiagnostic) await dependencies.writeGateDiagnostic(directory, gateForDiagnostic); } catch { /* diagnostics are private best-effort files. */ }
-  try { if (primaryError && status !== "gate") await dependencies.writeFailureDiagnostic(directory, primaryError); } catch { /* diagnostics are private best-effort files. */ }
+  try { if (primaryError && (status !== "gate" || gateForDiagnostic === undefined)) await dependencies.writeFailureDiagnostic(directory, primaryError); } catch { /* diagnostics are private best-effort files. */ }
   try { if (cleanupError) await dependencies.writeCleanupDiagnostic(directory, cleanupError); } catch { /* diagnostics are private best-effort files. */ }
 }
 
