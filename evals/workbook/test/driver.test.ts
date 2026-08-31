@@ -395,6 +395,7 @@ describe("authored workbook public driver", () => {
       WebSocket: CapturingWebSocket as any,
       terminalTimeoutMs: 100,
       terminalReviewTimeoutMs: 1_000,
+      transientTerminalReviewRetryDelayMs: 0,
       fetch: async (input, init) => {
         const path = new URL(String(input)).pathname;
         if (init?.method === "POST") {
@@ -450,6 +451,7 @@ describe("authored workbook public driver", () => {
       WebSocket: ReplayWebSocket as any,
       terminalTimeoutMs: 100,
       terminalReviewTimeoutMs: 1_000,
+      transientTerminalReviewRetryDelayMs: 0,
       fetch: async (_input, init) => {
         if (init?.method === "POST") {
           posts += 1;
@@ -479,6 +481,7 @@ describe("authored workbook public driver", () => {
       WebSocket: ReplayWebSocket as any,
       terminalTimeoutMs: 100,
       terminalReviewTimeoutMs: 1_000,
+      transientTerminalReviewRetryDelayMs: 0,
       fetch: async (_input, init) => {
         if (init?.method === "POST") {
           retrySignal = init.signal as AbortSignal;

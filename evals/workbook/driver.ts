@@ -33,6 +33,7 @@ export interface AuthoredWorkbookDriverOptions {
   WebSocket?: WebSocketConstructor;
   terminalTimeoutMs?: number;
   terminalReviewTimeoutMs?: number;
+  transientTerminalReviewRetryDelayMs?: number;
   editorReviewTimeoutMs?: number;
   requestTimeoutMs?: number;
   maxStructuralAutoProgressionSteps?: number;
@@ -69,6 +70,7 @@ export class AuthoredWorkbookDriver {
   readonly #WebSocket: WebSocketConstructor;
   readonly #terminalTimeoutMs: number;
   readonly #terminalReviewTimeoutMs: number;
+  readonly #transientTerminalReviewRetryDelayMs: number;
   readonly #editorReviewTimeoutMs: number;
   readonly #requestTimeoutMs: number;
   readonly #maxStructuralAutoProgressionSteps: number;
@@ -83,6 +85,7 @@ export class AuthoredWorkbookDriver {
     this.#WebSocket = options.WebSocket ?? WebSocket;
     this.#terminalTimeoutMs = options.terminalTimeoutMs ?? 5_000;
     this.#terminalReviewTimeoutMs = options.terminalReviewTimeoutMs ?? 120_000;
+    this.#transientTerminalReviewRetryDelayMs = options.transientTerminalReviewRetryDelayMs ?? 2_000;
     this.#editorReviewTimeoutMs = options.editorReviewTimeoutMs ?? 120_000;
     this.#requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
     this.#maxStructuralAutoProgressionSteps = options.maxStructuralAutoProgressionSteps ?? 100;
@@ -346,6 +349,7 @@ export class AuthoredWorkbookDriver {
         if (isCanonicalTransientTerminalReviewFailure(state, blockId, terminal.message, reviewBaseline.timelineSequence)) {
           if (retryCount >= MAX_TRANSIENT_TERMINAL_REVIEW_RETRIES) throw new Error(`Terminal review for ${blockId} repeatedly returned transient tutor failure.`);
           retryCount += 1;
+          await delay(this.#transientTerminalReviewRetryDelayMs * retryCount, signal);
           const retried = await this.#retryTerminalReviewTransient(state, blockId, label, retryCount, signal);
           reviewBaseline = terminalReviewBaseline(retried, blockId);
           observedReviewTransition = terminalStateFor(retried, blockId)?.phase === "checking";
