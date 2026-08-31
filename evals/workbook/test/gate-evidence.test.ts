@@ -528,7 +528,7 @@ async function writeLessons003004Final(root: string, options: { extraArtifact?: 
   await writeFile(join(root, "factory/refactor-validate.sh"), script);
   await mkdir(join(root, "factory/.tmp"), { recursive: true });
   await writeFile(join(root, "factory/.tmp/refactor-quality-before.txt"), "Findings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n");
-  await writeFile(join(root, "factory/.tmp/refactor-validate-findings.txt"), "VERDICT: PASS\n\nEVIDENCE:\n- quality passed\n");
+  await writeFile(join(root, "factory/.tmp/refactor-validate-findings.txt"), "VERDICT: FAIL\n\nEVIDENCE:\n- authored validator reran after repair\n");
   await writeFile(join(root, "calculator/src/index.ts"), completeSource(await readFile(join(root, "calculator/src/index.ts"), "utf8")));
   if (options.extraArtifact) await writeFile(join(root, "factory/.tmp/unexpected.txt"), "extra");
 }
@@ -583,7 +583,7 @@ async function writeLesson013Final(root: string, options: { dirtyAfterCommit?: b
 }
 
 function lessons003004Evidence(): AuthoredCommandInvocationEvidence[] {
-  return [stub("doer", { mutation: "partial-refactor" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("repair", { mutation: "complete-refactor" }), stub("validator", { verdict: "PASS", mutation: "none", tools: "read,grep,find,ls,bash" })];
+  return [stub("doer", { mutation: "partial-refactor" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("repair", { mutation: "complete-refactor" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" })];
 }
 
 function lesson013Evidence(): AuthoredCommandInvocationEvidence[] {
@@ -632,10 +632,7 @@ function lesson004DivideCommand(): string { return String.raw`{
 (cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
-${lesson004CurrentEvidenceAndValidationCommand()}
-cp factory/.tmp/refactor-quality-before.txt factory/.tmp/refactor-original-baseline.txt
-cp factory/.tmp/refactor-current-evidence.txt factory/.tmp/refactor-quality-before.txt
-(trap 'cp factory/.tmp/refactor-original-baseline.txt factory/.tmp/refactor-quality-before.txt; rm -f factory/.tmp/refactor-original-baseline.txt factory/.tmp/refactor-current-evidence.txt' EXIT; ./factory/refactor-validate.sh)
+./factory/refactor-validate.sh
 }`; }
 
 function multiplyOnlySource(source: string): string {

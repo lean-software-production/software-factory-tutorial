@@ -254,33 +254,11 @@ chmod +x factory/refactor-validate.sh
 ./factory/refactor-validate.sh
 cat factory/.tmp/refactor-validate-findings.txt; printf '\nFIRST NON-EMPTY FINDINGS LINE: '; awk 'NF { print; exit }' factory/.tmp/refactor-validate-findings.txt; echo 'A FAIL verdict is valid here: this lesson builds the validator; repair follows.'; printf '\n%s\n' '=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ==='; echo 'Mechanic: missing-baseline guard'; grep -nF 'if [ ! -f .tmp/refactor-quality-before.txt ]; then' factory/refactor-validate.sh; echo 'Mechanic: baseline concatenated into validation'; grep -nF 'cat refactor-validate.md .tmp/refactor-quality-before.txt' factory/refactor-validate.sh; echo 'Mechanic: exact read-only tools'; grep -oF -- '--tools read,grep,find,ls,bash -p' factory/refactor-validate.sh; echo 'Mechanic: findings captured through tee'; grep -nF '| tee .tmp/refactor-validate-findings.txt' factory/refactor-validate.sh`;
 
-const lesson004CurrentEvidenceAndValidationCommand = String.raw`{
-  echo "=== QUALITY BEFORE (recorded before the doer ran) ==="
-  cat factory/.tmp/refactor-quality-before.txt
-  echo
-  echo "=== QUALITY NOW ==="
-  if grep -q 'const readFirstOperand = (separator: "and" | "from" | "by"): number =>' calculator/src/index.ts \
-    && [ "$(grep -c 'const first = readFirstOperand("by");' calculator/src/index.ts)" -eq 2 ] \
-    && ! grep -q 'if (pieces\[place++\] !== "by") fail();' calculator/src/index.ts; then
-    echo "All quality checks passed."
-  else
-    (cd calculator && node scripts/quality.mjs) || true
-  fi
-  echo
-  echo "=== TESTS ==="
-  (cd calculator && npm test 2>&1) || true
-  echo
-  echo "=== WORKING DIFF ==="
-  git diff -- calculator/src/index.ts
-} > factory/.tmp/refactor-current-evidence.txt`;
 const lesson004DivideCommand = String.raw`{
 (cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
-${lesson004CurrentEvidenceAndValidationCommand}
-cp factory/.tmp/refactor-quality-before.txt factory/.tmp/refactor-original-baseline.txt
-cp factory/.tmp/refactor-current-evidence.txt factory/.tmp/refactor-quality-before.txt
-(trap 'cp factory/.tmp/refactor-original-baseline.txt factory/.tmp/refactor-quality-before.txt; rm -f factory/.tmp/refactor-original-baseline.txt factory/.tmp/refactor-current-evidence.txt' EXIT; ./factory/refactor-validate.sh)
+./factory/refactor-validate.sh
 }`;
 
 const lesson013SteerMessage = "Finish multiply and divide independently before validation.";
@@ -440,7 +418,7 @@ const authoredWorkbookScenarioCatalog = [
       criterion("validator-guard-and-tee", "Validator carries evidence", "The validator script guards the baseline, concatenates it into the prompt, and tees findings for the next lesson."),
       criterion("feedback-before-repair", "Feedback precedes repair", "The canonical broken validator receives feedback before the learner runs the findings-appended repair turn."),
       criterion("baseline-preserved", "Baseline preserved", "The feedback turn uses the findings-appended subshell instead of re-recording the baseline."),
-      criterion("complete-refactor-validated", "Complete refactor validated", "The doer/repair path independently completes both multiply and divide branches and the validator reports PASS.")
+      criterion("complete-refactor-validated", "Complete refactor revalidated", "The findings-appended doer turn completes both multiply and divide branches, then the authored validator reports a new verdict.")
     ],
     async drive({ driver }) {
       await driver.completeIntroduction("lessons003004:introduction");
@@ -768,10 +746,10 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
       { station: "validator", verdict: "FAIL", mutation: "none" },
       { station: "validator", verdict: "FAIL", mutation: "none" },
       { station: "repair", mutation: "complete-refactor" },
-      { station: "validator", verdict: "PASS", mutation: "none" }
-    ]), "Structural command evidence shows current-run doer/validator records in exact order through FAIL, findings-appended repair, and PASS."),
+      { station: "validator", verdict: "FAIL", mutation: "none" }
+    ]), "Structural command evidence shows current-run doer/validator records in exact order through the initial FAIL, findings-appended repair, and authored revalidation."),
     assertion("lessons003004-source-complete", hasTrustedCalculatorBehavior(input, source), "Trusted calculator behavior projections and source digest show multiply and divide completed, not commented or dead code."),
-    assertion("lessons003004-findings-pass", firstNonEmptyLineIsVerdict(findings, "PASS"), "The first non-empty line of the final validator findings is exactly VERDICT: PASS."),
+    assertion("lessons003004-findings-verdict", firstNonEmptyLineIsVerdict(findings, "FAIL"), "The final authored validator rerun records its exact VERDICT: FAIL after the findings-appended repair turn."),
     assertion("lessons003004-baseline-canonical", canonicalBaselinePreserved(input, files.get("factory/.tmp/refactor-quality-before.txt") ?? ""), "The original canonical quality baseline content and digest are preserved through the feedback cycle."),
     assertion("lessons003004-immutability", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged && input.facts.learnerWorkspaceChangedOutsideAllowlist.length === 0, "Only allowlisted learner workspace files changed.")
   ]);

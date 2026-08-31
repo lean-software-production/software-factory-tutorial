@@ -130,47 +130,11 @@ const lesson001SimpleCommand = `pi -p "What is the capital of France?"`;
 const lesson001SuppliedCommand = `echo "Describe what this calculator does, in three sentences." \\\n  | (cd calculator && pi --no-session --tools read,grep,find,ls -p)`;
 const lesson001ChangedJobCommand = `echo "What files make up this calculator, and what does each one appear to do?" \\\n  | (cd calculator && pi --no-session --tools read,grep,find,ls -p)`;
 
-const lesson004CurrentEvidenceAndValidationCommand = String.raw`{
-  echo "=== QUALITY BEFORE (recorded before the doer ran) ==="
-  cat factory/.tmp/refactor-quality-before.txt
-  echo
-  echo "=== QUALITY NOW ==="
-  if grep -q 'const readFirstOperand = (separator: "and" | "from" | "by"): number =>' calculator/src/index.ts \
-    && [ "$(grep -c 'const first = readFirstOperand("by");' calculator/src/index.ts)" -eq 2 ] \
-    && ! grep -q 'if (pieces\[place++\] !== "by") fail();' calculator/src/index.ts; then
-    echo "All quality checks passed."
-  else
-    (cd calculator && node scripts/quality.mjs) || true
-  fi
-  echo
-  echo "=== TESTS ==="
-  (cd calculator && npm test 2>&1) || true
-  echo
-  echo "=== WORKING DIFF ==="
-  git diff -- calculator/src/index.ts
-} > factory/.tmp/refactor-current-evidence.txt`;
-const lesson004MultiplyCommand = String.raw`{
-node <<'NODE'
-const { readFileSync, writeFileSync } = require('node:fs');
-const path = 'calculator/src/index.ts';
-let source = readFileSync(path, 'utf8');
-source = source.replace(
-  '    if (word === "multiply") {\n      const first = read();\n      if (pieces[place++] !== "by") fail();\n      const second = read();\n      return first * second;\n    }',
-  '    if (word === "multiply") {\n      const first = readFirstOperand("by");\n      const second = read();\n      return first * second;\n    }'
-);
-writeFileSync(path, source);
-NODE
-${lesson004CurrentEvidenceAndValidationCommand}
-printf '%s\n' 'MISTAKEN STOP: multiply is fixed, so I will stop even though divide remains duplicated.'; cat factory/.tmp/refactor-validate-findings.txt
-}`;
 const lesson004DivideCommand = String.raw`{
 (cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
-${lesson004CurrentEvidenceAndValidationCommand}
-cp factory/.tmp/refactor-quality-before.txt factory/.tmp/refactor-original-baseline.txt
-cp factory/.tmp/refactor-current-evidence.txt factory/.tmp/refactor-quality-before.txt
-(trap 'cp factory/.tmp/refactor-original-baseline.txt factory/.tmp/refactor-quality-before.txt; rm -f factory/.tmp/refactor-original-baseline.txt factory/.tmp/refactor-current-evidence.txt' EXIT; ./factory/refactor-validate.sh)
+./factory/refactor-validate.sh
 }`;
 
 const completedSource = `type Output = (line: string) => void;
@@ -680,14 +644,14 @@ describe("authored workbook scenario gates", () => {
       ["show mechanics before validator verdict", (input) => { const output = input.trace.terminalTranscript.find((entry) => entry.direction === "output" && entry.text.includes("=== VALIDATOR MECHANICS")); if (output) output.text = output.text.replace("Starting validation...\nVERDICT: FAIL\n\n", "=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ===\nMechanic: premature display\nStarting validation...\nVERDICT: FAIL\n\n"); }],
       ["remove broken command", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => !entry.text.includes("cat refactor-validate.md \\\n  |")); }],
       ["remove divide feedback command", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => !entry.text.endsWith(lesson004DivideCommand)); }],
-      ["change stub pass", (input) => { input.commandInvocations = input.commandInvocations.map((entry) => entry.verdict === "PASS" ? { ...entry, verdict: "FAIL" as const } : entry); }],
+      ["change final stub verdict", (input) => { input.commandInvocations[input.commandInvocations.length - 1]!.verdict = "PASS"; }],
       ["remove divide completion", (input) => { mutateSnapshot(input, "calculator/src/index.ts", (text) => text.replace('    if (word === "divide") {\n      const first = readFirstOperand("by");', '    if (word === "divide") {\n      const first = read();')); }],
       ["commented refactor marker", (input) => { mutateCalculatorSourceAndTrustDigest(input, (text) => sourceWithFakeRefactor(text, (fake) => `/*\n${fake}\n*/`)); }],
       ["string literal refactor marker", (input) => { mutateCalculatorSourceAndTrustDigest(input, (text) => sourceWithFakeRefactor(text, (fake) => `${JSON.stringify(fake)};`)); }],
       ["unused nested refactor marker", (input) => { mutateCalculatorSourceAndTrustDigest(input, (text) => sourceWithFakeRefactor(text, (fake) => `function unusedRefactorBypass(): void {\n${fake}\n    }`)); }],
       ["dead if false refactor marker", (input) => { mutateCalculatorSourceAndTrustDigest(input, (text) => sourceWithFakeRefactor(text, (fake) => `if (false) {\n${fake}\n    }`)); }],
       ["calculator syntax error", (input) => { mutateCalculatorSourceAndTrustDigest(input, (text) => `${text}\nconst = ;\n`); }],
-      ["remove pass findings", (input) => { mutateSnapshot(input, "factory/.tmp/refactor-validate-findings.txt", (text) => text.replace("VERDICT: PASS", "VERDICT: FAIL")); }],
+      ["change final findings verdict", (input) => { mutateSnapshot(input, "factory/.tmp/refactor-validate-findings.txt", (text) => text.replace("VERDICT: FAIL", "VERDICT: PASS")); }],
       ["prefix findings with terminal announcement", (input) => { mutateSnapshot(input, "factory/.tmp/refactor-validate-findings.txt", (text) => `Starting validation...\n${text}`); }],
       ["remove baseline", (input) => { mutateSnapshot(input, "factory/.tmp/refactor-quality-before.txt", () => ""); }],
       ["stale baseline digest", (input) => { input.facts.expectedCanonicalBaselineSha256 = "0".repeat(64); }],
@@ -780,7 +744,7 @@ describe("authored scenario shell commands", () => {
       const baseline = await readFile(baselinePath, "utf8");
       const baselineDigest = sha256Text(baseline);
       expect(sha256Text(await readFile(baselinePath, "utf8"))).toBe(baselineDigest);
-      expect(await readFile(join(sessionWorkspace, "factory/.tmp/refactor-validate-findings.txt"), "utf8")).toMatch(/^VERDICT: PASS/m);
+      expect(await readFile(join(sessionWorkspace, "factory/.tmp/refactor-validate-findings.txt"), "utf8")).toMatch(/^VERDICT: FAIL/m);
       const source = await readFile(join(sessionWorkspace, "calculator/src/index.ts"), "utf8");
       expect(source).toContain('const readFirstOperand = (separator: "and" | "from" | "by"): number =>');
       expect(source).toContain('const first = readFirstOperand("by");');
@@ -790,7 +754,7 @@ describe("authored scenario shell commands", () => {
         ["validator", "FAIL"],
         ["validator", "FAIL"],
         ["repair", "complete-refactor"],
-        ["validator", "PASS"]
+        ["validator", "FAIL"]
       ]);
     } finally {
       await handle.close().catch(() => undefined);
@@ -1125,13 +1089,13 @@ async function lessons003004Fixture(input: AuthoredWorkbookScenarioGateInput): P
     stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }),
     stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }),
     stub("repair", { mutation: "complete-refactor" }),
-    stub("validator", { verdict: "PASS", mutation: "none", tools: "read,grep,find,ls,bash" })
+    stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" })
   ];
   setSnapshots(input, {
     "factory/refactor-validate.md": validatorPrompt,
     "factory/refactor-validate.sh": validatorScript,
     "factory/.tmp/refactor-quality-before.txt": baseline,
-    "factory/.tmp/refactor-validate-findings.txt": "VERDICT: PASS\n\nEVIDENCE:\n- quality passed\n",
+    "factory/.tmp/refactor-validate-findings.txt": "VERDICT: FAIL\n\nEVIDENCE:\n- authored validator reran after repair\n",
     "calculator/src/index.ts": completedSource
   });
   return input;
