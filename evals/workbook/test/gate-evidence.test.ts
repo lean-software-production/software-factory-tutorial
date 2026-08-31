@@ -651,7 +651,7 @@ function lesson004DivideCommand(): string { return String.raw`(cd factory \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
 ${lesson004CurrentEvidenceAndValidationCommand()}
 cp factory/.tmp/refactor-validate-findings.txt factory/.tmp/refactor-final-pass.txt
-(trap 'cp factory/.tmp/refactor-final-pass.txt factory/.tmp/refactor-validate-findings.txt' EXIT; ./factory/refactor-validate.sh)`; }
+(cd factory && cat refactor.md .tmp/refactor-validate-findings.txt | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)); (trap 'cp factory/.tmp/refactor-final-pass.txt factory/.tmp/refactor-validate-findings.txt' EXIT; ./factory/refactor-validate.sh)`; }
 
 function multiplyOnlySource(source: string): string {
   return refactorSource(source, false);
