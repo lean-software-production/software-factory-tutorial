@@ -251,6 +251,12 @@ ${authoredValidatorPrompt}EOF
 cat > factory/refactor-validate.sh <<'EOF'
 ${authoredValidatorScript}EOF
 chmod +x factory/refactor-validate.sh
+mv factory/.tmp/refactor-quality-before.txt factory/.tmp/refactor-quality-before.saved
+if ./factory/refactor-validate.sh > factory/.tmp/refactor-guard-check.txt 2>&1; then echo 'Validator unexpectedly accepted a missing baseline.' >&2; exit 1; else guard_status=$?; fi
+cat factory/.tmp/refactor-guard-check.txt
+printf 'Missing-baseline exit status: %s\n' "$guard_status"
+mv factory/.tmp/refactor-quality-before.saved factory/.tmp/refactor-quality-before.txt
+rm factory/.tmp/refactor-guard-check.txt
 ./factory/refactor-validate.sh
 cat factory/.tmp/refactor-validate-findings.txt; printf '\nFIRST NON-EMPTY FINDINGS LINE: '; awk 'NF { print; exit }' factory/.tmp/refactor-validate-findings.txt; echo 'A FAIL verdict is valid here: this lesson builds the validator; repair follows.'; printf '\n%s\n' '=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ==='; echo 'Mechanic: missing-baseline guard'; grep -nF 'if [ ! -f .tmp/refactor-quality-before.txt ]; then' factory/refactor-validate.sh; echo 'Mechanic: baseline concatenated into validation'; grep -nF 'cat refactor-validate.md .tmp/refactor-quality-before.txt' factory/refactor-validate.sh; echo 'Mechanic: exact read-only tools'; grep -oF -- '--tools read,grep,find,ls,bash -p' factory/refactor-validate.sh; echo 'Mechanic: findings captured through tee'; grep -nF '| tee .tmp/refactor-validate-findings.txt' factory/refactor-validate.sh`;
 
@@ -426,8 +432,8 @@ const authoredWorkbookScenarioCatalog = [
       await driver.submitTerminalCommand("lesson--003-build-a-validator--implementation-order", brokenValidatorCommand, { label: "lesson003:broken-validator", expectedFeedback: feedbackAboutEvidenceCarriage });
       await driver.submitTerminalCommand("lesson--003-build-a-validator--implementation-order", correctedValidatorCommand, { label: "lesson003:correct-validator" });
       await driver.continueBlock("lesson--003-build-a-validator--advanced-substitute-another-validator", "lesson003:advanced");
-      const lesson003Reflection = await driver.submitReflection("lesson--003-build-a-validator--checks", "The terminal may announce validation before Pi runs. The captured findings file starts with a VERDICT line, uses read/grep/find/ls/bash but not edit or write, quotes real command evidence, writes through tee, and refuses if the baseline file is missing. That keeps checking separate from fixing.", "lesson003:checks");
-      await completeReflectionAfterPossibleFeedback(driver, "lesson--003-build-a-validator--checks", lesson003Reflection, "The validator's harness, not its FAIL or PASS result, is the lesson outcome: it checks the baseline before launch, concatenates that baseline into the prompt, grants only read/grep/find/ls/bash, and tees a VERDICT-first response into the findings file without fixing source.", "lesson003:checks:complete");
+      const lesson003Reflection = await driver.submitReflection("lesson--003-build-a-validator--checks", "I removed the baseline temporarily and the validator exited non-zero with its missing-baseline message. I restored the same saved baseline before the real validation run; I did not overwrite it by rerunning the doer. The captured findings file starts with a VERDICT line, uses read/grep/find/ls/bash but not edit or write, quotes real command evidence, and writes through tee. That keeps checking separate from fixing.", "lesson003:checks");
+      await completeReflectionAfterPossibleFeedback(driver, "lesson--003-build-a-validator--checks", lesson003Reflection, "Yes: the deliberate missing-baseline run exited non-zero. I then restored the exact saved baseline—not by rerunning the doer—and ran validation successfully. The harness concatenates that baseline into the prompt, grants only read/grep/find/ls/bash, and tees a VERDICT-first response without fixing source.", "lesson003:checks:complete");
       await driver.continueBlock("lesson--003-build-a-validator--pressure-test", "lesson003:pressure-test");
       await driver.continueBlock("lesson--004-feed-the-findings-back", "lesson004:introduction");
       await driver.continueBlock("lesson--004-feed-the-findings-back--key-concept", "lesson004:key-concept");
