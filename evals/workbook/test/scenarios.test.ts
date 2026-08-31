@@ -158,7 +158,8 @@ const lesson004CurrentEvidenceAndValidationCommand = String.raw`{
 } > factory/.tmp/refactor-current-evidence.txt
 cat factory/refactor-validate.md factory/.tmp/refactor-current-evidence.txt \
   | (cd calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
-  | tee factory/.tmp/refactor-validate-findings.txt`;
+  | tee factory/.tmp/refactor-validate-findings.txt
+rm factory/.tmp/refactor-current-evidence.txt`;
 const lesson004MultiplyCommand = String.raw`node <<'NODE'
 const { readFileSync, writeFileSync } = require('node:fs');
 const path = 'calculator/src/index.ts';
@@ -169,13 +170,13 @@ source = source.replace(
 );
 writeFileSync(path, source);
 NODE
-${lesson004CurrentEvidenceAndValidationCommand}`;
-const lesson004DivideCommand = String.raw`bash <<'BASH'
-(cd factory \
+${lesson004CurrentEvidenceAndValidationCommand}
+printf '%s\n' 'MULTIPLY-ONLY TURN: current validator findings follow; divide remains for feedback.'; cat factory/.tmp/refactor-validate-findings.txt`;
+const lesson004DivideCommand = String.raw`(cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
 ${lesson004CurrentEvidenceAndValidationCommand}
-BASH`;
+printf '%s\n' 'FEEDBACK TURN COMPLETED: prior validator findings were appended to the doer context; current findings follow.'; cat factory/.tmp/refactor-validate-findings.txt`;
 
 const completedSource = `type Output = (line: string) => void;
 

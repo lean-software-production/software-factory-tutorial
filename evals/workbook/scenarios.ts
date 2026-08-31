@@ -276,7 +276,8 @@ const lesson004CurrentEvidenceAndValidationCommand = String.raw`{
 } > factory/.tmp/refactor-current-evidence.txt
 cat factory/refactor-validate.md factory/.tmp/refactor-current-evidence.txt \
   | (cd calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
-  | tee factory/.tmp/refactor-validate-findings.txt`;
+  | tee factory/.tmp/refactor-validate-findings.txt
+rm factory/.tmp/refactor-current-evidence.txt`;
 const lesson004MultiplyCommand = String.raw`node <<'NODE'
 const { readFileSync, writeFileSync } = require('node:fs');
 const path = 'calculator/src/index.ts';
@@ -287,13 +288,13 @@ source = source.replace(
 );
 writeFileSync(path, source);
 NODE
-${lesson004CurrentEvidenceAndValidationCommand}`;
-const lesson004DivideCommand = String.raw`bash <<'BASH'
-(cd factory \
+${lesson004CurrentEvidenceAndValidationCommand}
+printf '%s\n' 'MULTIPLY-ONLY TURN: current validator findings follow; divide remains for feedback.'; cat factory/.tmp/refactor-validate-findings.txt`;
+const lesson004DivideCommand = String.raw`(cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
 ${lesson004CurrentEvidenceAndValidationCommand}
-BASH`;
+printf '%s\n' 'FEEDBACK TURN COMPLETED: prior validator findings were appended to the doer context; current findings follow.'; cat factory/.tmp/refactor-validate-findings.txt`;
 
 const lesson013SteerMessage = "Finish multiply and divide independently before validation.";
 const lesson013InitialReflection = "The factory root lives in factory/. The current assembly line is factory/refactor/. A second line would be a sibling such as factory/second-line/, with its own run.sh and prompt/script station files such as refactor.md, validate.md, repair.md, commit.md, and success.md. The current orchestrator is factory/refactor/run.sh. Its exact five unattended jobs are: start the doer, hand/carry inputs and evidence between stations, branch on the validator VERDICT, run repair after failures, and stop when PASS commits or the iteration/failure counters fire. factory/watch.sh and factory/ask.sh work for any line name; ask.sh is a no-tools station because the event record is piped to it. The most expensive unattended action is letting run.sh keep calling model stations, so the event record and logs are what I inspect for cost and behaviour. Repeated FAIL can mean the criterion is not met, or the evidence is missing or unreachable; I would compare the record and evidence with the criterion. Cost, regressions, and whether the result is worth it are still operator judgement.";
