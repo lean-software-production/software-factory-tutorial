@@ -407,7 +407,7 @@ const authoredWorkbookScenarioCatalog = [
     prerequisiteOverlay: authoredWorkbookPrerequisiteOverlay("lesson-003-prerequisites"),
     stubLessonNumber: 4,
     artifactAllowlist: lessons003004ArtifactAllowlist,
-    runnerPrivate: runnerPrivateDeclaration({ workspaceFiles: [commandStubInvocationEvidenceFile], commandStubInvocations: true, rawWorkbookTimeline: true, learnerWorkspaceFiles: lessons003004ArtifactAllowlist }),
+    runnerPrivate: runnerPrivateDeclaration({ workspaceFiles: [commandStubInvocationEvidenceFile], commandStubInvocations: true, rawWorkbookTimeline: true, learnerWorkspaceFiles: [...lessons003004ArtifactAllowlist, ".gitignore"] }),
     expectedModelCalls: freezeExpectedCalls({ mainTutor: 28, practiceCoach: 7, judge: 1 }),
     expectedModelCallDerivation: freezeStrings([
       "Main Tutor upper bound: actual path includes three terminal reviews, two reflection reviews, evaluated terminal/reflection/narrative blocks, lesson/part summaries, and workbook summary; conservative margin 28.",
