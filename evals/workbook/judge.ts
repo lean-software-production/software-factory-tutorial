@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { copyAuthoredWorkbookEvalTrace, enumerateAuthoredWorkbookEvalJudgeCitations, projectAuthoredWorkbookEvalTraceForJudge, type AuthoredWorkbookEvalCitation, type AuthoredWorkbookEvalJudgeTrace, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
+import { copyAuthoredWorkbookEvalTrace, enumerateAuthoredWorkbookEvalJudgeCitations, projectAuthoredWorkbookEvalTraceForJudge, type AuthoredWorkbookEvalCitation, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
 
 export const AUTHORED_WORKBOOK_JUDGE_COMMAND_TIMEOUT_MS = 120_000;
 export const AUTHORED_WORKBOOK_JUDGE_PROMPT_MAX_BYTES = 1_048_576;
@@ -82,7 +82,6 @@ export interface AuthoredWorkbookJudgeCommandRequest {
 export type AuthoredWorkbookJudgeSpawn = (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
 export type AuthoredWorkbookJudgeCommandLabel = "configured-command";
 
-type PromptCitation = AuthoredWorkbookEvalCitation & { value: unknown };
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -142,19 +141,8 @@ export function projectAuthoredWorkbookGateForPublicReport(gate: AuthoredWorkboo
   };
 }
 
-function valueForCitation(trace: AuthoredWorkbookEvalJudgeTrace, citation: AuthoredWorkbookEvalCitation): unknown {
-  switch (citation.kind) {
-    case "publicState": return trace.publicStates[citation.ref.index];
-    case "terminalTranscript": return trace.terminalTranscript[citation.ref.index];
-    case "reflection": return trace.reflections[citation.ref.index];
-    case "editor": return trace.editors[citation.ref.index];
-    case "progressionEvent": return trace.progressionEvents[citation.ref.index];
-    case "artifact": return trace.artifacts[citation.ref.index];
-  }
-}
-
-function citationsForPrompt(trace: AuthoredWorkbookEvalJudgeTrace): PromptCitation[] {
-  return enumerateAuthoredWorkbookEvalJudgeCitations(trace).map((citation) => ({ ...citation, value: valueForCitation(trace, citation) }));
+function citationsForPrompt(trace: ReturnType<typeof projectAuthoredWorkbookEvalTraceForJudge>): AuthoredWorkbookEvalCitation[] {
+  return enumerateAuthoredWorkbookEvalJudgeCitations(trace);
 }
 
 function resultShapeForScenario(scenario: AuthoredWorkbookEvalScenarioPublicDescriptor): Record<string, AuthoredWorkbookEvalJudgeCriterionScore> {
@@ -175,7 +163,7 @@ ${JSON.stringify(scenario, null, 2)}
 Allowlisted Judge-specific structural public workbook trace. Complete browser-public workbook states are compacted here for Judge/report use only; deterministic gates retain their complete state snapshots outside this prompt:
 ${JSON.stringify(trace, null, 2)}
 
-Trace citations. Each citation references one trace channel and includes the public value to inspect. Use citation ids in your result; do not invent ids:
+Trace citation index. Each citation references one value in the trace above without duplicating that value. Use citation ids in your result; do not invent ids:
 ${JSON.stringify(citationsForPrompt(trace), null, 2)}
 
 Structural deterministic gate summary. Gate assertion details are local diagnostics and are omitted here:

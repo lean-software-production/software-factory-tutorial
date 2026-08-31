@@ -184,7 +184,8 @@ describe("authored workbook judge prompt and result validation", () => {
 
     expect(prompt).toContain("Return JSON only");
     expect(prompt).toContain("Visible artifact can mention Coach handoff");
-    expect(prompt).toContain("\"value\"");
+    expect(prompt).not.toContain("\"value\"");
+    expect(prompt).toContain("Trace citation index");
     expect(prompt).toContain("\"public-contract\"");
     expect(prompt).toContain("terminalTranscript");
     expectNoPrivate(prompt);
@@ -255,7 +256,7 @@ describe("authored workbook judge prompt and result validation", () => {
     trace.artifacts = [];
 
     const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
-    const citations = JSON.parse(prompt.match(/Trace citations[\s\S]*?\n(\[[\s\S]*?\])\n\nStructural deterministic gate summary/)?.[1] ?? "[]") as Array<{ id: number; kind: string }>;
+    const citations = JSON.parse(prompt.match(/Trace citation index[\s\S]*?\n(\[[\s\S]*?\])\n\nStructural deterministic gate summary/)?.[1] ?? "[]") as Array<{ id: number; kind: string }>;
 
     expect(citations.map((citation) => [citation.id, citation.kind])).toEqual([[0, "publicState"], [1, "terminalTranscript"]]);
     expect(() => verifyAuthoredWorkbookJudgeResult({ criteria: { "public-contract": { score: 2, citations: [0], rationale: "state" }, "learner-progress": { score: 2, citations: [1], rationale: "terminal" } }, summary: "ok" }, scenario(), trace)).not.toThrow();
@@ -284,7 +285,7 @@ describe("authored workbook judge prompt and result validation", () => {
     }];
     const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
     const objects = createAuthoredWorkbookEvalReportBundleObjects({ runId: "private-state", scenario: scenario(), trace, gate: gate(), judgeInput: prompt, judge: judgeResult(), modelIdentities: modelIdentities() });
-    const promptTrace = JSON.parse(prompt.match(/Allowlisted Judge-specific structural public workbook trace[\s\S]*?:\n(\{[\s\S]*?\})\n\nTrace citations/)?.[1] ?? "{}");
+    const promptTrace = JSON.parse(prompt.match(/Allowlisted Judge-specific structural public workbook trace[\s\S]*?:\n(\{[\s\S]*?\})\n\nTrace citation index/)?.[1] ?? "{}");
     const serialized = JSON.stringify({ prompt, trace: objects.traceEnvelope.trace });
 
     expect(promptTrace).toEqual(objects.traceEnvelope.trace);
