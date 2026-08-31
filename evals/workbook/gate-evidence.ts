@@ -882,7 +882,7 @@ function changedWorkspacePathsOutsideAllowlist(beforeEntries: readonly AuthoredG
 }
 
 function allowedMutationDirectories(paths: readonly string[]): Set<string> {
-  const directories = new Set<string>();
+  const directories = new Set<string>([".tmp/"]);
   for (const path of paths) {
     const parts = path.replace(/\/$/, "").split("/").filter(Boolean);
     for (let index = 1; index < parts.length; index += 1) directories.add(`${parts.slice(0, index).join("/")}/`);

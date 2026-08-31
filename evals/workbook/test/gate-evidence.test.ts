@@ -76,6 +76,26 @@ describe("authored workbook gate evidence", () => {
     expect(sibling.facts.learnerWorkspaceChangedOutsideAllowlist).toContain("factory/refactor/.tmp/unlisted-sibling.txt");
   }, 30_000);
 
+  it("allows the empty session-local .tmp directory but not files created inside it", async () => {
+    const scenario = authoredWorkbookScenarioById("lessons-003-004-evidence-feedback");
+    const workspace = await tempWorkspace();
+    await rm(join(workspace.root, ".tmp"), { recursive: true, force: true });
+    const trace = lessons003004Trace();
+    const session = sessionFor(workspace.root);
+    await writeSessionEvents(session.sessionRoot, trace.internalEvents);
+    const collector = createAuthoredWorkbookScenarioGateEvidenceCollector({ scenario, workspace: fakeGuardedWorkspace(), session, trace, commandStubHandle: { hostEvidencePath: workspace.evidencePath, runId: RUN_ID }, probe: fakeProbe() });
+    await collector.captureBaseline();
+    await mkdir(join(workspace.root, ".tmp"));
+    await writeLessons003004Final(workspace.root, {});
+    await writeFile(workspace.evidencePath, lessons003004Evidence().map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+
+    const empty = await collector.collectGateInput();
+    expect(empty.facts.learnerWorkspaceChangedOutsideAllowlist).not.toContain(".tmp/");
+    await writeFile(join(workspace.root, ".tmp/unlisted.txt"), "not allowed\n");
+    const withFile = await collector.collectGateInput();
+    expect(withFile.facts.learnerWorkspaceChangedOutsideAllowlist).toContain(".tmp/unlisted.txt");
+  }, 30_000);
+
   it("derives Lesson 013 Git expectations with real Git tree directory/file byte ordering", async () => {
     const scenario = authoredWorkbookScenarioById("lesson-013-operator-judgement");
     const workspace = await tempWorkspace();
