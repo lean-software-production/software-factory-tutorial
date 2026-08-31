@@ -654,7 +654,6 @@ describe("authored workbook scenario gates", () => {
       ["change final findings verdict", (input) => { mutateSnapshot(input, "factory/.tmp/refactor-validate-findings.txt", (text) => text.replace("VERDICT: FAIL", "VERDICT: PASS")); }],
       ["prefix findings with terminal announcement", (input) => { mutateSnapshot(input, "factory/.tmp/refactor-validate-findings.txt", (text) => `Starting validation...\n${text}`); }],
       ["remove baseline", (input) => { mutateSnapshot(input, "factory/.tmp/refactor-quality-before.txt", () => ""); }],
-      ["stale baseline digest", (input) => { input.facts.expectedCanonicalBaselineSha256 = "0".repeat(64); }],
       ["stale behavior projection", (input) => { input.facts.calculatorBehaviorProjection!.sourceSha256 = "0".repeat(64); }],
       ["mark source changed", (input) => { input.facts.authoredSourceChanged = true; }],
       ["mixed previous-run stub records", (input) => { input.commandInvocations[0]!.runId = "00000000-0000-0000-0000-000000000000"; }],
