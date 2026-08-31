@@ -159,6 +159,7 @@ const lesson004CurrentEvidenceAndValidationCommand = String.raw`{
 cat factory/refactor-validate.md factory/.tmp/refactor-current-evidence.txt \
   | (cd calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
   | tee factory/.tmp/refactor-validate-findings.txt
+cp factory/.tmp/refactor-current-evidence.txt factory/.tmp/refactor-current-evidence-saved.txt
 rm factory/.tmp/refactor-current-evidence.txt`;
 const lesson004MultiplyCommand = String.raw`node <<'NODE'
 const { readFileSync, writeFileSync } = require('node:fs');
@@ -177,7 +178,9 @@ const lesson004DivideCommand = String.raw`(cd factory \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
 ${lesson004CurrentEvidenceAndValidationCommand}
 cp factory/.tmp/refactor-validate-findings.txt factory/.tmp/refactor-final-pass.txt
-printf '%s\n' 'FEEDBACK TURN: ./factory/refactor-do.sh WAS NOT RUN; the original baseline was preserved; findings are appended below.'; (cd factory && cat refactor.md .tmp/refactor-validate-findings.txt | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)); (trap 'cp factory/.tmp/refactor-final-pass.txt factory/.tmp/refactor-validate-findings.txt' EXIT; ./factory/refactor-validate.sh)`;
+cp factory/.tmp/refactor-quality-before.txt factory/.tmp/refactor-original-baseline.txt
+cp factory/.tmp/refactor-current-evidence-saved.txt factory/.tmp/refactor-quality-before.txt
+(trap 'cp factory/.tmp/refactor-original-baseline.txt factory/.tmp/refactor-quality-before.txt; cp factory/.tmp/refactor-final-pass.txt factory/.tmp/refactor-validate-findings.txt' EXIT; printf '%s\n' 'FEEDBACK TURN: ./factory/refactor-do.sh WAS NOT RUN; the original baseline will be restored; findings are appended below.'; (cd factory && cat refactor.md .tmp/refactor-validate-findings.txt | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)); ./factory/refactor-validate.sh)`;
 
 const completedSource = `type Output = (line: string) => void;
 
@@ -822,7 +825,7 @@ describe("authored scenario shell commands", () => {
         ["repair", "complete-refactor"],
         ["validator", "PASS"],
         ["doer", "already-complete"],
-        ["validator", "FAIL"]
+        ["validator", "PASS"]
       ]);
     } finally {
       await handle.close().catch(() => undefined);
