@@ -169,7 +169,7 @@ source = source.replace(
 writeFileSync(path, source);
 NODE
 ${lesson004CurrentEvidenceAndValidationCommand}
-printf '%s\n' 'MULTIPLY-ONLY TURN: current validator findings follow; divide remains for feedback.'; cat factory/.tmp/refactor-validate-findings.txt
+printf '%s\n' 'MISTAKEN STOP: multiply is fixed, so I will stop even though divide remains duplicated.'; cat factory/.tmp/refactor-validate-findings.txt
 }`;
 const lesson004DivideCommand = String.raw`{
 (cd factory \
@@ -804,7 +804,7 @@ describe("authored scenario shell commands", () => {
       expect(correctedOutput).not.toMatch(/exact labelled TESTS|complete QUALITY\/TESTS\/DIFF|current PASS/i);
       expect(outputs[2]).toMatch(/^VERDICT: FAIL/m);
       expect(outputs[2]).toContain("one or more operator branches still duplicate parser work");
-      expect(outputs[2]).toContain("MULTIPLY-ONLY TURN");
+      expect(outputs[2]).toContain("MISTAKEN STOP");
       const baseline = await readFile(baselinePath, "utf8");
       const baselineDigest = sha256Text(baseline);
       expect(sha256Text(await readFile(baselinePath, "utf8"))).toBe(baselineDigest);

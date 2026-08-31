@@ -645,7 +645,7 @@ source = source.replace(
 writeFileSync(path, source);
 NODE
 ${lesson004CurrentEvidenceAndValidationCommand()}
-printf '%s\n' 'MULTIPLY-ONLY TURN: current validator findings follow; divide remains for feedback.'; cat factory/.tmp/refactor-validate-findings.txt
+printf '%s\n' 'MISTAKEN STOP: multiply is fixed, so I will stop even though divide remains duplicated.'; cat factory/.tmp/refactor-validate-findings.txt
 }`; }
 function lesson004DivideCommand(): string { return String.raw`{
 (cd factory \
