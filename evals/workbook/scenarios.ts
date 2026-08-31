@@ -262,6 +262,7 @@ rm factory/.tmp/refactor-guard-check.txt
 cat factory/.tmp/refactor-validate-findings.txt; printf '\nFIRST NON-EMPTY FINDINGS LINE: '; awk 'NF { print; exit }' factory/.tmp/refactor-validate-findings.txt; echo 'A FAIL verdict is valid here: this lesson builds the validator; repair follows.'; printf '\n%s\n' '=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ==='; echo 'Mechanic: missing-baseline guard'; grep -nF 'if [ ! -f .tmp/refactor-quality-before.txt ]; then' factory/refactor-validate.sh; echo 'Mechanic: baseline concatenated into validation'; grep -nF 'cat refactor-validate.md .tmp/refactor-quality-before.txt' factory/refactor-validate.sh; echo 'Mechanic: exact read-only tools'; grep -oF -- '--tools read,grep,find,ls,bash -p' factory/refactor-validate.sh; echo 'Mechanic: findings captured through tee'; grep -nF '| tee .tmp/refactor-validate-findings.txt' factory/refactor-validate.sh`;
 
 const lesson004DivideCommand = String.raw`{
+printf '%s\n' 'LESSON 004 FEEDBACK TURN: refactor-do.sh is not run here; the Lesson 003 baseline stays intact.'
 node <<'NODE'
 const { readFileSync, writeFileSync } = require('node:fs');
 const path = 'calculator/src/index.ts';
@@ -773,7 +774,7 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
     ]), "Structural command evidence shows current-run doer/validator records in exact order through the initial FAIL, findings-appended repair, and authored revalidation."),
     assertion("lessons003004-source-complete", hasTrustedCalculatorBehavior(input, source), "Trusted calculator behavior projections and source digest show multiply and divide completed, not commented or dead code."),
     assertion("lessons003004-findings-verdict", firstNonEmptyLineIsVerdict(findings, "FAIL"), "The final authored validator rerun records its exact VERDICT: FAIL after the findings-appended repair turn."),
-    assertion("lessons003004-baseline-preserved", /eslint|Findings reported by:/i.test(files.get("factory/.tmp/refactor-quality-before.txt") ?? "") && !lesson004DivideCommand.includes("refactor-do.sh"), "The feedback turn keeps a real non-empty quality baseline and does not invoke the baseline-recording doer script."),
+    assertion("lessons003004-baseline-preserved", /eslint|Findings reported by:/i.test(files.get("factory/.tmp/refactor-quality-before.txt") ?? "") && !/(^|\s)\.\/factory\/refactor-do\.sh(?:\s|$)/m.test(lesson004DivideCommand), "The feedback turn keeps a real non-empty quality baseline and does not invoke the baseline-recording doer script."),
     assertion("lessons003004-immutability", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged && input.facts.learnerWorkspaceChangedOutsideAllowlist.length === 0, "Only allowlisted learner workspace files changed.")
   ]);
 }

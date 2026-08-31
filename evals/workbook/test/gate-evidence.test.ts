@@ -649,6 +649,7 @@ ${lesson004CurrentEvidenceAndValidationCommand()}
 printf '%s\n' 'MISTAKEN STOP: multiply is fixed, so I will stop even though divide remains duplicated.'; cat factory/.tmp/refactor-validate-findings.txt
 }`; }
 function lesson004DivideCommand(): string { return String.raw`{
+printf '%s\n' 'LESSON 004 FEEDBACK TURN: refactor-do.sh is not run here; the Lesson 003 baseline stays intact.'
 node <<'NODE'
 const { readFileSync, writeFileSync } = require('node:fs');
 const path = 'calculator/src/index.ts';

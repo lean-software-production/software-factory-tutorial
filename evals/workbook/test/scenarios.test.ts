@@ -131,6 +131,7 @@ const lesson001SuppliedCommand = `echo "Describe what this calculator does, in t
 const lesson001ChangedJobCommand = `echo "What files make up this calculator, and what does each one appear to do?" \\\n  | (cd calculator && pi --no-session --tools read,grep,find,ls -p)`;
 
 const lesson004DivideCommand = String.raw`{
+printf '%s\n' 'LESSON 004 FEEDBACK TURN: refactor-do.sh is not run here; the Lesson 003 baseline stays intact.'
 node <<'NODE'
 const { readFileSync, writeFileSync } = require('node:fs');
 const path = 'calculator/src/index.ts';
