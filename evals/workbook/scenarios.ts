@@ -272,6 +272,7 @@ source = source.replace(
 );
 writeFileSync(path, source);
 NODE
+./factory/refactor-validate.sh
 (cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
@@ -765,6 +766,7 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
       { station: "doer", mutation: "partial-refactor" },
       { station: "validator", verdict: "FAIL", mutation: "none" },
       { station: "repair", mutation: "complete-refactor" },
+      { station: "validator", verdict: "FAIL", mutation: "none" },
       { station: "validator", verdict: "FAIL", mutation: "none" },
       { station: "repair", mutation: "complete-refactor" },
       { station: "validator", verdict: "FAIL", mutation: "none" }

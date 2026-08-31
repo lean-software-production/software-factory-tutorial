@@ -141,6 +141,7 @@ source = source.replace(
 );
 writeFileSync(path, source);
 NODE
+./factory/refactor-validate.sh
 (cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
@@ -763,6 +764,7 @@ describe("authored scenario shell commands", () => {
         ["validator", "FAIL"],
         ["repair", "complete-refactor"],
         ["validator", "FAIL"],
+        ["validator", "FAIL"],
         ["repair", "complete-refactor"],
         ["validator", "FAIL"]
       ]);
@@ -1098,6 +1100,7 @@ async function lessons003004Fixture(input: AuthoredWorkbookScenarioGateInput): P
     stub("doer", { mutation: "partial-refactor" }),
     stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }),
     stub("repair", { mutation: "complete-refactor" }),
+    stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }),
     stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }),
     stub("repair", { mutation: "complete-refactor" }),
     stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" })
