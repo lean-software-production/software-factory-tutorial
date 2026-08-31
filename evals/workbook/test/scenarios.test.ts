@@ -148,12 +148,7 @@ const lesson004CurrentEvidenceAndValidationCommand = String.raw`{
   echo
   echo "=== WORKING DIFF ==="
   git diff -- calculator/src/index.ts
-} > factory/.tmp/refactor-current-evidence.txt
-cat factory/refactor-validate.md factory/.tmp/refactor-current-evidence.txt \
-  | (cd calculator && pi --no-session --tools read,grep,find,ls,bash -p) \
-  | tee factory/.tmp/refactor-validate-findings.txt
-cp factory/.tmp/refactor-current-evidence.txt factory/.tmp/refactor-current-evidence-saved.txt
-rm factory/.tmp/refactor-current-evidence.txt`;
+} > factory/.tmp/refactor-current-evidence.txt`;
 const lesson004MultiplyCommand = String.raw`{
 node <<'NODE'
 const { readFileSync, writeFileSync } = require('node:fs');
@@ -173,10 +168,9 @@ const lesson004DivideCommand = String.raw`{
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
 ${lesson004CurrentEvidenceAndValidationCommand}
-cp factory/.tmp/refactor-validate-findings.txt factory/.tmp/refactor-final-pass.txt
 cp factory/.tmp/refactor-quality-before.txt factory/.tmp/refactor-original-baseline.txt
-cp factory/.tmp/refactor-current-evidence-saved.txt factory/.tmp/refactor-quality-before.txt
-(trap 'cp factory/.tmp/refactor-original-baseline.txt factory/.tmp/refactor-quality-before.txt; cp factory/.tmp/refactor-final-pass.txt factory/.tmp/refactor-validate-findings.txt' EXIT; printf '%s\n' 'FEEDBACK TURN: ./factory/refactor-do.sh WAS NOT RUN; the original baseline will be restored; findings are appended below.'; (cd factory && cat refactor.md .tmp/refactor-validate-findings.txt | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)); ./factory/refactor-validate.sh)
+cp factory/.tmp/refactor-current-evidence.txt factory/.tmp/refactor-quality-before.txt
+(trap 'cp factory/.tmp/refactor-original-baseline.txt factory/.tmp/refactor-quality-before.txt; rm -f factory/.tmp/refactor-original-baseline.txt factory/.tmp/refactor-current-evidence.txt' EXIT; ./factory/refactor-validate.sh)
 }`;
 
 const completedSource = `type Output = (line: string) => void;
@@ -796,8 +790,6 @@ describe("authored scenario shell commands", () => {
         ["validator", "FAIL"],
         ["validator", "FAIL"],
         ["repair", "complete-refactor"],
-        ["validator", "PASS"],
-        ["doer", "already-complete"],
         ["validator", "PASS"]
       ]);
     } finally {
@@ -1133,8 +1125,6 @@ async function lessons003004Fixture(input: AuthoredWorkbookScenarioGateInput): P
     stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }),
     stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }),
     stub("repair", { mutation: "complete-refactor" }),
-    stub("validator", { verdict: "PASS", mutation: "none", tools: "read,grep,find,ls,bash" }),
-    stub("doer", { mutation: "already-complete" }),
     stub("validator", { verdict: "PASS", mutation: "none", tools: "read,grep,find,ls,bash" })
   ];
   setSnapshots(input, {
