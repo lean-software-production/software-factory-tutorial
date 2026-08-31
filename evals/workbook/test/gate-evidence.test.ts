@@ -651,7 +651,7 @@ function lesson004DivideCommand(): string { return String.raw`(cd factory \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
 ${lesson004CurrentEvidenceAndValidationCommand()}
 cp factory/.tmp/refactor-validate-findings.txt factory/.tmp/refactor-final-pass.txt
-printf '%s\n' 'FEEDBACK DOER COMMAND COMPLETED BEFORE THIS REQUIRED VALIDATION.'; ./factory/refactor-validate.sh; cp factory/.tmp/refactor-final-pass.txt factory/.tmp/refactor-validate-findings.txt`; }
+(trap 'cp factory/.tmp/refactor-final-pass.txt factory/.tmp/refactor-validate-findings.txt' EXIT; ./factory/refactor-validate.sh)`; }
 
 function multiplyOnlySource(source: string): string {
   return refactorSource(source, false);
