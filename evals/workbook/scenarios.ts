@@ -433,7 +433,7 @@ const authoredWorkbookScenarioCatalog = [
       await driver.submitTerminalCommand("lesson--003-build-a-validator--implementation-order", correctedValidatorCommand, { label: "lesson003:correct-validator" });
       await driver.continueBlock("lesson--003-build-a-validator--advanced-substitute-another-validator", "lesson003:advanced");
       const lesson003Reflection = await driver.submitReflection("lesson--003-build-a-validator--checks", "I removed the baseline temporarily and the validator exited non-zero with its missing-baseline message. I restored the same saved baseline before the real validation run; I did not overwrite it by rerunning the doer. The captured findings file starts with a VERDICT line, uses read/grep/find/ls/bash but not edit or write, quotes real command evidence, and writes through tee. That keeps checking separate from fixing.", "lesson003:checks");
-      await completeReflectionAfterPossibleFeedback(driver, "lesson--003-build-a-validator--checks", lesson003Reflection, "Yes: the deliberate missing-baseline run exited non-zero. I then restored the exact saved baseline—not by rerunning the doer—and ran validation successfully. The harness concatenates that baseline into the prompt, grants only read/grep/find/ls/bash, and tees a VERDICT-first response without fixing source.", "lesson003:checks:complete");
+      await completeReflectionAfterPossibleFeedback(driver, "lesson--003-build-a-validator--checks", lesson003Reflection, ["Yes: the deliberate missing-baseline run exited non-zero. I then restored the exact saved baseline—not by rerunning the doer—and ran validation successfully. The harness concatenates that baseline into the prompt, grants only read/grep/find/ls/bash, and tees a VERDICT-first response without fixing source.", "Direct answers: yes, the missing-baseline run exited non-zero. No, I did not rerun the doer merely to restore the baseline; I restored the exact saved baseline, then the real validator run produced a VERDICT-first findings file. The validator remained read-only and tee preserved its response."], "lesson003:checks:complete");
       await driver.continueBlock("lesson--003-build-a-validator--pressure-test", "lesson003:pressure-test");
       await driver.continueBlock("lesson--004-feed-the-findings-back", "lesson004:introduction");
       await driver.continueBlock("lesson--004-feed-the-findings-back--key-concept", "lesson004:key-concept");
@@ -670,13 +670,16 @@ async function completeReflectionAfterPossibleFeedback(
   driver: Pick<AuthoredWorkbookDriver, "submitReflectionFollowUp" | "completeReflection">,
   blockId: string,
   state: unknown,
-  followUp: string,
+  followUp: string | readonly string[],
   label: string
 ): Promise<void> {
-  if (checkpointStatusFor(state as WorkbookPublicStateLike, blockId) === "feedback") {
-    const followUpState = await driver.submitReflectionFollowUp(blockId, followUp, `${label}:follow-up`);
-    if (checkpointStatusFor(followUpState as WorkbookPublicStateLike, blockId) === "feedback") throw new Error(`Tutor still requested feedback for ${blockId} after the authored follow-up.`);
+  let currentState = state;
+  const followUps = typeof followUp === "string" ? [followUp] : [...followUp];
+  for (const [index, response] of followUps.entries()) {
+    if (checkpointStatusFor(currentState as WorkbookPublicStateLike, blockId) !== "feedback") break;
+    currentState = await driver.submitReflectionFollowUp(blockId, response, `${label}:follow-up:${index + 1}`);
   }
+  if (checkpointStatusFor(currentState as WorkbookPublicStateLike, blockId) === "feedback") throw new Error(`Tutor still requested feedback for ${blockId} after the authored follow-up.`);
   await driver.completeReflection(blockId, label);
 }
 
