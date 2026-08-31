@@ -177,7 +177,7 @@ const lesson004DivideCommand = String.raw`(cd factory \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
 ${lesson004CurrentEvidenceAndValidationCommand}
 cp factory/.tmp/refactor-validate-findings.txt factory/.tmp/refactor-final-pass.txt
-(cd factory && cat refactor.md .tmp/refactor-validate-findings.txt | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)); (trap 'cp factory/.tmp/refactor-final-pass.txt factory/.tmp/refactor-validate-findings.txt' EXIT; ./factory/refactor-validate.sh)`;
+printf '%s\n' 'FEEDBACK TURN: ./factory/refactor-do.sh WAS NOT RUN; the original baseline was preserved; findings are appended below.'; (cd factory && cat refactor.md .tmp/refactor-validate-findings.txt | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)); (trap 'cp factory/.tmp/refactor-final-pass.txt factory/.tmp/refactor-validate-findings.txt' EXIT; ./factory/refactor-validate.sh)`;
 
 const completedSource = `type Output = (line: string) => void;
 
