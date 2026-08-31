@@ -66,9 +66,6 @@ class Lessons003004WorkflowFakeTutor extends RecordingMainTutor {
     if (/cat refactor-validate\.md\s*\\\s*\|/.test(command) && !command.includes("refactor-quality-before.txt")) {
       return { outcome: "feedback", message: "Carry the recorded quality baseline into the validator and tee findings for the next lesson." };
     }
-    if (command.endsWith(lesson004MultiplyCommand)) {
-      return { outcome: "feedback", message: "Multiply has been repaired, but the divide branch still needs feedback before this can pass." };
-    }
     return { outcome: "accepted", message: "Accepted by deterministic fake tutor." };
   }
 }
@@ -409,7 +406,6 @@ describe("authored workbook scenario descriptors", () => {
     expect(commands[1]).toContain("./factory/refactor-validate.sh\ncat factory/.tmp/refactor-validate-findings.txt; printf");
     expect(commands[1]).toContain("grep -nF 'if [ ! -f .tmp/refactor-quality-before.txt ]; then' factory/refactor-validate.sh");
     expect(commands[1]).toContain("grep -oF -- '--tools read,grep,find,ls,bash -p' factory/refactor-validate.sh");
-    expect(commands.some((command) => command.endsWith(lesson004MultiplyCommand))).toBe(true);
     expect(commands.some((command) => command.endsWith(lesson004DivideCommand))).toBe(true);
     expect(commands.every((command) => !command.startsWith("export PATH=") && !command.includes("AUTHORED_EVAL_COMMAND_STUB_CONFIG"))).toBe(true);
 
@@ -449,20 +445,12 @@ describe("authored workbook scenario descriptors", () => {
     await scenario.drive({ driver: noOpRecorder });
 
     const checkpointRecorder = createAuthoredWorkbookScenarioGateCheckpointRecorder(scenario);
-    const recorder = new RecordingDriver();
-    const checkpointCallCounts: number[] = [];
-    await scenario.drive({
-      driver: recorder,
-      captureGateCheckpoint: (label) => { checkpointRecorder.captureGateCheckpoint(label); checkpointCallCounts.push(recorder.calls.length); }
-    });
-    expect(checkpointRecorder.labels).toEqual(["lessons003004:after-multiply-only"]);
-    const multiplyCall = recorder.calls.findIndex((call) => call.command?.endsWith(lesson004MultiplyCommand));
-    const divideCall = recorder.calls.findIndex((call) => call.command?.endsWith(lesson004DivideCommand));
-    expect(checkpointCallCounts).toEqual([multiplyCall + 1]);
-    expect(divideCall).toBe(multiplyCall + 1);
-    expect(() => checkpointRecorder.captureGateCheckpoint("lessons003004:after-multiply-only")).toThrow(/duplicate gate checkpoint/);
-    const primerRecorder = createAuthoredWorkbookScenarioGateCheckpointRecorder(authoredWorkbookScenarioById("primer-validation-misconception"));
-    expect(() => primerRecorder.captureGateCheckpoint("lessons003004:after-multiply-only")).toThrow(/does not declare gate checkpoint/);
+    expect(checkpointRecorder.labels).toEqual([]);
+    expect(() => checkpointRecorder.captureGateCheckpoint("lessons003004:after-multiply-only")).toThrow(/does not declare gate checkpoint/);
+    const declaredRecorder = createAuthoredWorkbookScenarioGateCheckpointRecorder({ id: "checkpoint-test" as any, gateCheckpoints: ["lessons003004:after-multiply-only"] });
+    declaredRecorder.captureGateCheckpoint("lessons003004:after-multiply-only");
+    expect(declaredRecorder.labels).toEqual(["lessons003004:after-multiply-only"]);
+    expect(() => declaredRecorder.captureGateCheckpoint("lessons003004:after-multiply-only")).toThrow(/duplicate gate checkpoint/);
     expect(() => createAuthoredWorkbookScenarioGateCheckpointRecorder({ id: "lessons-003-004-evidence-feedback", gateCheckpoints: ["unknown" as any] })).toThrow(/Unknown authored workbook gate checkpoint label/);
   });
 
@@ -575,7 +563,7 @@ describe("authored workbook scenario gates", () => {
       const rawEvents = await readAuthoredWorkbookTimeline(workspace.latestSession().sessionRoot);
       const publicTrace = projectAuthoredWorkbookEvalTrace({ ...trace, internalEvents: rawEvents });
       const inputs = publicTrace.terminalTranscript.filter((entry) => entry.direction === "input").map((entry) => entry.text.replace(/[\r\n]+$/, ""));
-      expect(inputs).toHaveLength(4);
+      expect(inputs).toHaveLength(3);
       expect(inputs[1]).not.toContain("sed -n '1,120p' factory/refactor-validate.sh");
       expect(inputs[1]).toContain("./factory/refactor-validate.sh\ncat factory/.tmp/refactor-validate-findings.txt; printf");
       const visibleOutput = publicTrace.terminalTranscript.filter((entry) => entry.direction === "output").map((entry) => entry.text).join("\n");
@@ -584,11 +572,10 @@ describe("authored workbook scenario gates", () => {
       expect(verdictIndex).toBeGreaterThanOrEqual(0);
       expect(mechanicsIndex).toBeGreaterThan(verdictIndex);
       for (const marker of ["Mechanic: missing-baseline guard", "if [ ! -f .tmp/refactor-quality-before.txt ]; then", "Mechanic: baseline concatenated into validation", "cat refactor-validate.md .tmp/refactor-quality-before.txt", "Mechanic: exact read-only tools", "--tools read,grep,find,ls,bash -p", "Mechanic: findings captured through tee", "| tee .tmp/refactor-validate-findings.txt"]) expect(visibleOutput).toContain(marker);
-      expect(checkpoints.labels).toEqual(["lessons003004:after-multiply-only"]);
+      expect(checkpoints.labels).toEqual([]);
       const feedbackMessages = publicTrace.publicStates.flatMap((entry) => entry.state.progress.blocks.flatMap((block) => block.terminal?.phase === "feedback" ? [block.terminal.message] : []));
       expect(feedbackMessages).toEqual(expect.arrayContaining([
-        expect.stringMatching(/baseline|tee|findings/i),
-        expect.stringMatching(/divide branch/i)
+        expect.stringMatching(/baseline|tee|findings/i)
       ]));
       expect(publicTrace.progressionEvents).toEqual(expect.arrayContaining([
         expect.objectContaining({ type: "block_completed", blockId: "lesson--004-feed-the-findings-back" }),
@@ -698,7 +685,6 @@ describe("authored workbook scenario gates", () => {
       ["remove visible corrected mechanics", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => entry.direction !== "output" || !entry.text.includes("refactor-quality-before.txt")); }],
       ["show mechanics before validator verdict", (input) => { const output = input.trace.terminalTranscript.find((entry) => entry.direction === "output" && entry.text.includes("=== VALIDATOR MECHANICS")); if (output) output.text = output.text.replace("Starting validation...\nVERDICT: FAIL\n\n", "=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ===\nMechanic: premature display\nStarting validation...\nVERDICT: FAIL\n\n"); }],
       ["remove broken command", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => !entry.text.includes("cat refactor-validate.md \\\n  |")); }],
-      ["remove multiply command", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => !entry.text.endsWith(lesson004MultiplyCommand)); }],
       ["remove divide feedback command", (input) => { input.trace.terminalTranscript = input.trace.terminalTranscript.filter((entry) => !entry.text.endsWith(lesson004DivideCommand)); }],
       ["change stub pass", (input) => { input.commandInvocations = input.commandInvocations.map((entry) => entry.verdict === "PASS" ? { ...entry, verdict: "FAIL" as const } : entry); }],
       ["remove divide completion", (input) => { mutateSnapshot(input, "calculator/src/index.ts", (text) => text.replace('    if (word === "divide") {\n      const first = readFirstOperand("by");', '    if (word === "divide") {\n      const first = read();')); }],
@@ -776,19 +762,14 @@ describe("authored scenario shell commands", () => {
     const { workspace, sessionWorkspace, handle, commands } = await liveScenarioHarness(scenario.id);
     try {
       const bodies = commands.map(stripActivation);
-      expect(bodies).toHaveLength(4);
+      expect(bodies).toHaveLength(3);
       const baselinePath = join(sessionWorkspace, "factory/.tmp/refactor-quality-before.txt");
       const outputs: string[] = [];
       for (const [index, command] of bodies.entries()) {
-        outputs.push(await execShell(command, sessionWorkspace, stubbedShellEnv(handle), index === 3 ? 20_000 : 10_000));
+        outputs.push(await execShell(command, sessionWorkspace, stubbedShellEnv(handle), index === 2 ? 20_000 : 10_000));
         if (index === 1) {
           const baseline = await readFile(baselinePath, "utf8");
           expect(sha256Text(baseline)).toBe(sha256Text(await readFile(baselinePath, "utf8")));
-        }
-        if (index === 2) {
-          const sourceAfterMultiply = await readFile(join(sessionWorkspace, "calculator/src/index.ts"), "utf8");
-          expect(sourceAfterMultiply).toContain('const first = readFirstOperand("and");');
-          expect(sourceAfterMultiply).toContain('if (pieces[place++] !== "by") fail();');
         }
       }
       const correctedOutput = outputs[1]!;
@@ -802,9 +783,6 @@ describe("authored scenario shell commands", () => {
       expect(correctedOutput).toMatch(/^Starting validation\.\.\.\nVERDICT: FAIL/m);
       expect(correctedOutput).toContain("Current quality still reports: calculator/src/index.ts duplicated operator branch parser.");
       expect(correctedOutput).not.toMatch(/exact labelled TESTS|complete QUALITY\/TESTS\/DIFF|current PASS/i);
-      expect(outputs[2]).toMatch(/^VERDICT: FAIL/m);
-      expect(outputs[2]).toContain("one or more operator branches still duplicate parser work");
-      expect(outputs[2]).toContain("MISTAKEN STOP");
       const baseline = await readFile(baselinePath, "utf8");
       const baselineDigest = sha256Text(baseline);
       expect(sha256Text(await readFile(baselinePath, "utf8"))).toBe(baselineDigest);
@@ -815,7 +793,6 @@ describe("authored scenario shell commands", () => {
       const evidence = await readAuthoredCommandStubEvidence(handle.hostEvidencePath);
       expect(evidence.filter((entry) => entry.accepted && entry.kind === "pi").map((entry) => [entry.station, entry.verdict ?? entry.mutation])).toEqual([
         ["doer", "partial-refactor"],
-        ["validator", "FAIL"],
         ["validator", "FAIL"],
         ["validator", "FAIL"],
         ["repair", "complete-refactor"],
@@ -1145,8 +1122,6 @@ async function lessons003004Fixture(input: AuthoredWorkbookScenarioGateInput): P
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "observer", text: "Feedback: carry the baseline with a guard and tee findings." },
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\ncat refactor-validate.md .tmp/refactor-quality-before.txt \\\n  | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p)" },
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "output", text: "Starting validation...\nVERDICT: FAIL\n\n=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ===\nMechanic: missing-baseline guard\n6:if [ ! -f .tmp/refactor-quality-before.txt ]; then\nMechanic: baseline concatenated into validation\n11:cat refactor-validate.md .tmp/refactor-quality-before.txt \\\nMechanic: exact read-only tools\n--tools read,grep,find,ls,bash -p\nMechanic: findings captured through tee\n13:  | tee .tmp/refactor-validate-findings.txt\n" },
-    { blockId: "lesson--004-feed-the-findings-back--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\n" + lesson004MultiplyCommand },
-    { blockId: "lesson--004-feed-the-findings-back--implementation-order", direction: "observer", text: "Feedback: multiply is fixed but divide still has duplicated branch parser findings." },
     { blockId: "lesson--004-feed-the-findings-back--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\n" + lesson004DivideCommand }
   ];
   input.trace.reflections = [
@@ -1157,9 +1132,9 @@ async function lessons003004Fixture(input: AuthoredWorkbookScenarioGateInput): P
     stub("doer", { mutation: "partial-refactor" }),
     stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }),
     stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }),
-    stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }),
-    stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }),
     stub("repair", { mutation: "complete-refactor" }),
+    stub("validator", { verdict: "PASS", mutation: "none", tools: "read,grep,find,ls,bash" }),
+    stub("doer", { mutation: "already-complete" }),
     stub("validator", { verdict: "PASS", mutation: "none", tools: "read,grep,find,ls,bash" })
   ];
   setSnapshots(input, {

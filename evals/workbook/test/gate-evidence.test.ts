@@ -51,16 +51,6 @@ describe("authored workbook gate evidence", () => {
     }
   }, 30_000);
 
-  it("captures the multiply-only checkpoint immutably and rejects stale probe facts through the gate", async () => {
-    const scenario = authoredWorkbookScenarioById("lessons-003-004-evidence-feedback");
-    const fixture = await gateFixture(scenario);
-    const checkpoint = fixture.input.facts.calculatorBehaviorTimeline?.find((entry: { label: string }) => entry.label === "after-multiply-only");
-    expect(checkpoint?.cases).toEqual([{ input: "multiply 6 by 7", output: 42 }]);
-    const mutated = structuredClone(fixture.input);
-    mutated.facts.calculatorBehaviorTimeline![0]!.sourceSha256 = mutated.facts.calculatorBehaviorProjection!.sourceSha256;
-    expect(scenario.gate(mutated).passed).toBe(false);
-  }, 20_000);
-
   it("allows private raw event files and only necessary ancestor dirs in the mutation manifest without public capture", async () => {
     const scenario = authoredWorkbookScenarioById("lesson-013-operator-judgement");
     const workspace = await tempWorkspace();
@@ -389,8 +379,6 @@ async function gateFixture(scenario: AuthoredWorkbookScenarioDescriptor, options
   const collector = createAuthoredWorkbookScenarioGateEvidenceCollector({ scenario, workspace: fakeGuardedWorkspace(), session, trace, commandStubHandle: scenario.stubLessonNumber === undefined ? undefined : { hostEvidencePath: workspace.evidencePath, runId: RUN_ID }, probe: fakeProbe() });
   await collector.captureBaseline();
   if (scenario.id === "lessons-003-004-evidence-feedback") {
-    await writeFile(join(workspace.root, "calculator/src/index.ts"), multiplyOnlySource(await readFile(join(workspace.root, "calculator/src/index.ts"), "utf8")));
-    await collector.captureGateCheckpoint("lessons003004:after-multiply-only");
     await writeLessons003004Final(workspace.root, options);
     await writeFile(workspace.evidencePath, lessons003004Evidence().map((entry) => JSON.stringify(entry)).join("\n") + "\n");
   } else if (scenario.id === "lesson-013-operator-judgement") {
@@ -506,8 +494,6 @@ function lessons003004Trace(options: { rawJump?: boolean } = {}): AuthoredWorkbo
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\ncat refactor-validate.md \\\n  | (cd ../calculator && pi --no-session --tools read,grep,find,ls,bash -p)" },
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "observer", text: "Feedback: carry the baseline with a guard and tee findings." },
     { blockId: "lesson--003-build-a-validator--implementation-order", direction: "output", text: "Starting validation...\nVERDICT: FAIL\n\n=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ===\nMechanic: missing-baseline guard\n6:if [ ! -f .tmp/refactor-quality-before.txt ]; then\nMechanic: baseline concatenated into validation\n11:cat refactor-validate.md .tmp/refactor-quality-before.txt \\\nMechanic: exact read-only tools\n--tools read,grep,find,ls,bash -p\nMechanic: findings captured through tee\n13:  | tee .tmp/refactor-validate-findings.txt\n" },
-    { blockId: "lesson--004-feed-the-findings-back--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\n" + lesson004MultiplyCommand() },
-    { blockId: "lesson--004-feed-the-findings-back--implementation-order", direction: "observer", text: "Feedback: multiply is fixed but divide still has findings." },
     { blockId: "lesson--004-feed-the-findings-back--implementation-order", direction: "input", text: "export PATH=/stubs:$PATH\n" + lesson004DivideCommand() }
   ];
   trace.reflections = [{ blockId: "lesson--003-build-a-validator--checks", role: "learner", text: "The validator announces validation, uses read/grep/find/ls/bash not edit/write, starts VERDICT, quotes evidence, tees findings, and refuses without baseline." }, { blockId: "lesson--004-feed-the-findings-back--checks", role: "learner", text: "I reran, carried findings into context, preserved baseline, and decided when to stop." }];
@@ -597,7 +583,7 @@ async function writeLesson013Final(root: string, options: { dirtyAfterCommit?: b
 }
 
 function lessons003004Evidence(): AuthoredCommandInvocationEvidence[] {
-  return [stub("doer", { mutation: "partial-refactor" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("repair", { mutation: "complete-refactor" }), stub("validator", { verdict: "PASS", mutation: "none", tools: "read,grep,find,ls,bash" })];
+  return [stub("doer", { mutation: "partial-refactor" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("validator", { verdict: "FAIL", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("repair", { mutation: "complete-refactor" }), stub("validator", { verdict: "PASS", mutation: "none", tools: "read,grep,find,ls,bash" }), stub("doer", { mutation: "already-complete" }), stub("validator", { verdict: "PASS", mutation: "none", tools: "read,grep,find,ls,bash" })];
 }
 
 function lesson013Evidence(): AuthoredCommandInvocationEvidence[] {

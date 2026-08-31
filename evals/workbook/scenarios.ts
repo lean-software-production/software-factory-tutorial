@@ -278,20 +278,6 @@ cat factory/refactor-validate.md factory/.tmp/refactor-current-evidence.txt \
   | tee factory/.tmp/refactor-validate-findings.txt
 cp factory/.tmp/refactor-current-evidence.txt factory/.tmp/refactor-current-evidence-saved.txt
 rm factory/.tmp/refactor-current-evidence.txt`;
-const lesson004MultiplyCommand = String.raw`{
-node <<'NODE'
-const { readFileSync, writeFileSync } = require('node:fs');
-const path = 'calculator/src/index.ts';
-let source = readFileSync(path, 'utf8');
-source = source.replace(
-  '    if (word === "multiply") {\n      const first = read();\n      if (pieces[place++] !== "by") fail();\n      const second = read();\n      return first * second;\n    }',
-  '    if (word === "multiply") {\n      const first = readFirstOperand("by");\n      const second = read();\n      return first * second;\n    }'
-);
-writeFileSync(path, source);
-NODE
-${lesson004CurrentEvidenceAndValidationCommand}
-printf '%s\n' 'MISTAKEN STOP: multiply is fixed, so I will stop even though divide remains duplicated.'; cat factory/.tmp/refactor-validate-findings.txt
-}`;
 const lesson004DivideCommand = String.raw`{
 (cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
@@ -450,20 +436,19 @@ const authoredWorkbookScenarioCatalog = [
     stubLessonNumber: 4,
     artifactAllowlist: lessons003004ArtifactAllowlist,
     runnerPrivate: runnerPrivateDeclaration({ workspaceFiles: [commandStubInvocationEvidenceFile], commandStubInvocations: true, rawWorkbookTimeline: true, learnerWorkspaceFiles: lessons003004ArtifactAllowlist }),
-    gateCheckpoints: ["lessons003004:after-multiply-only"],
     expectedModelCalls: freezeExpectedCalls({ mainTutor: 28, practiceCoach: 7, judge: 1 }),
     expectedModelCallDerivation: freezeStrings([
-      "Main Tutor upper bound: actual path includes five terminal reviews, two reflection reviews, evaluated terminal/reflection/narrative blocks, lesson/part summaries, and workbook summary; conservative margin 28.",
-      "Practice Coach upper bound: explanation/review paths for broken validator, corrected validator, multiply-only, divide/final, and reflection/transition assists, with retry margin.",
+      "Main Tutor upper bound: actual path includes three terminal reviews, two reflection reviews, evaluated terminal/reflection/narrative blocks, lesson/part summaries, and workbook summary; conservative margin 28.",
+      "Practice Coach upper bound: explanation/review paths for broken validator, corrected validator, divide/final, and reflection/transition assists, with retry margin.",
       "Judge: exactly one stateless public-report judge call."
     ]),
     criteria: [
       criterion("validator-guard-and-tee", "Validator carries evidence", "The validator script guards the baseline, concatenates it into the prompt, and tees findings for the next lesson."),
-      criterion("feedback-before-repair", "Feedback precedes repair", "The canonical broken validator and wrong doer rerun both receive feedback before the learner repairs them."),
+      criterion("feedback-before-repair", "Feedback precedes repair", "The canonical broken validator receives feedback before the learner runs the findings-appended repair turn."),
       criterion("baseline-preserved", "Baseline preserved", "The feedback turn uses the findings-appended subshell instead of re-recording the baseline."),
       criterion("complete-refactor-validated", "Complete refactor validated", "The doer/repair path independently completes both multiply and divide branches and the validator reports PASS.")
     ],
-    async drive({ driver, captureGateCheckpoint }) {
+    async drive({ driver }) {
       await driver.completeIntroduction("lessons003004:introduction");
       await driver.continueBlock("lesson--003-build-a-validator--key-concept", "lesson003:key-concept");
       await driver.submitTerminalCommand("lesson--003-build-a-validator--implementation-order", brokenValidatorCommand, { label: "lesson003:broken-validator", expectedFeedback: feedbackAboutEvidenceCarriage });
@@ -475,8 +460,6 @@ const authoredWorkbookScenarioCatalog = [
       await driver.continueBlock("lesson--004-feed-the-findings-back", "lesson004:introduction");
       await driver.continueBlock("lesson--004-feed-the-findings-back--key-concept", "lesson004:key-concept");
       await driver.continueBlock("lesson--004-feed-the-findings-back--the-loop-you-just-ran", "lesson004:loop");
-      await driver.submitTerminalCommand("lesson--004-feed-the-findings-back--implementation-order", lesson004MultiplyCommand, { label: "lesson004:multiply-only", expectedFeedback: /divide|branch|still|FAIL|findings/i });
-      await captureGateCheckpoint?.("lessons003004:after-multiply-only");
       await driver.submitTerminalCommand("lesson--004-feed-the-findings-back--implementation-order", lesson004DivideCommand, { label: "lesson004:divide-feedback" });
       await driver.submitReflection("lesson--004-feed-the-findings-back--checks", "I decided when to rerun, carried the validator findings into the doer's next context, preserved the original baseline, and decided when to stop. The prompt file did not learn; the appended findings changed the doer's context. If I walked away, nothing would choose the next turn.", "lesson004:checks");
       await driver.completeReflection("lesson--004-feed-the-findings-back--checks", "lesson004:checks:complete");
@@ -785,17 +768,17 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
     assertion("lessons003004-visible-corrected-mechanics", ["Mechanic: missing-baseline guard", "if [ ! -f .tmp/refactor-quality-before.txt ]; then", "Mechanic: baseline concatenated into validation", "cat refactor-validate.md .tmp/refactor-quality-before.txt", "Mechanic: exact read-only tools", "--tools read,grep,find,ls,bash -p", "Mechanic: findings captured through tee", "| tee .tmp/refactor-validate-findings.txt"].every((marker) => terminalOutput.includes(marker)), "Corrected validator output visibly displays concise grep-backed guard, baseline concatenation, read-only tool list, and tee mechanics."),
     assertion("lessons003004-verdict-before-mechanics", correctedVerdictIndex >= 0 && mechanicDisplayIndex > correctedVerdictIndex, "The corrected terminal output runs the validator and shows its VERDICT before displaying mechanism evidence."),
     assertion("lessons003004-broken-before-feedback", /cat refactor-validate\.md\s*\\\s*\|/.test(terminalInputs) && tutorFeedbackAfterInput(input.trace, /cat refactor-validate\.md\s*\\\s*\|/, /baseline|guard|findings|tee|evidence/i), "Broken validator lacking evidence carriage occurs before feedback."),
-    assertion("lessons003004-multiply-then-divide", terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004MultiplyCommand)) && terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004DivideCommand)) && suffixInputIndex(terminalInputTexts(input.trace), lesson004DivideCommand) > suffixInputIndex(terminalInputTexts(input.trace), lesson004MultiplyCommand), "The repair is split into multiply-only and divide/final turns after feedback."),
+    assertion("lessons003004-feedback-turn-command", terminalInputTexts(input.trace).some((text) => text.endsWith(lesson004DivideCommand)), "The findings-appended doer and validation feedback turn runs as one terminal attempt."),
     assertion("lessons003004-stub-sequence", hasExactAcceptedStubSequence(input.commandInvocations, [
       { station: "doer", mutation: "partial-refactor" },
       { station: "validator", verdict: "FAIL", mutation: "none" },
       { station: "validator", verdict: "FAIL", mutation: "none" },
-      { station: "validator", verdict: "FAIL", mutation: "none" },
-      { station: "validator", verdict: "FAIL", mutation: "none" },
       { station: "repair", mutation: "complete-refactor" },
+      { station: "validator", verdict: "PASS", mutation: "none" },
+      { station: "doer", mutation: "already-complete" },
       { station: "validator", verdict: "PASS", mutation: "none" }
-    ]), "Structural command evidence shows current-run doer/validator records in exact order through FAIL, multiply-only FAIL, divide repair, and PASS."),
-    assertion("lessons003004-source-complete", hasTrustedCalculatorBehavior(input, source, { requireIntermediateMultiplyOnly: true }), "Trusted calculator behavior projections and source digest show multiply and divide completed, not commented or dead code."),
+    ]), "Structural command evidence shows current-run doer/validator records in exact order through FAIL, findings-appended repair, and PASS."),
+    assertion("lessons003004-source-complete", hasTrustedCalculatorBehavior(input, source), "Trusted calculator behavior projections and source digest show multiply and divide completed, not commented or dead code."),
     assertion("lessons003004-findings-pass", firstNonEmptyLineIsVerdict(findings, "PASS"), "The first non-empty line of the final validator findings is exactly VERDICT: PASS."),
     assertion("lessons003004-baseline-canonical", canonicalBaselinePreserved(input, files.get("factory/.tmp/refactor-quality-before.txt") ?? ""), "The original canonical quality baseline content and digest are preserved through the feedback cycle."),
     assertion("lessons003004-immutability", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged && input.facts.learnerWorkspaceChangedOutsideAllowlist.length === 0, "Only allowlisted learner workspace files changed.")
