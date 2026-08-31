@@ -136,7 +136,7 @@ const lesson001SimpleCommand = `pi -p "What is the capital of France?"`;
 const lesson001SuppliedCommand = `echo "Describe what this calculator does, in three sentences." \\\n  | (cd calculator && pi --no-session --tools read,grep,find,ls -p)`;
 const lesson001ChangedJobCommand = `echo "What files make up this calculator, and what does each one appear to do?" \\\n  | (cd calculator && pi --no-session --tools read,grep,find,ls -p)`;
 
-const lesson004WrongCommand = String.raw`{ ./factory/refactor-validate.sh; printf '%s\n' 'TURN RESULT: validator reran without appending findings to the doer context.'; }`;
+const lesson004WrongCommand = String.raw`{ ./factory/refactor-validate.sh; printf '%s\n' 'MISTAKEN NEXT STEP: rerun ./factory/refactor-do.sh to refresh the baseline before feedback.'; }`;
 const lesson004CurrentEvidenceAndValidationCommand = String.raw`{
   echo "=== QUALITY BEFORE (recorded before the doer ran) ==="
   cat factory/.tmp/refactor-quality-before.txt
