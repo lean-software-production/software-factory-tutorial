@@ -175,8 +175,9 @@ printf '%s\n' 'MULTIPLY-ONLY TURN: current validator findings follow; divide rem
 const lesson004DivideCommand = String.raw`(cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
+./factory/refactor-validate.sh | tee factory/.tmp/refactor-second-validation.txt
 ${lesson004CurrentEvidenceAndValidationCommand}
-printf '%s\n' '=== COMMANDS EXECUTED IN THIS TURN ===' '(cd factory && cat refactor.md .tmp/refactor-validate-findings.txt | doer)' 'cat refactor-validate.md current-evidence | validator | tee refactor-validate-findings.txt' '=== CURRENT VALIDATOR OUTPUT ==='; cat factory/.tmp/refactor-validate-findings.txt`;
+printf '%s\n' '=== FEEDBACK DOER COMMAND EXECUTED ===' '(cd factory && cat refactor.md .tmp/refactor-validate-findings.txt | doer)' '=== REQUIRED ./factory/refactor-validate.sh OUTPUT ==='; cat factory/.tmp/refactor-second-validation.txt; printf '%s\n' '=== CURRENT LABELLED VALIDATOR OUTPUT ==='; cat factory/.tmp/refactor-validate-findings.txt`;
 
 const completedSource = `type Output = (line: string) => void;
 
@@ -819,6 +820,7 @@ describe("authored scenario shell commands", () => {
         ["validator", "FAIL"],
         ["validator", "FAIL"],
         ["repair", "complete-refactor"],
+        ["validator", "FAIL"],
         ["validator", "PASS"]
       ]);
     } finally {
