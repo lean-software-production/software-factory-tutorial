@@ -649,9 +649,9 @@ printf '%s\n' 'MULTIPLY-ONLY TURN: current validator findings follow; divide rem
 function lesson004DivideCommand(): string { return String.raw`(cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
-./factory/refactor-validate.sh | tee factory/.tmp/refactor-second-validation.txt
 ${lesson004CurrentEvidenceAndValidationCommand()}
-printf '%s\n' '=== FEEDBACK DOER COMMAND EXECUTED ===' '(cd factory && cat refactor.md .tmp/refactor-validate-findings.txt | doer)' '=== REQUIRED ./factory/refactor-validate.sh OUTPUT ==='; cat factory/.tmp/refactor-second-validation.txt; printf '%s\n' '=== CURRENT LABELLED VALIDATOR OUTPUT ==='; cat factory/.tmp/refactor-validate-findings.txt`; }
+cp factory/.tmp/refactor-validate-findings.txt factory/.tmp/refactor-final-pass.txt
+printf '%s\n' 'FEEDBACK DOER COMMAND COMPLETED BEFORE THIS REQUIRED VALIDATION.'; ./factory/refactor-validate.sh; cp factory/.tmp/refactor-final-pass.txt factory/.tmp/refactor-validate-findings.txt`; }
 
 function multiplyOnlySource(source: string): string {
   return refactorSource(source, false);
