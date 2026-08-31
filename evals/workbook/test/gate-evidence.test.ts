@@ -635,7 +635,8 @@ cat factory/refactor-validate.md factory/.tmp/refactor-current-evidence.txt \
   | tee factory/.tmp/refactor-validate-findings.txt
 cp factory/.tmp/refactor-current-evidence.txt factory/.tmp/refactor-current-evidence-saved.txt
 rm factory/.tmp/refactor-current-evidence.txt`; }
-function lesson004MultiplyCommand(): string { return String.raw`node <<'NODE'
+function lesson004MultiplyCommand(): string { return String.raw`{
+node <<'NODE'
 const { readFileSync, writeFileSync } = require('node:fs');
 const path = 'calculator/src/index.ts';
 let source = readFileSync(path, 'utf8');
@@ -646,15 +647,18 @@ source = source.replace(
 writeFileSync(path, source);
 NODE
 ${lesson004CurrentEvidenceAndValidationCommand()}
-printf '%s\n' 'MULTIPLY-ONLY TURN: current validator findings follow; divide remains for feedback.'; cat factory/.tmp/refactor-validate-findings.txt`; }
-function lesson004DivideCommand(): string { return String.raw`(cd factory \
+printf '%s\n' 'MULTIPLY-ONLY TURN: current validator findings follow; divide remains for feedback.'; cat factory/.tmp/refactor-validate-findings.txt
+}`; }
+function lesson004DivideCommand(): string { return String.raw`{
+(cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
 ${lesson004CurrentEvidenceAndValidationCommand()}
 cp factory/.tmp/refactor-validate-findings.txt factory/.tmp/refactor-final-pass.txt
 cp factory/.tmp/refactor-quality-before.txt factory/.tmp/refactor-original-baseline.txt
 cp factory/.tmp/refactor-current-evidence-saved.txt factory/.tmp/refactor-quality-before.txt
-(trap 'cp factory/.tmp/refactor-original-baseline.txt factory/.tmp/refactor-quality-before.txt; cp factory/.tmp/refactor-final-pass.txt factory/.tmp/refactor-validate-findings.txt' EXIT; printf '%s\n' 'FEEDBACK TURN: ./factory/refactor-do.sh WAS NOT RUN; the original baseline will be restored; findings are appended below.'; (cd factory && cat refactor.md .tmp/refactor-validate-findings.txt | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)); ./factory/refactor-validate.sh)`; }
+(trap 'cp factory/.tmp/refactor-original-baseline.txt factory/.tmp/refactor-quality-before.txt; cp factory/.tmp/refactor-final-pass.txt factory/.tmp/refactor-validate-findings.txt' EXIT; printf '%s\n' 'FEEDBACK TURN: ./factory/refactor-do.sh WAS NOT RUN; the original baseline will be restored; findings are appended below.'; (cd factory && cat refactor.md .tmp/refactor-validate-findings.txt | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p)); ./factory/refactor-validate.sh)
+}`; }
 
 function multiplyOnlySource(source: string): string {
   return refactorSource(source, false);
