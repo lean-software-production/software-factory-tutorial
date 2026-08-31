@@ -278,6 +278,7 @@ NODE
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
 ./factory/refactor-validate.sh
+printf '%s\n' 'CONFIRMATION: the findings-appended subshell above was the feedback doer turn; ./factory/refactor-do.sh was not invoked, so it did not re-record the Lesson 004 baseline.'
 }`;
 
 const lesson013SteerMessage = "Finish multiply and divide independently before validation.";
@@ -774,7 +775,7 @@ function gateLessons003004EvidenceFeedback(input: AuthoredWorkbookScenarioGateIn
     ]), "Structural command evidence shows current-run doer/validator records in exact order through the initial FAIL, findings-appended repair, and authored revalidation."),
     assertion("lessons003004-source-complete", hasTrustedCalculatorBehavior(input, source), "Trusted calculator behavior projections and source digest show multiply and divide completed, not commented or dead code."),
     assertion("lessons003004-findings-verdict", firstNonEmptyLineIsVerdict(findings, "FAIL"), "The final authored validator rerun records its exact VERDICT: FAIL after the findings-appended repair turn."),
-    assertion("lessons003004-baseline-preserved", /eslint|Findings reported by:/i.test(files.get("factory/.tmp/refactor-quality-before.txt") ?? "") && !/(^|\s)\.\/factory\/refactor-do\.sh(?:\s|$)/m.test(lesson004DivideCommand), "The feedback turn keeps a real non-empty quality baseline and does not invoke the baseline-recording doer script."),
+    assertion("lessons003004-baseline-preserved", /eslint|Findings reported by:/i.test(files.get("factory/.tmp/refactor-quality-before.txt") ?? "") && !/^[ \t]*\.\/factory\/refactor-do\.sh(?:[ \t]|$)/m.test(lesson004DivideCommand), "The feedback turn keeps a real non-empty quality baseline and does not invoke the baseline-recording doer script."),
     assertion("lessons003004-immutability", !input.facts.authoredSourceChanged && !input.facts.disposableCurriculumChanged && input.facts.learnerWorkspaceChangedOutsideAllowlist.length === 0, "Only allowlisted learner workspace files changed.")
   ]);
 }

@@ -147,6 +147,7 @@ NODE
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
 ./factory/refactor-validate.sh
+printf '%s\n' 'CONFIRMATION: the findings-appended subshell above was the feedback doer turn; ./factory/refactor-do.sh was not invoked, so it did not re-record the Lesson 004 baseline.'
 }`;
 
 const completedSource = `type Output = (line: string) => void;
