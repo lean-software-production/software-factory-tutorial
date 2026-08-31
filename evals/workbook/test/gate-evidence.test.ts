@@ -644,11 +644,13 @@ source = source.replace(
 );
 writeFileSync(path, source);
 NODE
-${lesson004CurrentEvidenceAndValidationCommand()}`; }
+${lesson004CurrentEvidenceAndValidationCommand()}
+printf '%s\n' 'MULTIPLY-ONLY TURN: current validator findings follow; divide remains for feedback.'; cat factory/.tmp/refactor-validate-findings.txt`; }
 function lesson004DivideCommand(): string { return String.raw`(cd factory \
   && cat refactor.md .tmp/refactor-validate-findings.txt \
   | (cd ../calculator && pi --no-session --tools read,edit,write,grep,find,ls -p))
-${lesson004CurrentEvidenceAndValidationCommand()}`; }
+${lesson004CurrentEvidenceAndValidationCommand()}
+printf '%s\n' 'FEEDBACK TURN COMPLETED: prior validator findings were appended to the doer context; current findings follow.'; cat factory/.tmp/refactor-validate-findings.txt`; }
 
 function multiplyOnlySource(source: string): string {
   return refactorSource(source, false);
