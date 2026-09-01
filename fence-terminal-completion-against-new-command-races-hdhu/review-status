@@ -1,0 +1,1 @@
+Initial c8376e4 implementation under correction: stage summaries atomically, retry fenced terminal facts, handle multiple local terminal revisions
