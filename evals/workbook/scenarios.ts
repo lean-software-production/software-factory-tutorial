@@ -172,11 +172,19 @@ validatePrerequisiteSeedCatalog(authoredWorkbookPrerequisiteSeedFiles);
 export const AUTHORED_WORKBOOK_PREREQUISITE_SEED_FILES = deepFreeze(authoredWorkbookPrerequisiteSeedFiles);
 export type AuthoredWorkbookPrerequisiteSeedId = keyof typeof AUTHORED_WORKBOOK_PREREQUISITE_SEED_FILES;
 export const AUTHORED_WORKBOOK_GATE_CHECKPOINT_LABELS: readonly AuthoredWorkbookGateCheckpointLabel[] = Object.freeze(["lessons003004:after-multiply-only"]);
+export const AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_SCENARIO_ID = "lessons-003-004-evidence-feedback" as const;
+export const AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_REPORT_POLICY = deepFreeze({
+  scenarioId: AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_SCENARIO_ID,
+  evaluationMode: "deterministic-only" as const,
+  expectedJudgeCalls: 0 as const,
+  verdictRule: "deterministic-gate-only" as const,
+  requiredAssertionCount: 17 as const
+});
 
 export const AUTHORED_WORKBOOK_SCENARIO_JUDGE_POLICIES: Readonly<Record<AuthoredWorkbookScenarioId, AuthoredWorkbookScenarioJudgePolicy>> = deepFreeze({
   "primer-validation-misconception": { kind: "scenario-specific", expectedCalls: 1 },
   "lesson-001-headless-boundary": { kind: "scenario-specific", expectedCalls: 1 },
-  "lessons-003-004-evidence-feedback": { kind: "deterministic-only", expectedCalls: 0, deterministicSuccess: { rule: "deterministic-gate-only", requiredAssertionCount: 17 } },
+  [AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_SCENARIO_ID]: { kind: "deterministic-only", expectedCalls: 0, deterministicSuccess: { rule: AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_REPORT_POLICY.verdictRule, requiredAssertionCount: AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_REPORT_POLICY.requiredAssertionCount } },
   "lesson-013-operator-judgement": { kind: "scenario-specific", expectedCalls: 1 }
 });
 

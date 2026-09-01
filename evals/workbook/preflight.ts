@@ -350,9 +350,16 @@ export function parseAuthoredWorkbookEvalPreflightArgs(
   }
 
   const resolvedScenarioIds = resolveScenarioIdsForParser(scenarioIds, scenarioCatalogForTest);
-  for (const role of WORKBOOK_EVAL_ROLES) models[role.key] ??= environment[role.env];
-  const request = Object.freeze({ scenarioIds: Object.freeze([...resolvedScenarioIds]), repeat: repeat ?? 1, models: Object.freeze({ ...models }), costBudget: Object.freeze({ ...costBudget }) as AuthoredWorkbookEvalCostBudgetInput, environment });
-  validateAuthoredWorkbookEvalPreflightRequestInternal(request, scenarioCatalogForTest ?? AUTHORED_WORKBOOK_SCENARIOS);
+  const catalog = scenarioCatalogForTest ?? AUTHORED_WORKBOOK_SCENARIOS;
+  const resolvedScenarios = resolveScenariosFromCatalog(resolvedScenarioIds, catalog);
+  const requiresJudge = scenariosRequireJudge(resolvedScenarios);
+  const populatedModels: Partial<Record<AuthoredWorkbookEvalRoleKey, string>> = {};
+  if (models.mainTutor !== undefined) populatedModels.mainTutor = models.mainTutor;
+  else if (environment[TUTOR_MODEL_ENV] !== undefined) populatedModels.mainTutor = environment[TUTOR_MODEL_ENV];
+  if (models.judge !== undefined) populatedModels.judge = models.judge;
+  else if (requiresJudge && environment[EVAL_JUDGE_MODEL_ENV] !== undefined) populatedModels.judge = environment[EVAL_JUDGE_MODEL_ENV];
+  const request = Object.freeze({ scenarioIds: Object.freeze([...resolvedScenarioIds]), repeat: repeat ?? 1, models: Object.freeze(populatedModels), costBudget: Object.freeze({ ...costBudget }) as AuthoredWorkbookEvalCostBudgetInput, environment });
+  validateAuthoredWorkbookEvalPreflightRequestInternal(request, catalog);
   return { kind: "request", request };
 }
 
@@ -367,10 +374,10 @@ export function validateAuthoredWorkbookEvalPreflightRequestForTest(input: Autho
 
 function validateAuthoredWorkbookEvalPreflightRequestInternal(input: AuthoredWorkbookEvalPreflightRequestInput, catalog: readonly (AuthoredWorkbookEvalScenario | AuthoredWorkbookScenarioDescriptor)[]): AuthoredWorkbookEvalPreflightRequest {
   if (!input || typeof input !== "object" || Object.hasOwn(input, "scenarios")) throw validationError();
-  const environment = snapshotAuthoredWorkbookEvalEnvironment(input.environment ?? process.env, input.models);
   const scenarios = resolveScenariosFromCatalog(input.scenarioIds, catalog);
   const repeat = validateRepeat(input.repeat);
   const requiresJudge = scenariosRequireJudge(scenarios);
+  const environment = snapshotAuthoredWorkbookEvalEnvironmentForSelection(input.environment ?? process.env, input.models, requiresJudge);
   const models = validateModels(input.models, environment, requiresJudge);
   const repositoryRoot = input.repositoryRoot === undefined ? process.cwd() : validateHostPath(input.repositoryRoot);
   const nodeRange = input.nodeRange ?? SUPPORTED_NODE_RANGE;
@@ -1220,18 +1227,30 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 }
 
 export function snapshotAuthoredWorkbookEvalEnvironment(environment: NodeJS.ProcessEnv, modelOverrides: Partial<Record<AuthoredWorkbookEvalRoleKey, string>> = {}): AuthoredWorkbookEvalEnvironment {
+  return snapshotAuthoredWorkbookEvalEnvironmentInternal(environment, modelOverrides, true);
+}
+
+function snapshotAuthoredWorkbookEvalEnvironmentForSelection(environment: NodeJS.ProcessEnv, modelOverrides: Partial<Record<AuthoredWorkbookEvalRoleKey, string>> = {}, includeJudge: boolean): AuthoredWorkbookEvalEnvironment {
+  return snapshotAuthoredWorkbookEvalEnvironmentInternal(environment, modelOverrides, includeJudge);
+}
+
+function snapshotAuthoredWorkbookEvalEnvironmentInternal(environment: NodeJS.ProcessEnv, modelOverrides: Partial<Record<AuthoredWorkbookEvalRoleKey, string>>, includeJudge: boolean): AuthoredWorkbookEvalEnvironment {
   const keys = new Set<string>([
     "PATH", "HOME", "NO_COLOR",
     "DOCKER_API_VERSION", "DOCKER_CERT_PATH", "DOCKER_CONFIG", "DOCKER_CONTEXT", "DOCKER_DEFAULT_PLATFORM", "DOCKER_HOST", "DOCKER_TLS_VERIFY", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR",
-    OPENCODE_API_KEY_ENV, TUTOR_MODEL_ENV, EVAL_JUDGE_MODEL_ENV, EVAL_JUDGE_COMMAND_ENV
+    OPENCODE_API_KEY_ENV, TUTOR_MODEL_ENV
   ]);
+  if (includeJudge) {
+    keys.add(EVAL_JUDGE_MODEL_ENV);
+    keys.add(EVAL_JUDGE_COMMAND_ENV);
+  }
   const snapshot: Record<string, string> = {};
   for (const key of keys) {
     const value = environment[key];
     if (typeof value === "string") snapshot[key] = value;
   }
   if (modelOverrides.mainTutor !== undefined) snapshot[TUTOR_MODEL_ENV] = modelOverrides.mainTutor;
-  if (modelOverrides.judge !== undefined) snapshot[EVAL_JUDGE_MODEL_ENV] = modelOverrides.judge;
+  if (includeJudge && modelOverrides.judge !== undefined) snapshot[EVAL_JUDGE_MODEL_ENV] = modelOverrides.judge;
   return deepFreezePlain(snapshot);
 }
 

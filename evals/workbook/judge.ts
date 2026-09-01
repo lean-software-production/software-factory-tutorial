@@ -129,14 +129,17 @@ export function copyAuthoredWorkbookEvalScenarioPublicDescriptor(value: unknown)
 
 export function projectAuthoredWorkbookGateForPublicReport(gate: AuthoredWorkbookEvalGateResult): AuthoredWorkbookEvalPublicGateResult {
   if (!isPlainRecord(gate) || typeof gate.passed !== "boolean" || !Array.isArray(gate.assertions)) throw new Error("Invalid deterministic gate result.");
+  const assertions = gate.assertions.map((assertion, index) => {
+    if (!isPlainRecord(assertion) || typeof assertion.passed !== "boolean") throw new Error("Invalid deterministic gate result.");
+    return { index, passed: assertion.passed };
+  });
+  const failureCount = assertions.filter((assertion) => !assertion.passed).length;
+  if (gate.passed && failureCount > 0) throw new Error("Deterministic gate passed with failed assertions.");
   return {
     passed: gate.passed,
-    assertionCount: gate.assertions.length,
-    failureCount: gate.assertions.filter((assertion) => isPlainRecord(assertion) && assertion.passed === false).length,
-    assertions: gate.assertions.map((assertion, index) => {
-      if (!isPlainRecord(assertion) || typeof assertion.passed !== "boolean") throw new Error("Invalid deterministic gate result.");
-      return { index, passed: assertion.passed };
-    }),
+    assertionCount: assertions.length,
+    failureCount,
+    assertions,
     detailPolicy: "assertion-details-omitted-from-public-report"
   };
 }
@@ -151,10 +154,19 @@ function resultShapeForScenario(scenario: AuthoredWorkbookEvalScenarioPublicDesc
   return shape;
 }
 
-export function buildAuthoredWorkbookJudgePrompt(scenarioInput: AuthoredWorkbookEvalScenarioPublicDescriptor, traceInput: AuthoredWorkbookEvalTrace, gateInput: AuthoredWorkbookEvalGateResult): string {
+function copyPublicGateForPrompt(gateInput: AuthoredWorkbookEvalPublicGateResult): AuthoredWorkbookEvalPublicGateResult {
+  const projected = projectAuthoredWorkbookGateForPublicReport({
+    passed: gateInput.passed,
+    assertions: gateInput.assertions.map((assertion, index) => ({ name: `public-gate-${index}`, passed: assertion.passed }))
+  });
+  if (gateInput.assertionCount !== projected.assertionCount || gateInput.failureCount !== projected.failureCount || gateInput.detailPolicy !== projected.detailPolicy) throw new Error("Invalid deterministic gate result.");
+  for (let index = 0; index < projected.assertions.length; index += 1) if (gateInput.assertions[index]?.index !== index) throw new Error("Invalid deterministic gate result.");
+  return projected;
+}
+
+export function buildAuthoredWorkbookJudgePromptFromProjectedTrace(scenarioInput: AuthoredWorkbookEvalScenarioPublicDescriptor, trace: ReturnType<typeof projectAuthoredWorkbookEvalTraceForJudge>, gateInput: AuthoredWorkbookEvalPublicGateResult): string {
   const scenario = copyAuthoredWorkbookEvalScenarioPublicDescriptor(scenarioInput);
-  const trace = projectAuthoredWorkbookEvalTraceForJudge(traceInput);
-  const gate = projectAuthoredWorkbookGateForPublicReport(gateInput);
+  const gate = copyPublicGateForPrompt(gateInput);
   const prompt = `You are a strict, stateless evaluator of one authored workbook tutoring session. Return JSON only. Use only the data in this prompt.
 
 Scenario-public descriptor. This descriptor was rebuilt by scenario code and intentionally contains only id, title, description, and scenario-authored public criteria. It does not contain lesson specs, tutor frontmatter, private rubrics, prerequisite internals, private steering, credentials, config, or disposable paths:
@@ -173,6 +185,11 @@ Score each exact scenario criterion from 0 to 2. Return exactly this JSON shape 
 ${JSON.stringify({ criteria: resultShapeForScenario(scenario), summary: "..." }, null, 2)}
 Every criterion key must be present exactly once with no extra criteria. Each citation must identify one trace citation id above. Rationale and summary must be concise and based only on public trace evidence.`;
   return prompt;
+}
+
+export function buildAuthoredWorkbookJudgePrompt(scenarioInput: AuthoredWorkbookEvalScenarioPublicDescriptor, traceInput: AuthoredWorkbookEvalTrace, gateInput: AuthoredWorkbookEvalGateResult): string {
+  const trace = projectAuthoredWorkbookEvalTraceForJudge(traceInput);
+  return buildAuthoredWorkbookJudgePromptFromProjectedTrace(scenarioInput, trace, projectAuthoredWorkbookGateForPublicReport(gateInput));
 }
 
 function extractJson(text: string): unknown {

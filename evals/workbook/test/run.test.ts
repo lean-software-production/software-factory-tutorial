@@ -72,7 +72,7 @@ function publicTraceFrom(trace: AuthoredWorkbookEvalSessionTrace): AuthoredWorkb
   return projectAuthoredWorkbookEvalTrace(trace);
 }
 
-function makeDeps(options: { failGate?: boolean; judgePass?: boolean; abortOnDrive?: AbortController; cleanupFails?: boolean } = {}) {
+function makeDeps(options: { failGate?: boolean; judgePass?: boolean; abortOnDrive?: AbortController; abortOnCleanup?: AbortController; cleanupFails?: boolean } = {}) {
   const events: string[] = [];
   const latest: any[] = [];
   const writes: any[] = [];
@@ -95,7 +95,7 @@ function makeDeps(options: { failGate?: boolean; judgePass?: boolean; abortOnDri
         latestSession: () => sessions.at(-1),
         startServer: async () => { throw new Error("startServer dependency must be used"); },
         assertGuardedStateUnchanged: async () => undefined,
-        close: async () => { events.push(`workspace.close:${keepWorkspace}`); if (options.cleanupFails) throw new Error("cleanup boom"); }
+        close: async () => { events.push(`workspace.close:${keepWorkspace}`); options.abortOnCleanup?.abort(); if (options.cleanupFails) throw new Error("cleanup boom"); }
       } as any;
     },
     startServer: async ({ workspace }) => {
@@ -119,8 +119,8 @@ function makeDeps(options: { failGate?: boolean; judgePass?: boolean; abortOnDri
       judgeCalls += 1;
       return { judgeInput: "prompt", judge: { criteria: Object.fromEntries(scenario.criteria.map((criterion) => [criterion.id, { score: options.judgePass === false ? 0 : 2, citations: [0], rationale: "ok" }])), summary: "ok" } as any };
     },
-    writeSuccess: async ({ runId, bundle }) => { events.push(`write-success:${runId}`); writes.push({ kind: "success", bundle }); return { directory: `/reports/${runId}` }; },
-    writeFailure: async ({ runId, status }) => { events.push(`write-failure:${status}`); writes.push({ kind: "failure", status }); return { directory: `/reports/${runId}` }; },
+    writeSuccess: async ({ runId, bundle, modelIdentities }) => { events.push(`write-success:${runId}`); writes.push({ kind: "success", bundle, modelIdentities }); return { directory: `/reports/${runId}` }; },
+    writeFailure: async ({ runId, status, evaluationMode, modelIdentities }) => { events.push(`write-failure:${status}:${evaluationMode}`); writes.push({ kind: "failure", status, evaluationMode, modelIdentities }); return { directory: `/reports/${runId}` }; },
     writeLatest: async ({ runs }) => { events.push("latest"); latest.push(...runs); },
     writeGateDiagnostic: async () => { events.push("gate-diagnostic"); },
     writeFailureDiagnostic: async () => { events.push("failure-diagnostic"); },
@@ -534,6 +534,61 @@ describe("authored workbook eval orchestration", () => {
         files: { trace: "trace.json", report: "report.json", summary: "summary.md", metadata: "metadata.json" }
       })
     ]);
+  });
+
+  it("records deterministic-only report-write failures after cleanup without running or fabricating Judge state", async () => {
+    const fakes = makeDeps();
+    const gateInput = await lessons003004PassingGateInput();
+    fakes.deps.createGateEvidenceCollector = () => ({
+      captureBaseline: async () => { fakes.events.push("baseline"); },
+      captureGateCheckpoint: async (label: string) => { fakes.events.push(`checkpoint:${label}`); },
+      collectGateInput: async () => { fakes.events.push("gate-input"); return gateInput; }
+    } as any);
+    fakes.deps.writeSuccess = async ({ runId }) => { fakes.events.push(`write-success-attempt:${runId}`); throw new Error("raw report path /private/tmp/deterministic secret"); };
+
+    const code = await runAuthoredWorkbookEvalBatch(invocation(["lessons-003-004-evidence-feedback"], 1), { dependencies: fakes.deps });
+
+    expect(code).toBe(1);
+    expect(fakes.judgeCalls).toBe(0);
+    expect(fakes.events).not.toContain("judge");
+    expect(fakes.events).toContain("write-success-attempt:lessons-003-004-evidence-feedback-1");
+    expect(fakes.writes[0]).toMatchObject({ kind: "failure", status: "report", evaluationMode: "deterministic-only", modelIdentities: { "Main Tutor": expect.any(Object) } });
+    expect(fakes.writes[0].modelIdentities).not.toHaveProperty("Judge");
+    expect(fakes.latest).toEqual([expect.objectContaining({ scenario: "lessons-003-004-evidence-feedback", status: "report", evaluationMode: "deterministic-only", files: { metadata: "metadata.json" } })]);
+  });
+
+  it("records deterministic-only cleanup failures without writing success or Judge state", async () => {
+    const fakes = makeDeps({ cleanupFails: true });
+    const gateInput = await lessons003004PassingGateInput();
+    fakes.deps.createGateEvidenceCollector = () => ({
+      captureBaseline: async () => { fakes.events.push("baseline"); },
+      captureGateCheckpoint: async (label: string) => { fakes.events.push(`checkpoint:${label}`); },
+      collectGateInput: async () => { fakes.events.push("gate-input"); return gateInput; }
+    } as any);
+
+    const code = await runAuthoredWorkbookEvalBatch(invocation(["lessons-003-004-evidence-feedback"], 1), { dependencies: fakes.deps });
+
+    expect(code).toBe(1);
+    expect(fakes.judgeCalls).toBe(0);
+    expect(fakes.events).not.toContain("judge");
+    expect(fakes.events.some((event) => event.startsWith("write-success"))).toBe(false);
+    expect(fakes.writes[0]).toMatchObject({ kind: "failure", status: "cleanup", evaluationMode: "deterministic-only", modelIdentities: { "Main Tutor": expect.any(Object) } });
+    expect(fakes.writes[0].modelIdentities).not.toHaveProperty("Judge");
+    expect(fakes.latest).toEqual([expect.objectContaining({ scenario: "lessons-003-004-evidence-feedback", status: "cleanup", evaluationMode: "deterministic-only", files: { metadata: "metadata.json" } })]);
+  });
+
+  it("treats abort during mandatory cleanup as interrupted and does not publish success or latest", async () => {
+    const controller = new AbortController();
+    const fakes = makeDeps({ abortOnCleanup: controller });
+
+    const code = await runAuthoredWorkbookEvalBatch(invocation(["primer-validation-misconception"], 1), { dependencies: fakes.deps, signal: controller.signal, signalCode: () => 130 });
+
+    expect(code).toBe(130);
+    expect(fakes.events).not.toContain("write-success:primer-validation-misconception-1");
+    expect(fakes.writes[0]).toMatchObject({ kind: "failure", status: "interrupted", evaluationMode: "judged" });
+    expect(fakes.events).toContain("failure-diagnostic");
+    expect(fakes.events).not.toContain("latest");
+    expect(fakes.latest).toEqual([]);
   });
 
   it("writes a private failure diagnostic when gate evidence collection throws before gate.json exists", async () => {

@@ -176,7 +176,7 @@ are ignored under `evals/workbook/reports/`, with `latest.json` in that tree.
 
 Public curated report files may include `trace.json`, `artifacts.json`, `judge-input.txt` or
 `judge-input.json`, `judge.json`, `report.json`, `summary.md`, `metadata.json`, and `latest.json`.
-Use only the exact files listed by current-run metadata or latest summaries. Deterministic-only authored success omits `judge-input.json` and `judge.json`, reports `evaluationMode: deterministic-only`, and uses the `deterministic-gate-only` verdict rule without a percentage.
+Use only the exact files listed by current-run metadata or latest summaries. Authored run directories are closed: only the advertised curated files plus recognized local diagnostics (`gate.json`, `failure.txt`, `cleanup-failure.txt`) are valid. Deterministic-only authored success omits `judge-input.json` and `judge.json`, reports `evaluationMode: deterministic-only`, and uses the `deterministic-gate-only` verdict rule without a percentage.
 
 Raw events, gate assertions, failure diagnostics, cleanup diagnostics, prompts, responses, server
 URLs, absolute disposable paths, and credentials are private. Files such as `gate.json`,
@@ -194,7 +194,7 @@ Docker CLI/daemon access, image inspection, disposable terminal startup, in-cont
 fixture validation, and privacy checks happen before role probes can spend tokens. Main Tutor is always preflighted; Judge is preflighted only when at least one selected authored scenario requires a Judge call.
 
 If preflight fails, the live runner must not create or mutate the report root, `latest.json`, live
-workspaces, sessions, stubs, or judge inputs. A stale report is not evidence of the failed run.
+workspaces, sessions, stubs, or judge inputs. A stale report is not evidence of the failed run. If an abort is observed during mandatory cleanup, the runner may write only honest interrupted failure metadata for the attempted run and must not publish a success bundle or update `latest.json` after the abort.
 
 During `npm run test`, independent lanes continue after ordinary failures. The final exit code is
 non-zero if any lane fails. The summary reports only current-run changed reports: changed engine or

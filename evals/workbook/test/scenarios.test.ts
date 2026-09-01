@@ -19,6 +19,7 @@ import {
 } from "../command-stubs.js";
 import type { AuthoredWorkbookEvalArtifactSnapshot, AuthoredWorkbookEvalSessionTrace, AuthoredWorkbookEvalTrace } from "../types.js";
 import {
+  AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_REPORT_POLICY,
   AUTHORED_WORKBOOK_GATE_CHECKPOINT_LABELS,
   AUTHORED_WORKBOOK_PREREQUISITE_SEED_FILES,
   AUTHORED_WORKBOOK_SCENARIOS,
@@ -327,7 +328,8 @@ describe("authored workbook scenario descriptors", () => {
     }
 
     expect(authoredWorkbookScenarioById("lesson-001-headless-boundary").stubLessonNumber).toBeUndefined();
-    expect(authoredWorkbookScenarioById("lessons-003-004-evidence-feedback").judgePolicy).toEqual({ kind: "deterministic-only", expectedCalls: 0, deterministicSuccess: { rule: "deterministic-gate-only", requiredAssertionCount: 17 } });
+    expect(AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_REPORT_POLICY).toEqual({ scenarioId: "lessons-003-004-evidence-feedback", evaluationMode: "deterministic-only", expectedJudgeCalls: 0, verdictRule: "deterministic-gate-only", requiredAssertionCount: 17 });
+    expect(authoredWorkbookScenarioById("lessons-003-004-evidence-feedback").judgePolicy).toEqual({ kind: "deterministic-only", expectedCalls: 0, deterministicSuccess: { rule: "deterministic-gate-only", requiredAssertionCount: AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_REPORT_POLICY.requiredAssertionCount } });
     expect(authoredWorkbookScenarioById("lessons-003-004-evidence-feedback").stubLessonNumber).toBe(4);
     expect(authoredWorkbookScenarioById("lessons-003-004-evidence-feedback").prerequisiteOverlay).toMatchObject({ id: "lesson-003-prerequisites", workspaceId: "refactor-line" });
     expect(authoredWorkbookScenarioById("lesson-013-operator-judgement").stubLessonNumber).toBe(13);

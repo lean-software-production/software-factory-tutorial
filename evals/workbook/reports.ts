@@ -3,19 +3,22 @@ import { constants, type Stats } from "node:fs";
 import { chmod, copyFile, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, rmdir, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { AUTHORED_WORKBOOK_EVAL_MARKERS, type AuthoredWorkbookEvalMarkers } from "./types.js";
-import { copyAuthoredWorkbookEvalTrace, projectAuthoredWorkbookEvalTraceForJudge, type AuthoredWorkbookEvalJudgeTrace, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
+import { copyAuthoredWorkbookEvalTrace, enumerateAuthoredWorkbookEvalJudgeCitations, projectAuthoredWorkbookEvalTraceForJudge, type AuthoredWorkbookEvalJudgeTrace, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
 import {
   authoredWorkbookJudgeVerdict,
   buildAuthoredWorkbookJudgePrompt,
+  buildAuthoredWorkbookJudgePromptFromProjectedTrace,
   copyAuthoredWorkbookEvalScenarioPublicDescriptor,
   projectAuthoredWorkbookGateForPublicReport,
   verifyAuthoredWorkbookJudgeResult,
   type AuthoredWorkbookEvalGateResult,
+  type AuthoredWorkbookEvalJudgeCriterionScore,
   type AuthoredWorkbookEvalJudgeResult,
   type AuthoredWorkbookEvalPublicGateResult,
   type AuthoredWorkbookEvalScenarioPublicDescriptor,
   type AuthoredWorkbookEvalVerdict
 } from "./judge.js";
+import { AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_REPORT_POLICY } from "./scenarios.js";
 
 const MAX_CURATED_TEXT_BYTES = 4 * 1024 * 1024;
 const MAX_DIAGNOSTIC_TEXT_BYTES = 4 * 1024 * 1024;
@@ -45,7 +48,7 @@ export const AUTHORED_WORKBOOK_DETERMINISTIC_REPORT_FILENAMES = deepFreeze({
 } as const);
 
 export const AUTHORED_WORKBOOK_LATEST_FILENAME = "latest.json" as const;
-export const AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_SUCCESS_ASSERTION_COUNT = 17 as const;
+export const AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_SUCCESS_ASSERTION_COUNT = AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_REPORT_POLICY.requiredAssertionCount;
 
 export const AUTHORED_WORKBOOK_LOCAL_DIAGNOSTIC_FILENAMES = deepFreeze({
   gate: "gate.json",
@@ -73,10 +76,17 @@ export interface AuthoredWorkbookEvalModelIdentity {
   selected: string;
 }
 
-export interface AuthoredWorkbookEvalModelIdentities {
+export interface AuthoredWorkbookEvalJudgedModelIdentities {
   "Main Tutor": AuthoredWorkbookEvalModelIdentity;
-  Judge?: AuthoredWorkbookEvalModelIdentity;
+  Judge: AuthoredWorkbookEvalModelIdentity;
 }
+
+export interface AuthoredWorkbookEvalDeterministicOnlyModelIdentities {
+  "Main Tutor": AuthoredWorkbookEvalModelIdentity;
+  Judge?: never;
+}
+
+export type AuthoredWorkbookEvalModelIdentities = AuthoredWorkbookEvalJudgedModelIdentities | AuthoredWorkbookEvalDeterministicOnlyModelIdentities;
 
 export interface AuthoredWorkbookTraceEnvelope extends AuthoredWorkbookEvalMarkers {
   trace: AuthoredWorkbookEvalJudgeTrace;
@@ -97,16 +107,29 @@ export type AuthoredWorkbookEvalJudgeRunSummary =
   | { policy: "scenario-specific"; expectedCalls: 1; status: "completed" }
   | { policy: "deterministic-only"; expectedCalls: 0; status: "not-run" };
 
-export interface AuthoredWorkbookReportEnvelope extends AuthoredWorkbookEvalMarkers {
+interface AuthoredWorkbookBaseReportEnvelope extends AuthoredWorkbookEvalMarkers {
   runId: string;
   scenario: AuthoredWorkbookEvalScenarioPublicDescriptor;
-  evaluationMode: AuthoredWorkbookEvalEvaluationMode;
-  modelIdentities: AuthoredWorkbookEvalModelIdentities;
   gate: AuthoredWorkbookEvalPublicGateResult;
-  judge: AuthoredWorkbookEvalJudgeRunSummary;
-  verdict: AuthoredWorkbookEvalLifecycleVerdict;
-  files: AuthoredWorkbookSuccessCuratedFiles;
 }
+
+export interface AuthoredWorkbookJudgedReportEnvelope extends AuthoredWorkbookBaseReportEnvelope {
+  evaluationMode: "judged";
+  modelIdentities: AuthoredWorkbookEvalJudgedModelIdentities;
+  judge: Extract<AuthoredWorkbookEvalJudgeRunSummary, { policy: "scenario-specific" }>;
+  verdict: AuthoredWorkbookJudgedLifecycleVerdict;
+  files: AuthoredWorkbookJudgedSuccessFiles;
+}
+
+export interface AuthoredWorkbookDeterministicOnlyReportEnvelope extends AuthoredWorkbookBaseReportEnvelope {
+  evaluationMode: "deterministic-only";
+  modelIdentities: AuthoredWorkbookEvalDeterministicOnlyModelIdentities;
+  judge: Extract<AuthoredWorkbookEvalJudgeRunSummary, { policy: "deterministic-only" }>;
+  verdict: AuthoredWorkbookDeterministicOnlySuccessVerdict;
+  files: AuthoredWorkbookDeterministicSuccessFiles;
+}
+
+export type AuthoredWorkbookReportEnvelope = AuthoredWorkbookJudgedReportEnvelope | AuthoredWorkbookDeterministicOnlyReportEnvelope;
 
 export interface AuthoredWorkbookEvalLifecycle {
   setup: "not-started" | "completed" | "failed";
@@ -131,25 +154,81 @@ export type AuthoredWorkbookMetadataOnlyFiles = Pick<typeof AUTHORED_WORKBOOK_RE
 export type AuthoredWorkbookSuccessCuratedFiles = AuthoredWorkbookJudgedSuccessFiles | AuthoredWorkbookDeterministicSuccessFiles;
 export type AuthoredWorkbookCuratedFiles = AuthoredWorkbookSuccessCuratedFiles | AuthoredWorkbookMetadataOnlyFiles;
 
-export interface AuthoredWorkbookMetadataEnvelope extends AuthoredWorkbookEvalMarkers {
+export interface AuthoredWorkbookJudgedLifecycleVerdict {
+  passed: boolean;
+  percentage: number;
+  rule: AuthoredWorkbookEvalVerdict["rule"];
+}
+
+export interface AuthoredWorkbookDeterministicOnlySuccessVerdict {
+  passed: true;
+  rule: "deterministic-gate-only";
+  percentage?: never;
+}
+
+export interface AuthoredWorkbookNotJudgedVerdict {
+  passed: false;
+  percentage: 0;
+  rule: "not-judged";
+}
+
+export type AuthoredWorkbookEvalLifecycleVerdict = AuthoredWorkbookJudgedLifecycleVerdict | AuthoredWorkbookDeterministicOnlySuccessVerdict | AuthoredWorkbookNotJudgedVerdict;
+export type AuthoredWorkbookEvalFailureStatus = Exclude<AuthoredWorkbookEvalRunLifecycleStatus, "completed">;
+export type AuthoredWorkbookEvalDeterministicFailureStatus = Exclude<AuthoredWorkbookEvalFailureStatus, "judge">;
+
+interface AuthoredWorkbookBaseMetadataEnvelope extends AuthoredWorkbookEvalMarkers {
   runId: string;
   scenario: string;
   repetition: number;
-  status: AuthoredWorkbookEvalRunLifecycleStatus;
   outcome: AuthoredWorkbookEvalRunOutcome;
-  evaluationMode: AuthoredWorkbookEvalEvaluationMode;
-  verdict: AuthoredWorkbookEvalLifecycleVerdict;
-  modelIdentities: AuthoredWorkbookEvalModelIdentities;
   lifecycle: AuthoredWorkbookEvalLifecycle;
-  files: AuthoredWorkbookCuratedFiles;
-  failure?: AuthoredWorkbookEvalFailureSummary;
 }
 
-export interface AuthoredWorkbookEvalLifecycleVerdict {
-  passed: boolean;
-  percentage?: number;
-  rule: AuthoredWorkbookEvalVerdict["rule"] | "deterministic-gate-only" | "not-judged";
+export interface AuthoredWorkbookJudgedSuccessMetadataEnvelope extends AuthoredWorkbookBaseMetadataEnvelope {
+  status: "completed";
+  outcome: "passed" | "failed";
+  evaluationMode: "judged";
+  verdict: AuthoredWorkbookJudgedLifecycleVerdict;
+  modelIdentities: AuthoredWorkbookEvalJudgedModelIdentities;
+  files: AuthoredWorkbookJudgedSuccessFiles;
+  failure?: never;
 }
+
+export interface AuthoredWorkbookDeterministicOnlySuccessMetadataEnvelope extends AuthoredWorkbookBaseMetadataEnvelope {
+  status: "completed";
+  outcome: "passed";
+  evaluationMode: "deterministic-only";
+  verdict: AuthoredWorkbookDeterministicOnlySuccessVerdict;
+  modelIdentities: AuthoredWorkbookEvalDeterministicOnlyModelIdentities;
+  files: AuthoredWorkbookDeterministicSuccessFiles;
+  failure?: never;
+}
+
+export interface AuthoredWorkbookJudgedFailureMetadataEnvelope extends AuthoredWorkbookBaseMetadataEnvelope {
+  status: AuthoredWorkbookEvalFailureStatus;
+  outcome: "failed" | "interrupted";
+  evaluationMode: "judged";
+  verdict: AuthoredWorkbookNotJudgedVerdict;
+  modelIdentities: AuthoredWorkbookEvalJudgedModelIdentities;
+  files: AuthoredWorkbookMetadataOnlyFiles;
+  failure: AuthoredWorkbookEvalFailureSummary;
+}
+
+export interface AuthoredWorkbookDeterministicOnlyFailureMetadataEnvelope extends AuthoredWorkbookBaseMetadataEnvelope {
+  status: AuthoredWorkbookEvalDeterministicFailureStatus;
+  outcome: "failed" | "interrupted";
+  evaluationMode: "deterministic-only";
+  verdict: AuthoredWorkbookNotJudgedVerdict;
+  modelIdentities: AuthoredWorkbookEvalDeterministicOnlyModelIdentities;
+  files: AuthoredWorkbookMetadataOnlyFiles;
+  failure: AuthoredWorkbookEvalFailureSummary;
+}
+
+export type AuthoredWorkbookMetadataEnvelope =
+  | AuthoredWorkbookJudgedSuccessMetadataEnvelope
+  | AuthoredWorkbookDeterministicOnlySuccessMetadataEnvelope
+  | AuthoredWorkbookJudgedFailureMetadataEnvelope
+  | AuthoredWorkbookDeterministicOnlyFailureMetadataEnvelope;
 
 export interface AuthoredWorkbookReportBundleObjects {
   traceEnvelope: AuthoredWorkbookTraceEnvelope;
@@ -203,15 +282,45 @@ export interface WriteAuthoredWorkbookFailureMetadataOptions extends CreateAutho
   writeText?: (path: string, data: string) => Promise<void>;
 }
 
-export interface AuthoredWorkbookEvalLatestRunEntry extends AuthoredWorkbookEvalMarkers {
+interface AuthoredWorkbookBaseLatestRunEntry extends AuthoredWorkbookEvalMarkers {
   scenario: string;
   repetition: number;
-  status: AuthoredWorkbookEvalRunLifecycleStatus;
-  evaluationMode: AuthoredWorkbookEvalEvaluationMode;
-  verdict: AuthoredWorkbookEvalLifecycleVerdict;
   reportDirectory: string;
-  files: AuthoredWorkbookCuratedFiles;
 }
+
+export interface AuthoredWorkbookJudgedSuccessLatestRunEntry extends AuthoredWorkbookBaseLatestRunEntry {
+  status: "completed";
+  evaluationMode: "judged";
+  verdict: AuthoredWorkbookJudgedLifecycleVerdict;
+  files: AuthoredWorkbookJudgedSuccessFiles;
+}
+
+export interface AuthoredWorkbookDeterministicOnlySuccessLatestRunEntry extends AuthoredWorkbookBaseLatestRunEntry {
+  status: "completed";
+  evaluationMode: "deterministic-only";
+  verdict: AuthoredWorkbookDeterministicOnlySuccessVerdict;
+  files: AuthoredWorkbookDeterministicSuccessFiles;
+}
+
+export interface AuthoredWorkbookJudgedFailureLatestRunEntry extends AuthoredWorkbookBaseLatestRunEntry {
+  status: AuthoredWorkbookEvalFailureStatus;
+  evaluationMode: "judged";
+  verdict: AuthoredWorkbookNotJudgedVerdict;
+  files: AuthoredWorkbookMetadataOnlyFiles;
+}
+
+export interface AuthoredWorkbookDeterministicOnlyFailureLatestRunEntry extends AuthoredWorkbookBaseLatestRunEntry {
+  status: AuthoredWorkbookEvalDeterministicFailureStatus;
+  evaluationMode: "deterministic-only";
+  verdict: AuthoredWorkbookNotJudgedVerdict;
+  files: AuthoredWorkbookMetadataOnlyFiles;
+}
+
+export type AuthoredWorkbookEvalLatestRunEntry =
+  | AuthoredWorkbookJudgedSuccessLatestRunEntry
+  | AuthoredWorkbookDeterministicOnlySuccessLatestRunEntry
+  | AuthoredWorkbookJudgedFailureLatestRunEntry
+  | AuthoredWorkbookDeterministicOnlyFailureLatestRunEntry;
 
 export interface AuthoredWorkbookEvalLatestEnvelope extends AuthoredWorkbookEvalMarkers {
   generatedAt: string;
@@ -272,9 +381,10 @@ function boundedModelIdentity(value: unknown, label: string): string {
   return identity;
 }
 
-function modelRole(value: Record<string, unknown>, canonical: keyof AuthoredWorkbookEvalModelIdentities, legacy: "mainTutor" | "judge"): AuthoredWorkbookEvalModelIdentity {
-  const raw = value[canonical] ?? value[legacy];
+function copyModelIdentityRole(value: Record<string, unknown>, canonical: "Main Tutor" | "Judge"): AuthoredWorkbookEvalModelIdentity {
+  const raw = value[canonical];
   if (!isPlainRecord(raw)) throw new Error("Invalid authored workbook model identities.");
+  assertExactKeys(raw, ["requested", "selected"], "authored workbook model identity");
   return {
     requested: boundedModelIdentity(raw.requested, `${canonical} requested`),
     selected: boundedModelIdentity(raw.selected, `${canonical} selected`)
@@ -282,18 +392,17 @@ function modelRole(value: Record<string, unknown>, canonical: keyof AuthoredWork
 }
 
 export function copyAuthoredWorkbookEvalModelIdentities(value: unknown): AuthoredWorkbookEvalModelIdentities {
-  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook model identities.");
   return copyModelIdentitiesForMode(value, "judged");
 }
 
 function copyModelIdentitiesForMode(value: unknown, mode: AuthoredWorkbookEvalEvaluationMode): AuthoredWorkbookEvalModelIdentities {
   const checkedMode = validEvaluationMode(mode);
   if (!isPlainRecord(value)) throw new Error("Invalid authored workbook model identities.");
-  const identities: AuthoredWorkbookEvalModelIdentities = {
-    "Main Tutor": modelRole(value, "Main Tutor", "mainTutor")
-  };
-  if (checkedMode === "judged") identities.Judge = modelRole(value, "Judge", "judge");
-  return deepFreeze(identities);
+  const expectedRoles = checkedMode === "judged" ? ["Main Tutor", "Judge"] : ["Main Tutor"];
+  assertExactKeys(value, expectedRoles, "authored workbook model identities");
+  const mainTutor = copyModelIdentityRole(value, "Main Tutor");
+  if (checkedMode === "deterministic-only") return deepFreeze({ "Main Tutor": mainTutor });
+  return deepFreeze({ "Main Tutor": mainTutor, Judge: copyModelIdentityRole(value, "Judge") });
 }
 
 export function defaultAuthoredWorkbookEvalLifecycle(status: AuthoredWorkbookEvalRunLifecycleStatus, evaluationMode: AuthoredWorkbookEvalEvaluationMode = "judged"): AuthoredWorkbookEvalLifecycle {
@@ -315,8 +424,8 @@ export function defaultAuthoredWorkbookEvalLifecycle(status: AuthoredWorkbookEva
     case "session": lifecycle.setup = "completed"; lifecycle.session = "failed"; break;
     case "gate": lifecycle.setup = "completed"; lifecycle.session = "completed"; lifecycle.gate = "failed"; break;
     case "judge": lifecycle.setup = "completed"; lifecycle.session = "completed"; lifecycle.gate = "passed"; lifecycle.judge = "failed"; break;
-    case "report": lifecycle.setup = "completed"; lifecycle.session = "completed"; lifecycle.gate = "passed"; lifecycle.judge = completedJudgeState; lifecycle.report = "failed"; break;
-    case "cleanup": lifecycle.setup = "completed"; lifecycle.session = "completed"; lifecycle.gate = "passed"; lifecycle.judge = completedJudgeState; lifecycle.report = "written"; lifecycle.cleanup = "failed"; break;
+    case "report": lifecycle.setup = "completed"; lifecycle.session = "completed"; lifecycle.gate = "passed"; lifecycle.judge = completedJudgeState; lifecycle.report = "failed"; lifecycle.cleanup = "completed"; break;
+    case "cleanup": lifecycle.setup = "completed"; lifecycle.session = "completed"; lifecycle.gate = "passed"; lifecycle.judge = completedJudgeState; lifecycle.report = "not-written"; lifecycle.cleanup = "failed"; break;
     case "interrupted": lifecycle.session = "interrupted"; break;
     case "completed": lifecycle.setup = "completed"; lifecycle.session = "completed"; lifecycle.gate = "passed"; lifecycle.judge = completedJudgeState; lifecycle.report = "written"; lifecycle.cleanup = "completed"; break;
   }
@@ -350,15 +459,15 @@ function publicFailureMessage(status: Exclude<AuthoredWorkbookEvalRunLifecycleSt
   }
 }
 
-function verdictFromJudge(verdict: AuthoredWorkbookEvalVerdict): AuthoredWorkbookEvalLifecycleVerdict {
+function verdictFromJudge(verdict: AuthoredWorkbookEvalVerdict): AuthoredWorkbookJudgedLifecycleVerdict {
   return deepFreeze({ passed: verdict.passed, percentage: verdict.percentage, rule: verdict.rule });
 }
 
-function notJudgedVerdict(): AuthoredWorkbookEvalLifecycleVerdict {
+function notJudgedVerdict(): AuthoredWorkbookNotJudgedVerdict {
   return deepFreeze({ passed: false, percentage: 0, rule: "not-judged" as const });
 }
 
-function deterministicSuccessVerdict(): AuthoredWorkbookEvalLifecycleVerdict {
+function deterministicSuccessVerdict(): AuthoredWorkbookDeterministicOnlySuccessVerdict {
   return deepFreeze({ passed: true, rule: "deterministic-gate-only" as const });
 }
 
@@ -384,22 +493,7 @@ function copyExactCuratedFilesForStatus(status: AuthoredWorkbookEvalRunLifecycle
 }
 
 function copyStrictAuthoredWorkbookEvalModelIdentities(value: unknown, mode: AuthoredWorkbookEvalEvaluationMode): AuthoredWorkbookEvalModelIdentities {
-  const checkedMode = validEvaluationMode(mode);
-  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook model identities.");
-  const expectedRoles = checkedMode === "judged" ? ["Main Tutor", "Judge"] : ["Main Tutor"];
-  assertExactKeys(value, expectedRoles, "authored workbook model identities");
-  const role = (canonical: keyof AuthoredWorkbookEvalModelIdentities): AuthoredWorkbookEvalModelIdentity => {
-    const raw = value[canonical];
-    if (!isPlainRecord(raw)) throw new Error("Invalid authored workbook model identities.");
-    assertExactKeys(raw, ["requested", "selected"], "authored workbook model identity");
-    return {
-      requested: boundedModelIdentity(raw.requested, `${canonical} requested`),
-      selected: boundedModelIdentity(raw.selected, `${canonical} selected`)
-    };
-  };
-  const identities: AuthoredWorkbookEvalModelIdentities = { "Main Tutor": role("Main Tutor") };
-  if (checkedMode === "judged") identities.Judge = role("Judge");
-  return deepFreeze(identities);
+  return copyModelIdentitiesForMode(value, mode);
 }
 
 function copyExactLifecycleForStatus(status: AuthoredWorkbookEvalRunLifecycleStatus, value: unknown, mode: AuthoredWorkbookEvalEvaluationMode): AuthoredWorkbookEvalLifecycle {
@@ -429,6 +523,17 @@ function validEvaluationMode(value: unknown): AuthoredWorkbookEvalEvaluationMode
   return value;
 }
 
+function assertScenarioAllowsEvaluationMode(scenarioId: string, mode: AuthoredWorkbookEvalEvaluationMode): void {
+  const checkedMode = validEvaluationMode(mode);
+  const deterministicScenarioId = AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_REPORT_POLICY.scenarioId;
+  if (checkedMode === "deterministic-only" && scenarioId !== deterministicScenarioId) throw new Error("Invalid deterministic-only scenario for authored workbook reports.");
+  if (checkedMode === "judged" && scenarioId === deterministicScenarioId) throw new Error("Invalid judged scenario for deterministic-only authored workbook reports.");
+}
+
+function deterministicOnlyRequiredAssertionCount(): number {
+  return AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_REPORT_POLICY.requiredAssertionCount;
+}
+
 function copyStrictAuthoredWorkbookMetadataEnvelope(value: unknown): AuthoredWorkbookMetadataEnvelope {
   if (!isPlainRecord(value)) throw new Error("Invalid authored workbook metadata.");
   if (value.namespace !== AUTHORED_WORKBOOK_EVAL_MARKERS.namespace || value.owner !== AUTHORED_WORKBOOK_EVAL_MARKERS.owner || value.suite !== AUTHORED_WORKBOOK_EVAL_MARKERS.suite || value.schemaVersion !== AUTHORED_WORKBOOK_EVAL_MARKERS.schemaVersion) throw new Error("Invalid authored workbook metadata markers.");
@@ -440,10 +545,13 @@ function copyStrictAuthoredWorkbookMetadataEnvelope(value: unknown): AuthoredWor
   const verdict = copyLifecycleVerdictForStatus(status, value.verdict, evaluationMode);
   const outcome = expectedOutcomeForStatusAndVerdict(status, verdict);
   if (value.outcome !== outcome) throw new Error("Invalid authored workbook metadata outcome.");
-  const envelope: AuthoredWorkbookMetadataEnvelope = {
+  const runId = safeRunId(value.runId);
+  const scenario = safeScenarioId(value.scenario);
+  assertScenarioAllowsEvaluationMode(scenario, evaluationMode);
+  const envelope = {
     ...AUTHORED_WORKBOOK_EVAL_MARKERS,
-    runId: safeRunId(value.runId),
-    scenario: safeScenarioId(value.scenario),
+    runId,
+    scenario,
     repetition: validRepetition(value.repetition as number),
     status,
     outcome,
@@ -452,7 +560,7 @@ function copyStrictAuthoredWorkbookMetadataEnvelope(value: unknown): AuthoredWor
     modelIdentities: copyStrictAuthoredWorkbookEvalModelIdentities(value.modelIdentities, evaluationMode),
     lifecycle: copyExactLifecycleForStatus(status, value.lifecycle, evaluationMode),
     files: copyExactCuratedFilesForStatus(status, value.files, evaluationMode)
-  };
+  } as AuthoredWorkbookMetadataEnvelope;
   if (status !== "completed") envelope.failure = copyExactFailureSummaryForStatus(status, value.failure);
   return deepFreeze(envelope);
 }
@@ -465,16 +573,18 @@ export function createAuthoredWorkbookEvalReportBundleObjects(options: CreateAut
   const judgeTrace = projectAuthoredWorkbookEvalTraceForJudge(trace);
   const publicGate = projectAuthoredWorkbookGateForPublicReport(options.gate);
   if (!publicGate.passed) throw new Error("Cannot create an authored workbook report when the deterministic gate failed.");
+  if (publicGate.failureCount > 0) throw new Error("Cannot create an authored workbook report when the deterministic gate passed with failed assertions.");
   const mode = validEvaluationMode(options.evaluationMode ?? "judged");
+  assertScenarioAllowsEvaluationMode(scenario.id, mode);
   const traceEnvelope: AuthoredWorkbookTraceEnvelope = deepFreeze({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, trace: judgeTrace });
 
   if (mode === "deterministic-only") {
     if (Object.hasOwn(options, "judgeInput") || Object.hasOwn(options, "judge")) throw new Error("Judge artifacts are not valid for deterministic-only authored workbook reports.");
-    if (publicGate.assertionCount !== AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_SUCCESS_ASSERTION_COUNT) throw new Error("Deterministic-only authored workbook success requires the 17-assertion gate.");
-    const modelIdentities = copyModelIdentitiesForMode(options.modelIdentities, mode);
+    if (publicGate.assertionCount !== deterministicOnlyRequiredAssertionCount()) throw new Error("Deterministic-only authored workbook success requires the 17-assertion gate.");
+    const modelIdentities = copyModelIdentitiesForMode(options.modelIdentities, mode) as AuthoredWorkbookEvalDeterministicOnlyModelIdentities;
     const verdict = deterministicSuccessVerdict();
-    const files = successFiles(mode);
-    const report: AuthoredWorkbookReportEnvelope = deepFreeze({
+    const files = successFiles(mode) as AuthoredWorkbookDeterministicSuccessFiles;
+    const report: AuthoredWorkbookDeterministicOnlyReportEnvelope = deepFreeze({
       ...AUTHORED_WORKBOOK_EVAL_MARKERS,
       runId,
       scenario,
@@ -486,7 +596,7 @@ export function createAuthoredWorkbookEvalReportBundleObjects(options: CreateAut
       files
     });
     const summary = renderAuthoredWorkbookSummary({ scenario, gate: publicGate, evaluationMode: mode });
-    const metadata: AuthoredWorkbookMetadataEnvelope = deepFreeze({
+    const metadata: AuthoredWorkbookDeterministicOnlySuccessMetadataEnvelope = deepFreeze({
       ...AUTHORED_WORKBOOK_EVAL_MARKERS,
       runId,
       scenario: scenario.id,
@@ -507,11 +617,11 @@ export function createAuthoredWorkbookEvalReportBundleObjects(options: CreateAut
   const judge = verifyAuthoredWorkbookJudgeResult(options.judge, scenario, trace);
   const verdict = authoredWorkbookJudgeVerdict(judge);
   const lifecycleVerdict = verdictFromJudge(verdict);
-  const modelIdentities = copyModelIdentitiesForMode(options.modelIdentities, mode);
-  const files = successFiles(mode);
+  const modelIdentities = copyModelIdentitiesForMode(options.modelIdentities, mode) as AuthoredWorkbookEvalJudgedModelIdentities;
+  const files = successFiles(mode) as AuthoredWorkbookJudgedSuccessFiles;
   const judgeInputEnvelope: AuthoredWorkbookJudgeInputEnvelope = deepFreeze({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, scenario: scenario.id, traceFile: AUTHORED_WORKBOOK_REPORT_FILENAMES.trace, prompt: expectedJudgeInput });
   const judgeEnvelope: AuthoredWorkbookJudgeEnvelope = deepFreeze({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, judge, verdict });
-  const report: AuthoredWorkbookReportEnvelope = deepFreeze({
+  const report: AuthoredWorkbookJudgedReportEnvelope = deepFreeze({
     ...AUTHORED_WORKBOOK_EVAL_MARKERS,
     runId,
     scenario,
@@ -523,7 +633,7 @@ export function createAuthoredWorkbookEvalReportBundleObjects(options: CreateAut
     files
   });
   const summary = renderAuthoredWorkbookSummary({ scenario, judge, verdict, gate: publicGate, evaluationMode: mode });
-  const metadata: AuthoredWorkbookMetadataEnvelope = deepFreeze({
+  const metadata: AuthoredWorkbookJudgedSuccessMetadataEnvelope = deepFreeze({
     ...AUTHORED_WORKBOOK_EVAL_MARKERS,
     runId,
     scenario: scenario.id,
@@ -545,10 +655,12 @@ export function createAuthoredWorkbookEvalFailureMetadataEnvelope(options: Creat
   if (evaluationMode === "deterministic-only" && status === "judge") throw new Error("Deterministic-only authored workbook runs cannot fail in the Judge stage.");
   const outcome: AuthoredWorkbookEvalRunOutcome = status === "interrupted" ? "interrupted" : "failed";
   const message = boundedTextForWrite(publicFailureMessage(status), 1024, "public failure message");
-  const envelope: AuthoredWorkbookMetadataEnvelope = {
+  const scenario = safeScenarioId(options.scenarioId);
+  assertScenarioAllowsEvaluationMode(scenario, evaluationMode);
+  const envelope = {
     ...AUTHORED_WORKBOOK_EVAL_MARKERS,
     runId: safeRunId(options.runId),
-    scenario: safeScenarioId(options.scenarioId),
+    scenario,
     repetition: validRepetition(options.repetition ?? 1),
     status,
     outcome,
@@ -558,7 +670,7 @@ export function createAuthoredWorkbookEvalFailureMetadataEnvelope(options: Creat
     lifecycle: defaultAuthoredWorkbookEvalLifecycle(status, evaluationMode),
     files: metadataOnlyFiles(),
     failure: { stage: status, message, diagnosticPolicy: "local-diagnostics-are-not-curated-or-advertised" }
-  };
+  } as AuthoredWorkbookMetadataEnvelope;
   return deepFreeze(envelope);
 }
 
@@ -797,33 +909,59 @@ async function readBoundedFileHandleText(handle: Awaited<ReturnType<typeof open>
   return Buffer.concat(chunks, total).toString("utf8");
 }
 
-async function readStableMetadataJson(metadataPath: string): Promise<{ metadata: AuthoredWorkbookMetadataEnvelope; identity: StableFilesystemIdentity }> {
+async function readStableJsonFile(path: string, label: string): Promise<{ parsed: unknown; text: string; identity: StableFilesystemIdentity }> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    handle = await open(metadataPath, constants.O_RDONLY | O_NOFOLLOW);
+    handle = await open(path, constants.O_RDONLY | O_NOFOLLOW);
     const beforeStat = await handle.stat();
-    assertOrdinarySingleLinkFileStat(beforeStat, "Authored workbook latest metadata must be an ordinary non-linked file.");
-    if (beforeStat.size > MAX_CURATED_TEXT_BYTES) throw new Error("authored workbook metadata.json exceeds the authored workbook report length limit.");
+    assertOrdinarySingleLinkFileStat(beforeStat, `Authored workbook ${label} must be an ordinary non-linked file.`);
+    if (beforeStat.size > MAX_CURATED_TEXT_BYTES) throw new Error(`authored workbook ${label} exceeds the authored workbook report length limit.`);
     const beforeIdentity = stableFilesystemIdentity(beforeStat);
-    const text = await readBoundedFileHandleText(handle, MAX_CURATED_TEXT_BYTES, "authored workbook metadata.json");
+    const text = await readBoundedFileHandleText(handle, MAX_CURATED_TEXT_BYTES, `authored workbook ${label}`);
     const afterStat = await handle.stat();
-    assertOrdinarySingleLinkFileStat(afterStat, "Authored workbook latest metadata must be an ordinary non-linked file.");
+    assertOrdinarySingleLinkFileStat(afterStat, `Authored workbook ${label} must be an ordinary non-linked file.`);
     const afterIdentity = stableFilesystemIdentity(afterStat);
-    assertStableFilesystemIdentity(beforeIdentity, afterIdentity, "Authored workbook latest metadata changed during validation.");
-    if (Buffer.byteLength(text, "utf8") !== afterStat.size) throw new Error("Authored workbook latest metadata changed during validation.");
-    const pathStat = await lstat(metadataPath);
-    assertOrdinarySingleLinkFileStat(pathStat, "Authored workbook latest metadata must be an ordinary non-linked file.");
-    assertStableFilesystemIdentity(afterIdentity, stableFilesystemIdentity(pathStat), "Authored workbook latest metadata path changed during validation.");
-    let parsed: unknown;
+    assertStableFilesystemIdentity(beforeIdentity, afterIdentity, `Authored workbook ${label} changed during validation.`);
+    if (Buffer.byteLength(text, "utf8") !== afterStat.size) throw new Error(`Authored workbook ${label} changed during validation.`);
+    const pathStat = await lstat(path);
+    assertOrdinarySingleLinkFileStat(pathStat, `Authored workbook ${label} must be an ordinary non-linked file.`);
+    assertStableFilesystemIdentity(afterIdentity, stableFilesystemIdentity(pathStat), `Authored workbook ${label} path changed during validation.`);
     try {
-      parsed = JSON.parse(text);
+      return { parsed: JSON.parse(text), text, identity: afterIdentity };
     } catch {
-      throw new Error("Invalid authored workbook metadata.");
+      throw new Error(`Invalid authored workbook ${label}.`);
     }
-    return { metadata: copyStrictAuthoredWorkbookMetadataEnvelope(parsed), identity: afterIdentity };
   } finally {
     await handle?.close().catch(() => undefined);
   }
+}
+
+async function readStableTextFile(path: string, label: string): Promise<{ text: string; identity: StableFilesystemIdentity }> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | O_NOFOLLOW);
+    const beforeStat = await handle.stat();
+    assertOrdinarySingleLinkFileStat(beforeStat, `Authored workbook ${label} must be an ordinary non-linked file.`);
+    if (beforeStat.size > MAX_CURATED_TEXT_BYTES) throw new Error(`authored workbook ${label} exceeds the authored workbook report length limit.`);
+    const beforeIdentity = stableFilesystemIdentity(beforeStat);
+    const text = await readBoundedFileHandleText(handle, MAX_CURATED_TEXT_BYTES, `authored workbook ${label}`);
+    const afterStat = await handle.stat();
+    assertOrdinarySingleLinkFileStat(afterStat, `Authored workbook ${label} must be an ordinary non-linked file.`);
+    const afterIdentity = stableFilesystemIdentity(afterStat);
+    assertStableFilesystemIdentity(beforeIdentity, afterIdentity, `Authored workbook ${label} changed during validation.`);
+    if (Buffer.byteLength(text, "utf8") !== afterStat.size) throw new Error(`Authored workbook ${label} changed during validation.`);
+    const pathStat = await lstat(path);
+    assertOrdinarySingleLinkFileStat(pathStat, `Authored workbook ${label} must be an ordinary non-linked file.`);
+    assertStableFilesystemIdentity(afterIdentity, stableFilesystemIdentity(pathStat), `Authored workbook ${label} path changed during validation.`);
+    return { text, identity: afterIdentity };
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function readStableMetadataJson(metadataPath: string): Promise<{ metadata: AuthoredWorkbookMetadataEnvelope; identity: StableFilesystemIdentity }> {
+  const { parsed, identity } = await readStableJsonFile(metadataPath, "metadata.json");
+  return { metadata: copyStrictAuthoredWorkbookMetadataEnvelope(parsed), identity };
 }
 
 async function validateRunDirectoryFilesForStatus(reportsRoot: string, runDirectory: string, status: AuthoredWorkbookEvalRunLifecycleStatus, mode: AuthoredWorkbookEvalEvaluationMode): Promise<void> {
@@ -832,17 +970,51 @@ async function validateRunDirectoryFilesForStatus(reportsRoot: string, runDirect
   const rootReal = await canonicalReportsRoot(reportsRoot);
   const directory = await runDirectoryForRoot(rootReal, runDirectory);
   const expected = curatedFilesForStatus(checkedStatus, checkedMode);
-  for (const file of Object.values(expected)) await assertOrdinarySingleLinkFile(join(directory, file), "Authored workbook report advertised file must be an ordinary non-linked file.");
-  for (const file of Object.values(AUTHORED_WORKBOOK_REPORT_FILENAMES)) {
-    if (Object.values(expected).includes(file)) continue;
-    try {
-      await lstat(join(directory, file));
-      throw new Error("Authored workbook report directory contains unexpected curated files for its status.");
-    } catch (error) {
-      if (isNativeFsError(error) && error.code === "ENOENT") continue;
-      throw error;
+  await assertRunDirectoryClosed(directory, expected);
+  const { metadata } = await readStableMetadataJson(join(directory, AUTHORED_WORKBOOK_REPORT_FILENAMES.metadata));
+  if (metadata.runId !== runIdFromReportDirectory(runDirectory) || metadata.status !== checkedStatus || metadata.evaluationMode !== checkedMode || !sameCuratedFiles(metadata.files, expected)) throw new Error("Authored workbook report metadata identity mismatch.");
+  await validateCuratedContentMatchesMetadata(directory, metadata);
+}
+
+async function assertRunDirectoryClosed(directory: string, expected: AuthoredWorkbookCuratedFiles): Promise<void> {
+  const expectedFiles = new Set<string>(Object.values(expected));
+  const recognizedDiagnostics = new Set<string>(Object.values(AUTHORED_WORKBOOK_LOCAL_DIAGNOSTIC_FILENAMES));
+  for (const file of expectedFiles) await assertOrdinarySingleLinkFile(join(directory, file), "Authored workbook report advertised file must be an ordinary non-linked file.");
+  for (const entry of await readdir(directory)) {
+    if (entry === "." || entry === ".." || entry.includes("/") || entry.includes("\\")) throw new Error("Authored workbook report directory contains an invalid entry.");
+    const path = join(directory, entry);
+    if (expectedFiles.has(entry)) continue;
+    if (recognizedDiagnostics.has(entry)) {
+      await assertOrdinarySingleLinkFile(path, "Authored workbook report local diagnostic must be an ordinary non-linked file.");
+      continue;
     }
+    throw new Error("Authored workbook report directory contains an unexpected file.");
   }
+}
+
+async function validateCuratedContentMatchesMetadata(directory: string, metadata: AuthoredWorkbookMetadataEnvelope): Promise<void> {
+  if (metadata.status !== "completed") return;
+  const { parsed: traceParsed } = await readStableJsonFile(join(directory, AUTHORED_WORKBOOK_REPORT_FILENAMES.trace), "trace.json");
+  const traceEnvelope = copyStrictAuthoredWorkbookTraceEnvelope(traceParsed, metadata.scenario);
+  const { parsed: reportParsed } = await readStableJsonFile(join(directory, AUTHORED_WORKBOOK_REPORT_FILENAMES.report), "report.json");
+  const report = copyStrictAuthoredWorkbookReportEnvelope(reportParsed);
+  assertReportMatchesMetadata(report, metadata);
+  let expectedSummary: string;
+  if (metadata.evaluationMode === "judged") {
+    const { parsed: judgeInputParsed } = await readStableJsonFile(join(directory, AUTHORED_WORKBOOK_REPORT_FILENAMES.judgeInput), "judge-input.json");
+    const judgeInput = copyStrictAuthoredWorkbookJudgeInputEnvelope(judgeInputParsed);
+    if (judgeInput.scenario !== metadata.scenario || judgeInput.traceFile !== AUTHORED_WORKBOOK_REPORT_FILENAMES.trace) throw new Error("Authored workbook judge input identity mismatch.");
+    const expectedPrompt = buildAuthoredWorkbookJudgePromptFromProjectedTrace(report.scenario, traceEnvelope.trace, report.gate);
+    if (judgeInput.prompt !== expectedPrompt) throw new Error("Authored workbook judge input prompt mismatch.");
+    const { parsed: judgeParsed } = await readStableJsonFile(join(directory, AUTHORED_WORKBOOK_REPORT_FILENAMES.judge), "judge.json");
+    const judge = copyStrictAuthoredWorkbookJudgeEnvelope(judgeParsed, report.scenario, traceEnvelope.trace);
+    if (!sameLifecycleVerdict(verdictFromJudge(judge.verdict), metadata.verdict)) throw new Error("Authored workbook judge verdict metadata mismatch.");
+    expectedSummary = renderAuthoredWorkbookSummary({ scenario: report.scenario, gate: report.gate, evaluationMode: metadata.evaluationMode, judge: judge.judge, verdict: judge.verdict });
+  } else {
+    expectedSummary = renderAuthoredWorkbookSummary({ scenario: report.scenario, gate: report.gate, evaluationMode: metadata.evaluationMode });
+  }
+  const { text: summary } = await readStableTextFile(join(directory, AUTHORED_WORKBOOK_REPORT_FILENAMES.summary), "summary.md");
+  if (summary !== expectedSummary) throw new Error("Authored workbook summary metadata mismatch.");
 }
 
 function runIdFromReportDirectory(reportDirectory: string): string {
@@ -859,6 +1031,211 @@ function sameCuratedFiles(left: AuthoredWorkbookCuratedFiles, right: AuthoredWor
   const rightRecord = right as Record<string, string>;
   const keys = Object.keys(leftRecord);
   return keys.length === Object.keys(rightRecord).length && keys.every((key) => leftRecord[key] === rightRecord[key]);
+}
+
+function sameModelIdentities(left: AuthoredWorkbookEvalModelIdentities, right: AuthoredWorkbookEvalModelIdentities): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function copyStrictMarkers(value: Record<string, unknown>, label: string): void {
+  if (value.namespace !== AUTHORED_WORKBOOK_EVAL_MARKERS.namespace || value.owner !== AUTHORED_WORKBOOK_EVAL_MARKERS.owner || value.suite !== AUTHORED_WORKBOOK_EVAL_MARKERS.suite || value.schemaVersion !== AUTHORED_WORKBOOK_EVAL_MARKERS.schemaVersion) throw new Error(`Invalid authored workbook ${label} markers.`);
+}
+
+function copyStrictAuthoredWorkbookTraceEnvelope(value: unknown, expectedScenario: string): AuthoredWorkbookTraceEnvelope {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook trace envelope.");
+  assertExactKeys(value, ["namespace", "owner", "suite", "schemaVersion", "trace"], "authored workbook trace envelope");
+  copyStrictMarkers(value, "trace envelope");
+  const trace = copyStrictAuthoredWorkbookJudgeTrace(value.trace);
+  if (trace.scenarioId !== expectedScenario) throw new Error("Authored workbook trace metadata identity mismatch.");
+  return deepFreeze({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, trace });
+}
+
+function copyStrictAuthoredWorkbookJudgeTrace(value: unknown): AuthoredWorkbookEvalJudgeTrace {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge trace.");
+  assertExactKeys(value, ["scenarioId", "publicStates", "terminalTranscript", "reflections", "editors", "progressionEvents", "artifacts"], "authored workbook judge trace");
+  if (!Array.isArray(value.publicStates) || !Array.isArray(value.terminalTranscript) || !Array.isArray(value.reflections) || !Array.isArray(value.editors) || !Array.isArray(value.progressionEvents) || !Array.isArray(value.artifacts)) throw new Error("Invalid authored workbook judge trace.");
+  return deepFreeze({
+    scenarioId: safeScenarioId(value.scenarioId),
+    publicStates: value.publicStates.map(copyStrictJudgeRecordedPublicState),
+    terminalTranscript: value.terminalTranscript.map(copyStrictPublicTerminalTranscriptEntry),
+    reflections: value.reflections.map(copyStrictPublicReflectionEntry),
+    editors: value.editors.map(copyStrictPublicEditorEntry),
+    progressionEvents: value.progressionEvents.map(copyStrictProgressionEvent),
+    artifacts: value.artifacts.map(copyStrictArtifactSnapshot)
+  });
+}
+
+function copyStrictJudgeRecordedPublicState(value: unknown): AuthoredWorkbookEvalJudgeTrace["publicStates"][number] {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge public state.");
+  assertExactKeys(value, ["label", "state"], "authored workbook judge public state");
+  if (!isPlainRecord(value.state)) throw new Error("Invalid authored workbook judge public state.");
+  return { label: boundedString(value.label, "public state label", 128), state: deepFreeze(structuredClone(value.state)) as unknown as AuthoredWorkbookEvalJudgeTrace["publicStates"][number]["state"] };
+}
+
+function copyStrictPublicTerminalTranscriptEntry(value: unknown): AuthoredWorkbookEvalJudgeTrace["terminalTranscript"][number] {
+  if (!isPlainRecord(value) || (value.direction !== "input" && value.direction !== "output" && value.direction !== "observer") || typeof value.text !== "string") throw new Error("Invalid authored workbook terminal transcript entry.");
+  const keys = Object.hasOwn(value, "blockId") ? ["blockId", "direction", "text"] : ["direction", "text"];
+  assertExactKeys(value, keys, "authored workbook terminal transcript entry");
+  if (Object.hasOwn(value, "blockId") && typeof value.blockId !== "string") throw new Error("Invalid authored workbook terminal transcript entry.");
+  const text = boundedString(value.text, "terminal transcript", 64 * 1024);
+  return Object.hasOwn(value, "blockId") ? { blockId: boundedString(value.blockId, "terminal transcript block id", 512), direction: value.direction, text } : { direction: value.direction, text };
+}
+
+function copyStrictPublicReflectionEntry(value: unknown): AuthoredWorkbookEvalJudgeTrace["reflections"][number] {
+  if (!isPlainRecord(value) || typeof value.blockId !== "string" || (value.role !== "learner" && value.role !== "tutor") || typeof value.text !== "string") throw new Error("Invalid authored workbook reflection entry.");
+  assertExactKeys(value, ["blockId", "role", "text"], "authored workbook reflection entry");
+  return { blockId: boundedString(value.blockId, "reflection block id", 512), role: value.role, text: boundedString(value.text, "reflection transcript", 64 * 1024) };
+}
+
+function copyStrictPublicEditorEntry(value: unknown): AuthoredWorkbookEvalJudgeTrace["editors"][number] {
+  if (!isPlainRecord(value) || typeof value.blockId !== "string" || !Number.isInteger(value.revision) || (value.status !== "reviewing" && value.status !== "feedback" && value.status !== "unlocked")) throw new Error("Invalid authored workbook editor entry.");
+  const keys = Object.hasOwn(value, "feedback") ? ["blockId", "revision", "status", "feedback"] : ["blockId", "revision", "status"];
+  assertExactKeys(value, keys, "authored workbook editor entry");
+  if (Object.hasOwn(value, "feedback") && typeof value.feedback !== "string") throw new Error("Invalid authored workbook editor entry.");
+  const revision = value.revision as number;
+  return Object.hasOwn(value, "feedback") ? { blockId: boundedString(value.blockId, "editor block id", 512), revision, status: value.status, feedback: boundedString(value.feedback, "editor feedback", 64 * 1024) } : { blockId: boundedString(value.blockId, "editor block id", 512), revision, status: value.status };
+}
+
+function copyStrictProgressionEvent(value: unknown): AuthoredWorkbookEvalJudgeTrace["progressionEvents"][number] {
+  if (!isPlainRecord(value) || typeof value.type !== "string") throw new Error("Invalid authored workbook progression event.");
+  switch (value.type) {
+    case "session_started":
+    case "workbook_introduction_completed":
+      assertExactKeys(value, ["type"], "authored workbook progression event");
+      return { type: value.type };
+    case "attempt_accepted":
+      assertExactKeys(value, ["type", "lessonId", "blockId", "kind"], "authored workbook progression event");
+      if (typeof value.lessonId !== "string" || typeof value.blockId !== "string" || (value.kind !== "editor" && value.kind !== "terminal" && value.kind !== "reflection")) throw new Error("Invalid authored workbook progression event.");
+      return { type: "attempt_accepted", lessonId: value.lessonId, blockId: value.blockId, kind: value.kind };
+    case "reflection_submitted":
+    case "reflection_follow_up_submitted":
+    case "reflection_reply_recorded":
+    case "reflection_completed":
+      assertExactKeys(value, ["type", "lessonId", "blockId"], "authored workbook progression event");
+      if (typeof value.lessonId !== "string" || typeof value.blockId !== "string") throw new Error("Invalid authored workbook progression event.");
+      return { type: value.type, lessonId: value.lessonId, blockId: value.blockId };
+    case "block_completed": {
+      const keys = Object.hasOwn(value, "lessonId") ? ["type", "lessonId", "blockId"] : ["type", "blockId"];
+      assertExactKeys(value, keys, "authored workbook progression event");
+      if (Object.hasOwn(value, "lessonId") && typeof value.lessonId !== "string") throw new Error("Invalid authored workbook progression event.");
+      if (typeof value.blockId !== "string") throw new Error("Invalid authored workbook progression event.");
+      return Object.hasOwn(value, "lessonId") ? { type: "block_completed", lessonId: value.lessonId as string, blockId: value.blockId } : { type: "block_completed", blockId: value.blockId };
+    }
+    default:
+      throw new Error("Invalid authored workbook progression event.");
+  }
+}
+
+function copyStrictArtifactSnapshot(value: unknown): AuthoredWorkbookEvalJudgeTrace["artifacts"][number] {
+  if (!isPlainRecord(value) || typeof value.path !== "string" || typeof value.content !== "string") throw new Error("Invalid authored workbook artifact snapshot.");
+  assertExactKeys(value, ["path", "content"], "authored workbook artifact snapshot");
+  const path = boundedString(value.path, "artifact path", 512);
+  if (path.startsWith("/") || path.includes("\\") || path.includes("\0") || path.split("/").some((part) => part === "" || part === "." || part === "..")) throw new Error("Invalid authored workbook artifact path.");
+  return { path, content: boundedString(value.content, `artifact '${path}'`, 64 * 1024) };
+}
+
+function copyStrictScenarioPublicDescriptor(value: unknown): AuthoredWorkbookEvalScenarioPublicDescriptor {
+  if (!isPlainRecord(value) || !Array.isArray(value.criteria)) throw new Error("Invalid authored workbook eval scenario descriptor.");
+  assertExactKeys(value, ["id", "title", "description", "criteria"], "authored workbook eval scenario descriptor");
+  for (const criterion of value.criteria) {
+    if (!isPlainRecord(criterion)) throw new Error("Invalid authored workbook eval scenario criterion.");
+    assertExactKeys(criterion, ["id", "title", "description"], "authored workbook eval scenario criterion");
+  }
+  return copyAuthoredWorkbookEvalScenarioPublicDescriptor(value);
+}
+
+function copyStrictPublicGate(value: unknown): AuthoredWorkbookEvalPublicGateResult {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook public gate result.");
+  assertExactKeys(value, ["passed", "assertionCount", "failureCount", "assertions", "detailPolicy"], "authored workbook public gate result");
+  if (typeof value.passed !== "boolean" || !Number.isInteger(value.assertionCount) || !Number.isInteger(value.failureCount) || !Array.isArray(value.assertions) || value.detailPolicy !== "assertion-details-omitted-from-public-report") throw new Error("Invalid authored workbook public gate result.");
+  const assertions = value.assertions.map((assertion, index) => {
+    if (!isPlainRecord(assertion)) throw new Error("Invalid authored workbook public gate assertion.");
+    assertExactKeys(assertion, ["index", "passed"], "authored workbook public gate assertion");
+    if (assertion.index !== index || typeof assertion.passed !== "boolean") throw new Error("Invalid authored workbook public gate assertion.");
+    return { index, passed: assertion.passed };
+  });
+  const failureCount = assertions.filter((assertion) => !assertion.passed).length;
+  if (value.assertionCount !== assertions.length || value.failureCount !== failureCount) throw new Error("Invalid authored workbook public gate result.");
+  if (value.passed && failureCount > 0) throw new Error("Invalid authored workbook public gate result with failed assertions.");
+  return deepFreeze({ passed: value.passed, assertionCount: assertions.length, failureCount, assertions, detailPolicy: "assertion-details-omitted-from-public-report" as const });
+}
+
+function copyStrictJudgeRunSummary(value: unknown, mode: AuthoredWorkbookEvalEvaluationMode): AuthoredWorkbookEvalJudgeRunSummary {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook report judge summary.");
+  if (mode === "deterministic-only") {
+    assertExactKeys(value, ["policy", "expectedCalls", "status"], "authored workbook report judge summary");
+    if (value.policy !== "deterministic-only" || value.expectedCalls !== 0 || value.status !== "not-run") throw new Error("Invalid authored workbook report judge summary.");
+    return { policy: "deterministic-only", expectedCalls: 0, status: "not-run" };
+  }
+  assertExactKeys(value, ["policy", "expectedCalls", "status"], "authored workbook report judge summary");
+  if (value.policy !== "scenario-specific" || value.expectedCalls !== 1 || value.status !== "completed") throw new Error("Invalid authored workbook report judge summary.");
+  return { policy: "scenario-specific", expectedCalls: 1, status: "completed" };
+}
+
+function copyStrictAuthoredWorkbookReportEnvelope(value: unknown): AuthoredWorkbookReportEnvelope {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook report envelope.");
+  assertExactKeys(value, ["namespace", "owner", "suite", "schemaVersion", "runId", "scenario", "evaluationMode", "modelIdentities", "gate", "judge", "verdict", "files"], "authored workbook report envelope");
+  copyStrictMarkers(value, "report envelope");
+  const mode = validEvaluationMode(value.evaluationMode);
+  const scenario = copyStrictScenarioPublicDescriptor(value.scenario);
+  assertScenarioAllowsEvaluationMode(scenario.id, mode);
+  const gate = copyStrictPublicGate(value.gate);
+  if (mode === "deterministic-only" && (gate.assertionCount !== deterministicOnlyRequiredAssertionCount() || gate.failureCount !== 0 || !gate.passed)) throw new Error("Invalid deterministic-only authored workbook report gate.");
+  return deepFreeze({
+    ...AUTHORED_WORKBOOK_EVAL_MARKERS,
+    runId: safeRunId(value.runId),
+    scenario,
+    evaluationMode: mode,
+    modelIdentities: copyStrictAuthoredWorkbookEvalModelIdentities(value.modelIdentities, mode),
+    gate,
+    judge: copyStrictJudgeRunSummary(value.judge, mode),
+    verdict: copyLifecycleVerdictForStatus("completed", value.verdict, mode),
+    files: copyExactCuratedFilesForStatus("completed", value.files, mode)
+  } as AuthoredWorkbookReportEnvelope);
+}
+
+function copyStrictAuthoredWorkbookJudgeInputEnvelope(value: unknown): AuthoredWorkbookJudgeInputEnvelope {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge input envelope.");
+  assertExactKeys(value, ["namespace", "owner", "suite", "schemaVersion", "scenario", "traceFile", "prompt"], "authored workbook judge input envelope");
+  copyStrictMarkers(value, "judge input envelope");
+  if (value.traceFile !== AUTHORED_WORKBOOK_REPORT_FILENAMES.trace) throw new Error("Invalid authored workbook judge input envelope.");
+  return deepFreeze({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, scenario: safeScenarioId(value.scenario), traceFile: AUTHORED_WORKBOOK_REPORT_FILENAMES.trace, prompt: boundedString(value.prompt, "judge prompt", MAX_CURATED_TEXT_BYTES) });
+}
+
+function copyStrictJudgeResultForTrace(value: unknown, scenario: AuthoredWorkbookEvalScenarioPublicDescriptor, trace: AuthoredWorkbookEvalJudgeTrace): AuthoredWorkbookEvalJudgeResult {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge result.");
+  assertExactKeys(value, ["criteria", "summary"], "authored workbook judge result");
+  if (!isPlainRecord(value.criteria)) throw new Error("Invalid authored workbook judge result.");
+  const criterionIds = scenario.criteria.map((criterion) => criterion.id);
+  assertExactKeys(value.criteria, criterionIds, "authored workbook judge criteria");
+  const validCitationIds = new Set(enumerateAuthoredWorkbookEvalJudgeCitations(trace).map((citation) => citation.id));
+  const criteria: Record<string, AuthoredWorkbookEvalJudgeCriterionScore> = {};
+  for (const id of criterionIds) {
+    const score = value.criteria[id];
+    if (!isPlainRecord(score)) throw new Error("Invalid authored workbook judge criterion.");
+    assertExactKeys(score, ["score", "citations", "rationale"], "authored workbook judge criterion");
+    if (score.score !== 0 && score.score !== 1 && score.score !== 2) throw new Error("Invalid authored workbook judge criterion.");
+    if (!Array.isArray(score.citations) || score.citations.length === 0 || !score.citations.every((citation) => Number.isInteger(citation) && validCitationIds.has(citation))) throw new Error("Invalid authored workbook judge citation.");
+    criteria[id] = { score: score.score, citations: [...score.citations], rationale: boundedString(score.rationale, "judge rationale", 8 * 1024) };
+  }
+  return deepFreeze({ criteria, summary: boundedString(value.summary, "judge summary", 16 * 1024) });
+}
+
+function copyStrictAuthoredWorkbookJudgeEnvelope(value: unknown, scenario: AuthoredWorkbookEvalScenarioPublicDescriptor, trace: AuthoredWorkbookEvalJudgeTrace): AuthoredWorkbookJudgeEnvelope {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge envelope.");
+  assertExactKeys(value, ["namespace", "owner", "suite", "schemaVersion", "judge", "verdict"], "authored workbook judge envelope");
+  copyStrictMarkers(value, "judge envelope");
+  const judge = copyStrictJudgeResultForTrace(value.judge, scenario, trace);
+  const verdict = copyLifecycleVerdictForStatus("completed", value.verdict, "judged") as AuthoredWorkbookJudgedLifecycleVerdict;
+  const derived = authoredWorkbookJudgeVerdict(judge);
+  if (!sameLifecycleVerdict(verdict, derived)) throw new Error("Authored workbook judge verdict does not match judge scores.");
+  return deepFreeze({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, judge, verdict });
+}
+
+function assertReportMatchesMetadata(report: AuthoredWorkbookReportEnvelope, metadata: AuthoredWorkbookMetadataEnvelope): void {
+  if (metadata.status !== "completed") throw new Error("Authored workbook report metadata identity mismatch.");
+  if (report.runId !== metadata.runId || report.scenario.id !== metadata.scenario || report.evaluationMode !== metadata.evaluationMode) throw new Error("Authored workbook report metadata identity mismatch.");
+  if (!sameLifecycleVerdict(report.verdict, metadata.verdict) || !sameCuratedFiles(report.files, metadata.files) || !sameModelIdentities(report.modelIdentities, metadata.modelIdentities)) throw new Error("Authored workbook report metadata identity mismatch.");
 }
 
 function assertLatestEntryMatchesMetadata(entry: AuthoredWorkbookEvalLatestRunEntry, metadata: AuthoredWorkbookMetadataEnvelope): void {
@@ -881,6 +1258,7 @@ function assertSameLatestRunValidationSnapshot(left: LatestRunValidationSnapshot
 }
 
 async function validateLatestRunDirectory(rootReal: string, entry: AuthoredWorkbookEvalLatestRunEntry): Promise<LatestRunValidationSnapshot> {
+  await validateRunDirectoryFilesForStatus(rootReal, entry.reportDirectory, entry.status, entry.evaluationMode);
   const directory = await runDirectoryForRoot(rootReal, entry.reportDirectory);
   const directoryStat = await lstat(directory);
   const directoryIdentity = stableFilesystemIdentity(directoryStat);
@@ -1109,6 +1487,7 @@ function copyLatestRunEntry(value: unknown, scenarioIds: Set<string>, repeat: 1 
   if (repetition > repeat) throw new Error("Authored workbook latest contains a repetition outside the invocation repeat.");
   const status = validRunStatus(value.status);
   const evaluationMode = validEvaluationMode(value.evaluationMode);
+  assertScenarioAllowsEvaluationMode(scenario, evaluationMode);
   if (evaluationMode === "deterministic-only" && status === "judge") throw new Error("Invalid authored workbook deterministic-only latest entry.");
   return deepFreeze({
     ...AUTHORED_WORKBOOK_EVAL_MARKERS,
@@ -1119,13 +1498,14 @@ function copyLatestRunEntry(value: unknown, scenarioIds: Set<string>, repeat: 1 
     verdict: copyLifecycleVerdictForStatus(status, value.verdict, evaluationMode),
     reportDirectory: safeRelativeReportDirectory(value.reportDirectory),
     files: copyExactCuratedFilesForStatus(status, value.files, evaluationMode)
-  });
+  } as AuthoredWorkbookEvalLatestRunEntry);
 }
 
 export function createAuthoredWorkbookEvalLatestRunEntry(options: Omit<AuthoredWorkbookEvalLatestRunEntry, keyof AuthoredWorkbookEvalMarkers>): AuthoredWorkbookEvalLatestRunEntry {
   const scenario = safeScenarioId(options.scenario);
   const status = validRunStatus(options.status);
   const evaluationMode = validEvaluationMode(options.evaluationMode);
+  assertScenarioAllowsEvaluationMode(scenario, evaluationMode);
   if (evaluationMode === "deterministic-only" && status === "judge") throw new Error("Invalid authored workbook deterministic-only latest entry.");
   return deepFreeze({
     ...AUTHORED_WORKBOOK_EVAL_MARKERS,
@@ -1136,7 +1516,7 @@ export function createAuthoredWorkbookEvalLatestRunEntry(options: Omit<AuthoredW
     verdict: copyLifecycleVerdictForStatus(status, options.verdict, evaluationMode),
     reportDirectory: safeRelativeReportDirectory(options.reportDirectory),
     files: copyExactCuratedFilesForStatus(status, options.files, evaluationMode)
-  });
+  } as AuthoredWorkbookEvalLatestRunEntry);
 }
 
 export function createAuthoredWorkbookEvalLatestEnvelope(options: CreateAuthoredWorkbookEvalLatestEnvelopeOptions): AuthoredWorkbookEvalLatestEnvelope {

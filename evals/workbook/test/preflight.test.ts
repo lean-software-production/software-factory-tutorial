@@ -396,6 +396,44 @@ describe("authored workbook eval preflight", () => {
     expect(summary.warnings.join("\n")).toContain("No Judge preflight");
   });
 
+  it("ignores malformed ambient Judge config for deterministic-only parser selections and omits optional Judge keys", () => {
+    const ambient = {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      [OPENCODE_API_KEY_ENV]: secret,
+      TUTOR_MODEL: "anthropic/claude-sonnet-4-5",
+      [EVAL_JUDGE_MODEL_ENV]: "google/gemini\nOPENCODE_API_KEY=sk-secret",
+      [EVAL_JUDGE_COMMAND_ENV]: ""
+    };
+    const parsed = parseAuthoredWorkbookEvalPreflightArgs([
+      "--scenario", "lessons-003-004-evidence-feedback",
+      "--max-paid-model-calls", "36",
+      "--max-estimated-tokens", "72000"
+    ], ambient);
+
+    expect(parsed.kind).toBe("request");
+    if (parsed.kind !== "request") throw new Error("expected request");
+    expect(parsed.request.models).toEqual({ mainTutor: "anthropic/claude-sonnet-4-5" });
+    expect(Object.hasOwn(parsed.request.models ?? {}, "judge")).toBe(false);
+    const request = validateAuthoredWorkbookEvalPreflightRequest(parsed.request);
+    expect(Reflect.ownKeys(request.models)).toEqual(["mainTutor"]);
+    expect(Object.hasOwn(request.models, "judge")).toBe(false);
+    expect(Object.hasOwn(request.environment, EVAL_JUDGE_MODEL_ENV)).toBe(false);
+    expect(Object.hasOwn(request.environment, EVAL_JUDGE_COMMAND_ENV)).toBe(false);
+
+    expect(() => parseAuthoredWorkbookEvalPreflightArgs([
+      "--scenario", "primer-validation-misconception",
+      "--max-paid-model-calls", "18",
+      "--max-estimated-tokens", "36000"
+    ], ambient)).toThrow(AuthoredWorkbookEvalPreflightError);
+    expect(() => parseAuthoredWorkbookEvalPreflightArgs([
+      "--scenario", "lessons-003-004-evidence-feedback",
+      "--max-paid-model-calls", "36",
+      "--max-estimated-tokens", "72000",
+      "--judge-model", "google/gemini\nsecret"
+    ], ambient)).toThrow(AuthoredWorkbookEvalPreflightError);
+  });
+
   it("rejects invalid, missing, or duplicate repeat flags and repeat underbudgets before side effects", async () => {
     const badArgv = [
       ["--scenario", "part-1-happy-path", "--max-paid-model-calls", "9", "--max-estimated-tokens", "18000", "--repeat"],

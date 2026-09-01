@@ -331,15 +331,18 @@ export async function runAuthoredWorkbookEvalBatch(input: AuthoredWorkbookRunInv
       const scenario = authoredWorkbookScenarioById(scenarioId);
       const runId = dependencies.nowRunId(scenario.id, repetition);
       const result = await runOneAuthoredWorkbookScenario({ scenario, repetition: repetition as 1 | 2 | 3, runId, invocation: input, modelIdentities, reportsRoot, signal, dependencies });
-      if (result.latestEntry) latestEntries.push(result.latestEntry);
+      if (signal.aborted || result.status === "interrupted") interrupted = true;
+      if (!interrupted && result.latestEntry) latestEntries.push(result.latestEntry);
       const scenarioResults = resultsByScenario.get(scenario.id) ?? [];
       scenarioResults.push(result);
       resultsByScenario.set(scenario.id, scenarioResults);
       dependencies.log(`${scenario.id}#${repetition}: ${result.status} ${result.passed ? "pass" : "fail"}${result.reportDirectory ? ` ${relativePath(resolve(process.cwd()), resolve(reportsRoot, result.reportDirectory))}` : " unreported"}`);
-      if (result.status === "interrupted") { interrupted = true; break; }
+      if (interrupted) break;
     }
     if (interrupted) break;
   }
+
+  if (interrupted) return options.signalCode?.() ?? 130;
 
   if (latestEntries.length > 0) {
     try {
@@ -350,7 +353,6 @@ export async function runAuthoredWorkbookEvalBatch(input: AuthoredWorkbookRunInv
       return interrupted ? (options.signalCode?.() ?? 130) : 1;
     }
   }
-  if (interrupted) return options.signalCode?.() ?? 130;
   const stable = [...resultsByScenario.values()].every((runs) => authoredWorkbookEvalStabilityPassed(runs.map((run) => ({ passed: run.passed }))));
   const allReported = [...resultsByScenario.values()].flat().every((run) => run.reported);
   return stable && allReported ? 0 : 1;
@@ -399,6 +401,7 @@ async function runOneAuthoredWorkbookScenario(input: { scenario: AuthoredWorkboo
     throwIfAborted(signal);
     const gate = scenario.gate(gateInput);
     gateForDiagnostic = { passed: gate.passed, assertions: gate.assertions.map((assertion) => ({ name: assertion.id, passed: assertion.passed, detail: assertion.privateDetail ?? assertion.message })) };
+    if (gate.passed && gateForDiagnostic.assertions.some((assertion) => !assertion.passed)) throw new Error("Deterministic gate reported pass with failed assertions.");
     if (!gate.passed) throw new Error("Deterministic gate failed before judge invocation.");
     const scenarioPublic = publicScenarioDescriptor(scenario);
     if (scenario.judgePolicy.kind === "deterministic-only") {
@@ -422,6 +425,12 @@ async function runOneAuthoredWorkbookScenario(input: { scenario: AuthoredWorkboo
     try { await server?.close(); } catch (error) { cleanupFailures.push(error); }
     try { await workspace?.close(); } catch (error) { cleanupFailures.push(error); }
     if (cleanupFailures.length) cleanupError = new AggregateError(cleanupFailures, "Authored workbook eval cleanup failed.");
+  }
+
+  if (signal.aborted) {
+    primaryError ??= new InterruptedRunError();
+    status = "interrupted";
+    successBundle = undefined;
   }
 
   const finalStatus = finalStatusAfterCleanup(status, primaryError, cleanupError);
@@ -614,11 +623,9 @@ function applyReleaseBudget(costBudget: Record<string, number>): void {
 function modelIdentitiesFromPreflight(request: AuthoredWorkbookEvalPreflightRequest, summary: AuthoredWorkbookEvalPublicSummary): AuthoredWorkbookEvalModelIdentities {
   const selected = new Map(summary.selectedModelIdentities.map((entry) => [entry.role, `${entry.provider}/${entry.id}`]));
   const requested = new Map(summary.configuredModelIdentities.map((entry) => [entry.role, `${entry.provider}/${entry.id}`]));
-  const identities: AuthoredWorkbookEvalModelIdentities = {
-    "Main Tutor": { requested: requested.get("Main Tutor") ?? request.models.mainTutor.identity, selected: selected.get("Main Tutor") ?? request.models.mainTutor.identity }
-  };
-  if (request.models.judge) identities.Judge = { requested: requested.get("Judge") ?? request.models.judge.identity, selected: selected.get("Judge") ?? request.models.judge.identity };
-  return identities;
+  const mainTutor = { requested: requested.get("Main Tutor") ?? request.models.mainTutor.identity, selected: selected.get("Main Tutor") ?? request.models.mainTutor.identity };
+  if (!request.models.judge) return { "Main Tutor": mainTutor };
+  return { "Main Tutor": mainTutor, Judge: { requested: requested.get("Judge") ?? request.models.judge.identity, selected: selected.get("Judge") ?? request.models.judge.identity } };
 }
 
 function modelIdentitiesForEvaluationMode(modelIdentities: AuthoredWorkbookEvalModelIdentities, evaluationMode: AuthoredWorkbookEvalEvaluationMode): AuthoredWorkbookEvalModelIdentities {
