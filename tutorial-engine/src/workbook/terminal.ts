@@ -404,7 +404,9 @@ export class WorkbookTerminalManager {
   #activePublicTranscriptBlockKey: string | undefined;
   #inputEpochByBlock = new Map<string, number>();
   #observedInputEpochByBlock = new Map<string, number>();
-  #completionFenceBlockKeys = new Set<string>();
+  #terminalInputLifecycleGeneration = 0;
+  #completionFenceBlockKeys = new Map<string, number>();
+  #completionFenceGenerationsByBlock = new WeakMap<ActiveObservedTerminalBlock, number>();
   readonly #getActiveBlock: () => ActiveObservedTerminalBlock | undefined;
   readonly #observationSink: (fact: TerminalObservationFact) => Promise<void> | void;
   readonly #ptyFactory: TerminalPtyFactory;
@@ -449,7 +451,7 @@ export class WorkbookTerminalManager {
       const block = this.#getActiveBlock();
       if (!block) return;
       const key = terminalKey(block);
-      if (this.#completionFenceBlockKeys.has(key)) {
+      if (this.#completionFenceBlockKeys.get(key) === this.#terminalInputLifecycleGeneration) {
         this.#client?.send(publicTerminalFrame({ type: "output", data: "\r\n[workbook] That input was not run because this block is completing. If completion is cancelled, try it again.\r\n" }));
         return;
       }
@@ -492,7 +494,10 @@ export class WorkbookTerminalManager {
 
   /** Discard one completed terminal's transport only after its continuation is durable. */
   resetAfterTerminalContinuation(leaving: ActiveObservedTerminalBlock): void {
-    if (this.#terminalObservationBlockKey && this.#terminalObservationBlockKey !== terminalKey(leaving)) return;
+    const key = terminalKey(leaving);
+    const completionGeneration = this.#completionFenceGenerationsByBlock.get(leaving);
+    if (completionGeneration !== undefined && (completionGeneration !== this.#terminalInputLifecycleGeneration || this.#completionFenceBlockKeys.get(key) !== completionGeneration)) return;
+    if (this.#terminalObservationBlockKey && this.#terminalObservationBlockKey !== key) return;
     this.#retireTerminal(1012, "Terminal advanced to the next block.", "close");
   }
 
@@ -504,12 +509,17 @@ export class WorkbookTerminalManager {
   acquireCompletionFence(block: ActiveObservedTerminalBlock): boolean {
     const key = terminalKey(block);
     if (this.hasUnobservedInput(block)) return false;
-    this.#completionFenceBlockKeys.add(key);
+    this.#completionFenceBlockKeys.set(key, this.#terminalInputLifecycleGeneration);
+    this.#completionFenceGenerationsByBlock.set(block, this.#terminalInputLifecycleGeneration);
     return true;
   }
 
   releaseCompletionFence(block: ActiveObservedTerminalBlock): void {
-    this.#completionFenceBlockKeys.delete(terminalKey(block));
+    const completionGeneration = this.#completionFenceGenerationsByBlock.get(block);
+    if (completionGeneration !== undefined && completionGeneration !== this.#terminalInputLifecycleGeneration) return;
+    const key = terminalKey(block);
+    if (completionGeneration !== undefined && this.#completionFenceBlockKeys.get(key) !== completionGeneration) return;
+    this.#completionFenceBlockKeys.delete(key);
   }
 
   dispose(): void { this.#stopTerminal(); }
@@ -519,6 +529,7 @@ export class WorkbookTerminalManager {
   }
 
   #clearTerminalState(observation: "cancel" | "close"): void {
+    this.#terminalInputLifecycleGeneration += 1;
     const retiringKey = this.#terminalObservationBlockKey ?? this.#ptyBlockKey;
     if (observation === "cancel") this.#terminalObservation?.cancel();
     else this.#terminalObservation?.close();
@@ -614,7 +625,8 @@ export class WorkbookTerminalManager {
     this.#inputEpochByBlock.set(key, current - 1);
   }
 
-  #markInputObserved(key: string, epoch: number): void {
+  #markInputObserved(key: string, epoch: number, lifecycleGeneration: number): void {
+    if (lifecycleGeneration !== this.#terminalInputLifecycleGeneration) return;
     this.#observedInputEpochByBlock.set(key, Math.max(this.#observedInputEpochByBlock.get(key) ?? 0, epoch));
   }
 
@@ -654,10 +666,11 @@ export class WorkbookTerminalManager {
         createAttemptId: randomUUID,
         emit: (fact) => {
           const observedEpoch = this.#inputEpochByBlock.get(key) ?? 0;
+          const lifecycleGeneration = this.#terminalInputLifecycleGeneration;
           void Promise.resolve(this.#observationSink(fact)).then(
-            () => this.#markInputObserved(key, observedEpoch),
+            () => this.#markInputObserved(key, observedEpoch, lifecycleGeneration),
             (error) => {
-              this.#log.info(`Terminal observation failed: ${error instanceof Error ? error.message : String(error)}`);
+              if (lifecycleGeneration === this.#terminalInputLifecycleGeneration) this.#log.info(`Terminal observation failed: ${error instanceof Error ? error.message : String(error)}`);
             }
           );
         }

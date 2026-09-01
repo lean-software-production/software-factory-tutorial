@@ -525,6 +525,85 @@ describe("WorkbookTerminalManager", () => {
     expect(manager.acquireCompletionFence(activePractice)).toBe(true);
   });
 
+  it("ignores late old lifecycle sink resolution after recreating the same terminal block key", async () => {
+    const oldSink = deferred<void>();
+    const newSink = deferred<void>();
+    const facts: TerminalObservationFact[] = [];
+    const ptys: FakePty[] = [];
+    const manager = new WorkbookTerminalManager({
+      workspace: "/tmp/workspace",
+      getActiveBlock: () => activePractice,
+      observationSink: async (fact) => {
+        facts.push(fact);
+        if (fact.type === "terminal-command-submitted" && fact.command === "old") await oldSink.promise;
+        if (fact.type === "terminal-command-submitted" && fact.command === "new") await newSink.promise;
+      },
+      ptyFactory: () => {
+        const pty = new FakePty();
+        ptys.push(pty);
+        return pty;
+      },
+    });
+    manager.attach(new FakeClient());
+
+    manager.receive({ type: "input", data: "old\r" });
+    ptys[0]!.emit(marker("old"));
+    await Promise.resolve();
+    expect(manager.hasUnobservedInput(activePractice)).toBe(true);
+
+    manager.resetAfterTerminalContinuation(activePractice);
+    expect(ptys[0]!.killed).toBe(true);
+    manager.attach(new FakeClient());
+    manager.receive({ type: "input", data: "new\r" });
+    ptys[1]!.emit(marker("new"));
+    await Promise.resolve();
+    expect(manager.hasUnobservedInput(activePractice)).toBe(true);
+
+    oldSink.resolve();
+    await oldSink.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(manager.hasUnobservedInput(activePractice)).toBe(true);
+    expect(manager.acquireCompletionFence(activePractice)).toBe(false);
+
+    newSink.resolve();
+    await newSink.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(manager.hasUnobservedInput(activePractice)).toBe(false);
+    expect(manager.acquireCompletionFence(activePractice)).toBe(true);
+    expect(facts).toEqual([
+      expect.objectContaining({ type: "terminal-command-submitted", command: "old" }),
+      expect.objectContaining({ type: "terminal-command-submitted", command: "new" })
+    ]);
+  });
+
+  it("ignores old completion fence release and reset callbacks after a lifecycle change", () => {
+    const { manager, ptys } = setup();
+    manager.attach(new FakeClient());
+    const oldCompletionBlock = { ...activePractice };
+    expect(manager.acquireCompletionFence(oldCompletionBlock)).toBe(true);
+
+    manager.resetAfterTerminalContinuation(oldCompletionBlock);
+    expect(ptys[0]!.killed).toBe(true);
+
+    const client = new FakeClient();
+    manager.attach(client);
+    const newCompletionBlock = { ...activePractice };
+    expect(manager.acquireCompletionFence(newCompletionBlock)).toBe(true);
+    manager.releaseCompletionFence(oldCompletionBlock);
+    manager.resetAfterTerminalContinuation(oldCompletionBlock);
+    manager.receive({ type: "input", data: "echo should not run\r" });
+
+    expect(ptys[1]!.killed).toBe(false);
+    expect(ptys[1]!.writes).toEqual([]);
+    expect(client.messages.at(-1)?.data).toContain("not run");
+
+    manager.releaseCompletionFence(newCompletionBlock);
+    manager.receive({ type: "input", data: "echo restored\r" });
+    expect(ptys[1]!.writes).toEqual(["echo restored\r"]);
+  });
+
   it("rejects input after a completion fence without writing to transcript, observation, or PTY, then restores input on release", () => {
     const { manager, ptys, facts } = setup();
     const client = new FakeClient();

@@ -3278,6 +3278,57 @@ describe("workbook lesson UI", () => {
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
   });
 
+  it("keeps terminal Continue hidden for separate commands through intermediate non-accepted revisions", async () => {
+    FakeEventSource.reset();
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      addEventListener() {}
+      send() {}
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalBlock = lesson.blocks[1]!;
+    const acceptedProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    acceptedProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const runningProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "running" } } as any);
+    runningProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const checkingProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "checking" } } as any);
+    checkingProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const feedbackProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "feedback", message: "Try again." } } as any);
+    feedbackProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const latestAcceptedProgress = activeBlockProgress(terminalBlock, { terminalRevision: 3, terminal: { phase: "accepted", message: "Terminal accepted latest." } } as any);
+    latestAcceptedProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    let currentState: State = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock] } as any })],
+      progress: acceptedProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Run command" }],
+    } as State;
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => currentState })));
+    vi.stubGlobal("EventSource", FakeEventSource as any);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    await act(async () => { terminalDataListeners[0]!("echo one\r"); terminalDataListeners[0]!("echo two\r"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+
+    for (const progressState of [runningProgress, checkingProgress, feedbackProgress]) {
+      currentState = { ...currentState, progress: progressState };
+      await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 2 }); await Promise.resolve(); await Promise.resolve(); });
+      expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+    }
+
+    currentState = { ...currentState, progress: latestAcceptedProgress };
+    await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 3 }); await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+  });
+
   it("keeps passive scroll from completing an accepted editor while a newer local revision is debounced", async () => {
     vi.useFakeTimers();
     let observerCallback: ((entries: any[]) => void) | undefined;

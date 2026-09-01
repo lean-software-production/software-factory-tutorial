@@ -395,11 +395,11 @@ function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChan
   useLayoutEffect(() => { terminalServerRevisionRef.current = terminalServerRevision; }, [terminalServerRevision]);
   useEffect(() => {
     const pending = pendingTerminalInput.current;
-    if (pending.targetRevision !== undefined && terminalServerRevision >= pending.targetRevision) {
+    if (pending.targetRevision !== undefined && terminalServerRevision >= pending.targetRevision && state?.terminal?.phase === "accepted") {
       pending.physicalLines = 0;
       pending.targetRevision = undefined;
     }
-  }, [terminalServerRevision]);
+  }, [state?.terminal?.phase, terminalServerRevision]);
   useEffect(() => {
     pendingTerminalInput.current = { physicalLines: 0 };
   }, [block.id]);
@@ -479,10 +479,18 @@ function clearSatisfiedLocalEditorRevisions(next: State, localRevisions: Map<str
   }
 }
 
+function terminalLocalRevisionSatisfied(progress: BlockProgress | undefined, canComplete: Progress["canComplete"], localRevision: number): boolean {
+  return Boolean(progress
+    && (progress.terminalRevision ?? 0) >= localRevision
+    && progress.terminal?.phase === "accepted"
+    && canComplete?.blockId === progress.id
+    && canComplete.eligible);
+}
+
 function clearSatisfiedLocalTerminalRevisions(next: State, localRevisions: Map<string, number>): void {
   for (const [blockId, localRevision] of localRevisions) {
     const progress = progressFor(next.progress, blockId);
-    if (progress && (progress.terminalRevision ?? 0) >= localRevision) localRevisions.delete(blockId);
+    if (terminalLocalRevisionSatisfied(progress, next.progress.canComplete, localRevision)) localRevisions.delete(blockId);
   }
 }
 
@@ -501,7 +509,7 @@ function activeTerminalLocalRevisionOutrunsState(state: State, localRevisions: R
   if (localRevision === undefined) return false;
   const progress = progressFor(state.progress, activeId);
   const source = renderedBlockSource(state, activeId);
-  return Boolean(source?.block.type === "terminal-practice" && progress && (progress.terminalRevision ?? 0) < localRevision);
+  return Boolean(source?.block.type === "terminal-practice" && progress && !terminalLocalRevisionSatisfied(progress, state.progress.canComplete, localRevision));
 }
 
 function EditorPracticeBlockView({ block, state, refresh, disabled = false, onLocalRevision }: { block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void; disabled?: boolean; onLocalRevision?: EditorLocalRevisionHandler }) {
@@ -1005,7 +1013,7 @@ export function App() {
   const localActiveEditorRevision = localEditorRevisions.current.get(effectiveActiveBlockId);
   const localActiveEditorRevisionOutrunsState = Boolean(activeBlock?.type === "editor-practice" && localActiveEditorRevision !== undefined && (effectiveActiveBlockProgress?.revision ?? 0) < localActiveEditorRevision);
   const localActiveTerminalRevision = localTerminalRevisions.current.get(effectiveActiveBlockId);
-  const localActiveTerminalRevisionOutrunsState = Boolean(activeBlock?.type === "terminal-practice" && localActiveTerminalRevision !== undefined && (effectiveActiveBlockProgress?.terminalRevision ?? 0) < localActiveTerminalRevision);
+  const localActiveTerminalRevisionOutrunsState = Boolean(activeBlock?.type === "terminal-practice" && localActiveTerminalRevision !== undefined && effectiveActiveBlockProgress && !terminalLocalRevisionSatisfied(effectiveActiveBlockProgress, state.progress.canComplete, localActiveTerminalRevision));
   const sendTutorText = (text: string) => {
     if (mutationsDisabled) return Promise.resolve();
     if (state.introductionComplete && activeBlock?.type === "reflection") {

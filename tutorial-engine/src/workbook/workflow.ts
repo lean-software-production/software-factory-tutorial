@@ -1271,8 +1271,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       await appendStagedSummaries([...departureSummaries, ...completionSummaries], coveredThroughId);
       await append({ type: "block_completed", blockId: requested.id });
       if (requested.origin === "declared" && requested.block.type === "terminal-practice") {
-        const workspaceRoot = workspaceRootForLesson(requested.chapter.lesson);
-        try { if (workspaceRoot) onTerminalContinued?.({ lessonId: requested.lessonId, blockId: requested.id, workspaceId: requested.chapter.lesson.workspace!, workspaceRoot }); }
+        try { if (fence.terminalBlock) onTerminalContinued?.(fence.terminalBlock); }
         catch (error) { log.info(`Could not reset completed terminal ${requested.id}: ${error instanceof Error ? error.message : String(error)}`); }
       }
       const nextProjection = currentWorkbookProjection();
