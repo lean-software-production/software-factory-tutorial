@@ -38,8 +38,7 @@ Start it with:
 
     npm start
 
-Keep the complete game display within 24 terminal rows, including the board, score, controls,
-borders, and game-over messages.
+Keep the complete game display within 24 terminal rows, including the board, score, controls, borders, and game-over messages.
 
 You may install packages if they help you render or control the terminal display.
 `;
@@ -175,9 +174,10 @@ describe("authored curriculum slice materialization", () => {
       path: "path" in block ? block.path : undefined
     }))).toEqual([
       { id: "read-the-spec", type: "editor-practice", path: "spec.md" },
-      { id: "write-worker-prompt", type: "editor-practice", path: "prompt.md" },
+      { id: "write-doer-prompt", type: "editor-practice", path: "prompt.md" },
       { id: "write-the-loop", type: "editor-practice", path: "ralph.sh" },
-      { id: "run-the-factory", type: "terminal-practice", path: undefined }
+      { id: "run-the-factory", type: "terminal-practice", path: undefined },
+      { id: "play-your-game", type: "terminal-practice", path: undefined }
     ]);
 
     expect(await readFile(resolve(workspace.root, "workspaces/tetris/spec.md"), "utf8"))
@@ -186,16 +186,18 @@ describe("authored curriculum slice materialization", () => {
       .filter((entry) => entry.relativePath === "workspaces/tetris" || entry.relativePath.startsWith("workspaces/tetris/")))
       .toEqual([
         { kind: "directory", relativePath: "workspaces/tetris" },
+        { kind: "file", relativePath: "workspaces/tetris/prompt.md" },
+        { kind: "file", relativePath: "workspaces/tetris/ralph.sh" },
         { kind: "file", relativePath: "workspaces/tetris/spec.md" }
       ]);
     expect(workspace.provenance.files.find((entry) => entry.materializedRelativePath === "workspaces/tetris/spec.md"))
       .toMatchObject({ exact: true, sourceRelativePath: "workspaces/tetris/spec.md" });
 
-    const workerPrompt = await readFile(
-      resolve(workspace.root, "lessons/tetris/blocks/write-worker-prompt.md"),
+    const doerPrompt = await readFile(
+      resolve(workspace.root, "lessons/tetris/blocks/write-doer-prompt.md"),
       "utf8"
     );
-    assertTetrisPromptMechanism(workerPrompt);
+    assertTetrisPromptMechanism(doerPrompt);
 
     const loopBlock = await readFile(
       resolve(workspace.root, "lessons/tetris/blocks/write-the-loop.md"),
@@ -212,8 +214,8 @@ describe("authored curriculum slice materialization", () => {
     for (const marker of expectedTetrisPassMarkers()) expect(terminalBlock).toContain(marker);
     expect(terminalBlock).toMatch(/returned to the prompt/i);
     expect(terminalBlock).not.toMatch(/playable|perfect/i);
-    expect(workerPrompt).not.toMatch(/\bworker(?: agent)?\b/i);
-    expect(workerPrompt).not.toMatch(/\bagent\b/i);
+    expect(doerPrompt).not.toMatch(/\bworker(?: agent)?\b/i);
+    expect(doerPrompt).not.toMatch(/\bagent\b/i);
 
     await workspace.close();
     await expect(stat(workspace.repositoryRoot)).rejects.toMatchObject({ code: "ENOENT" });
@@ -1002,25 +1004,17 @@ function compact(text: string): string {
 
 function assertTetrisPromptMechanism(text: string): void {
   const normal = compact(text);
-  expect(normal).toMatch(/Without `?plan\.md`?/i);
-  expect(normal).toMatch(/create plan\.md with exactly four similarly sized, independently checkable tasks/i);
-  expect(normal).toMatch(/commit (?:that|the) `?plan`?[.,;]/i);
-  expect(normal).toMatch(/stop without implementing anything(?: in this first pass)?/i);
-  expect(normal).toMatch(/With `?plan\.md`?/i);
-  expect(normal).toMatch(/find the first (?:task that is not yet marked done|incomplete task)/i);
-  expect(normal).toMatch(/(?:do exactly that task and nothing more|Do only that task\. Nothing else\.)/i);
-  expect(normal).toMatch(/run a relevant check if one exists/i);
-  expect(normal).toMatch(/checks? must return on their own/i);
+  expect(normal).toMatch(/When there is no `?plan\.md`?/i);
+  expect(normal).toMatch(/read `?spec\.md`?/i);
+  expect(normal).toMatch(/create `?plan\.md`? with exactly four similar(?:ly sized)? tasks/i);
+  expect(normal).toMatch(/implement nothing/i);
+  expect(normal).toMatch(/When `?plan\.md`? exists/i);
+  expect(normal).toMatch(/find the first incomplete task/i);
+  expect(normal).toMatch(/do exactly that task and nothing more/i);
   expect(normal).toMatch(/do not start the game/i);
-  expect(normal).toMatch(/interactive scaffolds, dev\/watch commands/i);
-  expect(normal).toMatch(/command(?:s)? that might wait for input or keep running(?: as a check)?/i);
-  expect(normal).toMatch(/choose a non-interactive check instead(?: when a command might wait)?/i);
-  expect(normal).toMatch(/mark the task done in `?plan\.md`? before committing/i);
-  expect(normal).toMatch(/commit(?: the)? useful task work and the `?plan\.md`? update together/i);
-  expect(normal).toMatch(/stop without starting another task/i);
-  expect(normal).toMatch(/If no incomplete task remains, (?:the pass should )?stop without an empty commit\./i);
-  expect(normal).toMatch(/If nothing has changed, do not create an empty commit\./i);
-  expect(normal).toMatch(/(?:The prompt must not|Do not) ask Pi to (?:start|run) the loop script, (?:(?:to )?complete all tasks in (?:one|a single) pass, or (?:to )?run forever|(?:to )?run forever, or (?:to )?complete all tasks in (?:one|a single) pass)\./i);
+  expect(normal).toMatch(/commands? that might wait for input or keep running/i);
+  expect(normal).toMatch(/mark the task done in `?plan\.md`?/i);
+  expect(normal).toMatch(/The prompt must not ask Pi to start the loop script, run forever, or complete all tasks in a single pass\./i);
 }
 
 function assertTetrisLoopContract(text: string): void {
