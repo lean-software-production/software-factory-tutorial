@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { copyAuthoredWorkbookEvalTrace, enumerateAuthoredWorkbookEvalJudgeCitations, projectAuthoredWorkbookEvalTraceForJudge, type AuthoredWorkbookEvalCitation, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
+import { copyAuthoredWorkbookEvalJudgePublicState, copyAuthoredWorkbookEvalTrace, enumerateAuthoredWorkbookEvalJudgeCitations, projectAuthoredWorkbookEvalTraceForJudge, type AuthoredWorkbookEvalCitation, type AuthoredWorkbookEvalJudgeTrace, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
 
 export const AUTHORED_WORKBOOK_JUDGE_COMMAND_TIMEOUT_MS = 120_000;
 export const AUTHORED_WORKBOOK_JUDGE_PROMPT_MAX_BYTES = 1_048_576;
@@ -164,8 +164,28 @@ function copyPublicGateForPrompt(gateInput: AuthoredWorkbookEvalPublicGateResult
   return projected;
 }
 
-export function buildAuthoredWorkbookJudgePromptFromProjectedTrace(scenarioInput: AuthoredWorkbookEvalScenarioPublicDescriptor, trace: ReturnType<typeof projectAuthoredWorkbookEvalTraceForJudge>, gateInput: AuthoredWorkbookEvalPublicGateResult): string {
+function copyProjectedJudgeTraceForPrompt(traceInput: AuthoredWorkbookEvalJudgeTrace): AuthoredWorkbookEvalJudgeTrace {
+  if (!isPlainRecord(traceInput)) throw new Error("Invalid authored workbook projected judge trace.");
+  assertExactKeys(traceInput, ["scenarioId", "publicStates", "terminalTranscript", "reflections", "editors", "progressionEvents", "artifacts"], "authored workbook projected judge trace");
+  if (!Array.isArray(traceInput.publicStates) || !Array.isArray(traceInput.terminalTranscript) || !Array.isArray(traceInput.reflections) || !Array.isArray(traceInput.editors) || !Array.isArray(traceInput.progressionEvents) || !Array.isArray(traceInput.artifacts)) throw new Error("Invalid authored workbook projected judge trace.");
+  return {
+    scenarioId: boundedString(traceInput.scenarioId, "projected judge trace scenario id", 128),
+    publicStates: traceInput.publicStates.map((entry, index) => {
+      if (!isPlainRecord(entry)) throw new Error(`Invalid authored workbook projected public state at index ${index}.`);
+      assertExactKeys(entry, ["label", "state"], "authored workbook projected public state");
+      return { label: boundedString(entry.label, "public state label", 128), state: copyAuthoredWorkbookEvalJudgePublicState(entry.state) };
+    }),
+    terminalTranscript: traceInput.terminalTranscript,
+    reflections: traceInput.reflections,
+    editors: traceInput.editors,
+    progressionEvents: traceInput.progressionEvents,
+    artifacts: traceInput.artifacts
+  };
+}
+
+export function buildAuthoredWorkbookJudgePromptFromProjectedTrace(scenarioInput: AuthoredWorkbookEvalScenarioPublicDescriptor, traceInput: AuthoredWorkbookEvalJudgeTrace, gateInput: AuthoredWorkbookEvalPublicGateResult): string {
   const scenario = copyAuthoredWorkbookEvalScenarioPublicDescriptor(scenarioInput);
+  const trace = copyProjectedJudgeTraceForPrompt(traceInput);
   const gate = copyPublicGateForPrompt(gateInput);
   const prompt = `You are a strict, stateless evaluator of one authored workbook tutoring session. Return JSON only. Use only the data in this prompt.
 

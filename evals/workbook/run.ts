@@ -33,7 +33,7 @@ import {
   type AuthoredWorkbookEvalModelIdentities,
   type AuthoredWorkbookEvalRunLifecycleStatus
 } from "./reports.js";
-import { AUTHORED_WORKBOOK_SCENARIOS, authoredWorkbookScenarioById, type AuthoredWorkbookScenarioDescriptor, type AuthoredWorkbookScenarioId } from "./scenarios.js";
+import { AUTHORED_WORKBOOK_SCENARIOS, authoredWorkbookScenarioById, authoredWorkbookScenarioPublicDescriptorById, type AuthoredWorkbookScenarioDescriptor, type AuthoredWorkbookScenarioId } from "./scenarios.js";
 import { createEmptyAuthoredWorkbookEvalSessionTrace, type AuthoredWorkbookEvalSessionTrace, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
 import {
   AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL,
@@ -635,7 +635,7 @@ function modelIdentitiesForEvaluationMode(modelIdentities: AuthoredWorkbookEvalM
 }
 
 function publicScenarioDescriptor(scenario: AuthoredWorkbookScenarioDescriptor): AuthoredWorkbookEvalScenarioPublicDescriptor {
-  return { id: scenario.id, title: scenario.title, description: scenario.description, criteria: scenario.criteria.map((criterion) => ({ id: criterion.id, title: criterion.title, description: criterion.description })) };
+  return authoredWorkbookScenarioPublicDescriptorById(scenario.id);
 }
 
 function finalStatusAfterCleanup(status: AuthoredWorkbookEvalRunLifecycleStatus, primaryError: unknown, cleanupError: unknown): AuthoredWorkbookEvalRunLifecycleStatus {

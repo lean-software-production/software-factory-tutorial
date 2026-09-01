@@ -12,6 +12,7 @@ import {
   AUTHORED_WORKBOOK_JUDGE_STDOUT_MAX_BYTES,
   authoredWorkbookJudgeVerdict,
   buildAuthoredWorkbookJudgePrompt,
+  buildAuthoredWorkbookJudgePromptFromProjectedTrace,
   copyAuthoredWorkbookEvalScenarioPublicDescriptor,
   invokeAuthoredWorkbookJudgeCommand,
   judgeAuthoredWorkbookTrace,
@@ -33,6 +34,7 @@ import {
   createAuthoredWorkbookEvalFailureMetadataEnvelope,
   createAuthoredWorkbookEvalLatestEnvelope,
   createAuthoredWorkbookEvalLatestRunEntry,
+  renderAuthoredWorkbookSummary,
   writeAuthoredWorkbookEvalFailureDiagnostic,
   writeAuthoredWorkbookEvalGateDiagnostic,
   writeAuthoredWorkbookEvalLatestEnvelope,
@@ -101,6 +103,16 @@ function deterministicScenario(): AuthoredWorkbookEvalScenarioPublicDescriptor {
   };
 }
 
+function authoredScenario(): AuthoredWorkbookEvalScenarioPublicDescriptor {
+  const descriptor = authoredWorkbookScenarioById("lesson-001-headless-boundary");
+  return {
+    id: descriptor.id,
+    title: descriptor.title,
+    description: descriptor.description,
+    criteria: descriptor.criteria.map((criterion) => ({ id: criterion.id, title: criterion.title, description: criterion.description }))
+  };
+}
+
 function gate(passed = true): AuthoredWorkbookEvalGateResult {
   return { passed, assertions: [{ name: "private gate assertion name secret", passed, detail: "private gate assertion detail secret /tmp/private-gate-path" }] };
 }
@@ -143,6 +155,17 @@ function judgeResult(): AuthoredWorkbookEvalJudgeResult {
   };
 }
 
+function authoredTrace() {
+  return { ...projectedTrace(), scenarioId: authoredScenario().id };
+}
+
+function authoredJudgeResult(descriptor: AuthoredWorkbookEvalScenarioPublicDescriptor = authoredScenario()): AuthoredWorkbookEvalJudgeResult {
+  return {
+    criteria: Object.fromEntries(descriptor.criteria.map((criterion) => [criterion.id, { score: 2, citations: [0], rationale: `Public trace evidence supports ${criterion.title}.` }])) as AuthoredWorkbookEvalJudgeResult["criteria"],
+    summary: "The public trace supports every authored catalog criterion."
+  };
+}
+
 function serialize(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
@@ -153,6 +176,55 @@ async function pathExists(path: string): Promise<boolean> {
 
 async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, "utf8")) as T;
+}
+
+async function writeJson(path: string, value: unknown): Promise<void> {
+  await atomicWriteText(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function replacePromptTrace(prompt: string, originalTrace: unknown, replacementTrace: unknown): string {
+  const original = JSON.stringify(originalTrace, null, 2);
+  const replacement = JSON.stringify(replacementTrace, null, 2);
+  if (!prompt.includes(original)) throw new Error("Prompt did not contain the expected trace JSON.");
+  return prompt.replace(original, replacement);
+}
+
+async function authoredJudgedLatestFixture(root: string, runId = "run-authored-001") {
+  const trace = authoredTrace();
+  const scenario = authoredScenario();
+  const prompt = buildAuthoredWorkbookJudgePrompt(scenario, trace, gate());
+  const judge = authoredJudgeResult(scenario);
+  const written = await writeAuthoredWorkbookEvalReportBundle({
+    reportsRoot: root,
+    runId,
+    scenario,
+    trace,
+    gate: gate(),
+    judgeInput: prompt,
+    judge,
+    modelIdentities: modelIdentities()
+  });
+  const latest = createAuthoredWorkbookEvalLatestEnvelope({
+    generatedAt: "2026-08-29T00:00:00.000Z",
+    invocation: { scope: "scenario", scenarioIds: [scenario.id], repeat: 1 },
+    runs: [createAuthoredWorkbookEvalLatestRunEntry({
+      scenario: scenario.id,
+      repetition: 1,
+      status: "completed",
+      evaluationMode: "judged",
+      verdict: { passed: true, percentage: 1, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" },
+      reportDirectory: runId,
+      files: AUTHORED_WORKBOOK_REPORT_FILENAMES
+    })]
+  });
+  await writeAuthoredWorkbookEvalLatestEnvelope(root, latest);
+  const latestText = await readFile(join(root, "latest.json"), "utf8");
+  return { scenario, trace, judge, prompt, written, latest, latestText };
+}
+
+async function expectLatestRejectedAndUnchanged(root: string, latest: ReturnType<typeof createAuthoredWorkbookEvalLatestEnvelope>, prior: string): Promise<void> {
+  await expect(writeAuthoredWorkbookEvalLatestEnvelope(root, latest)).rejects.toThrow("Unable to update authored workbook latest report.");
+  await expect(readFile(join(root, "latest.json"), "utf8")).resolves.toBe(prior);
 }
 
 function expectNoPrivate(value: unknown): void {
@@ -465,16 +537,17 @@ describe("authored workbook report bundle", () => {
     const root = await mkdtemp(join(tmpdir(), "authored-report-bundle-"));
     tempRoots.push(root);
     const runId = "run-001";
-    const trace = projectedTrace();
-    const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
+    const authored = authoredScenario();
+    const trace = authoredTrace();
+    const prompt = buildAuthoredWorkbookJudgePrompt(authored, trace, gate());
     const result = await writeAuthoredWorkbookEvalReportBundle({
       reportsRoot: root,
       runId,
-      scenario: { ...scenario(), tutorFrontmatter: "frontmatter-secret" } as unknown as AuthoredWorkbookEvalScenarioPublicDescriptor,
+      scenario: { ...authored, tutorFrontmatter: "frontmatter-secret" } as unknown as AuthoredWorkbookEvalScenarioPublicDescriptor,
       trace: { ...trace, credentials: { token: "sk-secret-token" } } as typeof trace,
       gate: gate(),
       judgeInput: prompt,
-      judge: judgeResult(),
+      judge: authoredJudgeResult(authored),
       modelIdentities: modelIdentities()
     });
 
@@ -510,11 +583,11 @@ describe("authored workbook report bundle", () => {
     await expect(writeAuthoredWorkbookEvalReportBundle({
       reportsRoot: root,
       runId,
-      scenario: scenario(),
+      scenario: authored,
       trace,
       gate: gate(),
       judgeInput: prompt,
-      judge: judgeResult(),
+      judge: authoredJudgeResult(authored),
       modelIdentities: modelIdentities()
     })).rejects.toThrow(/already exists/i);
   });
@@ -677,6 +750,81 @@ describe("authored workbook report bundle", () => {
     await expect(writeAuthoredWorkbookEvalLatestEnvelope(root, latest)).resolves.toEqual({ file: "latest.json" });
   });
 
+  it("rejects a latest run whose Judge trace forges unknown projected public-state fields", async () => {
+    const root = await mkdtemp(join(tmpdir(), "authored-latest-forged-public-state-"));
+    tempRoots.push(root);
+    const { written, latest, latestText } = await authoredJudgedLatestFixture(root, "run-forged-public-state");
+    const tracePath = join(written.directory, "trace.json");
+    const judgeInputPath = join(written.directory, "judge-input.json");
+    const traceEnvelope = await readJson<any>(tracePath);
+    const judgeInput = await readJson<any>(judgeInputPath);
+    const forgedTraceEnvelope = structuredClone(traceEnvelope);
+    const forgedState = forgedTraceEnvelope.trace.publicStates[0].state;
+    forgedState.privateInternals = { token: "sk-secret-token", paths: ["/tmp/private-state-path"] };
+    forgedState.adapter.token = "adapter-token-secret";
+    forgedState.chapters = [{ id: "chapter", title: "Chapter", lessonNumber: 1, unknownChapterPolicy: "private-policy", lesson: { id: "lesson", title: "Lesson", durationMinutes: 1, outcomes: [], blockCount: 1, blocks: [{ id: "block", title: "Block", token: "block-token-secret" }] } }];
+    forgedState.timelineNewRecords = [{ type: "message", id: "timeline", sequence: 1, lessonId, blockId: "visible", role: "assistant", source: "main_tutor", presentation: "chat", text: { bytes: 1 }, token: "timeline-token-secret" }];
+    await writeJson(tracePath, forgedTraceEnvelope);
+    await writeJson(judgeInputPath, { ...judgeInput, prompt: replacePromptTrace(String(judgeInput.prompt), traceEnvelope.trace, forgedTraceEnvelope.trace) });
+
+    await expectLatestRejectedAndUnchanged(root, latest, latestText);
+  });
+
+  it("rejects a latest run whose report descriptor is a self-consistent forgery instead of the authored catalog descriptor", async () => {
+    const root = await mkdtemp(join(tmpdir(), "authored-latest-forged-scenario-"));
+    tempRoots.push(root);
+    const { written, latest, latestText } = await authoredJudgedLatestFixture(root, "run-forged-scenario");
+    const traceEnvelope = await readJson<any>(join(written.directory, "trace.json"));
+    const reportPath = join(written.directory, "report.json");
+    const judgeInputPath = join(written.directory, "judge-input.json");
+    const judgePath = join(written.directory, "judge.json");
+    const summaryPath = join(written.directory, "summary.md");
+    const report = await readJson<any>(reportPath);
+    const forgedScenario: AuthoredWorkbookEvalScenarioPublicDescriptor = {
+      id: report.scenario.id,
+      title: "Forged authored catalog title",
+      description: "Forged descriptor, prompt, judge, and summary are internally consistent but not from the authored catalog.",
+      criteria: [
+        { id: "forged-criterion", title: "Forged criterion", description: "A forged criterion should not be accepted." }
+      ]
+    };
+    const forgedJudge: AuthoredWorkbookEvalJudgeResult = {
+      criteria: { "forged-criterion": { score: 2, citations: [0], rationale: "Self-consistent forged rationale." } },
+      summary: "Self-consistent forged Judge summary."
+    };
+    const forgedVerdict = authoredWorkbookJudgeVerdict(forgedJudge);
+    await writeJson(reportPath, { ...report, scenario: forgedScenario, verdict: forgedVerdict });
+    await writeJson(judgeInputPath, { ...AUTHORED_WORKBOOK_EVAL_MARKERS, scenario: forgedScenario.id, traceFile: "trace.json", prompt: buildAuthoredWorkbookJudgePromptFromProjectedTrace(forgedScenario, traceEnvelope.trace, report.gate) });
+    await writeJson(judgePath, { ...AUTHORED_WORKBOOK_EVAL_MARKERS, judge: forgedJudge, verdict: forgedVerdict });
+    await atomicWriteText(summaryPath, renderAuthoredWorkbookSummary({ scenario: forgedScenario, gate: report.gate, evaluationMode: "judged", judge: forgedJudge, verdict: forgedVerdict }));
+
+    await expectLatestRejectedAndUnchanged(root, latest, latestText);
+  });
+
+  it("rejects a completed judged latest run with a failed deterministic gate even when the Judge passes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "authored-latest-forged-gate-"));
+    tempRoots.push(root);
+    const { scenario, judge, written, latest, latestText } = await authoredJudgedLatestFixture(root, "run-forged-gate");
+    const traceEnvelope = await readJson<any>(join(written.directory, "trace.json"));
+    const reportPath = join(written.directory, "report.json");
+    const judgeInputPath = join(written.directory, "judge-input.json");
+    const summaryPath = join(written.directory, "summary.md");
+    const report = await readJson<any>(reportPath);
+    const forgedGate = {
+      passed: false,
+      assertionCount: 2,
+      failureCount: 1,
+      assertions: [{ index: 0, passed: true }, { index: 1, passed: false }],
+      detailPolicy: "assertion-details-omitted-from-public-report" as const
+    };
+    const passingVerdict = authoredWorkbookJudgeVerdict(judge);
+    await writeJson(reportPath, { ...report, gate: forgedGate, verdict: passingVerdict });
+    await writeJson(judgeInputPath, { ...AUTHORED_WORKBOOK_EVAL_MARKERS, scenario: scenario.id, traceFile: "trace.json", prompt: buildAuthoredWorkbookJudgePromptFromProjectedTrace(scenario, traceEnvelope.trace, forgedGate) });
+    await atomicWriteText(summaryPath, renderAuthoredWorkbookSummary({ scenario, gate: forgedGate, evaluationMode: "judged", judge, verdict: passingVerdict }));
+
+    await expectLatestRejectedAndUnchanged(root, latest, latestText);
+  });
+
   it("rejects mismatched injected prompts, invalid judge results, failed gates, bad run ids, and unsafe model identities", () => {
     const trace = projectedTrace();
     const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
@@ -693,8 +841,9 @@ describe("authored workbook report bundle", () => {
   it("rolls back every partially written success bundle so failure metadata can reuse the run id", async () => {
     const root = await mkdtemp(join(tmpdir(), "authored-report-rollback-"));
     tempRoots.push(root);
-    const trace = projectedTrace();
-    const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
+    const authored = authoredScenario();
+    const trace = authoredTrace();
+    const prompt = buildAuthoredWorkbookJudgePrompt(authored, trace, gate());
 
     for (let failAfter = 1; failAfter <= Object.keys(AUTHORED_WORKBOOK_REPORT_FILENAMES).length; failAfter += 1) {
       const runId = `rollback-${failAfter}`;
@@ -702,11 +851,11 @@ describe("authored workbook report bundle", () => {
       await expect(writeAuthoredWorkbookEvalReportBundle({
         reportsRoot: root,
         runId,
-        scenario: scenario(),
+        scenario: authored,
         trace,
         gate: gate(),
         judgeInput: prompt,
-        judge: judgeResult(),
+        judge: authoredJudgeResult(authored),
         modelIdentities: modelIdentities(),
         writeText: async (path, data) => {
           writes += 1;
@@ -811,28 +960,29 @@ describe("authored workbook report bundle", () => {
   it("creates atomic marked latest envelopes from attempted runs only and preserves prior latest on failure", async () => {
     const root = await mkdtemp(join(tmpdir(), "authored-latest-"));
     tempRoots.push(root);
-    const trace = projectedTrace();
-    const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
+    const authored = authoredScenario();
+    const trace = authoredTrace();
+    const prompt = buildAuthoredWorkbookJudgePrompt(authored, trace, gate());
     await writeAuthoredWorkbookEvalReportBundle({
       reportsRoot: root,
       runId: "run-001",
-      scenario: scenario(),
+      scenario: authored,
       trace,
       gate: gate(),
       judgeInput: prompt,
-      judge: judgeResult(),
+      judge: authoredJudgeResult(authored),
       modelIdentities: modelIdentities()
     });
     await writeAuthoredWorkbookEvalFailureMetadata({
       reportsRoot: root,
       runId: "run-002",
-      scenarioId: scenario().id,
+      scenarioId: authored.id,
       repetition: 2,
       status: "interrupted",
       modelIdentities: modelIdentities()
     });
     const success = createAuthoredWorkbookEvalLatestRunEntry({
-      scenario: scenario().id,
+      scenario: authored.id,
       repetition: 1,
       status: "completed",
       evaluationMode: "judged",
@@ -841,7 +991,7 @@ describe("authored workbook report bundle", () => {
       files: AUTHORED_WORKBOOK_REPORT_FILENAMES
     });
     const interrupted = createAuthoredWorkbookEvalLatestRunEntry({
-      scenario: scenario().id,
+      scenario: authored.id,
       repetition: 2,
       status: "interrupted",
       evaluationMode: "judged",
@@ -849,11 +999,11 @@ describe("authored workbook report bundle", () => {
       reportDirectory: "run-002",
       files: { metadata: "metadata.json" }
     });
-    const latest = createAuthoredWorkbookEvalLatestEnvelope({ generatedAt: "2026-08-29T00:00:00.000Z", invocation: { scope: "scenario", scenarioIds: [scenario().id], repeat: 2 }, runs: [success, interrupted] });
+    const latest = createAuthoredWorkbookEvalLatestEnvelope({ generatedAt: "2026-08-29T00:00:00.000Z", invocation: { scope: "scenario", scenarioIds: [authored.id], repeat: 2 }, runs: [success, interrupted] });
 
     expect(Object.isFrozen(latest.runs[0]!.files)).toBe(true);
     expect(latest).toMatchObject({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, invocation: { repeat: 2 } });
-    expect(latest.runs[0]).toMatchObject({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, scenario: scenario().id, files: AUTHORED_WORKBOOK_REPORT_FILENAMES });
+    expect(latest.runs[0]).toMatchObject({ ...AUTHORED_WORKBOOK_EVAL_MARKERS, scenario: authored.id, files: AUTHORED_WORKBOOK_REPORT_FILENAMES });
     expect(JSON.stringify(latest)).not.toContain("gate.json");
     expect(JSON.stringify(latest)).not.toContain("/tmp/");
     await writeAuthoredWorkbookEvalLatestEnvelope(root, latest);
@@ -869,43 +1019,20 @@ describe("authored workbook report bundle", () => {
     await expect(readFile(join(root, "latest.json"), "utf8")).resolves.toBe(prior);
     expect(JSON.stringify(await readJson<Record<string, unknown>>(join(root, "latest.json")))).not.toContain("latest-alias");
 
-    const missing = createAuthoredWorkbookEvalLatestEnvelope({ invocation: { scope: "scenario", scenarioIds: [scenario().id], repeat: 1 }, runs: [createAuthoredWorkbookEvalLatestRunEntry({ ...success, reportDirectory: "missing-run" })] });
+    const missing = createAuthoredWorkbookEvalLatestEnvelope({ invocation: { scope: "scenario", scenarioIds: [authored.id], repeat: 1 }, runs: [createAuthoredWorkbookEvalLatestRunEntry({ ...success, reportDirectory: "missing-run" })] });
     await expect(writeAuthoredWorkbookEvalLatestEnvelope(root, missing)).rejects.toThrow("Unable to update authored workbook latest report.");
     await expect(readFile(join(root, "latest.json"), "utf8")).resolves.toBe(prior);
 
-    expect(() => createAuthoredWorkbookEvalLatestEnvelope({ invocation: { scope: "scenario", scenarioIds: [scenario().id], repeat: 2 }, runs: [success, success] })).toThrow(/duplicate/i);
-    expect(() => createAuthoredWorkbookEvalLatestEnvelope({ invocation: { scope: "scenario", scenarioIds: [scenario().id], repeat: 1 }, runs: [createAuthoredWorkbookEvalLatestRunEntry({ ...success, reportDirectory: "/tmp/private" })] })).toThrow(/directory/i);
+    expect(() => createAuthoredWorkbookEvalLatestEnvelope({ invocation: { scope: "scenario", scenarioIds: [authored.id], repeat: 2 }, runs: [success, success] })).toThrow(/duplicate/i);
+    expect(() => createAuthoredWorkbookEvalLatestEnvelope({ invocation: { scope: "scenario", scenarioIds: [authored.id], repeat: 1 }, runs: [createAuthoredWorkbookEvalLatestRunEntry({ ...success, reportDirectory: "/tmp/private" })] })).toThrow(/directory/i);
     expect(() => createAuthoredWorkbookEvalLatestRunEntry({ ...success, status: "gate", verdict: { passed: false, percentage: 0, rule: "not-judged" }, files: AUTHORED_WORKBOOK_REPORT_FILENAMES })).toThrow(/curated files/i);
-    expect(() => createAuthoredWorkbookEvalLatestEnvelope({ invocation: { scope: "release", scenarioIds: [scenario().id], repeat: 2 }, runs: [] })).toThrow(/release/i);
+    expect(() => createAuthoredWorkbookEvalLatestEnvelope({ invocation: { scope: "release", scenarioIds: [authored.id], repeat: 2 }, runs: [] })).toThrow(/release/i);
   });
 
   it("rejects adversarial latest curated content changes without replacing prior latest", async () => {
     const root = await mkdtemp(join(tmpdir(), "authored-latest-curated-adversarial-"));
     tempRoots.push(root);
-    const trace = projectedTrace();
-    const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
-    await writeAuthoredWorkbookEvalReportBundle({
-      reportsRoot: root,
-      runId: "run-001",
-      scenario: scenario(),
-      trace,
-      gate: gate(),
-      judgeInput: prompt,
-      judge: judgeResult(),
-      modelIdentities: modelIdentities()
-    });
-    const success = createAuthoredWorkbookEvalLatestRunEntry({
-      scenario: scenario().id,
-      repetition: 1,
-      status: "completed",
-      evaluationMode: "judged",
-      verdict: { passed: true, percentage: 1, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" },
-      reportDirectory: "run-001",
-      files: AUTHORED_WORKBOOK_REPORT_FILENAMES
-    });
-    const latest = createAuthoredWorkbookEvalLatestEnvelope({ generatedAt: "2026-08-29T00:00:00.000Z", invocation: { scope: "scenario", scenarioIds: [scenario().id], repeat: 1 }, runs: [success] });
-    await writeAuthoredWorkbookEvalLatestEnvelope(root, latest);
-    const prior = await readFile(join(root, "latest.json"), "utf8");
+    const { latest, latestText: prior } = await authoredJudgedLatestFixture(root, "run-001");
     const judgeInputPath = join(root, "run-001", "judge-input.json");
     const summaryPath = join(root, "run-001", "summary.md");
     const originalJudgeInput = await readJson<Record<string, unknown>>(judgeInputPath);
@@ -930,30 +1057,8 @@ describe("authored workbook report bundle", () => {
   it("rejects adversarial latest metadata identity changes without replacing prior latest", async () => {
     const root = await mkdtemp(join(tmpdir(), "authored-latest-adversarial-"));
     tempRoots.push(root);
-    const trace = projectedTrace();
-    const prompt = buildAuthoredWorkbookJudgePrompt(scenario(), trace, gate());
-    await writeAuthoredWorkbookEvalReportBundle({
-      reportsRoot: root,
-      runId: "run-001",
-      scenario: scenario(),
-      trace,
-      gate: gate(),
-      judgeInput: prompt,
-      judge: judgeResult(),
-      modelIdentities: modelIdentities()
-    });
-    const success = createAuthoredWorkbookEvalLatestRunEntry({
-      scenario: scenario().id,
-      repetition: 1,
-      status: "completed",
-      evaluationMode: "judged",
-      verdict: { passed: true, percentage: 1, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" },
-      reportDirectory: "run-001",
-      files: AUTHORED_WORKBOOK_REPORT_FILENAMES
-    });
-    const latest = createAuthoredWorkbookEvalLatestEnvelope({ generatedAt: "2026-08-29T00:00:00.000Z", invocation: { scope: "scenario", scenarioIds: [scenario().id], repeat: 1 }, runs: [success] });
-    await writeAuthoredWorkbookEvalLatestEnvelope(root, latest);
-    const prior = await readFile(join(root, "latest.json"), "utf8");
+    const { scenario: authored, latest, latestText: prior } = await authoredJudgedLatestFixture(root, "run-001");
+    const success = latest.runs[0]!;
     const metadataPath = join(root, "run-001", "metadata.json");
     const originalMetadataText = await readFile(metadataPath, "utf8");
     const originalMetadata = JSON.parse(originalMetadataText) as Record<string, unknown>;
@@ -982,7 +1087,7 @@ describe("authored workbook report bundle", () => {
 
     await expectLatestRejectedAndUnchanged(async () => writeMetadata({ ...originalMetadata, scenario: "other-public-scenario" }));
     await expectLatestRejectedAndUnchanged(async () => writeMetadata({ ...originalMetadata, repetition: 2 }));
-    await expectLatestRejectedAndUnchanged(async () => writeMetadata(createAuthoredWorkbookEvalFailureMetadataEnvelope({ runId: "run-001", scenarioId: scenario().id, status: "gate", modelIdentities: modelIdentities() })));
+    await expectLatestRejectedAndUnchanged(async () => writeMetadata(createAuthoredWorkbookEvalFailureMetadataEnvelope({ runId: "run-001", scenarioId: authored.id, status: "gate", modelIdentities: modelIdentities() })));
     await expectLatestRejectedAndUnchanged(async () => writeMetadata({ ...originalMetadata, outcome: "failed", verdict: { passed: false, percentage: 0.8, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" } }));
     await expectLatestRejectedAndUnchanged(async () => writeMetadata({ ...originalMetadata, verdict: { passed: false, percentage: 1, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" } }));
     await expectLatestRejectedAndUnchanged(async () => writeMetadata({ ...originalMetadata, namespace: "tutorial-engine/evals/v2" }));
@@ -996,7 +1101,7 @@ describe("authored workbook report bundle", () => {
     });
     const differingButValidLatest = createAuthoredWorkbookEvalLatestEnvelope({
       generatedAt: "2026-08-29T00:00:00.000Z",
-      invocation: { scope: "scenario", scenarioIds: [scenario().id], repeat: 1 },
+      invocation: { scope: "scenario", scenarioIds: [authored.id], repeat: 1 },
       runs: [createAuthoredWorkbookEvalLatestRunEntry({ ...success, verdict: { passed: false, percentage: 0.8, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" } })]
     });
     await expectLatestRejectedAndUnchanged(async () => undefined, differingButValidLatest);
@@ -1016,7 +1121,7 @@ describe("authored workbook report bundle", () => {
 
     expect(() => createAuthoredWorkbookEvalLatestRunEntry({ ...success, verdict: { passed: false, percentage: 1, rule: "all-criteria-positive-and-aggregate-at-least-80-percent" } })).toThrow(/verdict/i);
     expect(() => createAuthoredWorkbookEvalLatestEnvelope({
-      invocation: { scope: "scenario", scenarioIds: [scenario().id, "other-public-scenario"], repeat: 1 },
+      invocation: { scope: "scenario", scenarioIds: [authored.id, "other-public-scenario"], repeat: 1 },
       runs: [
         success,
         createAuthoredWorkbookEvalLatestRunEntry({ ...success, scenario: "other-public-scenario", reportDirectory: "run-001" })

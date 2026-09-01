@@ -3,7 +3,7 @@ import { constants, type Stats } from "node:fs";
 import { chmod, copyFile, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, rmdir, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { AUTHORED_WORKBOOK_EVAL_MARKERS, type AuthoredWorkbookEvalMarkers } from "./types.js";
-import { copyAuthoredWorkbookEvalTrace, enumerateAuthoredWorkbookEvalJudgeCitations, projectAuthoredWorkbookEvalTraceForJudge, type AuthoredWorkbookEvalJudgeTrace, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
+import { copyAuthoredWorkbookEvalJudgePublicState, copyAuthoredWorkbookEvalTrace, enumerateAuthoredWorkbookEvalJudgeCitations, projectAuthoredWorkbookEvalTraceForJudge, type AuthoredWorkbookEvalJudgeTrace, type AuthoredWorkbookEvalTrace } from "./public-trace.js";
 import {
   authoredWorkbookJudgeVerdict,
   buildAuthoredWorkbookJudgePrompt,
@@ -18,7 +18,7 @@ import {
   type AuthoredWorkbookEvalScenarioPublicDescriptor,
   type AuthoredWorkbookEvalVerdict
 } from "./judge.js";
-import { AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_REPORT_POLICY } from "./scenarios.js";
+import { AUTHORED_WORKBOOK_DETERMINISTIC_ONLY_REPORT_POLICY, authoredWorkbookScenarioPublicDescriptorById } from "./scenarios.js";
 
 const MAX_CURATED_TEXT_BYTES = 4 * 1024 * 1024;
 const MAX_DIAGNOSTIC_TEXT_BYTES = 4 * 1024 * 1024;
@@ -1068,8 +1068,7 @@ function copyStrictAuthoredWorkbookJudgeTrace(value: unknown): AuthoredWorkbookE
 function copyStrictJudgeRecordedPublicState(value: unknown): AuthoredWorkbookEvalJudgeTrace["publicStates"][number] {
   if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge public state.");
   assertExactKeys(value, ["label", "state"], "authored workbook judge public state");
-  if (!isPlainRecord(value.state)) throw new Error("Invalid authored workbook judge public state.");
-  return { label: boundedString(value.label, "public state label", 128), state: deepFreeze(structuredClone(value.state)) as unknown as AuthoredWorkbookEvalJudgeTrace["publicStates"][number]["state"] };
+  return { label: boundedString(value.label, "public state label", 128), state: deepFreeze(copyAuthoredWorkbookEvalJudgePublicState(value.state)) };
 }
 
 function copyStrictPublicTerminalTranscriptEntry(value: unknown): AuthoredWorkbookEvalJudgeTrace["terminalTranscript"][number] {
@@ -1141,7 +1140,21 @@ function copyStrictScenarioPublicDescriptor(value: unknown): AuthoredWorkbookEva
     if (!isPlainRecord(criterion)) throw new Error("Invalid authored workbook eval scenario criterion.");
     assertExactKeys(criterion, ["id", "title", "description"], "authored workbook eval scenario criterion");
   }
-  return copyAuthoredWorkbookEvalScenarioPublicDescriptor(value);
+  const descriptor = copyAuthoredWorkbookEvalScenarioPublicDescriptor(value);
+  const expected = authoredWorkbookScenarioPublicDescriptorById(descriptor.id);
+  if (!sameScenarioPublicDescriptor(descriptor, expected)) throw new Error("Authored workbook report scenario descriptor does not match the authored catalog.");
+  return expected;
+}
+
+function sameScenarioPublicDescriptor(left: AuthoredWorkbookEvalScenarioPublicDescriptor, right: AuthoredWorkbookEvalScenarioPublicDescriptor): boolean {
+  return left.id === right.id
+    && left.title === right.title
+    && left.description === right.description
+    && left.criteria.length === right.criteria.length
+    && left.criteria.every((criterion, index) => {
+      const expected = right.criteria[index];
+      return expected !== undefined && criterion.id === expected.id && criterion.title === expected.title && criterion.description === expected.description;
+    });
 }
 
 function copyStrictPublicGate(value: unknown): AuthoredWorkbookEvalPublicGateResult {
@@ -1158,6 +1171,10 @@ function copyStrictPublicGate(value: unknown): AuthoredWorkbookEvalPublicGateRes
   if (value.assertionCount !== assertions.length || value.failureCount !== failureCount) throw new Error("Invalid authored workbook public gate result.");
   if (value.passed && failureCount > 0) throw new Error("Invalid authored workbook public gate result with failed assertions.");
   return deepFreeze({ passed: value.passed, assertionCount: assertions.length, failureCount, assertions, detailPolicy: "assertion-details-omitted-from-public-report" as const });
+}
+
+function assertCompletedPublicGatePassed(gate: AuthoredWorkbookEvalPublicGateResult): void {
+  if (gate.passed !== true || gate.failureCount !== 0 || gate.assertions.some((assertion) => assertion.passed !== true)) throw new Error("Invalid completed authored workbook report gate.");
 }
 
 function copyStrictJudgeRunSummary(value: unknown, mode: AuthoredWorkbookEvalEvaluationMode): AuthoredWorkbookEvalJudgeRunSummary {
@@ -1180,7 +1197,8 @@ function copyStrictAuthoredWorkbookReportEnvelope(value: unknown): AuthoredWorkb
   const scenario = copyStrictScenarioPublicDescriptor(value.scenario);
   assertScenarioAllowsEvaluationMode(scenario.id, mode);
   const gate = copyStrictPublicGate(value.gate);
-  if (mode === "deterministic-only" && (gate.assertionCount !== deterministicOnlyRequiredAssertionCount() || gate.failureCount !== 0 || !gate.passed)) throw new Error("Invalid deterministic-only authored workbook report gate.");
+  assertCompletedPublicGatePassed(gate);
+  if (mode === "deterministic-only" && gate.assertionCount !== deterministicOnlyRequiredAssertionCount()) throw new Error("Invalid deterministic-only authored workbook report gate.");
   return deepFreeze({
     ...AUTHORED_WORKBOOK_EVAL_MARKERS,
     runId: safeRunId(value.runId),

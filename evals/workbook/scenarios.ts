@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import ts from "typescript";
 import { type AuthoredCommandInvocationEvidence, type AuthoredEventClass } from "./command-stubs.js";
 import type { AuthoredWorkbookDriver } from "./driver.js";
+import type { AuthoredWorkbookEvalScenarioPublicDescriptor } from "./judge.js";
 import type { AuthoredWorkbookEvalArtifactSnapshot, AuthoredWorkbookEvalProgressionEvent, AuthoredWorkbookEvalTrace } from "./types.js";
 import type { WorkbookTimelineRecord } from "../../tutorial-engine/src/workbook/timeline.js";
 import type { AuthoredCurriculumPrerequisiteOverlay, AuthoredCurriculumSliceSelection } from "./workspace.js";
@@ -524,6 +525,16 @@ export function authoredWorkbookScenarioById(id: AuthoredWorkbookScenarioId): Au
   const scenario = AUTHORED_WORKBOOK_SCENARIOS.find((candidate) => candidate.id === id);
   if (!scenario) throw new Error(`Unknown authored workbook scenario: ${id}`);
   return scenario;
+}
+
+export function authoredWorkbookScenarioPublicDescriptorById(id: string): AuthoredWorkbookEvalScenarioPublicDescriptor {
+  const scenario = authoredWorkbookScenarioById(id as AuthoredWorkbookScenarioId);
+  return deepFreeze({
+    id: scenario.id,
+    title: scenario.title,
+    description: scenario.description,
+    criteria: scenario.criteria.map((criterion) => ({ id: criterion.id, title: criterion.title, description: criterion.description }))
+  });
 }
 
 function authoredWorkbookPrerequisiteOverlay(seedId: AuthoredWorkbookPrerequisiteSeedId): AuthoredCurriculumPrerequisiteOverlay {

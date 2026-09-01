@@ -5,9 +5,11 @@ import type {
   AuthoredWorkbookEvalArtifactSnapshot,
   AuthoredWorkbookEvalCitation,
   AuthoredWorkbookEvalEditorEntry,
+  AuthoredWorkbookEvalJudgeBlockProgress,
   AuthoredWorkbookEvalJudgeBlockReference,
   AuthoredWorkbookEvalJudgeCheckpoint,
   AuthoredWorkbookEvalJudgePublicState,
+  AuthoredWorkbookEvalJudgeTextMetadata,
   AuthoredWorkbookEvalJudgeRecordedPublicState,
   AuthoredWorkbookEvalJudgeTimelineRecord,
   AuthoredWorkbookEvalJudgeTrace,
@@ -189,7 +191,7 @@ function enumerateTraceCitations(trace: Omit<AuthoredWorkbookEvalTrace | Authore
 }
 
 function projectPublicWorkbookStateForJudge(state: PublicWorkbookState, seenTimelineRecords: Set<string>): AuthoredWorkbookEvalJudgePublicState {
-  return omitUndefined({
+  return copyAuthoredWorkbookEvalJudgePublicState(omitUndefined({
     workbook: { title: state.workbook.title },
     introductionComplete: state.introductionComplete,
     active: omitUndefined({ lessonId: state.progress.activeLessonId, blockId: state.progress.activeBlockId, anchorId: state.progress.activeAnchorId }),
@@ -226,7 +228,269 @@ function projectPublicWorkbookStateForJudge(state: PublicWorkbookState, seenTime
     workbookComplete: state.progress.workbookComplete,
     adapter: omitUndefined({ modelBackedHelp: state.adapter.modelBackedHelp, note: textMetadata(state.adapter.note) }),
     timelineNewRecords: state.timeline.map((record) => projectTimelineRecordForJudge(record, seenTimelineRecords)).filter((record): record is AuthoredWorkbookEvalJudgeTimelineRecord => record !== undefined)
-  });
+  }));
+}
+
+export function copyAuthoredWorkbookEvalJudgePublicState(value: unknown): AuthoredWorkbookEvalJudgePublicState {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge public state.");
+  assertObjectKeys(value, ["workbook", "introductionComplete", "active", "completedLessons", "chapters", "progressBlocks", "reflectionBlocks", "reflectionConversations", "adapter", "timelineNewRecords"], ["completedBlocks", "workAcceptedBlocks", "readyBlocks", "revealedBlockIds", "renderedBlockIds", "readyBlockIds", "currentBlock", "completion", "orderedBlocks", "canComplete", "workbookComplete"], "authored workbook judge public state");
+  const copied: AuthoredWorkbookEvalJudgePublicState = {
+    workbook: copyJudgeWorkbook(value.workbook),
+    introductionComplete: copyBoolean(value.introductionComplete, "authored workbook judge public state introductionComplete"),
+    active: copyJudgeActive(value.active),
+    completedLessons: copyStringArray(value.completedLessons, "authored workbook judge completed lessons"),
+    chapters: copyArray(value.chapters, "authored workbook judge chapters", copyJudgeChapter),
+    progressBlocks: copyArray(value.progressBlocks, "authored workbook judge progress blocks", copyJudgeProgressBlock),
+    reflectionBlocks: copyStringArray(value.reflectionBlocks, "authored workbook judge reflection blocks"),
+    reflectionConversations: copyArray(value.reflectionConversations, "authored workbook judge reflection conversations", copyJudgeReflectionConversation),
+    adapter: copyJudgeAdapter(value.adapter),
+    timelineNewRecords: copyArray(value.timelineNewRecords, "authored workbook judge timeline records", copyJudgeTimelineRecord)
+  };
+  if (Object.hasOwn(value, "completedBlocks")) copied.completedBlocks = copyStringArray(value.completedBlocks, "authored workbook judge completed blocks");
+  if (Object.hasOwn(value, "workAcceptedBlocks")) copied.workAcceptedBlocks = copyStringArray(value.workAcceptedBlocks, "authored workbook judge work accepted blocks");
+  if (Object.hasOwn(value, "readyBlocks")) copied.readyBlocks = copyStringArray(value.readyBlocks, "authored workbook judge ready blocks");
+  if (Object.hasOwn(value, "revealedBlockIds")) copied.revealedBlockIds = copyStringArray(value.revealedBlockIds, "authored workbook judge revealed block ids");
+  if (Object.hasOwn(value, "renderedBlockIds")) copied.renderedBlockIds = copyStringArray(value.renderedBlockIds, "authored workbook judge rendered block ids");
+  if (Object.hasOwn(value, "readyBlockIds")) copied.readyBlockIds = copyStringArray(value.readyBlockIds, "authored workbook judge ready block ids");
+  if (Object.hasOwn(value, "currentBlock")) copied.currentBlock = copyJudgeBlockReference(value.currentBlock);
+  if (Object.hasOwn(value, "completion")) copied.completion = copyJudgeCompletion(value.completion);
+  if (Object.hasOwn(value, "orderedBlocks")) copied.orderedBlocks = copyArray(value.orderedBlocks, "authored workbook judge ordered blocks", copyJudgeBlockReference);
+  if (Object.hasOwn(value, "canComplete")) copied.canComplete = copyJudgeCanComplete(value.canComplete);
+  if (Object.hasOwn(value, "workbookComplete")) copied.workbookComplete = copyBoolean(value.workbookComplete, "authored workbook judge workbookComplete");
+  return copied;
+}
+
+function assertObjectKeys(value: Record<string, unknown>, required: readonly string[], optional: readonly string[], label: string): void {
+  const allowed = new Set([...required, ...optional]);
+  const keys = Object.keys(value);
+  if (keys.some((key) => !allowed.has(key)) || required.some((key) => !Object.hasOwn(value, key))) throw new Error(`Invalid ${label}.`);
+}
+
+function copyString(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`Invalid ${label}.`);
+  return boundedText(value, label);
+}
+
+function copyBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`Invalid ${label}.`);
+  return value;
+}
+
+function copyFiniteNumber(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`Invalid ${label}.`);
+  return value;
+}
+
+function copyNonNegativeInteger(value: unknown, label: string): number {
+  if (!Number.isInteger(value) || (value as number) < 0) throw new Error(`Invalid ${label}.`);
+  return value as number;
+}
+
+function copyStringArray(value: unknown, label: string): string[] {
+  return copyArray(value, label, (entry, index) => copyString(entry, `${label} entry ${index}`));
+}
+
+function copyArray<T>(value: unknown, label: string, copyEntry: (entry: unknown, index: number) => T): T[] {
+  if (!Array.isArray(value)) throw new Error(`Invalid ${label}.`);
+  return value.map(copyEntry);
+}
+
+function copyJudgeWorkbook(value: unknown): AuthoredWorkbookEvalJudgePublicState["workbook"] {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge workbook.");
+  assertObjectKeys(value, ["title"], [], "authored workbook judge workbook");
+  return { title: copyString(value.title, "authored workbook judge workbook title") };
+}
+
+function copyJudgeActive(value: unknown): AuthoredWorkbookEvalJudgePublicState["active"] {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge active block.");
+  assertObjectKeys(value, ["lessonId", "blockId"], ["anchorId"], "authored workbook judge active block");
+  const active: AuthoredWorkbookEvalJudgePublicState["active"] = {
+    lessonId: copyString(value.lessonId, "authored workbook judge active lesson id"),
+    blockId: copyString(value.blockId, "authored workbook judge active block id")
+  };
+  if (Object.hasOwn(value, "anchorId")) active.anchorId = copyString(value.anchorId, "authored workbook judge active anchor id");
+  return active;
+}
+
+function copyJudgeTextMetadata(value: unknown, label: string): AuthoredWorkbookEvalJudgeTextMetadata {
+  if (!isPlainRecord(value)) throw new Error(`Invalid ${label}.`);
+  assertObjectKeys(value, ["bytes"], [], label);
+  return { bytes: copyNonNegativeInteger(value.bytes, `${label} bytes`) };
+}
+
+function copyJudgeBlockPath(value: unknown, label: string): string {
+  const path = copyString(value, label);
+  if (path.startsWith("/") || path.includes("\\") || path.includes("\0") || path.split("/").some((part) => part === "" || part === "." || part === "..")) throw new Error(`Invalid ${label}.`);
+  return path;
+}
+
+function copyJudgeBlockReference(value: unknown): AuthoredWorkbookEvalJudgeBlockReference {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge block reference.");
+  assertObjectKeys(value, ["id"], ["anchorId", "origin", "kind", "type", "title", "lessonId", "declaredId", "order", "path", "workAccepted"], "authored workbook judge block reference");
+  const block: AuthoredWorkbookEvalJudgeBlockReference = { id: copyString(value.id, "authored workbook judge block id") };
+  for (const key of ["anchorId", "origin", "kind", "type", "title", "lessonId", "declaredId"] as const) if (Object.hasOwn(value, key)) block[key] = copyString(value[key], `authored workbook judge block ${key}`);
+  if (Object.hasOwn(value, "order")) block.order = copyFiniteNumber(value.order, "authored workbook judge block order");
+  if (Object.hasOwn(value, "path")) block.path = copyJudgeBlockPath(value.path, "authored workbook judge block path");
+  if (Object.hasOwn(value, "workAccepted")) block.workAccepted = copyBoolean(value.workAccepted, "authored workbook judge block workAccepted");
+  return block;
+}
+
+function copyJudgeCompletion(value: unknown): NonNullable<AuthoredWorkbookEvalJudgePublicState["completion"]> {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge completion.");
+  assertObjectKeys(value, ["complete", "anchorId"], ["summary"], "authored workbook judge completion");
+  if (value.complete !== true) throw new Error("Invalid authored workbook judge completion.");
+  const completion: NonNullable<AuthoredWorkbookEvalJudgePublicState["completion"]> = { complete: true, anchorId: copyString(value.anchorId, "authored workbook judge completion anchor id") };
+  if (Object.hasOwn(value, "summary")) completion.summary = copyJudgeTextMetadata(value.summary, "authored workbook judge completion summary");
+  return completion;
+}
+
+function copyJudgeLesson(value: unknown): NonNullable<AuthoredWorkbookEvalJudgePublicState["chapters"][number]["lesson"]> {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge lesson.");
+  assertObjectKeys(value, ["id", "title", "durationMinutes", "outcomes", "blockCount", "blocks"], [], "authored workbook judge lesson");
+  return {
+    id: copyString(value.id, "authored workbook judge lesson id"),
+    title: copyString(value.title, "authored workbook judge lesson title"),
+    durationMinutes: copyFiniteNumber(value.durationMinutes, "authored workbook judge lesson duration"),
+    outcomes: copyStringArray(value.outcomes, "authored workbook judge lesson outcomes"),
+    blockCount: copyNonNegativeInteger(value.blockCount, "authored workbook judge lesson block count"),
+    blocks: copyArray(value.blocks, "authored workbook judge lesson blocks", copyJudgeBlockReference)
+  };
+}
+
+function copyJudgeChapter(value: unknown): AuthoredWorkbookEvalJudgePublicState["chapters"][number] {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge chapter.");
+  assertObjectKeys(value, ["id", "title", "lessonNumber"], ["partId", "part", "partNumber", "lesson"], "authored workbook judge chapter");
+  const chapter: AuthoredWorkbookEvalJudgePublicState["chapters"][number] = {
+    id: copyString(value.id, "authored workbook judge chapter id"),
+    title: copyString(value.title, "authored workbook judge chapter title"),
+    lessonNumber: copyFiniteNumber(value.lessonNumber, "authored workbook judge chapter lesson number")
+  };
+  if (Object.hasOwn(value, "partId")) chapter.partId = copyString(value.partId, "authored workbook judge chapter part id");
+  if (Object.hasOwn(value, "part")) chapter.part = copyString(value.part, "authored workbook judge chapter part");
+  if (Object.hasOwn(value, "partNumber")) chapter.partNumber = copyFiniteNumber(value.partNumber, "authored workbook judge chapter part number");
+  if (Object.hasOwn(value, "lesson")) chapter.lesson = copyJudgeLesson(value.lesson);
+  return chapter;
+}
+
+function copyPublicAttemptKind(value: unknown, label: string): PublicAttemptKind {
+  if (value !== "editor" && value !== "terminal" && value !== "reflection") throw new Error(`Invalid ${label}.`);
+  return value;
+}
+
+function copyJudgeCheckpoint(value: unknown): AuthoredWorkbookEvalJudgeCheckpoint {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge checkpoint.");
+  assertObjectKeys(value, ["status"], ["feedback", "successMessage", "summary", "evidence"], "authored workbook judge checkpoint");
+  if (value.status !== "working" && value.status !== "reviewing" && value.status !== "feedback" && value.status !== "accepted") throw new Error("Invalid authored workbook judge checkpoint.");
+  const checkpoint: AuthoredWorkbookEvalJudgeCheckpoint = { status: value.status };
+  if (Object.hasOwn(value, "feedback")) checkpoint.feedback = copyJudgeTextMetadata(value.feedback, "authored workbook judge checkpoint feedback");
+  if (Object.hasOwn(value, "successMessage")) checkpoint.successMessage = copyJudgeTextMetadata(value.successMessage, "authored workbook judge checkpoint success message");
+  if (Object.hasOwn(value, "summary")) checkpoint.summary = copyJudgeTextMetadata(value.summary, "authored workbook judge checkpoint summary");
+  if (Object.hasOwn(value, "evidence")) checkpoint.evidence = copyJudgeCheckpointEvidence(value.evidence);
+  return checkpoint;
+}
+
+function copyJudgeCheckpointEvidence(value: unknown): NonNullable<AuthoredWorkbookEvalJudgeCheckpoint["evidence"]> {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge checkpoint evidence.");
+  assertObjectKeys(value, ["kind"], ["text", "conversationTurns"], "authored workbook judge checkpoint evidence");
+  const evidence: NonNullable<AuthoredWorkbookEvalJudgeCheckpoint["evidence"]> = { kind: copyPublicAttemptKind(value.kind, "authored workbook judge checkpoint evidence kind") };
+  if (Object.hasOwn(value, "text")) evidence.text = copyJudgeTextMetadata(value.text, "authored workbook judge checkpoint evidence text");
+  if (Object.hasOwn(value, "conversationTurns")) evidence.conversationTurns = copyNonNegativeInteger(value.conversationTurns, "authored workbook judge checkpoint evidence conversation turns");
+  return evidence;
+}
+
+function copyJudgeTerminal(value: unknown): AuthoredWorkbookEvalJudgeBlockProgress["terminal"] {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge terminal.");
+  if (value.phase === "running" || value.phase === "checking") {
+    assertObjectKeys(value, ["phase"], [], "authored workbook judge terminal");
+    return { phase: value.phase };
+  }
+  if (value.phase === "feedback" || value.phase === "complete") {
+    assertObjectKeys(value, ["phase", "message"], [], "authored workbook judge terminal");
+    return { phase: value.phase, message: copyString(value.message, "authored workbook judge terminal message") };
+  }
+  throw new Error("Invalid authored workbook judge terminal.");
+}
+
+function copyJudgeEditorStatus(value: unknown): AuthoredWorkbookEvalJudgeBlockProgress["editorStatus"] {
+  if (value !== "editing" && value !== "waiting" && value !== "reviewing" && value !== "feedback" && value !== "unlocked") throw new Error("Invalid authored workbook judge editor status.");
+  return value;
+}
+
+function copyJudgeProgressBlock(value: unknown): AuthoredWorkbookEvalJudgeBlockProgress {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge progress block.");
+  assertObjectKeys(value, ["id", "ready", "active", "completed", "verified", "emerged"], ["type", "anchorId", "origin", "kind", "title", "completedAt", "workAccepted", "checkpoint", "terminal", "terminalRevision", "terminalSnapshot", "revision", "editorStatus"], "authored workbook judge progress block");
+  const block: AuthoredWorkbookEvalJudgeBlockProgress = {
+    id: copyString(value.id, "authored workbook judge progress block id"),
+    ready: copyBoolean(value.ready, "authored workbook judge progress block ready"),
+    active: copyBoolean(value.active, "authored workbook judge progress block active"),
+    completed: copyBoolean(value.completed, "authored workbook judge progress block completed"),
+    verified: copyBoolean(value.verified, "authored workbook judge progress block verified"),
+    emerged: copyBoolean(value.emerged, "authored workbook judge progress block emerged")
+  };
+  for (const key of ["type", "anchorId", "origin", "kind", "title", "completedAt"] as const) if (Object.hasOwn(value, key)) block[key] = copyString(value[key], `authored workbook judge progress block ${key}`);
+  if (Object.hasOwn(value, "workAccepted")) block.workAccepted = copyBoolean(value.workAccepted, "authored workbook judge progress block workAccepted");
+  if (Object.hasOwn(value, "checkpoint")) block.checkpoint = copyJudgeCheckpoint(value.checkpoint);
+  if (Object.hasOwn(value, "terminal")) block.terminal = copyJudgeTerminal(value.terminal);
+  if (Object.hasOwn(value, "terminalRevision")) block.terminalRevision = copyNonNegativeInteger(value.terminalRevision, "authored workbook judge terminal revision");
+  if (Object.hasOwn(value, "terminalSnapshot")) block.terminalSnapshot = copyJudgeTextMetadata(value.terminalSnapshot, "authored workbook judge terminal snapshot");
+  if (Object.hasOwn(value, "revision")) block.revision = copyNonNegativeInteger(value.revision, "authored workbook judge revision");
+  if (Object.hasOwn(value, "editorStatus")) block.editorStatus = copyJudgeEditorStatus(value.editorStatus);
+  return block;
+}
+
+function copyJudgeReflectionConversation(value: unknown): AuthoredWorkbookEvalJudgePublicState["reflectionConversations"][number] {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge reflection conversation.");
+  assertObjectKeys(value, ["blockId", "turns", "roles"], [], "authored workbook judge reflection conversation");
+  return {
+    blockId: copyString(value.blockId, "authored workbook judge reflection conversation block id"),
+    turns: copyNonNegativeInteger(value.turns, "authored workbook judge reflection conversation turns"),
+    roles: copyArray(value.roles, "authored workbook judge reflection conversation roles", (role) => {
+      if (role !== "learner" && role !== "tutor") throw new Error("Invalid authored workbook judge reflection conversation role.");
+      return role;
+    })
+  };
+}
+
+function copyJudgeCanComplete(value: unknown): NonNullable<AuthoredWorkbookEvalJudgePublicState["canComplete"]> {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge canComplete.");
+  assertObjectKeys(value, ["blockId", "eligible"], ["reason"], "authored workbook judge canComplete");
+  const canComplete: NonNullable<AuthoredWorkbookEvalJudgePublicState["canComplete"]> = {
+    blockId: copyString(value.blockId, "authored workbook judge canComplete block id"),
+    eligible: copyBoolean(value.eligible, "authored workbook judge canComplete eligible")
+  };
+  if (Object.hasOwn(value, "reason")) canComplete.reason = copyString(value.reason, "authored workbook judge canComplete reason");
+  return canComplete;
+}
+
+function copyJudgeAdapter(value: unknown): AuthoredWorkbookEvalJudgePublicState["adapter"] {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge adapter.");
+  assertObjectKeys(value, [], ["modelBackedHelp", "note"], "authored workbook judge adapter");
+  const adapter: AuthoredWorkbookEvalJudgePublicState["adapter"] = {};
+  if (Object.hasOwn(value, "modelBackedHelp")) adapter.modelBackedHelp = copyBoolean(value.modelBackedHelp, "authored workbook judge adapter modelBackedHelp");
+  if (Object.hasOwn(value, "note")) adapter.note = copyJudgeTextMetadata(value.note, "authored workbook judge adapter note");
+  return adapter;
+}
+
+function copyJudgeTimelineRecord(value: unknown): AuthoredWorkbookEvalJudgeTimelineRecord {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge timeline record.");
+  if (value.type !== "message") throw new Error("Invalid authored workbook judge timeline record.");
+  assertObjectKeys(value, ["type", "id", "sequence", "lessonId", "blockId", "role", "source", "presentation", "text"], ["blockInView"], "authored workbook judge timeline record");
+  if (value.role !== "assistant" && value.role !== "user") throw new Error("Invalid authored workbook judge timeline role.");
+  if (value.source !== "authored" && value.source !== "learner" && value.source !== "main_tutor") throw new Error("Invalid authored workbook judge timeline source.");
+  if (value.presentation !== "course" && value.presentation !== "chat" && value.presentation !== "review") throw new Error("Invalid authored workbook judge timeline presentation.");
+  const record: AuthoredWorkbookEvalJudgeTimelineRecord = {
+    type: "message",
+    id: copyString(value.id, "authored workbook judge timeline id"),
+    sequence: copyFiniteNumber(value.sequence, "authored workbook judge timeline sequence"),
+    lessonId: copyString(value.lessonId, "authored workbook judge timeline lesson id"),
+    blockId: copyString(value.blockId, "authored workbook judge timeline block id"),
+    role: value.role,
+    source: value.source,
+    presentation: value.presentation,
+    text: copyJudgeTextMetadata(value.text, "authored workbook judge timeline text")
+  };
+  if (Object.hasOwn(value, "blockInView")) record.blockInView = copyString(value.blockInView, "authored workbook judge timeline blockInView");
+  return record;
 }
 
 export async function snapshotAuthoredWorkbookEvalArtifacts(workspaceRoot: string, options: AuthoredWorkbookEvalArtifactOptions): Promise<AuthoredWorkbookEvalArtifactSnapshot[]> {
