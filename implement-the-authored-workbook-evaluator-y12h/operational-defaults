@@ -1,1 +1,0 @@
-Operational defaults adopted: release runs use explicit tutor/Coach/judge model identities; Lesson 013 seed remains evaluator-owned; reports use scenario-authored criteria only; temporary workspaces are deleted after every release run. A single non-release scenario may opt into --keep-workspace for debugging, with a warning that the folder contains private/unreviewed state.
