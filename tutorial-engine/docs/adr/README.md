@@ -48,3 +48,4 @@ Update the index below whenever you create a record or change its status.
 | [0024](0024-isolate-lesson-workspaces-as-live-repositories.md) | accepted | Isolate lesson workspaces as live repositories |
 | [0025](0025-preflight-live-engine-evals-before-artifacts.md) | accepted | Preflight live engine evals before artifacts |
 | [0026](0026-use-one-stateless-main-tutor-for-practice-review.md) | accepted | Use one stateless Main Tutor for practice review |
+| [0027](0027-keep-workbooks-outside-the-tutorial-engine.md) | accepted | Keep workbooks outside the tutorial engine |

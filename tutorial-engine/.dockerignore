@@ -1,0 +1,21 @@
+# Keep the tutorial engine Docker context deterministic and small.
+node_modules
+**/node_modules
+
+dist
+**/dist
+
+# Runtime scratch, test temporary output, and regenerated evidence.
+tmp
+**/tmp
+.tmp
+**/.tmp
+test/.tmp
+test/**/.tmp
+test/visual/*.received.png
+
+# Eval and ad-hoc reports are regenerated locally.
+reports
+**/reports
+evals/reports
+evals/**/reports

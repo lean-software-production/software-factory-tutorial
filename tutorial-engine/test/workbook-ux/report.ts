@@ -243,7 +243,7 @@ function renderMarkdownReport(args: {
 
 function inputIdentityLines(inputMetadata: unknown): string[] {
   if (!inputMetadata || typeof inputMetadata !== 'object') return ['Input metadata was not written.'];
-  const metadata = inputMetadata as { git?: { sha?: string; shortSha?: string; dirty?: boolean; status?: string[] }; package?: { name?: string; version?: string; playwright?: string; lockfileVersion?: number }; browser?: { name?: string; version?: string }; viewport?: Record<string, unknown>; engine?: { webBundle?: unknown } };
+  const metadata = inputMetadata as { git?: { sha?: string; shortSha?: string; dirty?: boolean; status?: string[] }; package?: { name?: string; version?: string; playwright?: string }; browser?: { name?: string; version?: string }; viewport?: Record<string, unknown>; engine?: { webBundle?: unknown } };
   return [
     `- Git SHA: ${metadata.git?.sha ?? 'unknown'}${metadata.git?.shortSha ? ` (${metadata.git.shortSha})` : ''}`,
     `- Dirty: ${metadata.git?.dirty === undefined ? 'unknown' : String(metadata.git.dirty)}`,

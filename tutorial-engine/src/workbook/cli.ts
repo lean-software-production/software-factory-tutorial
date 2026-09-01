@@ -54,13 +54,13 @@ async function createLessonJumpSession(target: string, selector: string, runtime
 }
 
 function sessionLaunchLines(session: TutorialSessionPaths, reopened: boolean, lesson?: string): string[] {
-  const action = reopened ? "Reopened tutorial session" : "Created tutorial session";
+  const action = reopened ? "Reopened workbook session" : "Created workbook session";
   return [
     `${action}: ${session.sessionId}`,
     ...(lesson ? [`Lesson jump: ${lesson} (prior blocks are marked completed).`] : []),
     `Session state: ${session.sessionRoot}`,
     `Learner workspaces: ${Object.entries(session.workspaceRoots).map(([id, root]) => `${id}=${root}`).join(", ") || "none declared"}`,
-    `Reopen with: npm run tutorial:workbook -- --session ${session.sessionId}`,
+    `Reopen with the same workbook target and --session ${session.sessionId}`,
   ];
 }
 

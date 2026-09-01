@@ -64,17 +64,23 @@ function setup(options: { initialActiveBlock?: ActiveObservedTerminalBlock } = {
 }
 
 describe("workbook terminal image", () => {
-  it("installs Git and jq without recommendations and isolates its ambient configuration", async () => {
+  it("installs generic terminal tools and isolates its ambient configuration", async () => {
     const dockerfile = await readFile(resolve("docker/workbook-terminal.Dockerfile"), "utf8");
 
+    expect(dockerfile).toMatch(/FROM node:24-bookworm-slim/);
     expect(dockerfile).toMatch(/apt-get install\s+--yes\s+--no-install-recommends\s+git\s+jq/);
     expect(dockerfile).toContain("rm -rf /var/lib/apt/lists/*");
-    expect(dockerfile).toContain("COPY package.json package-lock.json ./");
-    expect(dockerfile).toContain("npm ci --workspace=tutorial/workspaces/refactor-line/calculator --include=dev --ignore-scripts");
-    expect(dockerfile).toContain("ln -s /opt/workbook/node_modules /workspace/node_modules");
+    expect(dockerfile).toContain("npm install --global @earendil-works/pi-coding-agent@0.84.0");
+    expect(dockerfile).toContain("mkdir -p /workspace /home/learner/.pi/agent");
+    expect(dockerfile).toContain("WORKDIR /workspace");
+    expect(dockerfile).toMatch(/ENV HOME=\/home\/learner/);
     expect(dockerfile).toMatch(/ENV GIT_CONFIG_NOSYSTEM=1/);
     expect(dockerfile).toMatch(/ENV GIT_CONFIG_GLOBAL=\/dev\/null/);
     expect(dockerfile).toMatch(/ENV GIT_TERMINAL_PROMPT=0/);
+    expect(dockerfile).not.toContain("COPY package.json");
+    expect(dockerfile).not.toContain("package-lock.json");
+    expect(dockerfile).not.toContain("tutorial/workspaces");
+    expect(dockerfile).not.toContain("node_modules");
   });
 });
 

@@ -12,8 +12,8 @@ learner workspaces under `tutorial/.tutorial/<session-id>/workspaces/<workspace-
 - [`tutorial-engine/evals/`](tutorial-engine/evals/) owns synthetic engine-mechanics live evals,
   engine-v2 report markers, deterministic evaluator checks, and active reports under
   `tutorial-engine/evals/reports/`.
-- [`evals/`](evals/) owns the evaluation map, authored-workbook evaluator foundations, and live
-  authored-workbook reports under `evals/workbook/reports/`.
+- [`evals/`](evals/) only points to the engine-owned synthetic eval documentation; the old
+  root-owned authored-workbook evaluator lane has been removed.
 - [`scripts/`](scripts/) contains root launchers and setup helpers.
 
 ## Root commands
@@ -26,7 +26,7 @@ npm run setup
 npm run tutorial:workbook
 npm start
 npm run tutorial:workbook -- --session <id>
-npm run --workspace=tutorial-engine check:workbook
+npm run check:workbook
 
 npm run test:fast
 npm run test:engine:fast
@@ -36,17 +36,13 @@ npm run test
 npm run eval:engine -- --help
 npm run eval -- --help
 npm run eval:release
-npm run eval:workbook -- --list
-npm run eval:workbook -- --release
 ```
 
 See [`docs/testing.md`](docs/testing.md) for the authoritative testing workflow, command matrix,
-live-eval prerequisites, report privacy rules, visual approval process, and `test:fast`
-benchmark notes. In short: `test:fast` is the normal deterministic gate; `check` remains a
-compatibility alias for it; `test` is the paid/Docker-backed release gate; `eval:workbook -- --list`
-has zero side effects.
+live-eval prerequisites, report privacy rules, and visual approval process. In short: `test:fast`
+is the normal deterministic gate; `check` remains a compatibility alias for it; `test` is the
+paid/Docker-backed engine release gate.
 `npm run eval -- ...` is a temporary compatibility alias for `eval:engine`, not an authored eval.
-`eval:workbook` is the authored-curriculum live runner.
 
 `npm run tutorial:workbook` supplies the embedded terminal with one read-only runtime mount: root
 `node_modules/` at the active live workspace's `node_modules/`. A normal launch creates a new
@@ -57,16 +53,17 @@ ignored state is neither resumed nor migrated.
 
 ## Evaluation ownership
 
-Use [`evals/README.md`](evals/README.md) as the active ownership map and
-[`docs/testing.md`](docs/testing.md) as the command workflow. The short version is:
+Use [`evals/README.md`](evals/README.md) and [`docs/testing.md`](docs/testing.md) for the current
+command workflow. The short version is:
 
 - [`tutorial-engine/evals/`](tutorial-engine/evals/) is tutorial-engine-owned and evaluates
   synthetic engine mechanics.
-- [`evals/workbook/`](evals/workbook/) is root-owned and evaluates real authored-curriculum slices.
+- The old root-owned authored-workbook evaluator under `evals/workbook/` has been removed.
 - `evals/reports/` is historical compatibility only. No active runner writes there.
 
-Live report files are ignored and split into public curated files and private diagnostics. Do not
-publish raw events, gate diagnostics, cleanup failures, prompts, credentials, or disposable paths.
+Live engine report files are ignored and split into public curated files and private diagnostics.
+Do not publish raw events, gate diagnostics, cleanup failures, prompts, credentials, or disposable
+paths.
 
 ## Start points
 
@@ -76,6 +73,6 @@ publish raw events, gate diagnostics, cleanup failures, prompts, credentials, or
   ADRs. Synthetic engine-mechanics evals live under
   [`tutorial-engine/evals/`](tutorial-engine/evals/).
 - Curriculum maintainers: edit authored lesson prose under [`tutorial/lessons/`](tutorial/lessons/)
-  and canonical lesson specs under [`tutorial/docs/specs/`](tutorial/docs/specs/). Authored-workbook
-  eval foundations live under [`evals/workbook/`](evals/workbook/).
+  and canonical lesson specs under [`tutorial/docs/specs/`](tutorial/docs/specs/). Prose and
+  learning quality are author-owned, not pinned by deterministic root tests.
 - Coding agents: read [`AGENTS.md`](AGENTS.md).

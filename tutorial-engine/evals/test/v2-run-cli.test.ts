@@ -7,6 +7,8 @@ describe("v2 eval runner CLI parsing", () => {
     const help = v2EvalUsageText();
     expect(help).toContain("npm run eval -- --release");
     expect(help).toContain("npm run eval:release");
+    expect(help).not.toContain("repository root");
+    expect(help).not.toContain("eval:engine");
 
     expect(() => prepareV2EvalCliRun(["--all"], {})).toThrow("--all can spend model tokens across 6 live scenarios");
     expect(() => prepareV2EvalCliRun(["--release", "--repeat", "2"], {})).toThrow("--release always runs each scenario once");

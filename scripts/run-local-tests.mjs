@@ -10,7 +10,6 @@ export const LOCAL_TEST_PROFILES = Object.freeze([
   "test",
   "test:fast",
   "test:engine",
-  "test:workbook",
   "test:workbook:fast"
 ]);
 

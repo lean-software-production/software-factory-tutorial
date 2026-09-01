@@ -2,21 +2,18 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-type PackageJson = { scripts: Record<string, string>; workspaces?: string[] };
+type PackageJson = { scripts: Record<string, string> };
 type TsconfigJson = {
   extends?: string;
   compilerOptions?: {
     strict?: boolean;
     noEmit?: boolean;
-    rootDir?: string;
-    jsx?: string;
   };
   include?: string[];
   exclude?: string[];
 };
 
-const repoRoot = resolve(import.meta.dirname, "../../..");
-const engineRoot = resolve(repoRoot, "tutorial-engine");
+const engineRoot = resolve(import.meta.dirname, "../..");
 
 async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, "utf8")) as T;
@@ -34,27 +31,41 @@ function shellChain(command: string): string[] {
   return command.split(" && ");
 }
 
+function dockerIgnorePatterns(text: string): string[] {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0 && !line.startsWith("#"));
+}
+
+function globPatternSource(pattern: string): string {
+  let source = "";
+  for (let index = 0; index < pattern.length; index++) {
+    const character = pattern[index]!;
+    if (character === "*") {
+      if (pattern[index + 1] === "*") {
+        source += ".*";
+        index++;
+      } else {
+        source += "[^/]*";
+      }
+    } else {
+      source += character.replace(/[\\^$+?.()|[\]{}]/g, "\\$&");
+    }
+  }
+  return source;
+}
+
+function contextIgnores(patterns: string[], contextPath: string): boolean {
+  return patterns.some((pattern) => {
+    const normalizedPattern = pattern.replace(/^\.\//, "").replace(/^\//, "").replace(/\/$/, "");
+    const source = globPatternSource(normalizedPattern);
+    const regex = normalizedPattern.includes("/") ? new RegExp(`^${source}(?:/.*)?$`) : new RegExp(`(?:^|.*/)${source}(?:/.*)?$`);
+    return regex.test(contextPath);
+  });
+}
+
 describe("evaluator package scripts", () => {
-  it("keeps deterministic eval checks on v2 code and leaves live eval explicit", async () => {
-    const packageJson = await readJson<PackageJson>(resolve(repoRoot, "package.json"));
+  it("keeps deterministic eval checks on synthetic v2 code and leaves live eval explicit", async () => {
     const enginePackageJson = await readJson<PackageJson>(resolve(engineRoot, "package.json"));
     const tsconfig = await readJson<TsconfigJson>(resolve(engineRoot, "evals/tsconfig.json"));
-
-    expect(packageJson.workspaces).toEqual(["tutorial/workspaces/refactor-line/calculator", "tutorial-engine"]);
-    expect(packageJson.scripts["check:eval"]).toBeUndefined();
-    expect(packageJson.scripts["test:eval"]).toBeUndefined();
-    expect(packageJson.scripts["check:eval:workbook"]).toBe("tsc -p evals/workbook/tsconfig.json");
-    expect(packageJson.scripts["test:eval:workbook"]).toBe("vitest run evals/workbook/test/*.test.ts");
-    expect(packageJson.scripts["eval:engine"]).toBe("npm run --workspace=tutorial-engine eval --");
-    expect(packageJson.scripts["eval:release"]).toBe("npm run --workspace=tutorial-engine eval:release --");
-    expect(packageJson.scripts.eval).toBe("npm run eval:engine --");
-    expect(packageJson.scripts["eval:workbook"]).toBe("tsx evals/workbook/run.ts");
-    expect(packageJson.scripts.test).toBe("node scripts/run-local-tests.mjs test");
-    expect(packageJson.scripts["test:fast"]).toBe("node scripts/run-local-tests.mjs test:fast");
-    expect(packageJson.scripts["test:engine"]).toBe("node scripts/run-local-tests.mjs test:engine");
-    expect(packageJson.scripts["test:engine:fast"]).toBe("npm run --workspace=tutorial-engine test:fast --");
-    expect(packageJson.scripts["test:workbook"]).toBe("node scripts/run-local-tests.mjs test:workbook");
-    expect(packageJson.scripts["test:workbook:fast"]).toBe("node scripts/run-local-tests.mjs test:workbook:fast");
 
     expect(enginePackageJson.scripts["check:eval"]).toBe("tsc -p evals/tsconfig.json");
     // Asserted by property, not by exact string: the guarantees that matter are that this runs
@@ -69,6 +80,10 @@ describe("evaluator package scripts", () => {
 
     expect(tsconfig.include).toEqual(["run.ts", "v2/**/*.ts", "test/**/*.test.ts"]);
     expect(tsconfig.exclude).toEqual(expect.arrayContaining(["harness", "scenarios", "reports"]));
+  });
+
+  it("keeps engine checks model-free and leaves Docker image readiness out of test:fast", async () => {
+    const enginePackageJson = await readJson<PackageJson>(resolve(engineRoot, "package.json"));
 
     expect(requiredScript(enginePackageJson, "build:typescript")).toBe("rm -rf dist && tsc -p tsconfig.json");
     expect(shellChain(requiredScript(enginePackageJson, "build"))).toEqual(["npm run build:typescript", "npm run build:web:workbook"]);
@@ -91,26 +106,28 @@ describe("evaluator package scripts", () => {
     expect(enginePackageJson.scripts.check).not.toContain("npm run test:eval");
     expect(enginePackageJson.scripts.check).not.toContain("tsx evals/run.ts");
     expect(enginePackageJson.scripts.check).not.toContain("EVAL_JUDGE_MODEL");
-
-    expect(packageJson.scripts.check).toBe("npm run test:fast");
-    expect(packageJson.scripts["test:fast"]).toBe("node scripts/run-local-tests.mjs test:fast");
-    expect(packageJson.scripts.check).not.toContain("--workspace=calculator");
-    expect(packageJson.scripts.check).not.toContain("check:eval");
-    expect(packageJson.scripts.check).not.toContain("test:eval");
-    expect(packageJson.scripts.check).not.toContain("tsx evals/run.ts");
-    expect(packageJson.scripts.check).not.toContain("EVAL_JUDGE_MODEL");
   });
 
-  it("runs the release workflow through the engine check exactly once", async () => {
-    const workflow = await readFile(resolve(repoRoot, ".github/workflows/release-gates.yml"), "utf8");
-    const runSteps = [...workflow.matchAll(/^\s*- run: (.+)$/gm)].map((match) => match[1]);
+  it("builds the generic workbook terminal image from the engine package context", async () => {
+    const enginePackageJson = await readJson<PackageJson>(resolve(engineRoot, "package.json"));
+    const patterns = dockerIgnorePatterns(await readFile(resolve(engineRoot, ".dockerignore"), "utf8"));
 
-    expect(runSteps).toEqual([
-      "npm ci",
-      "npm run --workspace=tutorial-engine browser:install:ci",
-      "npm run --workspace=tutorial-engine check"
-    ]);
-    expect(runSteps).not.toContain("npm run --workspace=tutorial-engine build");
+    expect(requiredScript(enginePackageJson, "build:workbook-terminal")).toBe("docker build --tag lean-software-production/workbook-terminal:latest --file docker/workbook-terminal.Dockerfile .");
+    expect([
+      "node_modules/typescript/package.json",
+      "src/fixtures/node_modules/cache/index.js",
+      "dist/workbook/cli.js",
+      "web-workbook/dist/assets/index.js",
+      "test/.tmp/workbook-state.json",
+      "test/workbook-ux/.tmp/trace.json",
+      "test/visual/terminal-band.received.png",
+      "evals/reports/latest.json",
+      "evals/v2/reports/run.json",
+      "reports/manual-check.json",
+      "src/workbook/.tmp/runtime.json",
+      "tmp/build-output.log"
+    ].filter((contextPath) => !contextIgnores(patterns, contextPath))).toEqual([]);
+    expect(contextIgnores(patterns, "docker/workbook-terminal.Dockerfile")).toBe(false);
   });
 
   it("keeps tsconfig.check.json as a strict no-emit superset before test:fast drops redundant tsc --noEmit", async () => {

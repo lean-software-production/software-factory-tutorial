@@ -36,17 +36,17 @@ function fakeWatchFactory() {
 
 describe("workbook content watch", () => {
   it("recognizes only authored Markdown locations", () => {
-    const root = "/tutorial";
-    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/workbook.md")).toBe(true);
-    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/parts/loop.md")).toBe(true);
-    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/parts/nested/loop.md")).toBe(true);
-    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/lessons/001/lesson.md")).toBe(true);
-    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/lessons/001/blocks/a.md")).toBe(true);
-    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/.tutorial/session/workbook.md")).toBe(false);
-    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/workspaces/refactor-line/factory/refactor.md")).toBe(false);
-    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/workspaces/refactor-line/calculator/README.md")).toBe(false);
-    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/lessons/001/notes.md")).toBe(false);
-    expect(isAuthoredWorkbookMarkdown(root, "/tutorial/lessons/001/blocks/a.md.swp")).toBe(false);
+    const root = "/path/to/workbook";
+    expect(isAuthoredWorkbookMarkdown(root, "/path/to/workbook/workbook.md")).toBe(true);
+    expect(isAuthoredWorkbookMarkdown(root, "/path/to/workbook/parts/loop.md")).toBe(true);
+    expect(isAuthoredWorkbookMarkdown(root, "/path/to/workbook/parts/nested/loop.md")).toBe(true);
+    expect(isAuthoredWorkbookMarkdown(root, "/path/to/workbook/lessons/001/lesson.md")).toBe(true);
+    expect(isAuthoredWorkbookMarkdown(root, "/path/to/workbook/lessons/001/blocks/a.md")).toBe(true);
+    expect(isAuthoredWorkbookMarkdown(root, "/path/to/workbook/.tutorial/session/workbook.md")).toBe(false);
+    expect(isAuthoredWorkbookMarkdown(root, "/path/to/workbook/workspaces/refactor-line/factory/refactor.md")).toBe(false);
+    expect(isAuthoredWorkbookMarkdown(root, "/path/to/workbook/workspaces/refactor-line/calculator/README.md")).toBe(false);
+    expect(isAuthoredWorkbookMarkdown(root, "/path/to/workbook/lessons/001/notes.md")).toBe(false);
+    expect(isAuthoredWorkbookMarkdown(root, "/path/to/workbook/lessons/001/blocks/a.md.swp")).toBe(false);
   });
 
   it("debounces coalesced authored Markdown events and ignores unrelated files", async () => {

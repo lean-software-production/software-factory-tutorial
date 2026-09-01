@@ -146,7 +146,7 @@ describe("canonical visual test command", () => {
 
 describe("rendering dependency pins", () => {
   // These exact versions keep approved screenshots deterministic. Loosen one back to a range and
-  // npm can update rendering code through package-lock.json without a deliberate manifest edit.
+  // npm can update rendering code through a lockfile without a deliberate manifest edit.
   const pinned = [
     "@codemirror/commands",
     "@codemirror/state",
