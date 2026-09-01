@@ -1133,6 +1133,44 @@ describe("workbook lesson UI", () => {
     expect(document.activeElement).toBe(refreshedEditor);
   });
 
+  it("keeps a focused active editor mounted and editable when acceptance arrives, then submits a newer revision", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 3, draftText: "newer accepted-local draft", editorStatus: "reviewing", checkpoint: { status: "reviewing", evidence: { kind: "editor", text: "newer accepted-local draft" } } } as any)) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const refresh = vi.fn();
+    const container = await mount(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ revision: 2, draftText: "draft under review", editorStatus: "reviewing", checkpoint: { status: "reviewing", evidence: { kind: "editor", text: "draft under review" } } } as any),
+      refresh,
+    }));
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+    editor.focus();
+    expect(document.activeElement).toBe(editor);
+
+    await act(async () => {
+      mountedRoot!.render(createElement(BlockView, {
+        block: editorBlock,
+        progress: activeEditorProgress({ revision: 2, draftText: "draft under review", editorStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "draft under review" } } } as any),
+        refresh,
+      }));
+    });
+
+    expect(container.querySelector("[role='textbox'][contenteditable='true']")).toBe(editor);
+    expect(document.activeElement).toBe(editor);
+    expect(editor.getAttribute("contenteditable")).toBe("true");
+    expect(container.textContent).toContain("Editor accepted.");
+    expect(container.querySelectorAll(".practice-feedback-bar.is-success")).toHaveLength(1);
+    expect(container.querySelector(".success-checkpoint")).toBeNull();
+
+    editor.textContent = "newer accepted-local draft";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); vi.advanceTimersByTime(749); await Promise.resolve(); });
+    expect(fetchMock).not.toHaveBeenCalled();
+    await act(async () => { vi.advanceTimersByTime(1); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ blockId: "edit-answer", revision: 3, text: "newer accepted-local draft" });
+  });
+
   it("automatically reviews a fresh seeded editor after the quiet period and keeps focus through the refresh", async () => {
     vi.useFakeTimers();
     const seed = "seeded spec.md draft";
@@ -1703,7 +1741,7 @@ describe("workbook lesson UI", () => {
     expect(feedbackMarkup).not.toContain("Retry review");
 
     const successMarkup = html(createElement(TerminalHistory, {
-      state: activeBlockProgress(terminalBlock, { terminal: { phase: "accepted", message: "Terminal accepted." }, terminalSnapshot: { transcript: "$ npm test\nPASS" } } as any).blocks[0]
+      state: activeBlockProgress(terminalBlock, { active: false, completed: true, terminal: { phase: "accepted", message: "Terminal accepted." }, terminalSnapshot: { transcript: "$ npm test\nPASS" } } as any).blocks[0]
     }));
     expect(successMarkup).toContain("terminal-completion-surface");
     expect(successMarkup).toContain("practice-feedback-bar is-success");
@@ -2740,6 +2778,8 @@ describe("workbook lesson UI", () => {
     const snapshot = "$ npm test\nPASS  calculator";
     const markup = html(createElement(TerminalHistory, {
       state: activeBlockProgress(lesson.blocks[1]!, {
+        active: false,
+        completed: true,
         terminal: { phase: "accepted", message: "Accepted by the Main Tutor." },
         terminalSnapshot: { transcript: snapshot }
       } as any).blocks[0]
@@ -3019,6 +3059,55 @@ describe("workbook lesson UI", () => {
     const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/complete-block");
     expect(eventCall).toBeTruthy();
     expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: block.id });
+  });
+
+  it("hides accepted editor Continue immediately after a local edit until accepted state catches up", async () => {
+    vi.useFakeTimers();
+    FakeEventSource.reset();
+    const editorLesson = { ...lesson, blocks: [editorBlock] } as Lesson;
+    const editorChapter = { ...chapter(), lesson: editorLesson } as Chapter & { lesson: Lesson };
+    const acceptedProgress = activeEditorProgress({
+      revision: 1,
+      draftText: "accepted answer text",
+      editorStatus: "accepted",
+      checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted answer text" } }
+    } as any);
+    acceptedProgress.canComplete = { blockId: editorBlock.id, eligible: true };
+    const caughtUpProgress = activeEditorProgress({
+      revision: 2,
+      draftText: "new accepted answer text",
+      editorStatus: "accepted",
+      checkpoint: { status: "accepted", successMessage: "Editor accepted again.", evidence: { kind: "editor", text: "new accepted answer text" } }
+    } as any);
+    caughtUpProgress.canComplete = { blockId: editorBlock.id, eligible: true };
+    let currentState: State = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [editorChapter],
+      progress: acceptedProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Edit the answer" }],
+    } as State;
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => {
+      expect(String(input)).toMatch(/api\/workbook\/state$/);
+      return { ok: true, json: async () => currentState };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", FakeEventSource as any);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+    editor.textContent = "new accepted answer text";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+
+    currentState = { ...currentState, progress: caughtUpProgress };
+    await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: editorBlock.id, revision: 2 }); await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
   });
 
   it("routes active reflection composer sends through the reflection event path without a sticky hint", async () => {

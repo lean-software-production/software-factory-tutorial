@@ -120,7 +120,7 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, disable
     };
   }, [activeBlock.id]);
   useEffect(() => {
-    if (disabled || activeBlock.type === "terminal-practice" || !activeProgress?.active || activeProgress.checkpoint?.status === "accepted" || typeof IntersectionObserver === "undefined") return;
+    if (disabled || activeBlock.type === "terminal-practice" || !activeProgress?.active || activeProgress.completed || activeProgress.checkpoint?.status === "accepted" || typeof IntersectionObserver === "undefined") return;
     const element = bandRef.current;
     if (!element) return;
     let lastY = typeof scrollY === "number" ? scrollY : 0;
@@ -135,13 +135,12 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, disable
     }, { rootMargin: "-100px 0px -45% 0px", threshold: 0.15 });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [activeBlock.id, activeBlock.type, activeProgress?.active, activeProgress?.checkpoint?.status, disabled]);
-  const activePractical = Boolean(activeProgress?.active && ["terminal-practice", "editor-practice"].includes(activeBlock.type));
+  }, [activeBlock.id, activeBlock.type, activeProgress?.active, activeProgress?.completed, activeProgress?.checkpoint?.status, disabled]);
+  const activePractical = Boolean(activeProgress?.active && !activeProgress.completed && ["terminal-practice", "editor-practice"].includes(activeBlock.type));
   const readyTerminalPreload = Boolean(activeBlock.type === "terminal-practice" && activeProgress?.ready && !activeProgress.active && !activeProgress.completed);
-  // Accepted terminal history belongs beneath its authored timeline record, never in the live
-  // activity band. A ready terminal may keep this one live surface through same-block promotion.
-  const completedTerminal = activeBlock.type === "terminal-practice" && activeProgress?.terminal?.phase === "accepted";
-  if (completedTerminal || !activePractical && !readyTerminalPreload || activeProgress?.checkpoint?.status === "accepted" && activeBlock.type !== "terminal-practice") return null;
+  // Completion, not acceptance, is the handoff away from the live practice surface. A ready
+  // terminal may keep this one live surface through same-block promotion.
+  if (!activePractical && !readyTerminalPreload) return null;
 
   return <>
     <section ref={bandRef} className="current-activity-band" data-activity-type={activeBlock.type} data-activity-layout="scroll-linked" data-activity-preloaded={readyTerminalPreload ? "true" : undefined} aria-label="Activity" aria-disabled={disabled ? "true" : undefined}>
