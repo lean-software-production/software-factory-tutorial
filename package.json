@@ -13,7 +13,7 @@
     "tutorial-engine"
   ],
   "scripts": {
-    "start": "npm run tutorial:workbook",
+    "start": "node scripts/tutorial-workbook.mjs",
     "setup": "node scripts/setup.mjs",
     "test:onboarding": "node --test test/*.test.mjs",
     "check:eval:workbook": "tsc -p evals/workbook/tsconfig.json",

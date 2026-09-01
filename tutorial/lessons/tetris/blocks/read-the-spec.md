@@ -16,11 +16,8 @@ tutor: |-
   learner to add tests, architecture, controls, rule details, or a validator.
 ---
 
-## Read your spec
+## Read your seed
 
-Your workspace already contains `spec.md` — the product specification the Pi passes will build
-toward. Open it and read it.
+Your workspace already contains `spec.md` — the product specification seed that the loops will use as their initial guidance.
 
-You may leave it exactly as it is, or make small changes if you want to adjust the target. Keep it
-brief. The spec deliberately leaves architecture, controls, and visual style open: that is what
-gives Pi room to make decisions.
+You may leave it exactly as it is, or make small changes if you want to play around with it.

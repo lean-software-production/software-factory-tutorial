@@ -46,9 +46,10 @@ const dependencyVolumeMounts = [
 ];
 
 describe("tutorial launcher", () => {
-  it("starts the workbook from npm start and keeps onboarding tests broad enough for root orchestration", async () => {
+  it("starts the workbook directly from npm start and keeps onboarding tests broad enough for root orchestration", async () => {
     const manifest = await readPackageManifest();
-    assert.equal(manifest.scripts.start, "npm run tutorial:workbook");
+    assert.equal(manifest.scripts.start, "node scripts/tutorial-workbook.mjs");
+    assert.doesNotMatch(manifest.scripts.start, /^npm run\b/);
     assert.equal(manifest.scripts["test:onboarding"], "node --test test/*.test.mjs");
   });
 

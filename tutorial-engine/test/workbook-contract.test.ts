@@ -375,6 +375,22 @@ describe("workbook lesson contract", () => {
     expect(() => parseFrontMatter("no front matter")).toThrow(/front matter/i);
   });
 
+  it("adds the source location to YAML parser diagnostics", () => {
+    const location = "lessons/tetris/blocks/play-your-game.md";
+    let thrown: unknown;
+    try {
+      parseFrontMatter("---\ntutor: |-\n\tTabbed indentation is invalid YAML.\n---\nbody", location);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain(location);
+    expect((thrown as Error).message).toMatch(/YAML/i);
+    expect((thrown as Error).message).toMatch(/tab|indent/i);
+    expect((thrown as Error & { cause?: unknown }).cause).toBeInstanceOf(Error);
+  });
+
   it("rejects a lesson without exactly one H1 title heading", async () => {
     const dir = await fixture();
     await writeFile(resolve(dir, "lessons/02-alpha-part/10-first-lesson/lesson.md"), [

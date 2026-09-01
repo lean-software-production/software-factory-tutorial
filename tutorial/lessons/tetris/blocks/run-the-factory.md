@@ -24,13 +24,6 @@ Run your tiny factory:
 bash ralph.sh
 ```
 
-Watch what changes. The first pass should create `plan.md`. Later passes should complete tasks one
-at a time. You may get partial code, a failing check, or a commit. Any of those is enough for this
-first taste.
+Go and make a cup of tea, it could take a while.
 
-When it returns to the prompt, inspect what happened:
-
-```sh
-ls
-git log --oneline --max-count=6
-```
+Watch the output. Notice how the agent works silently for some time before finally returning and writing some updates and the end of the loop. The first pass should create `plan.md`. Later passes should complete tasks one at a time. 

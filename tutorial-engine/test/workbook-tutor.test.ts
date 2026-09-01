@@ -297,6 +297,56 @@ describe("MainWorkbookTutor", () => {
     expect(sessions[0]!.prompts[0]).not.toMatch(/private briefing/i);
   });
 
+  it("states the main tutor tone and reflection coaching contract", async () => {
+    const sessions: FakeSession[] = [];
+    const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", sessionFactory: async (request) => {
+      const session = new FakeSession(request);
+      session.promptResponses.push("What boundary did that reveal?");
+      sessions.push(session);
+      return session;
+    } });
+
+    await tutor.review({ records: [], activeContext: activeContext(), attempt: attempt("reflection-1", "reflection"), privateGuidance: "Accept only if the learner names the boundary." });
+
+    expect(sessions[0]!.systemPrompt).toContain("warm, patient, friendly, and kind");
+    expect(sessions[0]!.systemPrompt).toContain("Celebrate genuine progress warmly and specifically, without exaggeration");
+    expect(sessions[0]!.systemPrompt).toContain("one concise question that helps them articulate the insight themselves");
+    expect(sessions[0]!.systemPrompt).toContain("do not put words in their mouth");
+    expect(sessions[0]!.prompts[0]).toContain("nearly grasped the concept");
+    expect(sessions[0]!.prompts[0]).toContain("clearly stuck or frustrated");
+    expect(sessions[0]!.prompts[0]).toContain("smaller next step");
+  });
+
+  it("states completion as inferred learner intent rather than correctness or magic words", async () => {
+    const sessions: FakeSession[] = [];
+    const requests: WorkbookTutorSessionFactoryRequest[] = [];
+    const tutor = new MainWorkbookTutor({ workspace: "/tmp/workbook", sessionFactory: async (request) => {
+      requests.push(request);
+      const session = new FakeSession(request);
+      session.promptResponses.push("Yes — the next block builds on this idea.");
+      sessions.push(session);
+      return session;
+    } });
+
+    await tutor.reply({ records: [], activeContext: activeContext(), completionTool: { blockId: "lesson--block" }, learnerMessage: message("learner-1", 1, "learner", "user", "What's next?") });
+
+    const completeBlock = requests[0]!.customTools.find((tool: any) => tool.name === "completeBlock") as any;
+    expect(sessions[0]!.systemPrompt).toContain("Completion uses clear inferred learner intent, not correctness");
+    expect(sessions[0]!.systemPrompt).toContain("Exact magic phrases are not required");
+    expect(sessions[0]!.systemPrompt).toContain("Never infer intent merely because an answer is correct or an attempt was accepted");
+    expect(sessions[0]!.systemPrompt).toContain("substantive question about the current block");
+    expect(sessions[0]!.prompts[0]).toContain("latest learner message clearly indicates they are finished");
+    expect(sessions[0]!.prompts[0]).toContain("done");
+    expect(sessions[0]!.prompts[0]).toContain("that makes sense now");
+    expect(sessions[0]!.prompts[0]).toContain("Do not call merely because an answer is correct or an attempt was accepted");
+    expect(sessions[0]!.prompts[0]).toContain("Treat ambiguous “What’s next?” questions conservatively");
+    expect(sessions[0]!.prompts[0]).not.toContain("explicit learner intent only");
+    expect(completeBlock.description).toContain("latest learner message clearly indicates");
+    expect(completeBlock.description).toContain("exact phrases are not required");
+    expect(completeBlock.description).toContain("not for correctness alone");
+    expect(completeBlock.description).toContain("substantive questions");
+  });
+
   it("binds workspace tools only for active workspace inputs and recreates them per operation", async () => {
     const liveA = await mkdtemp(resolve(tmpdir(), "main-tutor-live-a-"));
     const liveB = await mkdtemp(resolve(tmpdir(), "main-tutor-live-b-"));

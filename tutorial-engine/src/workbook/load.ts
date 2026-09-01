@@ -53,7 +53,15 @@ export function parseFrontMatter(text: string, location = "document"): { data: R
   if (lines[0] !== "---") throw new Error(`${location} needs YAML front matter delimited by --- lines, even if empty (---\\n---).`);
   const closingIndex = lines.indexOf("---", 1);
   if (closingIndex === -1) throw new Error(`${location} front matter is missing its closing --- line.`);
-  const data = parse(lines.slice(1, closingIndex).join("\n")) as Record<string, unknown> | null;
+  let data: Record<string, unknown> | null;
+  try {
+    data = parse(lines.slice(1, closingIndex).join("\n")) as Record<string, unknown> | null;
+  } catch (error) {
+    const diagnostic = error instanceof Error ? error.message : String(error);
+    const message = `${location}: invalid YAML front matter: ${diagnostic}`;
+    if (error instanceof Error) throw new Error(message, { cause: error });
+    throw new Error(message);
+  }
   if (data !== null && typeof data !== "object") throw new Error(`${location}: front matter must be a YAML mapping.`);
   return { data: data ?? {}, body: lines.slice(closingIndex + 1).join("\n").trim() };
 }

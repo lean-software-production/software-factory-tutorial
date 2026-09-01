@@ -3,20 +3,15 @@ durationMinutes: 30
 workspace: tetris
 blocks:
   - read-the-spec
-  - write-worker-prompt
+  - write-doer-prompt
   - write-the-loop
   - run-the-factory
+  - play-your-game
 ---
 
-# Your first Tetris factory
+# Your first factory
 
-Build a tiny throwaway factory that tries to make terminal Tetris, so you can feel the loop before
-we study it carefully.
+We'll build a tiny throwaway factory that uses a [Ralph loop](https://ghuntley.com/loop/) to build a game.
 
-This is deliberately quick and crude. You have a Tetris spec, a Pi prompt, and a loop script that
-runs exactly five Pi passes. That is enough to watch work move through a factory loop without
-pretending this is a production factory.
-
-Five passes at a real task takes real time and costs real money. Expect ten to thirty minutes and a
-few cents or more depending on the model you use. The goal is not a polished Tetris game; the goal
-is a first taste of the rhythm of a bounded loop.
+Don't expect to understand everything here just yet. We're supplying a lot of the code, but we want you to be able to poke around with it and get a feel for what
+happens when you let an agent run in a loop.
