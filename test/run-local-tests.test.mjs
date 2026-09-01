@@ -35,10 +35,10 @@ function releaseReportFixtureContract(steps) {
 
 describe("root local test orchestrator", () => {
   it("is import-safe, rejects extra arguments, and exposes the exact supported profiles", async () => {
-    for (const profile of ["test", "test:fast", "test:engine", "test:workbook", "test:workbook:fast"]) {
+    for (const profile of ["test", "test:fast", "test:engine", "test:workbook:fast"]) {
       assert.equal(parseLocalTestOrchestratorArgs([profile]), profile);
     }
-    for (const bad of [[], ["test", "--extra"], ["test:engine:fast"], ["eval:engine"], ["check"]]) {
+    for (const bad of [[], ["test", "--extra"], ["test:engine:fast"], ["test:workbook"], ["eval:engine"], ["check"]]) {
       assert.throws(() => parseLocalTestOrchestratorArgs(bad));
     }
     const errors = [];
@@ -64,10 +64,7 @@ describe("root local test orchestrator", () => {
     assert.equal(code, 0);
     assert.deepEqual(calls.map(({ command, args, cwd, env: childEnv, stdio, shell }) => ({ command, args, cwd, childEnv, stdio, shell })), [
       { command: "npm", args: ["run", "test:onboarding"], cwd: repositoryRoot, childEnv: env, stdio: "inherit", shell: false },
-      { command: "npm", args: ["run", "check:eval:workbook"], cwd: repositoryRoot, childEnv: env, stdio: "inherit", shell: false },
-      { command: "npm", args: ["run", "test:eval:workbook"], cwd: repositoryRoot, childEnv: env, stdio: "inherit", shell: false },
-      { command: "npm", args: ["run", "--workspace=tutorial-engine", "check:workbook"], cwd: repositoryRoot, childEnv: env, stdio: "inherit", shell: false },
-      { command: "npm", args: ["run", "--workspace=tutorial/workspaces/refactor-line/calculator", "test"], cwd: repositoryRoot, childEnv: env, stdio: "inherit", shell: false }
+      { command: "npm", args: ["run", "check:workbook"], cwd: repositoryRoot, childEnv: env, stdio: "inherit", shell: false }
     ]);
     assert.doesNotMatch(logs.join("\n"), /PRIVATE_TOKEN|not-for-summary/);
   });
@@ -90,14 +87,13 @@ describe("root local test orchestrator", () => {
     assert.deepEqual(calls, [
       "run test:fast",
       "run --workspace=tutorial-engine test:visual",
-      "run eval:engine -- --release",
-      "run eval:workbook -- --release"
+      "run eval:engine -- --release"
     ]);
     const summary = errors.join("\n");
     assert.match(summary, /deterministic-fast: FAIL/);
     assert.match(summary, /canonical-visual: FAIL/);
     assert.match(summary, /live-engine-eval: PASS/);
-    assert.match(summary, /authored-workbook-eval: PASS/);
+    assert.doesNotMatch(summary, /authored-workbook-eval/);
     assert.doesNotMatch(summary, /report target|\.received\.png|latest\.json|private\/tmp|secret/);
   });
 
@@ -121,9 +117,9 @@ describe("root local test orchestrator", () => {
 
   it("prints no stale latest.json report when a failing lane leaves a preexisting target unchanged or deleted", async () => {
     await withTemporaryRepository(async (cwd) => {
-      await mkdir(join(cwd, "evals/workbook/reports"), { recursive: true });
+      await mkdir(join(cwd, "reports/secondary"), { recursive: true });
       await mkdir(join(cwd, "tutorial-engine/evals/reports"), { recursive: true });
-      await writeFile(join(cwd, "evals/workbook/reports/latest.json"), "old workbook report\n");
+      await writeFile(join(cwd, "reports/secondary/latest.json"), "old secondary report\n");
       await writeFile(join(cwd, "tutorial-engine/evals/reports/latest.json"), "old engine report\n");
 
       const logs = [];
@@ -131,7 +127,7 @@ describe("root local test orchestrator", () => {
         cwd,
         contract: releaseReportFixtureContract([
           { command: "engine", report: "live-engine-eval", reportTarget: "tutorial-engine/evals/reports/latest.json" },
-          { command: "workbook", report: "authored-workbook-eval", reportTarget: "evals/workbook/reports/latest.json" }
+          { command: "secondary", report: "secondary-lane", reportTarget: "reports/secondary/latest.json" }
         ]),
         log: (line) => logs.push(line),
         error: (line) => logs.push(line),
@@ -144,30 +140,30 @@ describe("root local test orchestrator", () => {
       assert.equal(code, 1);
       const summary = logs.join("\n");
       assert.match(summary, /live-engine-eval: FAIL/);
-      assert.match(summary, /authored-workbook-eval: FAIL/);
+      assert.match(summary, /secondary-lane: FAIL/);
       assert.doesNotMatch(summary, /report:|latest\.json/);
     });
   });
 
   it("prints a latest.json report only when this lane rewrites it", async () => {
     await withTemporaryRepository(async (cwd) => {
-      await mkdir(join(cwd, "evals/workbook/reports"), { recursive: true });
-      await writeFile(join(cwd, "evals/workbook/reports/latest.json"), "old report\n");
+      await mkdir(join(cwd, "reports/secondary"), { recursive: true });
+      await writeFile(join(cwd, "reports/secondary/latest.json"), "old report\n");
 
       const logs = [];
       const code = await runLocalTests("test", {
         cwd,
         log: (line) => logs.push(line),
         error: (line) => logs.push(line),
-        contract: releaseReportFixtureContract([{ command: "workbook", report: "authored-workbook-eval", reportTarget: "evals/workbook/reports/latest.json" }]),
+        contract: releaseReportFixtureContract([{ command: "secondary", report: "secondary-lane", reportTarget: "reports/secondary/latest.json" }]),
         runner: async () => {
-          await writeFile(join(cwd, "evals/workbook/reports/latest.json"), "new report\n");
+          await writeFile(join(cwd, "reports/secondary/latest.json"), "new report\n");
           return { status: 1 };
         }
       });
 
       assert.equal(code, 1);
-      assert.match(logs.join("\n"), /authored-workbook-eval: FAIL report: evals\/workbook\/reports\/latest\.json/);
+      assert.match(logs.join("\n"), /secondary-lane: FAIL report: reports\/secondary\/latest\.json/);
     });
   });
 
@@ -260,12 +256,12 @@ describe("root local test orchestrator", () => {
       assert.match(logs.join("\n"), /deterministic-fast: INTERRUPTED/);
       assert.match(logs.join("\n"), /canonical-visual: SKIPPED/);
       assert.match(logs.join("\n"), /live-engine-eval: SKIPPED/);
-      assert.match(logs.join("\n"), /authored-workbook-eval: SKIPPED/);
+      assert.doesNotMatch(logs.join("\n"), /authored-workbook-eval/);
     }
   });
 
   it("keeps the command invocation parser shell-free for every orchestrated contract step", () => {
-    for (const profile of ["test", "test:fast", "test:engine", "test:workbook", "test:workbook:fast"]) {
+    for (const profile of ["test", "test:fast", "test:engine", "test:workbook:fast"]) {
       for (const step of rootCommandContract(profile).steps) {
         const invocation = commandInvocationForStep(step);
         assert.equal(invocation.command, "npm");

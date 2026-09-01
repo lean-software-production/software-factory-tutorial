@@ -16,9 +16,7 @@
     "start": "node scripts/tutorial-workbook.mjs",
     "setup": "node scripts/setup.mjs",
     "test:onboarding": "node --test test/*.test.mjs",
-    "check:eval:workbook": "tsc -p evals/workbook/tsconfig.json",
-    "test:eval:workbook": "vitest run evals/workbook/test/*.test.ts",
-    "eval:workbook": "tsx evals/workbook/run.ts",
+    "check:workbook": "npm run --workspace=tutorial-engine check:workbook -- ../tutorial",
     "eval:engine": "npm run --workspace=tutorial-engine eval --",
     "eval:release": "npm run --workspace=tutorial-engine eval:release --",
     "eval": "npm run eval:engine --",
@@ -30,7 +28,6 @@
     "test:fast": "node scripts/run-local-tests.mjs test:fast",
     "test:engine": "node scripts/run-local-tests.mjs test:engine",
     "test:engine:fast": "npm run --workspace=tutorial-engine test:fast --",
-    "test:workbook": "node scripts/run-local-tests.mjs test:workbook",
     "test:workbook:fast": "node scripts/run-local-tests.mjs test:workbook:fast"
   },
   "dependencies": {

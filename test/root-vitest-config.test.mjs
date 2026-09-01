@@ -32,16 +32,16 @@ test("root Vitest config preserves default excludes and adds only the root workt
   assert.deepEqual(rootVitestConfigDefinition.test?.exclude, [...configDefaults.exclude, ".worktrees/**"]);
 });
 
-test("root Vitest config excludes nested .worktrees workbook tests", async () => {
+test("root Vitest config excludes nested .worktrees tests", async () => {
   const fixtureRoot = await mkdtemp(resolve(tmpdir(), "root-vitest-worktrees-exclude-"));
   try {
-    const rootTestDirectory = resolve(fixtureRoot, "evals/workbook/test");
-    const nestedWorktreeTestDirectory = resolve(fixtureRoot, ".worktrees/unify-practice-main-tutor/evals/workbook/test");
+    const rootTestDirectory = resolve(fixtureRoot, "packages/example/test");
+    const nestedWorktreeTestDirectory = resolve(fixtureRoot, ".worktrees/parallel-agent/packages/example/test");
     await mkdir(rootTestDirectory, { recursive: true });
     await mkdir(nestedWorktreeTestDirectory, { recursive: true });
     await writeFile(resolve(rootTestDirectory, "root-owned.test.ts"), `
       import { expect, test } from "vitest";
-      test("root-owned workbook eval test runs", () => expect(1).toBe(1));
+      test("root-owned fixture test runs", () => expect(1).toBe(1));
     `);
     await writeFile(resolve(nestedWorktreeTestDirectory, "nested-sentinel.test.ts"), `
       import { expect, test } from "vitest";

@@ -1,30 +1,10 @@
-# Evaluation ownership map
+# Evaluation ownership
 
-This directory is root-owned. It holds authored-workbook evaluation foundations and the authored-workbook live runner. It is deliberately separate from the tutorial-engine's synthetic mechanics evals.
+The root-owned authored-workbook evaluator lane has been removed. Authored tutorial content under
+`tutorial/` is manually maintained prose and lesson material, not a deterministic evaluation target.
 
-| Path | Owner | Scope | Markers | Reports | Commands |
-| --- | --- | --- | --- | --- | --- |
-| [`../tutorial-engine/evals/`](../tutorial-engine/evals/) | `tutorial-engine` | Synthetic engine-mechanics live evals and their deterministic evaluator tests. These exercise the engine, not the authored curriculum. | Engine-v2 envelopes use namespace `tutorial-engine/evals/engine-v2`, owner `tutorial-engine`, suite `engine-v2`, and `schemaVersion`. | Active live reports are ignored under `tutorial-engine/evals/reports/`. | Deterministic/model-free: `npm run --workspace=tutorial-engine check:eval` and `npm run --workspace=tutorial-engine test:eval`. Live/paid/Docker-backed: `npm run eval:engine -- ...` or `npm run --workspace=tutorial-engine eval -- ...`. |
-| [`workbook/`](workbook/) | `root` | Real authored-curriculum evaluator foundations and live runner. Current fixtures seed curriculum slices; they are not synthetic engine scenarios. | Report envelopes carry namespace `root/workbook`, owner `root`, suite `workbook`, and `schemaVersion`. | Live reports belong under ignored `evals/workbook/reports/`. | Deterministic/model-free: `npm run check:eval:workbook` and `npm run test:eval:workbook`. Live/paid/Docker-backed: `npm run eval:workbook -- ...`. |
-| `reports/` | historical root compatibility | Historical root eval report location from older runner shapes. | None for active code. | Ignored for compatibility only. No active runner writes `evals/reports/`. | None. Do not delete, migrate, or rewrite historical report artifacts or historical plan paths as part of current eval work. |
+Active live eval documentation now lives with the generic engine-owned synthetic evals:
+[`../tutorial-engine/evals/README.md`](../tutorial-engine/evals/README.md).
 
-## Root aliases
-
-- `npm run eval:engine -- ...` forwards to the tutorial-engine live evaluator.
-- `npm run eval:release` forwards to the bounded two-scenario engine release profile.
-- `npm run eval -- ...` is a temporary compatibility alias for `eval:engine`. It is not an authored-workbook eval.
-- `npm run eval:workbook -- ...` runs the authored-workbook live evaluator; `--release` runs the four-scenario catalog once.
-
-## Deterministic versus live checks
-
-The deterministic commands (`check:eval:workbook`, `test:eval:workbook`, and the tutorial-engine `check:eval`/`test:eval`) are model-free. They do not call the Main Tutor or Judge, and they do not require Docker.
-
-The live engine evaluator is paid and Docker-backed. Before running it, build the workbook terminal image, keep Docker available, provide `OPENCODE_API_KEY`, configure host Pi auth and model access for the Main Tutor and Judge, and export `EVAL_JUDGE_MODEL`. See [`../tutorial-engine/evals/README.md`](../tutorial-engine/evals/README.md) for the full preflight order, release versus exploratory scopes, and report-file boundary.
-
-The authored-workbook live runner is paid and Docker-backed. Use `--list` for a zero-side-effect catalog listing. Live scopes accept `--scenario <exact-id>`, `--all --yes`, or `--release`, plus the same preflight model and budget flags documented in [`workbook/README.md`](workbook/README.md). Judge calls are scenario-specific: Lessons 003–004 is deterministic-only and has zero Judge calls; the other three authored scenarios retain one Judge call each. Do not run live scopes unless you intend to spend the selected Main Tutor tokens and, for judged selections, Judge tokens.
-
-## Public reports and diagnostics
-
-Engine live reports distinguish public curated files from local diagnostics. Public records live in files such as `trace.json`, `artifacts.json`, `judge-input.txt`, `judge.json`, `report.json`, `summary.md`, `metadata.json`, and `latest.json`. Diagnostic files such as `gate.json`, `failure.txt`, and `cleanup-failure.txt` may include internal assertion details, local paths, stack traces, or server URLs. Do not publish diagnostics blindly.
-
-The authored-workbook runner keeps the same public-versus-diagnostic separation under `evals/workbook/reports/` and does not reuse `tutorial-engine/evals/reports/` or the historical root `evals/reports/` location. Use each run's metadata/latest `files` set: deterministic-only success omits `judge-input.json` and `judge.json` by design. Authored run directories are closed to the advertised curated files plus recognized local diagnostics, and latest validation rejects forged curated JSON or extra private files.
+Historical root eval report directories may still be ignored for old checkout artifacts, but no
+active root runner writes new eval reports under this directory.

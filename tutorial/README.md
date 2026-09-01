@@ -113,11 +113,13 @@ Before starting the tutor, check the authored workbook from the repository root 
 browser or starting a server:
 
 ```sh
-npm run --workspace=tutorial-engine check:workbook
+npm run check:workbook
 ```
 
-This uses the same loader as the tutor. It checks lesson and optional-part structure, manifests,
-blocks, and lesson references, then prints the workbook's lesson and part counts.
+This uses the same generic loader as the tutor and verifies load/schema integrity. It does not pin
+prose, lesson counts, block order, vocabulary, commands, filenames, or expected learner behavior.
+Learning quality stays with the authors. Occasional human or dynamic agent play-throughs can be
+useful observations, but they are non-gating and should consume the workbook dynamically.
 
 Leave the tutor running and open a second terminal, then `cd` to the printed active live workspace
 path, for example `tutorial/.tutorial/<session-id>/workspaces/refactor-line`. Stay there: every

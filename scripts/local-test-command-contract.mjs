@@ -1,6 +1,4 @@
 const ENGINE_WORKSPACE = "tutorial-engine";
-const CALCULATOR_WORKSPACE = "tutorial/workspaces/refactor-line/calculator";
-const WORKBOOK_EVAL_MODULE = "evals/workbook/run.ts";
 
 const WIRING_PLANNED = "planned";
 const WIRING_WIRED = "wired";
@@ -11,10 +9,9 @@ export const ROOT_TEST_COMMAND_ORDER = Object.freeze([
   "test:fast",
   "test:engine",
   "test:engine:fast",
-  "test:workbook",
   "test:workbook:fast",
-  "eval:engine",
-  "eval:workbook"
+  "check:workbook",
+  "eval:engine"
 ]);
 
 function freezeStep({
@@ -79,22 +76,6 @@ const rootStep = ({ command, script, shell, report, reportTarget, releaseArgs = 
   visual
 });
 
-const rootModuleStep = ({ command, module, shell, report, reportTarget, releaseArgs = [], forwardsArguments = false, requiresDocker = false }) => freezeStep({
-  command,
-  workspace: undefined,
-  script: undefined,
-  shell,
-  report,
-  reportTarget,
-  releaseArgs,
-  forwardsArguments,
-  implementation: "root-module-command",
-  module,
-  requiresDocker,
-  requiresCanonicalDevcontainer: false,
-  visual: false
-});
-
 function packageScript({ packageName = ROOT_PACKAGE, workspace, script, status, command, notes = [] }) {
   return Object.freeze({
     packageName,
@@ -136,19 +117,16 @@ function commandContract({
   });
 }
 
-const liveEvalCostNote = "Live eval costs spend model tokens for Main Tutor and scenario-specific Judge calls.";
+const liveEngineEvalCostNote = "Live engine evals spend model tokens for the selected engine tutor and judge roles.";
 
 export const PACKAGE_SCRIPT_WIRING_CONTRACT = Object.freeze([
   packageScript({ script: "test", status: WIRING_WIRED, command: "node scripts/run-local-tests.mjs test", notes: ["Uses the root orchestrator so release lanes continue and aggregate independent reports instead of relying on &&."] }),
   packageScript({ script: "test:fast", status: WIRING_WIRED, command: "node scripts/run-local-tests.mjs test:fast" }),
   packageScript({ script: "test:engine", status: WIRING_WIRED, command: "node scripts/run-local-tests.mjs test:engine" }),
   packageScript({ script: "test:engine:fast", status: WIRING_WIRED, command: "npm run --workspace=tutorial-engine test:fast --" }),
-  packageScript({ script: "test:workbook", status: WIRING_WIRED, command: "node scripts/run-local-tests.mjs test:workbook" }),
   packageScript({ script: "test:workbook:fast", status: WIRING_WIRED, command: "node scripts/run-local-tests.mjs test:workbook:fast" }),
-  packageScript({ script: "check:eval:workbook", status: WIRING_WIRED, command: "tsc -p evals/workbook/tsconfig.json" }),
-  packageScript({ script: "test:eval:workbook", status: WIRING_WIRED, command: "vitest run evals/workbook/test/*.test.ts" }),
+  packageScript({ script: "check:workbook", status: WIRING_WIRED, command: "npm run --workspace=tutorial-engine check:workbook -- ../tutorial" }),
   packageScript({ script: "eval:engine", status: WIRING_WIRED, command: "npm run --workspace=tutorial-engine eval --" }),
-  packageScript({ script: "eval:workbook", status: WIRING_WIRED, command: `tsx ${WORKBOOK_EVAL_MODULE}` }),
   packageScript({ packageName: "tutorial-engine", workspace: ENGINE_WORKSPACE, script: "build:typescript", status: WIRING_WIRED, command: "rm -rf dist && tsc -p tsconfig.json" }),
   packageScript({ packageName: "tutorial-engine", workspace: ENGINE_WORKSPACE, script: "build", status: WIRING_WIRED, command: "npm run build:typescript && npm run build:web:workbook" }),
   packageScript({ packageName: "tutorial-engine", workspace: ENGINE_WORKSPACE, script: "test:fast", status: WIRING_WIRED, command: "npm run lint && tsc -p tsconfig.check.json && npm run check:eval && npm run test && npm run build:web:workbook && npm run browser:smoke" }),
@@ -167,7 +145,7 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
     test: commandContract({
       name: "test",
       owner: "root",
-      purpose: "Complete local release gate: deterministic fast checks, canonical visual validation, then separately reported live engine and authored-workbook evals.",
+      purpose: "Complete local release gate: deterministic fast checks, canonical visual validation, then the synthetic engine live eval.",
       deterministic: false,
       modelFree: false,
       spendsTokens: true,
@@ -177,25 +155,25 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
       execution: Object.freeze({
         mode: "continue-and-aggregate-independent-lanes",
         plainAndChainSafe: false,
-        reports: Object.freeze(["deterministic-fast", "canonical-visual", "live-engine-eval", "authored-workbook-eval"])
+        reports: Object.freeze(["deterministic-fast", "canonical-visual", "live-engine-eval"])
       }),
       steps: [
         rootStep({ command: "test:fast", script: "test:fast", shell: "npm run test:fast", report: "deterministic-fast" }),
         engineWorkspaceStep({ command: "test:visual", script: "test:visual", shell: "npm run --workspace=tutorial-engine test:visual", report: "canonical-visual", reportTarget: "tutorial-engine/test/visual/*.received.png", requiresDocker: true, requiresCanonicalDevcontainer: true, visual: true }),
-        rootStep({ command: "eval:engine", script: "eval:engine", shell: "npm run eval:engine -- --release", report: "live-engine-eval", reportTarget: "tutorial-engine/evals/reports/latest.json", releaseArgs: ["--release"], requiresDocker: true }),
-        rootStep({ command: "eval:workbook", script: "eval:workbook", shell: "npm run eval:workbook -- --release", report: "authored-workbook-eval", reportTarget: "evals/workbook/reports/latest.json", releaseArgs: ["--release"], requiresDocker: true })
+        rootStep({ command: "eval:engine", script: "eval:engine", shell: "npm run eval:engine -- --release", report: "live-engine-eval", reportTarget: "tutorial-engine/evals/reports/latest.json", releaseArgs: ["--release"], requiresDocker: true })
       ],
       notes: [
         "The visual lane is canonical, engine-owned, and requires the canonical repository devcontainer in addition to Docker.",
         "The release gate must continue all independent lanes and aggregate their named reports; it is not implementable as a plain && chain.",
-        liveEvalCostNote
+        "Authored tutorial content is not a deterministic or paid release-eval lane.",
+        liveEngineEvalCostNote
       ]
     }),
 
     "test:fast": commandContract({
       name: "test:fast",
       owner: "root",
-      purpose: "Fast deterministic developer loop for engine mechanics, authored workbook checks, authored evaluator foundations, and calculator exercises.",
+      purpose: "Fast deterministic developer loop for engine mechanics and generic workbook loading/infrastructure checks.",
       deterministic: true,
       modelFree: true,
       spendsTokens: false,
@@ -223,7 +201,7 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
         engineWorkspaceStep({ command: "test:visual", script: "test:visual", shell: "npm run --workspace=tutorial-engine test:visual", report: "canonical-visual", reportTarget: "tutorial-engine/test/visual/*.received.png", requiresDocker: true, requiresCanonicalDevcontainer: true, visual: true }),
         engineWorkspaceStep({ command: "eval", script: "eval", shell: "npm run --workspace=tutorial-engine eval -- --release", report: "live-engine-eval", reportTarget: "tutorial-engine/evals/reports/latest.json", releaseArgs: ["--release"], requiresDocker: true })
       ],
-      notes: [liveEvalCostNote]
+      notes: [liveEngineEvalCostNote]
     }),
 
     "test:engine:fast": commandContract({
@@ -241,26 +219,10 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
       notes: ["Root package wiring must use --workspace=tutorial-engine for this command.", "The target tutorial-engine test:fast script is wired, deterministic, model-free, and Docker-free."]
     }),
 
-    "test:workbook": commandContract({
-      name: "test:workbook",
-      owner: "root",
-      purpose: "Authored-workbook release lane: deterministic workbook checks plus the bounded authored-workbook live eval.",
-      deterministic: false,
-      modelFree: false,
-      spendsTokens: true,
-      requiresDocker: true,
-      packageScript: rootPackageScript("test:workbook"),
-      steps: [
-        rootStep({ command: "test:workbook:fast", script: "test:workbook:fast", shell: "npm run test:workbook:fast", report: "workbook-fast" }),
-        rootStep({ command: "eval:workbook", script: "eval:workbook", shell: "npm run eval:workbook -- --release", report: "authored-workbook-eval", reportTarget: "evals/workbook/reports/latest.json", releaseArgs: ["--release"], requiresDocker: true })
-      ],
-      notes: [liveEvalCostNote, "This release lane requires Docker for the live authored-workbook eval but does not require the canonical visual devcontainer."]
-    }),
-
     "test:workbook:fast": commandContract({
       name: "test:workbook:fast",
       owner: "root",
-      purpose: "Deterministic authored-workbook structure, launcher, evaluator-foundation, and learner-workspace checks.",
+      purpose: "Deterministic root onboarding/infrastructure checks plus generic workbook load/schema integrity.",
       deterministic: true,
       modelFree: true,
       spendsTokens: false,
@@ -268,21 +230,24 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
       packageScript: rootPackageScript("test:workbook:fast"),
       steps: [
         rootStep({ command: "test:onboarding", script: "test:onboarding", shell: "npm run test:onboarding" }),
-        rootStep({ command: "check:eval:workbook", script: "check:eval:workbook", shell: "npm run check:eval:workbook" }),
-        rootStep({ command: "test:eval:workbook", script: "test:eval:workbook", shell: "npm run test:eval:workbook" }),
-        engineWorkspaceStep({ command: "check:workbook", script: "check:workbook", shell: "npm run --workspace=tutorial-engine check:workbook" }),
-        freezeStep({
-          command: "calculator:test",
-          workspace: CALCULATOR_WORKSPACE,
-          script: "test",
-          shell: "npm run --workspace=tutorial/workspaces/refactor-line/calculator test",
-          report: undefined,
-          releaseArgs: [],
-          forwardsArguments: false,
-          implementation: "workspace-package-script"
-        })
+        rootStep({ command: "check:workbook", script: "check:workbook", shell: "npm run check:workbook" })
       ],
-      notes: ["This command must stay deterministic, model-free, and Docker-free while covering all authored workbook and authored evaluator foundations."]
+      notes: ["This command must stay deterministic, model-free, Docker-free, and independent of tutorial prose, scenario catalogs, learner-specific behavior, and calculator workspace tests."]
+    }),
+
+    "check:workbook": commandContract({
+      name: "check:workbook",
+      owner: "root-delegates-to-engine",
+      purpose: "Load the authored tutorial through the generic engine checker without asserting lesson prose or learner behavior.",
+      deterministic: true,
+      modelFree: true,
+      spendsTokens: false,
+      requiresDocker: false,
+      packageScript: rootPackageScript("check:workbook"),
+      steps: [
+        engineWorkspaceStep({ command: "check:workbook", script: "check:workbook", shell: "npm run --workspace=tutorial-engine check:workbook -- ../tutorial" })
+      ],
+      notes: ["The explicit ../tutorial argument is intentional: npm runs the workspace script from tutorial-engine, and tutorial/ is manually authored content."]
     }),
 
     "eval:engine": commandContract({
@@ -297,22 +262,7 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
       steps: [
         engineWorkspaceStep({ command: "eval", script: "eval", shell: "npm run --workspace=tutorial-engine eval --", forwardsArguments: true, requiresDocker: true })
       ],
-      notes: [liveEvalCostNote, "This root package script is currently wired and forwards through --workspace=tutorial-engine."]
-    }),
-
-    "eval:workbook": commandContract({
-      name: "eval:workbook",
-      owner: "root",
-      purpose: "Live authored-workbook eval for learner curriculum outcomes; forwards arguments to the authored-workbook evaluator module.",
-      deterministic: false,
-      modelFree: false,
-      spendsTokens: true,
-      requiresDocker: true,
-      packageScript: rootPackageScript("eval:workbook"),
-      steps: [
-        rootModuleStep({ command: "eval:workbook", module: WORKBOOK_EVAL_MODULE, shell: `tsx ${WORKBOOK_EVAL_MODULE}`, forwardsArguments: true, requiresDocker: true })
-      ],
-      notes: [liveEvalCostNote, `Package implementation is a direct root module command (tsx ${WORKBOOK_EVAL_MODULE}), not npm run eval:workbook as a self-delegating step.`]
+      notes: [liveEngineEvalCostNote, "This root package script is wired and forwards through --workspace=tutorial-engine."]
     })
   }),
   compatibility: Object.freeze({
@@ -327,7 +277,7 @@ export const LOCAL_TEST_COMMAND_CONTRACT = Object.freeze({
       requiresCanonicalDevcontainer: false,
       notes: Object.freeze([
         "Keep npm run check supported for existing docs and developer muscle memory.",
-        "Do not add eval:engine, eval:workbook, tutor, or judge calls to npm run check.",
+        "Do not add eval:engine, tutor, judge, Docker, visual, or tutorial-content assertions to npm run check.",
         "package.json makes check a direct alias of test:fast."
       ])
     })

@@ -104,16 +104,15 @@ describe("devcontainer dependency isolation", () => {
 });
 
 describe("local test command contract", () => {
-  it("defines the exact root command matrix consumed by package-script wiring and the orchestrator", () => {
+  it("defines the exact root command matrix consumed by package-script wiring and command contracts", () => {
     const expected = [
       "test",
       "test:fast",
       "test:engine",
       "test:engine:fast",
-      "test:workbook",
       "test:workbook:fast",
-      "eval:engine",
-      "eval:workbook"
+      "check:workbook",
+      "eval:engine"
     ];
 
     assert.deepEqual(rootCommandNames(), expected);
@@ -130,13 +129,13 @@ describe("local test command contract", () => {
     assert.equal(command.requiresCanonicalDevcontainer, false);
     assert.deepEqual(command.steps.map((step) => step.command), ["test:engine:fast", "test:workbook:fast"]);
 
-    for (const fastCommandName of ["test:fast", "test:engine:fast", "test:workbook:fast"]) {
+    for (const fastCommandName of ["test:fast", "test:engine:fast", "test:workbook:fast", "check:workbook"]) {
       assert.equal(rootCommandContract(fastCommandName).requiresDocker, false, `${fastCommandName} should stay Docker-free`);
       assert.equal(rootCommandContract(fastCommandName).requiresCanonicalDevcontainer, false, `${fastCommandName} should stay devcontainer-free`);
     }
   });
 
-  it("spells out all deterministic authored-workbook and evaluator foundations", () => {
+  it("spells out deterministic workbook infrastructure checks without pinning authored content", () => {
     const command = rootCommandContract("test:workbook:fast");
 
     assert.equal(command.deterministic, true);
@@ -147,25 +146,32 @@ describe("local test command contract", () => {
       command.steps.map((step) => ({ command: step.command, workspace: step.workspace, shell: step.shell })),
       [
         { command: "test:onboarding", workspace: undefined, shell: "npm run test:onboarding" },
-        { command: "check:eval:workbook", workspace: undefined, shell: "npm run check:eval:workbook" },
-        { command: "test:eval:workbook", workspace: undefined, shell: "npm run test:eval:workbook" },
-        { command: "check:workbook", workspace: "tutorial-engine", shell: "npm run --workspace=tutorial-engine check:workbook" },
-        {
-          command: "calculator:test",
-          workspace: "tutorial/workspaces/refactor-line/calculator",
-          shell: "npm run --workspace=tutorial/workspaces/refactor-line/calculator test"
-        }
+        { command: "check:workbook", workspace: undefined, shell: "npm run check:workbook" }
       ]
     );
-    assert.ok(command.steps.find((step) => step.command === "check:eval:workbook"));
-    assert.ok(command.steps.findIndex((step) => step.command === "check:eval:workbook") < command.steps.findIndex((step) => step.command === "test:eval:workbook"));
+    assert.match(command.notes.join("\n"), /independent of tutorial prose/);
+  });
+
+  it("uses the root workbook checker script to pass tutorial/ explicitly to the generic engine checker", () => {
+    const command = rootCommandContract("check:workbook");
+
+    assert.equal(command.deterministic, true);
+    assert.equal(command.modelFree, true);
+    assert.equal(command.spendsTokens, false);
+    assert.equal(command.requiresDocker, false);
+    assert.equal(command.packageScript.command, "npm run --workspace=tutorial-engine check:workbook -- ../tutorial");
+    assert.deepEqual(
+      command.steps.map((step) => ({ command: step.command, workspace: step.workspace, shell: step.shell })),
+      [{ command: "check:workbook", workspace: "tutorial-engine", shell: "npm run --workspace=tutorial-engine check:workbook -- ../tutorial" }]
+    );
   });
 
   it("delegates every root engine command through the tutorial-engine workspace", () => {
     assert.equal(workspaceDelegationCommand("test:engine:fast"), "npm run --workspace=tutorial-engine test:fast --");
+    assert.equal(workspaceDelegationCommand("check:workbook"), "npm run --workspace=tutorial-engine check:workbook -- ../tutorial");
     assert.equal(workspaceDelegationCommand("eval:engine"), "npm run --workspace=tutorial-engine eval --");
 
-    for (const commandName of ["test:engine", "test:engine:fast", "eval:engine"]) {
+    for (const commandName of ["test:engine", "test:engine:fast", "check:workbook", "eval:engine"]) {
       const command = rootCommandContract(commandName);
       assert.ok(command.steps.length > 0, `${commandName} should have engine workspace steps`);
       for (const step of command.steps) {
@@ -175,7 +181,7 @@ describe("local test command contract", () => {
     }
   });
 
-  it("makes full npm test an aggregate release gate with independent visual and live eval reports", () => {
+  it("makes full npm test an aggregate release gate with independent visual and live engine reports", () => {
     const command = rootCommandContract("test");
 
     assert.equal(command.deterministic, false);
@@ -186,9 +192,9 @@ describe("local test command contract", () => {
     assert.deepEqual(command.execution, {
       mode: "continue-and-aggregate-independent-lanes",
       plainAndChainSafe: false,
-      reports: ["deterministic-fast", "canonical-visual", "live-engine-eval", "authored-workbook-eval"]
+      reports: ["deterministic-fast", "canonical-visual", "live-engine-eval"]
     });
-    assert.deepEqual(rootTestReleaseReports(), ["deterministic-fast", "canonical-visual", "live-engine-eval", "authored-workbook-eval"]);
+    assert.deepEqual(rootTestReleaseReports(), ["deterministic-fast", "canonical-visual", "live-engine-eval"]);
     assert.deepEqual(
       command.steps.map((step) => ({ command: step.command, shell: step.shell, report: step.report, reportTarget: step.reportTarget })),
       [
@@ -199,8 +205,7 @@ describe("local test command contract", () => {
           report: "canonical-visual",
           reportTarget: "tutorial-engine/test/visual/*.received.png"
         },
-        { command: "eval:engine", shell: "npm run eval:engine -- --release", report: "live-engine-eval", reportTarget: "tutorial-engine/evals/reports/latest.json" },
-        { command: "eval:workbook", shell: "npm run eval:workbook -- --release", report: "authored-workbook-eval", reportTarget: "evals/workbook/reports/latest.json" }
+        { command: "eval:engine", shell: "npm run eval:engine -- --release", report: "live-engine-eval", reportTarget: "tutorial-engine/evals/reports/latest.json" }
       ]
     );
   });
@@ -209,11 +214,9 @@ describe("local test command contract", () => {
     assert.equal(rootCommandContract("test").requiresCanonicalDevcontainer, true);
     assert.equal(rootCommandContract("test:engine").requiresCanonicalDevcontainer, true);
 
-    for (const commandName of ["test:workbook", "eval:engine", "eval:workbook"]) {
-      const command = rootCommandContract(commandName);
-      assert.equal(command.requiresDocker, true, `${commandName} needs Docker`);
-      assert.equal(command.requiresCanonicalDevcontainer, false, `${commandName} must not require the visual devcontainer`);
-    }
+    const evalEngine = rootCommandContract("eval:engine");
+    assert.equal(evalEngine.requiresDocker, true);
+    assert.equal(evalEngine.requiresCanonicalDevcontainer, false);
 
     for (const commandName of ["test", "test:engine"]) {
       const visualSteps = rootCommandContract(commandName).steps.filter((step) => step.visual);
@@ -232,26 +235,13 @@ describe("local test command contract", () => {
       .filter((command) => command.requiresDocker)
       .map((command) => command.name);
 
-    assert.deepEqual(tokenSpenders, ["test", "test:engine", "test:workbook", "eval:engine", "eval:workbook"]);
+    assert.deepEqual(tokenSpenders, ["test", "test:engine", "eval:engine"]);
     assert.deepEqual(dockerUsers, tokenSpenders);
 
     for (const commandName of tokenSpenders) {
       const notes = rootCommandContract(commandName).notes.join("\n");
-      assert.match(notes, /Main Tutor/);
-      assert.match(notes, /Judge/);
+      assert.match(notes, /model tokens/);
     }
-  });
-
-  it("models eval:workbook as a wired direct module command, not a recursive package alias", () => {
-    const command = rootCommandContract("eval:workbook");
-
-    assert.equal(command.packageScript.status, "wired");
-    assert.equal(command.packageScript.command, "tsx evals/workbook/run.ts");
-    assert.deepEqual(
-      command.steps.map((step) => ({ implementation: step.implementation, module: step.module, shell: step.shell, forwardsArguments: step.forwardsArguments })),
-      [{ implementation: "root-module-command", module: "evals/workbook/run.ts", shell: "tsx evals/workbook/run.ts", forwardsArguments: true }]
-    );
-    assert.doesNotMatch(command.steps[0].shell, /npm run eval:workbook/);
   });
 
   it("records all planned package-script entries as wired to the exact local commands", async () => {
@@ -278,23 +268,12 @@ describe("local test command contract", () => {
     });
 
     for (const [script, command] of [
-      ["check:eval:workbook", "tsc -p evals/workbook/tsconfig.json"],
-      ["test:eval:workbook", "vitest run evals/workbook/test/*.test.ts"]
-    ]) {
-      const entry = report.find((candidate) => candidate.packageName === "root" && candidate.script === script);
-      assert.equal(entry.status, "wired");
-      assert.equal(entry.expectedCommand, command);
-      assert.equal(entry.actual, command);
-      assert.equal(entry.aligned, true);
-    }
-
-    for (const [script, command] of [
       ["test", "node scripts/run-local-tests.mjs test"],
       ["test:fast", "node scripts/run-local-tests.mjs test:fast"],
       ["test:engine", "node scripts/run-local-tests.mjs test:engine"],
       ["test:engine:fast", "npm run --workspace=tutorial-engine test:fast --"],
-      ["test:workbook", "node scripts/run-local-tests.mjs test:workbook"],
-      ["test:workbook:fast", "node scripts/run-local-tests.mjs test:workbook:fast"]
+      ["test:workbook:fast", "node scripts/run-local-tests.mjs test:workbook:fast"],
+      ["check:workbook", "npm run --workspace=tutorial-engine check:workbook -- ../tutorial"]
     ]) {
       const entry = report.find((candidate) => candidate.packageName === "root" && candidate.script === script);
       assert.equal(entry.status, "wired", `${script} should be wired`);
@@ -303,11 +282,11 @@ describe("local test command contract", () => {
       assert.equal(entry.aligned, true);
     }
 
-    const evalWorkbook = report.find((entry) => entry.packageName === "root" && entry.script === "eval:workbook");
-    assert.equal(evalWorkbook.status, "wired");
-    assert.equal(evalWorkbook.expectedCommand, "tsx evals/workbook/run.ts");
-    assert.equal(evalWorkbook.actual, "tsx evals/workbook/run.ts");
-    assert.equal(evalWorkbook.aligned, true);
+    for (const removedScript of ["check:eval:workbook", "test:eval:workbook", "test:workbook", "eval:workbook"]) {
+      const entry = report.find((candidate) => candidate.packageName === "root" && candidate.script === removedScript);
+      assert.equal(entry, undefined, `${removedScript} should not remain in root package wiring`);
+      assert.equal(root.scripts[removedScript], undefined, `${removedScript} should not remain in package.json`);
+    }
 
     for (const [script, command] of [
       ["build:typescript", "rm -rf dist && tsc -p tsconfig.json"],
@@ -336,7 +315,7 @@ describe("local test command contract", () => {
       requiresCanonicalDevcontainer: false,
       notes: [
         "Keep npm run check supported for existing docs and developer muscle memory.",
-        "Do not add eval:engine, eval:workbook, tutor, or judge calls to npm run check.",
+        "Do not add eval:engine, tutor, judge, Docker, visual, or tutorial-content assertions to npm run check.",
         "package.json makes check a direct alias of test:fast."
       ]
     });
