@@ -66,7 +66,7 @@ export interface AuthoredWorkbookEvalRoleModel extends PublicModelIdentity {
   identity: string;
 }
 
-export type AuthoredWorkbookEvalModels = Record<AuthoredWorkbookEvalRoleKey, AuthoredWorkbookEvalRoleModel>;
+export type AuthoredWorkbookEvalModels = Readonly<{ mainTutor: AuthoredWorkbookEvalRoleModel; judge?: AuthoredWorkbookEvalRoleModel }>;
 export type AuthoredWorkbookEvalExpectedModelCalls = Readonly<Record<AuthoredWorkbookEvalRoleKey, number> & { total: number }>;
 
 export interface AuthoredWorkbookEvalScenario {
@@ -122,7 +122,7 @@ export interface AuthoredWorkbookEvalPreflightRequest {
 export interface AuthoredWorkbookEvalExpectedCosts {
   paidPreflightCallsByRole: Record<AuthoredWorkbookEvalRoleLabel, number>;
   paidReleaseCallsByRole: Record<AuthoredWorkbookEvalRoleLabel, number>;
-  expectedPaidPreflightCalls: 2;
+  expectedPaidPreflightCalls: number;
   expectedPaidReleaseCalls: number;
   expectedPaidModelCallsTotal: number;
   estimatedTokensPerPaidCall: number;
@@ -229,12 +229,16 @@ export interface AuthoredWorkbookEvalCallCounts {
   paidPreflightCallsByRole: Record<AuthoredWorkbookEvalRoleLabel, number>;
 }
 
+export type AuthoredWorkbookEvalJudgePreflightSummary =
+  | { required: true; commandLabel: JudgeCommandLabel; model: string; capabilities: { jsonObject: true } }
+  | { required: false; policy: "not-required-for-selected-scenarios" };
+
 export interface AuthoredWorkbookEvalPublicSummary {
   scenarioIds: string[];
   repeat: number;
   configuredModelIdentities: Array<{ role: AuthoredWorkbookEvalRoleLabel } & PublicModelIdentity>;
   selectedModelIdentities: Array<{ role: AuthoredWorkbookEvalRoleLabel } & PublicModelIdentity>;
-  judge: { commandLabel: JudgeCommandLabel; model: string; capabilities: { jsonObject: true } };
+  judge: AuthoredWorkbookEvalJudgePreflightSummary;
   counts: AuthoredWorkbookEvalCallCounts & AuthoredWorkbookEvalExpectedCosts;
   expectedBudgetFlags: Record<string, boolean>;
   expectedCapabilityFlags: Record<string, boolean>;
@@ -296,8 +300,8 @@ export function formatAuthoredWorkbookEvalPreflightHelp(): string {
     "",
     "Required model identity options for future CLI wiring:",
     "  --tutor-model <provider/model>             Also accepted from TUTOR_MODEL.",
-    "  --judge-model <provider/model>             Also accepted from EVAL_JUDGE_MODEL.",
-    "  EVAL_JUDGE_COMMAND must name the judge command path/entry point.",
+    "  --judge-model <provider/model>             Also accepted from EVAL_JUDGE_MODEL for judged selections only.",
+    "  EVAL_JUDGE_COMMAND must name the judge command path/entry point for judged selections only.",
     "  OPENCODE_API_KEY must be present in the environment for the terminal auth path.",
     "",
     "Required bounded budget options:",
@@ -366,12 +370,13 @@ function validateAuthoredWorkbookEvalPreflightRequestInternal(input: AuthoredWor
   const environment = snapshotAuthoredWorkbookEvalEnvironment(input.environment ?? process.env, input.models);
   const scenarios = resolveScenariosFromCatalog(input.scenarioIds, catalog);
   const repeat = validateRepeat(input.repeat);
-  const models = validateModels(input.models, environment);
+  const requiresJudge = scenariosRequireJudge(scenarios);
+  const models = validateModels(input.models, environment, requiresJudge);
   const repositoryRoot = input.repositoryRoot === undefined ? process.cwd() : validateHostPath(input.repositoryRoot);
   const nodeRange = input.nodeRange ?? SUPPORTED_NODE_RANGE;
   const npmRange = input.npmRange ?? SUPPORTED_NPM_RANGE;
 
-  assertRequiredEnvironment(environment);
+  assertRequiredEnvironment(environment, requiresJudge);
   if (!satisfiesVersionRange(process.version, nodeRange)) throw new AuthoredWorkbookEvalPreflightError("runtime", { code: "unsupported_node_version" });
 
   const costBudget = validateCostBudget(input.costBudget);
@@ -421,8 +426,11 @@ export async function runAuthoredWorkbookEvalPreflight(input: AuthoredWorkbookEv
 
   selectedModels.push(await runPaidRole("mainTutor", mainTutor, request, operations, callCounts, timeouts.mainTutor, externalSignal));
   throwPreflightIfAborted(externalSignal, "mainTutor");
-  const judgeResult = await runPaidJudge(judge, request, operations, callCounts, timeouts.judge, externalSignal);
-  selectedModels.push({ role: judge.label, ...request.models.judge });
+  let judgeResult: AuthoredWorkbookEvalJudgeResult | undefined;
+  if (requestRequiresJudge(request)) {
+    judgeResult = await runPaidJudge(judge, request, operations, callCounts, timeouts.judge, externalSignal);
+    selectedModels.push({ role: judge.label, ...judgeModelForRequest(request) });
+  }
 
   return publicPreflightSummary(request, selectedModels, judgeResult, callCounts);
 }
@@ -484,7 +492,7 @@ async function runPaidRole(
   timeoutMs: number,
   externalSignal?: AbortSignal
 ): Promise<{ role: AuthoredWorkbookEvalRoleLabel } & PublicModelIdentity> {
-  const model = request.models[role.key];
+  const model = request.models.mainTutor;
   callCounts.paidPreflightCallsByRole[role.label] += 1;
   const result = await sanitizeStage(operation, `${operation}_paid_preflight_failed`, () => withAbortableTimeout(
     (signal) => operations.probeMainTutor({ request, timeoutMs, signal, role: role.key, roleLabel: role.label, model }),
@@ -503,7 +511,7 @@ async function runPaidJudge(
   timeoutMs: number,
   externalSignal?: AbortSignal
 ): Promise<AuthoredWorkbookEvalJudgeResult> {
-  const model = request.models.judge;
+  const model = judgeModelForRequest(request);
   callCounts.paidPreflightCallsByRole[role.label] += 1;
   const result = await sanitizeStage("judge", "judge_paid_preflight_failed", () => withAbortableTimeout(
     (signal) => operations.probeJudge({ request, timeoutMs, signal, role: role.key, roleLabel: role.label, model }),
@@ -518,19 +526,32 @@ async function runPaidJudge(
 export function publicPreflightSummary(
   request: AuthoredWorkbookEvalPreflightRequest,
   selectedModels: Array<{ role: AuthoredWorkbookEvalRoleLabel } & PublicModelIdentity>,
-  judgeResult: AuthoredWorkbookEvalJudgeResult,
+  judgeResult: AuthoredWorkbookEvalJudgeResult | undefined,
   callCounts: AuthoredWorkbookEvalCallCounts = emptyCallCounts()
 ): AuthoredWorkbookEvalPublicSummary {
+  const configuredModelIdentities = configuredModelIdentityEntries(request);
+  const requiresJudge = requestRequiresJudge(request);
+  if (requiresJudge && !judgeResult) throw validationError();
+  if (!requiresJudge && judgeResult) throw validationError();
+  const rolesText = requiresJudge ? "Main Tutor and Judge" : "Main Tutor";
+  const selectedRoleLabels = selectedModels.map((model) => model.role);
+  const configuredRoleLabels = configuredModelIdentities.map((model) => model.role);
+  if (JSON.stringify(selectedRoleLabels) !== JSON.stringify(configuredRoleLabels)) throw validationError();
+  const judgeSummary: AuthoredWorkbookEvalJudgePreflightSummary = judgeResult
+    ? { required: true, commandLabel: judgeResult.commandLabel, model: judgeResult.model, capabilities: { jsonObject: true } }
+    : { required: false, policy: "not-required-for-selected-scenarios" };
+  const warnings = [`Paid model-token checks are enabled for ${rolesText}. Budget allows ${request.costBudget.maxPaidModelCalls} paid calls and ${request.costBudget.maxEstimatedTokens} estimated tokens.`];
+  if (!requiresJudge) warnings.push("No Judge preflight or scenario Judge call is required for the selected deterministic-only scenarios.");
   return deepFreezePlain({
     scenarioIds: request.scenarios.map((scenario) => scenario.id),
     repeat: request.repeat,
-    configuredModelIdentities: WORKBOOK_EVAL_ROLES.map((role) => ({ role: role.label, provider: request.models[role.key].provider, id: request.models[role.key].id })),
+    configuredModelIdentities,
     selectedModelIdentities: selectedModels.map((model) => ({ role: model.role, provider: model.provider, id: model.id })),
-    judge: { commandLabel: judgeResult.commandLabel, model: judgeResult.model, capabilities: { jsonObject: true } },
+    judge: judgeSummary,
     counts: { ...cloneCallCounts(callCounts), ...request.expectedCosts },
     expectedBudgetFlags: mergeScenarioFlags(request.scenarios, "expectedBudgetFlags"),
     expectedCapabilityFlags: mergeScenarioFlags(request.scenarios, "expectedCapabilityFlags"),
-    warnings: [`Paid model-token checks are enabled for Main Tutor and Judge. Budget allows ${request.costBudget.maxPaidModelCalls} paid calls and ${request.costBudget.maxEstimatedTokens} estimated tokens.`]
+    warnings
   });
 }
 
@@ -568,8 +589,32 @@ function assertRunnerSummaryMatchesRequest(
 ): void {
   if (summary.repeat !== request.repeat) throw validationError();
   if (JSON.stringify(summary.scenarioIds) !== JSON.stringify(request.scenarios.map((scenario) => scenario.id))) throw validationError();
-  const expected = WORKBOOK_EVAL_ROLES.map((role) => ({ role: role.label, provider: request.models[role.key].provider, id: request.models[role.key].id }));
+  const expected = configuredModelIdentityEntries(request);
   if (JSON.stringify(summary.configuredModelIdentities) !== JSON.stringify(expected)) throw validationError();
+}
+
+function configuredModelIdentityEntries(request: AuthoredWorkbookEvalPreflightRequest): Array<{ role: AuthoredWorkbookEvalRoleLabel } & PublicModelIdentity> {
+  return activeModelRoles(request).map((role) => {
+    const model = role.key === "judge" ? judgeModelForRequest(request) : request.models.mainTutor;
+    return { role: role.label, provider: model.provider, id: model.id };
+  });
+}
+
+function activeModelRoles(request: Pick<AuthoredWorkbookEvalPreflightRequest, "scenarios" | "models">): AuthoredWorkbookEvalRoleDefinition[] {
+  return requestRequiresJudge(request) ? [...WORKBOOK_EVAL_ROLES] : [WORKBOOK_EVAL_ROLES[0]!];
+}
+
+function requestRequiresJudge(request: Pick<AuthoredWorkbookEvalPreflightRequest, "scenarios">): boolean {
+  return scenariosRequireJudge(request.scenarios);
+}
+
+function scenariosRequireJudge(scenarios: readonly Pick<AuthoredWorkbookEvalScenario, "expectedModelCalls">[]): boolean {
+  return scenarios.some((scenario) => scenario.expectedModelCalls.judge > 0);
+}
+
+function judgeModelForRequest(request: Pick<AuthoredWorkbookEvalPreflightRequest, "models">): AuthoredWorkbookEvalRoleModel {
+  if (!request.models.judge) throw validationError();
+  return request.models.judge;
 }
 
 export function defaultPreflightOperations(dependencies: AuthoredWorkbookEvalDefaultOperationDependencies = {}): AuthoredWorkbookEvalExternalOperations {
@@ -1191,9 +1236,9 @@ export function snapshotAuthoredWorkbookEvalEnvironment(environment: NodeJS.Proc
 }
 
 
-function assertRequiredEnvironment(environment: AuthoredWorkbookEvalEnvironment): void {
+function assertRequiredEnvironment(environment: AuthoredWorkbookEvalEnvironment, requiresJudge: boolean): void {
   if (!hasNonEmptyEnvValue(environment, OPENCODE_API_KEY_ENV)) throw new AuthoredWorkbookEvalPreflightError("arguments", { code: "missing_opencode_api_key" });
-  if (!hasNonEmptyEnvValue(environment, EVAL_JUDGE_COMMAND_ENV)) throw new AuthoredWorkbookEvalPreflightError("arguments", { code: "missing_eval_judge_command" });
+  if (requiresJudge && !hasNonEmptyEnvValue(environment, EVAL_JUDGE_COMMAND_ENV)) throw new AuthoredWorkbookEvalPreflightError("arguments", { code: "missing_eval_judge_command" });
 }
 
 
@@ -1258,12 +1303,18 @@ function sanitizeScenarioCatalog(raw: readonly AuthoredWorkbookEvalScenarioCatal
   });
 }
 
-function validateModels(raw: Partial<Record<AuthoredWorkbookEvalRoleKey, string>> | undefined, environment: AuthoredWorkbookEvalEnvironment): Readonly<AuthoredWorkbookEvalModels> {
-  const models = {} as AuthoredWorkbookEvalModels;
-  for (const role of WORKBOOK_EVAL_ROLES) {
-    const identity = raw?.[role.key] ?? environment[role.env];
-    if (typeof identity !== "string" || !identity.trim()) throw validationError();
-    models[role.key] = parseModelIdentity(identity);
+function validateModels(raw: Partial<Record<AuthoredWorkbookEvalRoleKey, string>> | undefined, environment: AuthoredWorkbookEvalEnvironment, requiresJudge: boolean): Readonly<AuthoredWorkbookEvalModels> {
+  const mainTutorIdentity = raw?.mainTutor ?? environment[TUTOR_MODEL_ENV];
+  if (typeof mainTutorIdentity !== "string" || !mainTutorIdentity.trim()) throw validationError();
+  const models: { mainTutor: AuthoredWorkbookEvalRoleModel; judge?: AuthoredWorkbookEvalRoleModel } = {
+    mainTutor: parseModelIdentity(mainTutorIdentity)
+  };
+  if (requiresJudge) {
+    const judgeIdentity = raw?.judge ?? environment[EVAL_JUDGE_MODEL_ENV];
+    if (typeof judgeIdentity !== "string" || !judgeIdentity.trim()) throw validationError();
+    models.judge = parseModelIdentity(judgeIdentity);
+  } else if (raw?.judge !== undefined) {
+    parseModelIdentity(raw.judge);
   }
   return deepFreezePlain(models);
 }
@@ -1299,14 +1350,15 @@ function validateCostBudget(raw: AuthoredWorkbookEvalCostBudgetInput | undefined
 function expectedCostsFor(scenarios: AuthoredWorkbookEvalPreflightRequest["scenarios"], budget: AuthoredWorkbookEvalCostBudget, repeat: number): AuthoredWorkbookEvalExpectedCosts {
   const paidPreflightCallsByRole = emptyRoleCounts();
   const paidReleaseCallsByRole = emptyRoleCounts();
-  for (const role of WORKBOOK_EVAL_ROLES) paidPreflightCallsByRole[role.label] = 1;
+  paidPreflightCallsByRole["Main Tutor"] = 1;
+  paidPreflightCallsByRole.Judge = scenariosRequireJudge(scenarios) ? 1 : 0;
   let expectedPaidReleaseCalls = 0;
   for (const scenario of scenarios) {
     const counts = normalizeExpectedModelCalls(scenario.expectedModelCalls);
     expectedPaidReleaseCalls += counts.total * repeat;
     for (const role of WORKBOOK_EVAL_ROLES) paidReleaseCallsByRole[role.label] += counts.byRole[role.label] * repeat;
   }
-  const expectedPaidPreflightCalls = 2 as const;
+  const expectedPaidPreflightCalls = Object.values(paidPreflightCallsByRole).reduce((sum, count) => sum + count, 0);
   const expectedPaidModelCallsTotal = expectedPaidPreflightCalls + expectedPaidReleaseCalls;
   return deepFreezePlain({
     paidPreflightCallsByRole,
@@ -1331,7 +1383,8 @@ function normalizeExpectedModelCalls(raw: AuthoredWorkbookEvalScenario["expected
   for (const role of WORKBOOK_EVAL_ROLES) {
     const rawCount = raw[role.key];
     if (typeof rawCount !== "number" || !Number.isInteger(rawCount) || rawCount < 0) throw validationError();
-    if (role.key === "judge" && rawCount !== 1) throw validationError();
+    if (role.key === "mainTutor" && rawCount < 1) throw validationError();
+    if (role.key === "judge" && rawCount !== 0 && rawCount !== 1) throw validationError();
     byKey[role.key] = rawCount;
     byRole[role.label] = rawCount;
     roleSum += rawCount;

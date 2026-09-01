@@ -46,7 +46,8 @@ const privatePath = "/private/tmp/disposable-workbook-secret";
 
 const CATALOG = [
   testScenario("part-1-happy-path", { mainTutor: 3, judge: 1, total: 4 }, { bounded: true, cheap: false }, { terminal: true, docker: true }),
-  testScenario("part-2-review", { mainTutor: 2, judge: 1, total: 3 }, { cheap: true }, { docker: true })
+  testScenario("part-2-review", { mainTutor: 2, judge: 1, total: 3 }, { cheap: true }, { docker: true }),
+  testScenario("deterministic-only", { mainTutor: 5, judge: 0, total: 5 }, { cheap: true }, { docker: true })
 ] satisfies AuthoredWorkbookEvalScenario[];
 
 function testScenario(
@@ -355,6 +356,46 @@ describe("authored workbook eval preflight", () => {
     expect(events.filter((event) => event.startsWith("paid:"))).toHaveLength(2);
   });
 
+  it("does not require or preflight the Judge role when all selected scenarios are deterministic-only", async () => {
+    const request = validateAuthoredWorkbookEvalPreflightRequest(validRequest({
+      scenarioIds: ["lessons-003-004-evidence-feedback"],
+      models: { mainTutor: "anthropic/claude-sonnet-4-5" },
+      environment: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        [OPENCODE_API_KEY_ENV]: secret
+      },
+      costBudget: { maxPaidModelCalls: 36, maxEstimatedTokens: 72_000, estimatedTokensPerPaidCall: 2_000 }
+    }));
+
+    expect(request.scenarios[0]?.expectedModelCalls).toEqual({ mainTutor: 35, judge: 0, total: 35 });
+    expect(request.models.judge).toBeUndefined();
+    expect(request.expectedCosts.paidPreflightCallsByRole).toEqual({ "Main Tutor": 1, Judge: 0 });
+    expect(request.expectedCosts.expectedPaidPreflightCalls).toBe(1);
+    expect(request.expectedCosts.paidReleaseCallsByRole).toEqual({ "Main Tutor": 35, Judge: 0 });
+    expect(request.expectedCosts.expectedPaidModelCallsTotal).toBe(36);
+
+    const events: string[] = [];
+    const summary = await runAuthoredWorkbookEvalPreflight(validRequest({
+      scenarioIds: ["lessons-003-004-evidence-feedback"],
+      models: { mainTutor: "anthropic/claude-sonnet-4-5" },
+      environment: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        [OPENCODE_API_KEY_ENV]: secret
+      },
+      costBudget: { maxPaidModelCalls: 36, maxEstimatedTokens: 72_000, estimatedTokensPerPaidCall: 2_000 }
+    }), { operations: recordingOperations(events) });
+
+    expect(events.filter((event) => event.startsWith("paid:Judge"))).toEqual([]);
+    expect(events.filter((event) => event.startsWith("paid:Main Tutor"))).toHaveLength(1);
+    expect(summary.configuredModelIdentities.map((entry) => entry.role)).toEqual(["Main Tutor"]);
+    expect(summary.selectedModelIdentities.map((entry) => entry.role)).toEqual(["Main Tutor"]);
+    expect(summary.judge).toEqual({ required: false, policy: "not-required-for-selected-scenarios" });
+    expect(summary.counts.paidPreflightCallsByRole).toEqual({ "Main Tutor": 1, Judge: 0 });
+    expect(summary.warnings.join("\n")).toContain("No Judge preflight");
+  });
+
   it("rejects invalid, missing, or duplicate repeat flags and repeat underbudgets before side effects", async () => {
     const badArgv = [
       ["--scenario", "part-1-happy-path", "--max-paid-model-calls", "9", "--max-estimated-tokens", "18000", "--repeat"],
@@ -409,7 +450,6 @@ describe("authored workbook eval preflight", () => {
     const cases: AuthoredWorkbookEvalScenario[] = [
       { id: "missing-role", expectedModelCalls: { judge: 1, total: 1 } as any },
       { id: "missing-total", expectedModelCalls: { mainTutor: 2, judge: 1 } as any },
-      { id: "zero-judge", expectedModelCalls: { mainTutor: 2, judge: 0, total: 2 } },
       { id: "negative-main", expectedModelCalls: { mainTutor: -1, judge: 1, total: 0 } },
       { id: "two-judges", expectedModelCalls: { mainTutor: 1, judge: 2, total: 3 } },
       { id: "bad-total", expectedModelCalls: { mainTutor: 2, judge: 1, total: 99 } }
@@ -418,6 +458,9 @@ describe("authored workbook eval preflight", () => {
     for (const scenario of cases) {
       expect(() => validateAuthoredWorkbookEvalPreflightRequestForTest(validRequest({ scenarioIds: [scenario.id] }), [scenario])).toThrow(AuthoredWorkbookEvalPreflightError);
     }
+
+    const deterministic = validateAuthoredWorkbookEvalPreflightRequestForTest(validRequest({ scenarioIds: ["deterministic-only"], costBudget: { maxPaidModelCalls: 6, maxEstimatedTokens: 12_000, estimatedTokensPerPaidCall: 2_000 } }), [CATALOG[2]!]);
+    expect(deterministic.scenarios[0]?.expectedModelCalls).toEqual({ mainTutor: 5, judge: 0, total: 5 });
 
     const primer = validateAuthoredWorkbookEvalPreflightRequest(validRequest());
     expect(primer.scenarios[0]?.expectedModelCalls).toEqual({ mainTutor: 14, judge: 1, total: 15 });
@@ -773,7 +816,7 @@ describe("authored workbook eval preflight", () => {
       return { commandLabel: "configured-command", model: environment.EVAL_JUDGE_MODEL ?? "", capabilities: { jsonObject: true } };
     });
 
-    await expect(probe({ request, timeoutMs: 4321, role: "judge", roleLabel: "Judge", model: request.models.judge })).resolves.toEqual({ commandLabel: "configured-command", model: "google/gemini-3-pro", capabilities: { jsonObject: true } });
+    await expect(probe({ request, timeoutMs: 4321, role: "judge", roleLabel: "Judge", model: request.models.judge! })).resolves.toEqual({ commandLabel: "configured-command", model: "google/gemini-3-pro", capabilities: { jsonObject: true } });
     expect(calls).toEqual([{ command: `${privatePath}/judge.sh`, model: "google/gemini-3-pro", timeout: 4321 }]);
   });
 

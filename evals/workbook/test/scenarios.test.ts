@@ -282,6 +282,13 @@ describe("authored workbook scenario descriptors", () => {
       "lesson-013-operator-judgement"
     ]);
 
+    const expectedJudgeCalls = new Map<AuthoredWorkbookScenarioId, number>([
+      ["primer-validation-misconception", 1],
+      ["lesson-001-headless-boundary", 1],
+      ["lessons-003-004-evidence-feedback", 0],
+      ["lesson-013-operator-judgement", 1]
+    ]);
+
     for (const scenario of AUTHORED_WORKBOOK_SCENARIOS) {
       expect(scenario.criteria.length).toBeGreaterThan(0);
       expect(scenario.expectedModelCalls).toEqual({
@@ -309,7 +316,8 @@ describe("authored workbook scenario descriptors", () => {
       expect(Object.isFrozen(scenario.expectedModelCalls)).toBe(true);
       expect(Object.isFrozen(scenario.expectedModelCallDerivation)).toBe(true);
       expect(scenario.expectedModelCallDerivation.join("\n")).toMatch(/Main Tutor upper bound|Main Tutor terminal assessment paths|Judge/);
-      expect(scenario.expectedModelCalls.judge).toBe(1);
+      expect(scenario.judgePolicy.expectedCalls).toBe(expectedJudgeCalls.get(scenario.id));
+      expect(scenario.expectedModelCalls.judge).toBe(expectedJudgeCalls.get(scenario.id));
       expect(scenario.expectedModelCalls.total).toBe(scenario.expectedModelCalls.mainTutor + scenario.expectedModelCalls.judge);
       expect(scenario.expectedModelCalls.total).toBeGreaterThan(1);
       if (scenario.id === "primer-validation-misconception") expect(scenario.expectedModelCalls.mainTutor).toBeGreaterThan(0);
@@ -319,6 +327,7 @@ describe("authored workbook scenario descriptors", () => {
     }
 
     expect(authoredWorkbookScenarioById("lesson-001-headless-boundary").stubLessonNumber).toBeUndefined();
+    expect(authoredWorkbookScenarioById("lessons-003-004-evidence-feedback").judgePolicy).toEqual({ kind: "deterministic-only", expectedCalls: 0, deterministicSuccess: { rule: "deterministic-gate-only", requiredAssertionCount: 17 } });
     expect(authoredWorkbookScenarioById("lessons-003-004-evidence-feedback").stubLessonNumber).toBe(4);
     expect(authoredWorkbookScenarioById("lessons-003-004-evidence-feedback").prerequisiteOverlay).toMatchObject({ id: "lesson-003-prerequisites", workspaceId: "refactor-line" });
     expect(authoredWorkbookScenarioById("lesson-013-operator-judgement").stubLessonNumber).toBe(13);
@@ -345,7 +354,7 @@ describe("authored workbook scenario descriptors", () => {
       const lessonAndWorkbookSummaries = scenario.selection.parts.reduce((sum, part) => sum + part.lessons.length, 0) + 1;
       const computedMainTutorPath = terminalReviews + reflectionReviews + evaluatedBlocks + lessonAndWorkbookSummaries;
       expect(scenario.expectedModelCalls.mainTutor, scenario.id).toBeGreaterThanOrEqual(computedMainTutorPath);
-      expect(scenario.expectedModelCalls.judge, scenario.id).toBe(1);
+      expect(scenario.expectedModelCalls.judge, scenario.id).toBe(scenario.judgePolicy.expectedCalls);
       expect(scenario.expectedModelCalls.mainTutor, scenario.id).toBeGreaterThanOrEqual(computedMainTutorPath + terminalReviews);
     }
     expect(authoredWorkbookScenarioById("primer-validation-misconception").expectedModelCalls.mainTutor).toBeGreaterThanOrEqual(11);
@@ -443,7 +452,9 @@ describe("authored workbook scenario descriptors", () => {
 describe("authored workbook scenario gates", () => {
   it("passes the authored synthetic fixture for each scenario", async () => {
     for (const scenario of AUTHORED_WORKBOOK_SCENARIOS) {
-      expect(scenario.gate(await passingFixture(scenario.id))).toMatchObject({ passed: true });
+      const gate = scenario.gate(await passingFixture(scenario.id));
+      expect(gate).toMatchObject({ passed: true });
+      if (scenario.id === "lessons-003-004-evidence-feedback") expect(gate.assertions).toHaveLength(17);
     }
   });
 

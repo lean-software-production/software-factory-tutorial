@@ -107,13 +107,12 @@ image, not the visual devcontainer. Before a live run:
    `npm run --workspace=tutorial-engine build:workbook-terminal`.
 3. Start Docker and make the daemon reachable from this shell.
 4. Export `OPENCODE_API_KEY` for the workbook terminal auth path.
-5. Authenticate Pi on the host for the Main Tutor and Judge providers.
+5. Authenticate Pi on the host for the Main Tutor provider and, for judged selections, the Judge provider.
 6. Set explicit models, either by flags where supported or by environment:
-   `TUTOR_MODEL` and `EVAL_JUDGE_MODEL`.
-7. Set `EVAL_JUDGE_COMMAND` explicitly, for example `pi --no-session` or a Pi-compatible wrapper.
+   `TUTOR_MODEL` and, for judged selections, `EVAL_JUDGE_MODEL`.
+7. Set `EVAL_JUDGE_COMMAND` explicitly for judged selections, for example `pi --no-session` or a Pi-compatible wrapper.
 
-Paid calls can occur in two roles: Main Tutor and Judge. Deterministic gates do not call either of
-them.
+Paid calls can occur in two roles: Main Tutor and Judge. Judge calls are scenario-specific; Lessons 003–004 has zero Judge calls and passes or fails solely by its deterministic 17-assertion gate. Deterministic gates do not call either role.
 
 Run engine live evals with a scenario, all confirmed scenarios, or the release profile:
 
@@ -133,7 +132,7 @@ npm run eval:workbook -- --list
 npm run eval:workbook -- --scenario lesson-001-headless-boundary \
   --max-paid-model-calls 20 --max-estimated-tokens 40000
 npm run eval:workbook -- --all --yes \
-  --max-paid-model-calls 88 --max-estimated-tokens 176000
+  --max-paid-model-calls 86 --max-estimated-tokens 172000
 npm run eval:workbook -- --release
 ```
 
@@ -165,8 +164,7 @@ the curriculum while avoiding unbounded recursive Pi/npm shell work.
 
 The slices are deliberately honest rather than comprehensive: a primer misconception, a real L001
 headless boundary, a Lessons 003-004 evidence-feedback path, and a Lesson 013 operator-judgement
-path. Each slice declares prerequisite seeds, expected artifacts, deterministic gates, expected
-model calls, cost budget derivation, and public criteria.
+path. Each slice declares prerequisite seeds, expected artifacts, deterministic gates, closed Judge policy, expected model calls, cost budget derivation, and public criteria. Primer, Lesson 001, and Lesson 013 retain one Judge call; Lessons 003–004 declares zero Judge calls and uses its 17 gate assertions as the deterministic-only success verdict.
 
 ## Reports and privacy
 
@@ -178,7 +176,7 @@ are ignored under `evals/workbook/reports/`, with `latest.json` in that tree.
 
 Public curated report files may include `trace.json`, `artifacts.json`, `judge-input.txt` or
 `judge-input.json`, `judge.json`, `report.json`, `summary.md`, `metadata.json`, and `latest.json`.
-Use only the files listed by current-run metadata or latest summaries.
+Use only the exact files listed by current-run metadata or latest summaries. Deterministic-only authored success omits `judge-input.json` and `judge.json`, reports `evaluationMode: deterministic-only`, and uses the `deterministic-gate-only` verdict rule without a percentage.
 
 Raw events, gate assertions, failure diagnostics, cleanup diagnostics, prompts, responses, server
 URLs, absolute disposable paths, and credentials are private. Files such as `gate.json`,
@@ -193,7 +191,7 @@ into reports, latest metadata, issues, or reviews.
 
 Live preflight spends unpaid setup checks before paid calls. Argument validation, budget validation,
 Docker CLI/daemon access, image inspection, disposable terminal startup, in-container Pi auth,
-fixture validation, and privacy checks happen before Tutor or Judge probes can spend tokens.
+fixture validation, and privacy checks happen before role probes can spend tokens. Main Tutor is always preflighted; Judge is preflighted only when at least one selected authored scenario requires a Judge call.
 
 If preflight fails, the live runner must not create or mutate the report root, `latest.json`, live
 workspaces, sessions, stubs, or judge inputs. A stale report is not evidence of the failed run.

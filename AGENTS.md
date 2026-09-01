@@ -41,7 +41,7 @@ Visual validation and approval are canonical-devcontainer work. `npm run check:v
 the canonical devcontainer from the host; `npm run approve:visual` must run inside it after a human
 inspects received screenshots.
 
-Live evals spend Main Tutor and Judge tokens and write ignored reports. Keep raw events, gate
+Live evals spend Main Tutor tokens and scenario-specific Judge tokens, then write ignored reports. Keep raw events, gate
 diagnostics, cleanup failures, prompts, credentials, server URLs, and disposable paths private.
 
 ## Tutorial-engine architecture decisions

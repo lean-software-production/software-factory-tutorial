@@ -50,7 +50,7 @@ describe("authored workbook runner model configuration", () => {
       repeat: request.repeat,
       configuredModelIdentities: [
         { role: "Main Tutor" as const, provider: request.models.mainTutor.provider, id: request.models.mainTutor.id },
-        { role: "Judge" as const, provider: request.models.judge.provider, id: request.models.judge.id }
+        { role: "Judge" as const, provider: request.models.judge!.provider, id: request.models.judge!.id }
       ]
     };
 

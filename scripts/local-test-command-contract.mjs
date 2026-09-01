@@ -136,7 +136,7 @@ function commandContract({
   });
 }
 
-const liveEvalCostNote = "Live eval costs spend model tokens for Main Tutor and Judge.";
+const liveEvalCostNote = "Live eval costs spend model tokens for Main Tutor and scenario-specific Judge calls.";
 
 export const PACKAGE_SCRIPT_WIRING_CONTRACT = Object.freeze([
   packageScript({ script: "test", status: WIRING_WIRED, command: "node scripts/run-local-tests.mjs test", notes: ["Uses the root orchestrator so release lanes continue and aggregate independent reports instead of relying on &&."] }),

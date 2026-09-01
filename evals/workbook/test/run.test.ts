@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,7 @@ import {
   type AuthoredWorkbookRunInvocation
 } from "../run.js";
 import { AUTHORED_WORKBOOK_SCENARIOS, authoredWorkbookScenarioById } from "../scenarios.js";
+import { AUTHORED_COMMAND_STUB_NAMESPACE, AUTHORED_COMMAND_STUB_OWNER, AUTHORED_COMMAND_STUB_SCHEMA_VERSION, type AuthoredCommandInvocationEvidence } from "../command-stubs.js";
 import { authoredWorkbookEvalStabilityPassed } from "../reports.js";
 import { createEmptyAuthoredWorkbookEvalSessionTrace, projectAuthoredWorkbookEvalTrace, type AuthoredWorkbookEvalSessionTrace, type AuthoredWorkbookEvalTrace } from "../public-trace.js";
 import { AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL, createAuthoredWorkbookRunnerModelConfiguration, type AuthoredWorkbookEvalPreflightRequest, type AuthoredWorkbookEvalPublicSummary } from "../preflight.js";
@@ -58,7 +60,7 @@ function summary(ids = ["primer-validation-misconception"], repeat: 1 | 2 | 3 = 
       { role: "Main Tutor", provider: "anthropic", id: "claude-opus" },
       { role: "Judge", provider: "openai", id: "gpt-judge" }
     ],
-    judge: { commandLabel: "configured-command", model: "openai/gpt-judge", capabilities: { jsonObject: true } },
+    judge: { required: true, commandLabel: "configured-command", model: "openai/gpt-judge", capabilities: { jsonObject: true } },
     counts: {} as AuthoredWorkbookEvalPublicSummary["counts"],
     expectedBudgetFlags: {},
     expectedCapabilityFlags: {},
@@ -163,6 +165,234 @@ function invocation(ids = ["primer-validation-misconception"], repeat: 1 | 2 | 3
   return { scope: ids.length === 1 ? "scenario" : "all", scenarioIds: ids as any, repeat, keepWorkspace: false, preflightInput: { scenarioIds: ids, repeat, costBudget: { maxPaidModelCalls: 20, maxEstimatedTokens: 40_000 }, environment: env }, preflightRequest: request(ids, repeat), preflightSummary: summary(ids, repeat) };
 }
 
+const completedSource = `type Output = (line: string) => void;
+
+const NUMBER_WORDS: Record<string, number> = {
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+};
+
+/**
+ * Evaluate the kata's tiny spoken-expression language.
+ *
+ * This is intentionally a single, inconvenient starting point for the kata:
+ * it tokenises, parses, performs arithmetic, formats results, and knows about
+ * command-line output. The behaviour is covered; the structure is not a model
+ * to emulate.
+ */
+export function evaluateSpokenExpression(source: string): number {
+  const pieces = source
+    .toLowerCase()
+    .replace(/\\(/g, " ( ")
+    .replace(/\\)/g, " ) ")
+    .trim()
+    .split(/\\s+/)
+    .filter(Boolean);
+  let place = 0;
+
+  const fail = (): never => {
+    // Deliberately unhelpful starter error: a later kata step improves this.
+    throw new Error("Could not work that out.");
+  };
+
+  const read = (): number => {
+    const word = pieces[place++];
+    if (!word) fail();
+
+    if (word === "(") {
+      const inside = read();
+      if (pieces[place++] !== ")") fail();
+      return inside;
+    }
+
+    if (/^\\d+$/.test(word)) return Number(word);
+
+    const numberWord = NUMBER_WORDS[word];
+    if (numberWord !== undefined) return numberWord;
+
+    const readFirstOperand = (separator: "and" | "from" | "by"): number => {
+      const first = read();
+      if (pieces[place++] !== separator) fail();
+      return first;
+    };
+
+    // Operators are prefix forms. Each branch repeats the same parser work on
+    // purpose, leaving several safe seams for the refactoring lesson.
+    if (word === "add") {
+      const first = readFirstOperand("and");
+      const second = read();
+      return first + second;
+    }
+
+    if (word === "subtract") {
+      const first = readFirstOperand("from");
+      const second = read();
+      return second - first;
+    }
+
+    if (word === "multiply") {
+      const first = readFirstOperand("by");
+      const second = read();
+      return first * second;
+    }
+
+    if (word === "divide") {
+      const first = readFirstOperand("by");
+      const second = read();
+      if (second === 0) fail();
+      return first / second;
+    }
+
+    return fail();
+  };
+
+  const answer = read();
+  if (place !== pieces.length) fail();
+  return answer;
+}
+
+export function formatAnswer(answer: number): string {
+  return \`Result: \${answer}\`;
+}
+
+/** Run the command-line behaviour without making tests replace process.exit. */
+export function runCli(args: string[], write: Output, writeError: Output): number {
+  if (args.length === 0) {
+    writeError("Give me a spoken expression to calculate.");
+    return 1;
+  }
+
+  try {
+    write(formatAnswer(evaluateSpokenExpression(args.join(" "))));
+    return 0;
+  } catch {
+    writeError("Unable to calculate that expression.");
+    return 1;
+  }
+}
+`;
+
+function sha256Text(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function event(type: AuthoredWorkbookEvalTrace["progressionEvents"][number]["type"], lessonId?: string, blockId?: string): AuthoredWorkbookEvalTrace["progressionEvents"][number] {
+  if (type === "workbook_introduction_completed") return { type };
+  return { type, lessonId: lessonId ?? "lesson", blockId: blockId ?? "block" } as AuthoredWorkbookEvalTrace["progressionEvents"][number];
+}
+
+function accepted(lessonId: string, blockId: string, kind: "terminal" | "reflection" | "editor"): AuthoredWorkbookEvalTrace["progressionEvents"][number] {
+  return { type: "attempt_accepted", lessonId, blockId, kind };
+}
+
+function stub(station: AuthoredCommandInvocationEvidence["station"], overrides: Partial<AuthoredCommandInvocationEvidence>): AuthoredCommandInvocationEvidence {
+  return {
+    namespace: AUTHORED_COMMAND_STUB_NAMESPACE,
+    owner: AUTHORED_COMMAND_STUB_OWNER,
+    schemaVersion: AUTHORED_COMMAND_STUB_SCHEMA_VERSION,
+    runId: "123e4567-e89b-42d3-a456-426614174000",
+    kind: "pi",
+    accepted: true,
+    cwd: "calculator",
+    station,
+    mode: "json",
+    tools: "read,grep,find,ls,bash",
+    mutation: "none",
+    ...overrides
+  } as AuthoredCommandInvocationEvidence;
+}
+
+async function lessons003004PassingGateInput(): Promise<any> {
+  const scenario = authoredWorkbookScenarioById("lessons-003-004-evidence-feedback");
+  const recorder: { calls: Array<{ method: string; blockId?: string; command?: string; response?: string }> } = { calls: [] };
+  const driver = {
+    completeIntroduction: async (label?: string) => { recorder.calls.push({ method: "completeIntroduction", blockId: label }); return {}; },
+    continueBlock: async (blockId: string) => { recorder.calls.push({ method: "continueBlock", blockId }); return { progress: { blocks: [{ id: blockId, checkpoint: { status: "accepted" } }] } }; },
+    submitReflection: async (blockId: string, response: string) => { recorder.calls.push({ method: "submitReflection", blockId, response }); return { progress: { blocks: [{ id: blockId, checkpoint: { status: "accepted" } }] } }; },
+    submitReflectionFollowUp: async (blockId: string, response: string) => { recorder.calls.push({ method: "submitReflectionFollowUp", blockId, response }); return { progress: { blocks: [{ id: blockId, checkpoint: { status: "accepted" } }] } }; },
+    completeReflection: async (blockId: string) => { recorder.calls.push({ method: "completeReflection", blockId }); return { progress: { blocks: [{ id: blockId, checkpoint: { status: "accepted" } }] } }; },
+    submitTerminalCommand: async (blockId: string, command: string) => { recorder.calls.push({ method: "submitTerminalCommand", blockId, command }); return { progress: { blocks: [{ id: blockId, checkpoint: { status: "accepted" } }] } }; },
+    completeTerminalBlock: async (blockId: string) => { recorder.calls.push({ method: "completeTerminalBlock", blockId }); return { progress: { blocks: [{ id: blockId, checkpoint: { status: "accepted" } }] } }; }
+  };
+  await scenario.drive({ driver: driver as any });
+  const commands = recorder.calls.filter((call) => call.method === "submitTerminalCommand").map((call) => call.command ?? "");
+  const validatorPrompt = await readFile(join(process.cwd(), "evals/workbook/prerequisites/lesson-004-prerequisites/factory/refactor-validate.md"), "utf8");
+  const validatorScript = await readFile(join(process.cwd(), "evals/workbook/prerequisites/lesson-004-prerequisites/factory/refactor-validate.sh"), "utf8");
+  const baseline = "Findings reported by: eslint.\n- calculator/src/index.ts duplicated operator branch parser\n";
+  const artifacts = [
+    { path: "factory/refactor-validate.md", content: validatorPrompt },
+    { path: "factory/refactor-validate.sh", content: validatorScript },
+    { path: "factory/.tmp/refactor-quality-before.txt", content: baseline },
+    { path: "factory/.tmp/refactor-validate-findings.txt", content: "VERDICT: FAIL\n\nEVIDENCE:\n- authored validator reran after repair\n" },
+    { path: "calculator/src/index.ts", content: completedSource }
+  ];
+  return {
+    trace: {
+      scenarioId: "lessons-003-004-evidence-feedback",
+      publicStates: [],
+      terminalTranscript: [
+        { blockId: "lesson--003-build-a-validator--implementation-order", direction: "input", text: commands[0] },
+        { blockId: "lesson--003-build-a-validator--implementation-order", direction: "observer", text: "Feedback: carry the baseline with a guard and tee findings." },
+        { blockId: "lesson--003-build-a-validator--implementation-order", direction: "input", text: commands[1] },
+        { blockId: "lesson--003-build-a-validator--implementation-order", direction: "output", text: "Starting validation...\nVERDICT: FAIL\n\n=== VALIDATOR MECHANICS (from factory/refactor-validate.sh) ===\nMechanic: missing-baseline guard\n6:if [ ! -f .tmp/refactor-quality-before.txt ]; then\nMechanic: baseline concatenated into validation\n11:cat refactor-validate.md .tmp/refactor-quality-before.txt \\\nMechanic: exact read-only tools\n--tools read,grep,find,ls,bash -p\nMechanic: findings captured through tee\n13:  | tee .tmp/refactor-validate-findings.txt\n" },
+        { blockId: "lesson--004-feed-the-findings-back--implementation-order", direction: "input", text: commands[2] }
+      ],
+      reflections: [
+        { blockId: "lesson--003-build-a-validator--checks", role: "learner", text: "The validator announces, uses read-only tools plus bash, never edit/write, starts with VERDICT, quotes evidence, tees findings, and refuses without a baseline." },
+        { blockId: "lesson--004-feed-the-findings-back--checks", role: "learner", text: "I chose when to rerun, carried findings into context, preserved the baseline, and decided when to stop." }
+      ],
+      editors: [],
+      progressionEvents: [
+        event("workbook_introduction_completed"),
+        accepted("003-build-a-validator", "lesson--003-build-a-validator--implementation-order", "terminal"),
+        accepted("003-build-a-validator", "lesson--003-build-a-validator--checks", "reflection"),
+        event("block_completed", "003-build-a-validator", "lesson--003-build-a-validator--checks"),
+        event("block_completed", "004-feed-the-findings-back", "lesson--004-feed-the-findings-back--key-concept"),
+        accepted("004-feed-the-findings-back", "lesson--004-feed-the-findings-back--implementation-order", "terminal"),
+        accepted("004-feed-the-findings-back", "lesson--004-feed-the-findings-back--checks", "reflection"),
+        event("block_completed", "004-feed-the-findings-back", "lesson--004-feed-the-findings-back--checks")
+      ],
+      artifacts
+    },
+    commandInvocations: [
+      stub("doer", { mutation: "partial-refactor" }),
+      stub("validator", { verdict: "FAIL", mutation: "none" }),
+      stub("repair", { mutation: "complete-refactor" }),
+      stub("validator", { verdict: "FAIL", mutation: "none" }),
+      stub("validator", { verdict: "FAIL", mutation: "none" }),
+      stub("repair", { mutation: "complete-refactor" }),
+      stub("validator", { verdict: "FAIL", mutation: "none" })
+    ],
+    artifactSnapshots: structuredClone(artifacts),
+    workspaceFileSnapshots: structuredClone(artifacts),
+    rawEvents: [],
+    facts: {
+      authoredSourceChanged: false,
+      disposableCurriculumChanged: false,
+      lessonJumpStarted: false,
+      commandStubsCreated: true,
+      learnerWorkspaceChangedOutsideAllowlist: [],
+      expectedCommandStubRunId: "123e4567-e89b-42d3-a456-426614174000",
+      expectedCanonicalBaselineContent: baseline,
+      expectedCanonicalBaselineSha256: sha256Text(baseline),
+      calculatorBehaviorTimeline: [{ label: "after-multiply-only", sourceSha256: "intermediate-sha", testStatus: "passed", cases: [{ input: "multiply 6 by 7", output: 42 }] }],
+      calculatorBehaviorProjection: { label: "final", sourceSha256: sha256Text(completedSource), testStatus: "passed", cases: [{ input: "multiply 6 by 7", output: 42 }, { input: "divide 84 by 2", output: 42 }] }
+    }
+  };
+}
+
+
 describe("authored workbook eval CLI parser", () => {
   it("has fixed usage, lists without side effects, and rejects invalid flags with code 2", async () => {
     expect(formatAuthoredWorkbookRunUsage()).toContain("--scenario <exact-id>");
@@ -214,6 +444,10 @@ describe("authored workbook eval orchestration", () => {
     expect(derived).toEqual({
       maxPaidModelCalls: AUTHORED_WORKBOOK_SCENARIOS.reduce((total, scenario) => total + scenario.expectedModelCalls.total, 0) + 2,
       maxEstimatedTokens: (AUTHORED_WORKBOOK_SCENARIOS.reduce((total, scenario) => total + scenario.expectedModelCalls.total, 0) + 2) * AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL
+    });
+    expect(authoredWorkbookReleaseBudget([authoredWorkbookScenarioById("lessons-003-004-evidence-feedback")])).toEqual({
+      maxPaidModelCalls: 36,
+      maxEstimatedTokens: 36 * AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL
     });
 
     const events: string[] = [];
@@ -272,6 +506,34 @@ describe("authored workbook eval orchestration", () => {
     expect(code).toBe(1);
     expect(bad.judgeCalls).toBe(0);
     expect(bad.writes[0]).toMatchObject({ kind: "failure", status: "gate" });
+  });
+
+  it("publishes Lessons 003-004 as deterministic-only success without invoking the Judge", async () => {
+    const fakes = makeDeps();
+    const gateInput = await lessons003004PassingGateInput();
+    fakes.deps.createGateEvidenceCollector = () => ({
+      captureBaseline: async () => { fakes.events.push("baseline"); },
+      captureGateCheckpoint: async (label: string) => { fakes.events.push(`checkpoint:${label}`); },
+      collectGateInput: async () => { fakes.events.push("gate-input"); return gateInput; }
+    } as any);
+
+    const code = await runAuthoredWorkbookEvalBatch(invocation(["lessons-003-004-evidence-feedback"], 1), { dependencies: fakes.deps });
+
+    expect(code).toBe(0);
+    expect(fakes.judgeCalls).toBe(0);
+    expect(fakes.events).not.toContain("judge");
+    expect(fakes.writes[0]).toMatchObject({ kind: "success", bundle: { evaluationMode: "deterministic-only" } });
+    expect(fakes.writes[0].bundle).not.toHaveProperty("judgeInput");
+    expect(fakes.writes[0].bundle).not.toHaveProperty("judge");
+    expect(fakes.latest).toEqual([
+      expect.objectContaining({
+        scenario: "lessons-003-004-evidence-feedback",
+        status: "completed",
+        evaluationMode: "deterministic-only",
+        verdict: { passed: true, rule: "deterministic-gate-only" },
+        files: { trace: "trace.json", report: "report.json", summary: "summary.md", metadata: "metadata.json" }
+      })
+    ]);
   });
 
   it("writes a private failure diagnostic when gate evidence collection throws before gate.json exists", async () => {

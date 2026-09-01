@@ -25,6 +25,10 @@ export interface AuthoredWorkbookScenarioExpectedModelCalls {
   total: number;
 }
 
+export type AuthoredWorkbookScenarioJudgePolicy =
+  | { kind: "scenario-specific"; expectedCalls: 1 }
+  | { kind: "deterministic-only"; expectedCalls: 0; deterministicSuccess: { rule: "deterministic-gate-only"; requiredAssertionCount: number } };
+
 export type AuthoredWorkbookGateCheckpointLabel = "lessons003004:after-multiply-only";
 
 export interface AuthoredWorkbookScenarioDriveContext {
@@ -130,6 +134,7 @@ export interface AuthoredWorkbookScenarioDescriptor {
   /** Runner-private evidence and mutation declarations; never projected into public descriptors or Judge prompts. */
   runnerPrivate?: AuthoredWorkbookScenarioRunnerPrivateDeclaration;
   gateCheckpoints?: readonly AuthoredWorkbookGateCheckpointLabel[];
+  judgePolicy: AuthoredWorkbookScenarioJudgePolicy;
   expectedModelCalls: AuthoredWorkbookScenarioExpectedModelCalls;
   expectedModelCallDerivation: readonly string[];
   criteria: readonly AuthoredWorkbookScenarioCriterion[];
@@ -167,6 +172,13 @@ validatePrerequisiteSeedCatalog(authoredWorkbookPrerequisiteSeedFiles);
 export const AUTHORED_WORKBOOK_PREREQUISITE_SEED_FILES = deepFreeze(authoredWorkbookPrerequisiteSeedFiles);
 export type AuthoredWorkbookPrerequisiteSeedId = keyof typeof AUTHORED_WORKBOOK_PREREQUISITE_SEED_FILES;
 export const AUTHORED_WORKBOOK_GATE_CHECKPOINT_LABELS: readonly AuthoredWorkbookGateCheckpointLabel[] = Object.freeze(["lessons003004:after-multiply-only"]);
+
+export const AUTHORED_WORKBOOK_SCENARIO_JUDGE_POLICIES: Readonly<Record<AuthoredWorkbookScenarioId, AuthoredWorkbookScenarioJudgePolicy>> = deepFreeze({
+  "primer-validation-misconception": { kind: "scenario-specific", expectedCalls: 1 },
+  "lesson-001-headless-boundary": { kind: "scenario-specific", expectedCalls: 1 },
+  "lessons-003-004-evidence-feedback": { kind: "deterministic-only", expectedCalls: 0, deterministicSuccess: { rule: "deterministic-gate-only", requiredAssertionCount: 17 } },
+  "lesson-013-operator-judgement": { kind: "scenario-specific", expectedCalls: 1 }
+});
 
 const prerequisiteRoot = resolve(import.meta.dirname, "prerequisites");
 
@@ -361,6 +373,7 @@ const authoredWorkbookScenarioCatalog = [
     selection: whatIsAFactorySlice,
     artifactAllowlist: [],
     runnerPrivate: runnerPrivateDeclaration({ rawWorkbookTimeline: true }),
+    judgePolicy: AUTHORED_WORKBOOK_SCENARIO_JUDGE_POLICIES["primer-validation-misconception"],
     expectedModelCalls: freezeExpectedCalls({ mainTutor: 14, judge: 1 }),
     expectedModelCallDerivation: freezeStrings([
       "Main Tutor upper bound: actual path includes introduction, four reflection reviews, evaluated reflection blocks, block summaries, lesson summary, and workbook summary; conservative margin 14.",
@@ -396,6 +409,7 @@ const authoredWorkbookScenarioCatalog = [
     stubLessonNumber: undefined,
     artifactAllowlist: [],
     runnerPrivate: runnerPrivateDeclaration({ rawWorkbookTimeline: true }),
+    judgePolicy: AUTHORED_WORKBOOK_SCENARIO_JUDGE_POLICIES["lesson-001-headless-boundary"],
     expectedModelCalls: freezeExpectedCalls({ mainTutor: 16, judge: 1 }),
     expectedModelCallDerivation: freezeStrings([
       "Main Tutor upper bound: actual path includes three direct terminal reviews, one reflection review, evaluated terminal/reflection blocks, lesson summary, workbook summary, and current explanation/review paths; conservative margin 16.",
@@ -427,10 +441,11 @@ const authoredWorkbookScenarioCatalog = [
     artifactAllowlist: lessons003004ArtifactAllowlist,
     runnerPrivate: runnerPrivateDeclaration({ workspaceFiles: [commandStubInvocationEvidenceFile], commandStubInvocations: true, rawWorkbookTimeline: true, learnerWorkspaceFiles: [...lessons003004ArtifactAllowlist, ".gitignore"] }),
     gateCheckpoints: ["lessons003004:after-multiply-only"],
-    expectedModelCalls: freezeExpectedCalls({ mainTutor: 35, judge: 1 }),
+    judgePolicy: AUTHORED_WORKBOOK_SCENARIO_JUDGE_POLICIES["lessons-003-004-evidence-feedback"],
+    expectedModelCalls: freezeExpectedCalls({ mainTutor: 35, judge: 0 }),
     expectedModelCallDerivation: freezeStrings([
       "Main Tutor upper bound: actual path includes five direct terminal reviews, two reflection reviews, evaluated terminal/reflection/narrative blocks, lesson/part summaries, workbook summary, and current explanation/review paths for broken validator, corrected validator, wrong rerun, multiply-only, divide/final, and two reflection/transition assists; conservative margin 35.",
-      "Judge: exactly one stateless public-report judge call."
+      "Judge policy: deterministic-only; expected Judge calls: 0. The existing 17-assertion deterministic gate is the sole success verdict."
     ]),
     criteria: [
       criterion("validator-guard-and-tee", "Validator carries evidence", "The validator script guards the baseline, concatenates it into the prompt, and tees findings for the next lesson."),
@@ -467,6 +482,7 @@ const authoredWorkbookScenarioCatalog = [
     stubLessonNumber: 13,
     artifactAllowlist: lesson013ArtifactAllowlist,
     runnerPrivate: runnerPrivateDeclaration({ workspaceFiles: [commandStubInvocationEvidenceFile], workspacePathPrefixes: [lesson013RawEventPrefix], commandStubInvocations: true, rawWorkbookTimeline: true, learnerWorkspaceFiles: lesson013ArtifactAllowlist }),
+    judgePolicy: AUTHORED_WORKBOOK_SCENARIO_JUDGE_POLICIES["lesson-013-operator-judgement"],
     expectedModelCalls: freezeExpectedCalls({ mainTutor: 16, judge: 1 }),
     expectedModelCallDerivation: freezeStrings([
       "Main Tutor upper bound: actual path includes one direct terminal review, one reflection review, evaluated terminal/reflection/narrative blocks, lesson summary, workbook summary, and current operator-command explanation plus reflection/review assist paths; conservative margin 16.",
@@ -552,6 +568,7 @@ function finalizeScenario<T extends AuthoredWorkbookScenarioDescriptor>(scenario
     artifactAllowlist: freezeStrings(scenario.artifactAllowlist),
     ...(scenario.runnerPrivate === undefined ? {} : { runnerPrivate: freezeRunnerPrivateDeclaration(scenario.runnerPrivate) }),
     ...(scenario.gateCheckpoints === undefined ? {} : { gateCheckpoints: freezeGateCheckpointLabels(scenario.gateCheckpoints) }),
+    judgePolicy: freezeJudgePolicy(scenario.judgePolicy),
     expectedModelCalls: freezeExpectedCalls(scenario.expectedModelCalls),
     expectedModelCallDerivation: freezeStrings(scenario.expectedModelCallDerivation),
     criteria: Object.freeze(scenario.criteria.map((entry) => Object.freeze({ ...entry })))
@@ -578,8 +595,12 @@ function validateScenarioCatalog(scenarios: readonly AuthoredWorkbookScenarioDes
       if (!Object.hasOwn(AUTHORED_WORKBOOK_PREREQUISITE_SEED_FILES, scenario.prerequisiteOverlay.id)) throw new Error(`Scenario ${scenario.id} declares an unknown prerequisite overlay.`);
       if (JSON.stringify([...scenario.prerequisiteOverlay.files]) !== JSON.stringify([...(AUTHORED_WORKBOOK_PREREQUISITE_SEED_FILES as Record<string, readonly string[]>)[scenario.prerequisiteOverlay.id]!])) throw new Error(`Scenario ${scenario.id} prerequisite overlay manifest does not match its seed catalog.`);
     }
+    const expectedPolicy = AUTHORED_WORKBOOK_SCENARIO_JUDGE_POLICIES[scenario.id];
+    if (JSON.stringify(scenario.judgePolicy) !== JSON.stringify(expectedPolicy)) throw new Error(`Scenario ${scenario.id} must declare its closed Judge policy.`);
+    if (!Number.isInteger(scenario.expectedModelCalls.mainTutor) || scenario.expectedModelCalls.mainTutor <= 0 || !Number.isInteger(scenario.expectedModelCalls.judge) || scenario.expectedModelCalls.judge < 0) throw new Error(`Scenario ${scenario.id} has invalid model-call counts.`);
     if (scenario.expectedModelCalls.total !== scenario.expectedModelCalls.mainTutor + scenario.expectedModelCalls.judge) throw new Error(`Scenario ${scenario.id} has an invalid model-call total.`);
-    if (scenario.expectedModelCalls.judge !== 1) throw new Error(`Scenario ${scenario.id} must budget exactly one Judge call.`);
+    if (scenario.expectedModelCalls.judge !== scenario.judgePolicy.expectedCalls) throw new Error(`Scenario ${scenario.id} model-call budget must match its Judge policy.`);
+    if (scenario.judgePolicy.kind === "deterministic-only" && scenario.judgePolicy.deterministicSuccess.requiredAssertionCount !== 17) throw new Error(`Scenario ${scenario.id} deterministic-only gate count must stay at 17 assertions.`);
     if (scenario.stubLessonNumber !== undefined && (scenario.stubLessonNumber < 2 || scenario.stubLessonNumber > 13)) throw new Error(`Scenario ${scenario.id} has an invalid stub lesson number.`);
     const criterionIds = new Set<string>();
     for (const criterion of scenario.criteria) {
@@ -651,6 +672,18 @@ function freezeRunnerPrivateDeclaration(declaration: AuthoredWorkbookScenarioRun
 
 function freezeGateCheckpointLabels(labels: readonly AuthoredWorkbookGateCheckpointLabel[]): readonly AuthoredWorkbookGateCheckpointLabel[] {
   return Object.freeze(labels.map(validateGateCheckpointLabel));
+}
+
+function freezeJudgePolicy(policy: AuthoredWorkbookScenarioJudgePolicy): AuthoredWorkbookScenarioJudgePolicy {
+  if (policy.kind === "scenario-specific") {
+    if (policy.expectedCalls !== 1) throw new Error("Scenario-specific Judge policy must declare exactly one Judge call.");
+    return Object.freeze({ kind: "scenario-specific", expectedCalls: 1 as const });
+  }
+  if (policy.kind === "deterministic-only") {
+    if (policy.expectedCalls !== 0 || policy.deterministicSuccess?.rule !== "deterministic-gate-only" || !Number.isInteger(policy.deterministicSuccess.requiredAssertionCount) || policy.deterministicSuccess.requiredAssertionCount < 1) throw new Error("Deterministic-only Judge policy must declare zero Judge calls and a deterministic success gate.");
+    return deepFreeze({ kind: "deterministic-only", expectedCalls: 0 as const, deterministicSuccess: { rule: "deterministic-gate-only" as const, requiredAssertionCount: policy.deterministicSuccess.requiredAssertionCount } });
+  }
+  throw new Error("Unknown authored workbook Judge policy.");
 }
 
 function deepFreeze<T>(value: T): T {

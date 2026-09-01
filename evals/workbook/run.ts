@@ -15,7 +15,8 @@ import {
   type AuthoredWorkbookEvalScenarioPublicDescriptor
 } from "./judge.js";
 import {
-  createAuthoredWorkbookEvalFailureMetadataEnvelope,
+  AUTHORED_WORKBOOK_DETERMINISTIC_REPORT_FILENAMES,
+  AUTHORED_WORKBOOK_REPORT_FILENAMES,
   createAuthoredWorkbookEvalLatestEnvelope,
   createAuthoredWorkbookEvalLatestRunEntry,
   writeAuthoredWorkbookEvalCleanupFailureDiagnostic,
@@ -26,6 +27,7 @@ import {
   writeAuthoredWorkbookEvalFailureMetadata,
   authoredWorkbookEvalLocalDiagnosticText,
   authoredWorkbookEvalStabilityPassed,
+  type AuthoredWorkbookEvalEvaluationMode,
   type AuthoredWorkbookEvalInvocationScope,
   type AuthoredWorkbookEvalLatestRunEntry,
   type AuthoredWorkbookEvalModelIdentities,
@@ -59,7 +61,7 @@ Options:
   --repeat <1|2|3>                         Scenario/all only; default 1.
   --keep-workspace                         One --scenario run, repeat 1, non-release only.
   --tutor-model <provider/model>           Main Tutor model identity.
-  --judge-model <provider/model>           Judge model identity.
+  --judge-model <provider/model>           Judge model identity for judged selections.
   --max-paid-model-calls <integer>         Required for scenario/all; release derives the exact catalog budget when omitted.
   --max-estimated-tokens <integer>         Required for scenario/all; release derives at least 2000 tokens per call when omitted.
 
@@ -89,13 +91,21 @@ export interface AuthoredWorkbookRunInvocation {
   preflightSummary: AuthoredWorkbookEvalPublicSummary;
 }
 
-export interface AuthoredWorkbookRunSuccessBundle {
-  scenario: AuthoredWorkbookEvalScenarioPublicDescriptor;
-  trace: AuthoredWorkbookEvalTrace;
-  gate: AuthoredWorkbookEvalGateResult;
-  judgeInput: string;
-  judge: AuthoredWorkbookEvalJudgeResult;
-}
+export type AuthoredWorkbookRunSuccessBundle =
+  | {
+    evaluationMode: "judged";
+    scenario: AuthoredWorkbookEvalScenarioPublicDescriptor;
+    trace: AuthoredWorkbookEvalTrace;
+    gate: AuthoredWorkbookEvalGateResult;
+    judgeInput: string;
+    judge: AuthoredWorkbookEvalJudgeResult;
+  }
+  | {
+    evaluationMode: "deterministic-only";
+    scenario: AuthoredWorkbookEvalScenarioPublicDescriptor;
+    trace: AuthoredWorkbookEvalTrace;
+    gate: AuthoredWorkbookEvalGateResult;
+  };
 
 export interface AuthoredWorkbookRunAttemptResult {
   runId: string;
@@ -164,7 +174,7 @@ export interface AuthoredWorkbookRunDependencies {
   createGateEvidenceCollector(input: { scenario: AuthoredWorkbookScenarioDescriptor; workspace: AuthoredCurriculumSliceWorkspace; session: TutorialSessionPaths; trace: AuthoredWorkbookEvalSessionTrace; commandStubHandle?: AuthoredCommandStubHandle; signal: AbortSignal }): ReturnType<typeof createAuthoredWorkbookScenarioGateEvidenceCollector>;
   judge(input: { scenario: AuthoredWorkbookEvalScenarioPublicDescriptor; trace: AuthoredWorkbookRunSuccessBundle["trace"]; gate: AuthoredWorkbookEvalGateResult; request: AuthoredWorkbookEvalPreflightRequest; signal: AbortSignal }): Promise<{ judgeInput: string; judge: AuthoredWorkbookEvalJudgeResult }>;
   writeSuccess(input: { runId: string; reportsRoot: string; bundle: AuthoredWorkbookRunSuccessBundle; modelIdentities: AuthoredWorkbookEvalModelIdentities; repetition: 1 | 2 | 3 }): Promise<{ directory: string }>;
-  writeFailure(input: { runId: string; reportsRoot: string; scenarioId: string; status: Exclude<AuthoredWorkbookEvalRunLifecycleStatus, "completed">; modelIdentities: AuthoredWorkbookEvalModelIdentities; repetition: 1 | 2 | 3 }): Promise<{ directory: string }>;
+  writeFailure(input: { runId: string; reportsRoot: string; scenarioId: string; status: Exclude<AuthoredWorkbookEvalRunLifecycleStatus, "completed">; evaluationMode?: AuthoredWorkbookEvalEvaluationMode; modelIdentities: AuthoredWorkbookEvalModelIdentities; repetition: 1 | 2 | 3 }): Promise<{ directory: string }>;
   writeLatest(input: { reportsRoot: string; invocation: { scope: AuthoredWorkbookEvalInvocationScope; scenarioIds: string[]; repeat: 1 | 2 | 3 }; runs: AuthoredWorkbookEvalLatestRunEntry[] }): Promise<void>;
   writeGateDiagnostic(directory: string, gate: AuthoredWorkbookEvalGateResult): Promise<void>;
   writeFailureDiagnostic(directory: string, error: unknown): Promise<void>;
@@ -390,10 +400,16 @@ async function runOneAuthoredWorkbookScenario(input: { scenario: AuthoredWorkboo
     const gate = scenario.gate(gateInput);
     gateForDiagnostic = { passed: gate.passed, assertions: gate.assertions.map((assertion) => ({ name: assertion.id, passed: assertion.passed, detail: assertion.privateDetail ?? assertion.message })) };
     if (!gate.passed) throw new Error("Deterministic gate failed before judge invocation.");
-    status = "judge";
     const scenarioPublic = publicScenarioDescriptor(scenario);
-    const judged = await dependencies.judge({ scenario: scenarioPublic, trace: gateInput.trace, gate: gateForDiagnostic, request: invocation.preflightRequest, signal });
-    successBundle = { scenario: scenarioPublic, trace: gateInput.trace, gate: gateForDiagnostic, judgeInput: judged.judgeInput, judge: judged.judge };
+    if (scenario.judgePolicy.kind === "deterministic-only") {
+      const expectedAssertionCount = scenario.judgePolicy.deterministicSuccess.requiredAssertionCount;
+      if (gateForDiagnostic.assertions.length !== expectedAssertionCount) throw new Error(`Deterministic-only scenario gate produced ${gateForDiagnostic.assertions.length} assertions; expected ${expectedAssertionCount}.`);
+      successBundle = { evaluationMode: "deterministic-only", scenario: scenarioPublic, trace: gateInput.trace, gate: gateForDiagnostic };
+    } else {
+      status = "judge";
+      const judged = await dependencies.judge({ scenario: scenarioPublic, trace: gateInput.trace, gate: gateForDiagnostic, request: invocation.preflightRequest, signal });
+      successBundle = { evaluationMode: "judged", scenario: scenarioPublic, trace: gateInput.trace, gate: gateForDiagnostic, judgeInput: judged.judgeInput, judge: judged.judge };
+    }
     status = "cleanup";
   } catch (error) {
     primaryError = signal.aborted ? new InterruptedRunError() : error;
@@ -415,6 +431,7 @@ async function runOneAuthoredWorkbookScenario(input: { scenario: AuthoredWorkboo
     scenarioId: scenario.id,
     repetition,
     status: finalStatus,
+    evaluationMode: scenario.judgePolicy.kind === "deterministic-only" ? "deterministic-only" : "judged",
     successBundle,
     modelIdentities,
     gateForDiagnostic,
@@ -422,7 +439,7 @@ async function runOneAuthoredWorkbookScenario(input: { scenario: AuthoredWorkboo
     cleanupError,
     dependencies
   });
-  const passed = finalStatus === "completed" && successBundle !== undefined && authoredWorkbookJudgeVerdict(successBundle.judge).passed && published.status === "completed";
+  const passed = finalStatus === "completed" && successBundle !== undefined && published.status === "completed" && (successBundle.evaluationMode === "deterministic-only" || authoredWorkbookJudgeVerdict(successBundle.judge).passed);
   return { runId, scenarioId: scenario.id, repetition, status: published.status, passed, reportDirectory: published.reportDirectory, latestEntry: published.latestEntry, reported: published.reported };
 }
 
@@ -432,6 +449,7 @@ async function publishAuthoredWorkbookRunReport(input: {
   scenarioId: string;
   repetition: 1 | 2 | 3;
   status: AuthoredWorkbookEvalRunLifecycleStatus;
+  evaluationMode: AuthoredWorkbookEvalEvaluationMode;
   successBundle?: AuthoredWorkbookRunSuccessBundle;
   modelIdentities: AuthoredWorkbookEvalModelIdentities;
   gateForDiagnostic?: AuthoredWorkbookEvalGateResult;
@@ -440,19 +458,21 @@ async function publishAuthoredWorkbookRunReport(input: {
   dependencies: AuthoredWorkbookRunDependencies;
 }): Promise<{ status: AuthoredWorkbookEvalRunLifecycleStatus; reported: boolean; reportDirectory?: string; latestEntry?: AuthoredWorkbookEvalLatestRunEntry }> {
   const { runId, reportsRoot, scenarioId, repetition, status, successBundle, modelIdentities, gateForDiagnostic, primaryError, cleanupError, dependencies } = input;
+  const evaluationMode = successBundle?.evaluationMode ?? input.evaluationMode;
+  const publicModelIdentities = modelIdentitiesForEvaluationMode(modelIdentities, evaluationMode);
   try {
     const report = status === "completed" && successBundle
-      ? await dependencies.writeSuccess({ runId, reportsRoot, bundle: successBundle, modelIdentities, repetition })
-      : await dependencies.writeFailure({ runId, reportsRoot, scenarioId, status: status as Exclude<AuthoredWorkbookEvalRunLifecycleStatus, "completed">, modelIdentities, repetition });
+      ? await dependencies.writeSuccess({ runId, reportsRoot, bundle: successBundle, modelIdentities: publicModelIdentities, repetition })
+      : await dependencies.writeFailure({ runId, reportsRoot, scenarioId, status: status as Exclude<AuthoredWorkbookEvalRunLifecycleStatus, "completed">, evaluationMode, modelIdentities: publicModelIdentities, repetition });
     await writeOptionalDiagnostics({ directory: report.directory, gateForDiagnostic, primaryError, cleanupError, status, dependencies });
-    const latestEntry = latestRunEntryFromMetadata({ runId, scenarioId, repetition, status, reportDirectory: runId, successBundle });
+    const latestEntry = latestRunEntryFromMetadata({ runId, scenarioId, repetition, status, reportDirectory: runId, successBundle, evaluationMode });
     return { status, reported: true, reportDirectory: runId, latestEntry };
   } catch (error) {
     if (status !== "completed") return { status: "report", reported: false };
     try {
-      const report = await dependencies.writeFailure({ runId, reportsRoot, scenarioId, status: "report", modelIdentities, repetition });
+      const report = await dependencies.writeFailure({ runId, reportsRoot, scenarioId, status: "report", evaluationMode, modelIdentities: publicModelIdentities, repetition });
       await writeOptionalDiagnostics({ directory: report.directory, primaryError: error, status: "report", dependencies });
-      const latestEntry = latestRunEntryFromMetadata({ runId, scenarioId, repetition, status: "report", reportDirectory: runId });
+      const latestEntry = latestRunEntryFromMetadata({ runId, scenarioId, repetition, status: "report", reportDirectory: runId, evaluationMode });
       return { status: "report", reported: true, reportDirectory: runId, latestEntry };
     } catch {
       return { status: "report", reported: false };
@@ -523,17 +543,20 @@ export function createAuthoredWorkbookRunDependencies(primitives: AuthoredWorkbo
     },
     judge: async ({ scenario, trace, gate, request, signal }) => {
       throwIfAborted(signal);
+      if (!request.models.judge) throw new Error("Judge model was not preflighted for a judged authored workbook scenario.");
       const judgeInput = primitives.buildJudgePrompt(scenario, trace, gate);
       const raw = await primitives.invokeJudgeCommand({ prompt: judgeInput, model: request.models.judge.identity, environment: request.environment, signal });
       throwIfAborted(signal);
       return { judgeInput, judge: primitives.verifyJudgeResult(raw, scenario, trace) };
     },
     writeSuccess: async ({ runId, reportsRoot, bundle, modelIdentities, repetition }) => {
-      const written = await primitives.writeReportBundle({ runId, reportsRoot, scenario: bundle.scenario, trace: bundle.trace, gate: bundle.gate, judgeInput: bundle.judgeInput, judge: bundle.judge, modelIdentities, repetition });
+      const written = bundle.evaluationMode === "deterministic-only"
+        ? await primitives.writeReportBundle({ runId, reportsRoot, scenario: bundle.scenario, trace: bundle.trace, gate: bundle.gate, evaluationMode: "deterministic-only", modelIdentities, repetition })
+        : await primitives.writeReportBundle({ runId, reportsRoot, scenario: bundle.scenario, trace: bundle.trace, gate: bundle.gate, evaluationMode: "judged", judgeInput: bundle.judgeInput, judge: bundle.judge, modelIdentities, repetition });
       return { directory: written.directory };
     },
-    writeFailure: async ({ runId, reportsRoot, scenarioId, status, modelIdentities, repetition }) => {
-      const written = await primitives.writeFailureMetadata({ runId, reportsRoot, scenarioId, status, modelIdentities, repetition });
+    writeFailure: async ({ runId, reportsRoot, scenarioId, status, evaluationMode, modelIdentities, repetition }) => {
+      const written = await primitives.writeFailureMetadata({ runId, reportsRoot, scenarioId, status, evaluationMode, modelIdentities, repetition });
       return { directory: written.directory };
     },
     writeLatest: async ({ reportsRoot, invocation, runs }) => {
@@ -556,7 +579,8 @@ export function createDefaultAuthoredWorkbookRunDependencies(): AuthoredWorkbook
 
 export function authoredWorkbookReleaseBudget(scenarios: readonly Pick<AuthoredWorkbookScenarioDescriptor, "expectedModelCalls">[] = AUTHORED_WORKBOOK_SCENARIOS): Readonly<AuthoredWorkbookEvalPreflightRequestInput["costBudget"]> {
   const releaseCalls = scenarios.reduce((total, scenario) => total + scenario.expectedModelCalls.total, 0);
-  const maxPaidModelCalls = releaseCalls + 2;
+  const preflightCalls = 1 + (scenarios.some((scenario) => scenario.expectedModelCalls.judge > 0) ? 1 : 0);
+  const maxPaidModelCalls = releaseCalls + preflightCalls;
   return Object.freeze({
     maxPaidModelCalls,
     maxEstimatedTokens: maxPaidModelCalls * AUTHORED_PREFLIGHT_MIN_TOKENS_PER_PAID_CALL
@@ -590,10 +614,17 @@ function applyReleaseBudget(costBudget: Record<string, number>): void {
 function modelIdentitiesFromPreflight(request: AuthoredWorkbookEvalPreflightRequest, summary: AuthoredWorkbookEvalPublicSummary): AuthoredWorkbookEvalModelIdentities {
   const selected = new Map(summary.selectedModelIdentities.map((entry) => [entry.role, `${entry.provider}/${entry.id}`]));
   const requested = new Map(summary.configuredModelIdentities.map((entry) => [entry.role, `${entry.provider}/${entry.id}`]));
-  return {
-    "Main Tutor": { requested: requested.get("Main Tutor") ?? request.models.mainTutor.identity, selected: selected.get("Main Tutor") ?? request.models.mainTutor.identity },
-    Judge: { requested: requested.get("Judge") ?? request.models.judge.identity, selected: selected.get("Judge") ?? request.models.judge.identity }
+  const identities: AuthoredWorkbookEvalModelIdentities = {
+    "Main Tutor": { requested: requested.get("Main Tutor") ?? request.models.mainTutor.identity, selected: selected.get("Main Tutor") ?? request.models.mainTutor.identity }
   };
+  if (request.models.judge) identities.Judge = { requested: requested.get("Judge") ?? request.models.judge.identity, selected: selected.get("Judge") ?? request.models.judge.identity };
+  return identities;
+}
+
+function modelIdentitiesForEvaluationMode(modelIdentities: AuthoredWorkbookEvalModelIdentities, evaluationMode: AuthoredWorkbookEvalEvaluationMode): AuthoredWorkbookEvalModelIdentities {
+  if (evaluationMode === "deterministic-only") return { "Main Tutor": modelIdentities["Main Tutor"] };
+  if (!modelIdentities.Judge) throw new Error("Judged authored workbook runs require a Judge model identity.");
+  return modelIdentities;
 }
 
 function publicScenarioDescriptor(scenario: AuthoredWorkbookScenarioDescriptor): AuthoredWorkbookEvalScenarioPublicDescriptor {
@@ -606,18 +637,24 @@ function finalStatusAfterCleanup(status: AuthoredWorkbookEvalRunLifecycleStatus,
   return "completed";
 }
 
-function latestRunEntryFromMetadata(input: { runId: string; scenarioId: string; repetition: 1 | 2 | 3; status: AuthoredWorkbookEvalRunLifecycleStatus; reportDirectory: string; successBundle?: AuthoredWorkbookRunSuccessBundle }): AuthoredWorkbookEvalLatestRunEntry {
+function latestRunEntryFromMetadata(input: { runId: string; scenarioId: string; repetition: 1 | 2 | 3; status: AuthoredWorkbookEvalRunLifecycleStatus; evaluationMode: AuthoredWorkbookEvalEvaluationMode; reportDirectory: string; successBundle?: AuthoredWorkbookRunSuccessBundle }): AuthoredWorkbookEvalLatestRunEntry {
   if (input.status !== "completed") {
-    const metadata = createAuthoredWorkbookEvalFailureMetadataEnvelope({ runId: input.runId, scenarioId: input.scenarioId, repetition: input.repetition, status: input.status as Exclude<AuthoredWorkbookEvalRunLifecycleStatus, "completed">, modelIdentities: placeholderModelIdentities() });
-    return createAuthoredWorkbookEvalLatestRunEntry({ scenario: metadata.scenario, repetition: metadata.repetition, status: metadata.status, verdict: metadata.verdict, reportDirectory: input.reportDirectory, files: metadata.files });
+    return createAuthoredWorkbookEvalLatestRunEntry({
+      scenario: input.scenarioId,
+      repetition: input.repetition,
+      status: input.status,
+      evaluationMode: input.evaluationMode,
+      verdict: { passed: false, percentage: 0, rule: "not-judged" },
+      reportDirectory: input.reportDirectory,
+      files: { metadata: AUTHORED_WORKBOOK_REPORT_FILENAMES.metadata }
+    });
   }
   if (!input.successBundle) throw new Error("Cannot create a completed latest entry without a success bundle.");
+  if (input.successBundle.evaluationMode === "deterministic-only") {
+    return createAuthoredWorkbookEvalLatestRunEntry({ scenario: input.scenarioId, repetition: input.repetition, status: "completed", evaluationMode: "deterministic-only", verdict: { passed: true, rule: "deterministic-gate-only" }, reportDirectory: input.reportDirectory, files: AUTHORED_WORKBOOK_DETERMINISTIC_REPORT_FILENAMES });
+  }
   const verdict = authoredWorkbookJudgeVerdict(input.successBundle.judge);
-  return createAuthoredWorkbookEvalLatestRunEntry({ scenario: input.scenarioId, repetition: input.repetition, status: "completed", verdict, reportDirectory: input.reportDirectory, files: { trace: "trace.json", judgeInput: "judge-input.json", judge: "judge.json", report: "report.json", summary: "summary.md", metadata: "metadata.json" } });
-}
-
-function placeholderModelIdentities(): AuthoredWorkbookEvalModelIdentities {
-  return { "Main Tutor": { requested: "placeholder/model", selected: "placeholder/model" }, Judge: { requested: "placeholder/model", selected: "placeholder/model" } };
+  return createAuthoredWorkbookEvalLatestRunEntry({ scenario: input.scenarioId, repetition: input.repetition, status: "completed", evaluationMode: "judged", verdict, reportDirectory: input.reportDirectory, files: AUTHORED_WORKBOOK_REPORT_FILENAMES });
 }
 
 function scenarioIdOrThrow(value: string): AuthoredWorkbookScenarioId {
