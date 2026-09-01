@@ -31,6 +31,37 @@ function shellChain(command: string): string[] {
   return command.split(" && ");
 }
 
+function dockerIgnorePatterns(text: string): string[] {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0 && !line.startsWith("#"));
+}
+
+function globPatternSource(pattern: string): string {
+  let source = "";
+  for (let index = 0; index < pattern.length; index++) {
+    const character = pattern[index]!;
+    if (character === "*") {
+      if (pattern[index + 1] === "*") {
+        source += ".*";
+        index++;
+      } else {
+        source += "[^/]*";
+      }
+    } else {
+      source += character.replace(/[\\^$+?.()|[\]{}]/g, "\\$&");
+    }
+  }
+  return source;
+}
+
+function contextIgnores(patterns: string[], contextPath: string): boolean {
+  return patterns.some((pattern) => {
+    const normalizedPattern = pattern.replace(/^\.\//, "").replace(/^\//, "").replace(/\/$/, "");
+    const source = globPatternSource(normalizedPattern);
+    const regex = normalizedPattern.includes("/") ? new RegExp(`^${source}(?:/.*)?$`) : new RegExp(`(?:^|.*/)${source}(?:/.*)?$`);
+    return regex.test(contextPath);
+  });
+}
+
 describe("evaluator package scripts", () => {
   it("keeps deterministic eval checks on synthetic v2 code and leaves live eval explicit", async () => {
     const enginePackageJson = await readJson<PackageJson>(resolve(engineRoot, "package.json"));
@@ -79,8 +110,24 @@ describe("evaluator package scripts", () => {
 
   it("builds the generic workbook terminal image from the engine package context", async () => {
     const enginePackageJson = await readJson<PackageJson>(resolve(engineRoot, "package.json"));
+    const patterns = dockerIgnorePatterns(await readFile(resolve(engineRoot, ".dockerignore"), "utf8"));
 
     expect(requiredScript(enginePackageJson, "build:workbook-terminal")).toBe("docker build --tag lean-software-production/workbook-terminal:latest --file docker/workbook-terminal.Dockerfile .");
+    expect([
+      "node_modules/typescript/package.json",
+      "src/fixtures/node_modules/cache/index.js",
+      "dist/workbook/cli.js",
+      "web-workbook/dist/assets/index.js",
+      "test/.tmp/workbook-state.json",
+      "test/workbook-ux/.tmp/trace.json",
+      "test/visual/terminal-band.received.png",
+      "evals/reports/latest.json",
+      "evals/v2/reports/run.json",
+      "reports/manual-check.json",
+      "src/workbook/.tmp/runtime.json",
+      "tmp/build-output.log"
+    ].filter((contextPath) => !contextIgnores(patterns, contextPath))).toEqual([]);
+    expect(contextIgnores(patterns, "docker/workbook-terminal.Dockerfile")).toBe(false);
   });
 
   it("keeps tsconfig.check.json as a strict no-emit superset before test:fast drops redundant tsc --noEmit", async () => {
