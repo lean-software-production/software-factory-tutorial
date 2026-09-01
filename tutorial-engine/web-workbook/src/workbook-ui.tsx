@@ -95,14 +95,43 @@ function stateForBlock(progress: Progress, lessonId: string, block: Block): Bloc
 function commandForInsertion(command = "") { return command.replace(/\\\r?\n\s*/g, " "); }
 
 const READING_LINE_TOP_PX = 120;
+const READING_LINE_HYSTERESIS_PX = 12;
+const READING_LINE_ADVANCE_TOP_PX = READING_LINE_TOP_PX - READING_LINE_HYSTERESIS_PX;
+const READING_LINE_RETURN_TOP_PX = READING_LINE_TOP_PX + READING_LINE_HYSTERESIS_PX;
 
-function canonicalBlockInView(state: State): string | undefined {
+type CanonicalBlockCandidate = { id: string; top: number };
+
+function revealedCanonicalBlockIds(state: State): string[] {
   const revealed = state.revealedBlockIds ?? state.progress.blocks.filter((block) => block.emerged).map((block) => block.id);
-  const candidates = revealed.flatMap((id) => {
+  if (!state.orderedBlocks?.length) return revealed;
+  const revealedSet = new Set(revealed);
+  const ordered = state.orderedBlocks.map((block) => block.id).filter((id) => revealedSet.has(id));
+  return [...ordered, ...revealed.filter((id) => !ordered.includes(id))];
+}
+
+function canonicalBlockCandidates(state: State): CanonicalBlockCandidate[] {
+  return revealedCanonicalBlockIds(state).flatMap((id) => {
     const element = typeof document !== "undefined" ? document.getElementById(id) : null;
     return element ? [{ id, top: element.getBoundingClientRect().top }] : [];
-  }).filter((candidate) => candidate.top <= READING_LINE_TOP_PX);
-  return candidates.at(-1)?.id ?? state.progress.activeBlockId;
+  });
+}
+
+function lastCandidateAtOrAbove(candidates: readonly CanonicalBlockCandidate[], top: number): CanonicalBlockCandidate | undefined {
+  return candidates.filter((candidate) => candidate.top <= top).at(-1);
+}
+
+function canonicalBlockInView(state: State, currentBlockId?: string): string | undefined {
+  const candidates = canonicalBlockCandidates(state);
+  if (candidates.length === 0) return currentBlockId ?? state.progress.activeBlockId;
+  const currentIndex = currentBlockId ? candidates.findIndex((candidate) => candidate.id === currentBlockId) : -1;
+  if (currentIndex < 0) return lastCandidateAtOrAbove(candidates, READING_LINE_ADVANCE_TOP_PX)?.id ?? state.progress.activeBlockId;
+
+  const later = lastCandidateAtOrAbove(candidates.slice(currentIndex + 1), READING_LINE_ADVANCE_TOP_PX);
+  if (later) return later.id;
+
+  const current = candidates[currentIndex]!;
+  if (current.top >= READING_LINE_RETURN_TOP_PX) return lastCandidateAtOrAbove(candidates.slice(0, currentIndex), READING_LINE_RETURN_TOP_PX)?.id ?? candidates[0]?.id ?? current.id;
+  return current.id;
 }
 
 const SHELL_FENCE = /^```([^`\n]*)\n([\s\S]*?)^```/gm;
@@ -730,6 +759,7 @@ export function App() {
   const [contentReloadError, setContentReloadError] = useState<string>();
   const latestState = useRef<State | undefined>(undefined);
   latestState.current = state;
+  const viewedCanonicalBlock = useRef<string | undefined>(undefined);
   const scrollCompletionPending = useRef(false);
   const sseStateRequestSequence = useRef(0);
   const initialAnchorReconciled = useRef(false);
@@ -844,23 +874,31 @@ export function App() {
       const lesson = state.orderedBlocks?.find((block) => block.id === id)?.lessonId;
       if (lesson && !lesson.startsWith("workbook--") && !lesson.startsWith("part--")) setViewed(lesson.replace(/^lesson--/, ""));
     };
-    const commitPassiveScroll = () => {
+    const commitViewedFromScroll = () => {
       const current = latestState.current;
-      if (!current) return;
-      const id = canonicalBlockInView(current);
+      if (!current) return undefined;
+      const id = canonicalBlockInView(current, viewedCanonicalBlock.current);
+      viewedCanonicalBlock.current = id;
       commitViewed(current, id);
+      return id;
+    };
+    const commitPassiveHistory = () => {
+      const id = viewedCanonicalBlock.current;
       if (id && typeof history !== "undefined" && Date.now() > suppressPassiveHistoryUntil) history.replaceState(null, "", `#${id}`);
     };
-    const schedulePassiveScrollCommit = () => {
+    const schedulePassiveHistoryCommit = () => {
       if (timer) clearTimeout(timer);
-      timer = setTimeout(commitPassiveScroll, 120);
+      timer = setTimeout(commitPassiveHistory, 120);
     };
-    const current = latestState.current;
-    if (current) commitViewed(current, canonicalBlockInView(current));
-    addEventListener("scroll", schedulePassiveScrollCommit, { passive: true });
+    commitViewedFromScroll();
+    const onScroll = () => {
+      commitViewedFromScroll();
+      schedulePassiveHistoryCommit();
+    };
+    addEventListener("scroll", onScroll, { passive: true });
     const pop = () => { const id = typeof location === "undefined" ? "" : decodeURIComponent(location.hash.replace(/^#/, "")); if (id) navigateToAnchor(id, "none"); };
     addEventListener("popstate", pop);
-    return () => { removeEventListener("scroll", schedulePassiveScrollCommit); removeEventListener("popstate", pop); if (timer) clearTimeout(timer); };
+    return () => { removeEventListener("scroll", onScroll); removeEventListener("popstate", pop); if (timer) clearTimeout(timer); };
   }, [hasInitialState]);
   if (!state) return <p className="loading">Loading workbook…</p>;
   const fatal = state.fatal;
@@ -873,7 +911,7 @@ export function App() {
   const effectiveActiveLessonId = state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeLessonId : INTRODUCTION_LESSON_ID;
   const effectiveActiveBlockId = state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID;
   const effectiveActiveBlockProgress = state.progress.blocks.find((block) => block.id === effectiveActiveBlockId) ?? (!state.introductionComplete ? { id: INTRODUCTION_BLOCK_ID, type: "workbook-introduction", ready: true, active: true, completed: false, verified: false, emerged: true } as BlockProgress : activeBlockProgress);
-  const blockInView = () => canonicalBlockInView(state);
+  const blockInView = () => canonicalBlockInView(state, viewedCanonicalBlock.current);
   const sendTutorText = (text: string) => {
     if (mutationsDisabled) return Promise.resolve();
     if (state.introductionComplete && activeBlock?.type === "reflection") {
