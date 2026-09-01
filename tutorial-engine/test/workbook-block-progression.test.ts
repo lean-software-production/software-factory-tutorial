@@ -171,7 +171,7 @@ describe("workbook block progression", () => {
       accepted = true;
       const third = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", revision: 3, text: "reaccepted editor text" }) });
       expect(third.status).toBe(202);
-      const reaccepted = await waitForState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.revision === 3 && block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted");
+      const reaccepted = await waitForState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.revision === 3 && block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted" && next.progress.canComplete?.eligible === true);
       expect(reaccepted.progress.canComplete).toMatchObject({ blockId: "lesson--001-first--edit-answer", eligible: true });
     } finally { await server.close(); }
   });
@@ -230,14 +230,16 @@ describe("workbook block progression", () => {
       expect(block(completed.state, blockId)).toMatchObject({
         active: false,
         completed: true,
-        draftText: "v2 accepted editor text",
+        editorSnapshot: { text: "v2 accepted editor text" },
         editorStatus: "accepted",
         checkpoint: { status: "accepted", successMessage: "Accepted editor answer.", evidence: { kind: "editor", text: "v2 accepted editor text" } }
       });
+      expect(block(completed.state, blockId)).not.toHaveProperty("draftText");
       expect(JSON.stringify(completed.state)).not.toContain("ORPHAN EDITOR SNAPSHOT");
       expect(JSON.stringify(completed.state)).not.toContain("STALE V1 EDITOR SNAPSHOT");
     } finally { await restarted.close(); }
 
+    await writeFile(resolve(dir, "workspaces/refactor-line/factory/answer.txt"), "MUTATED WORKSPACE FILE MUST NOT BECOME HISTORY");
     await rm(tutorialStatePath(dir, "workbook", "attempts"), { recursive: true, force: true });
     const restoredServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
     try {
@@ -245,10 +247,12 @@ describe("workbook block progression", () => {
       expect(block(restored, blockId)).toMatchObject({
         active: false,
         completed: true,
-        draftText: "v2 accepted editor text",
+        editorSnapshot: { text: "v2 accepted editor text" },
         editorStatus: "accepted",
         checkpoint: { status: "accepted", successMessage: "Accepted editor answer.", evidence: { kind: "editor", text: "v2 accepted editor text" } }
       });
+      expect(block(restored, blockId)).not.toHaveProperty("draftText");
+      expect(JSON.stringify(restored)).not.toContain("MUTATED WORKSPACE FILE");
       expect(JSON.stringify(restored)).not.toContain("ORPHAN EDITOR SNAPSHOT");
       expect(JSON.stringify(restored)).not.toContain("STALE V1 EDITOR SNAPSHOT");
     } finally { await restoredServer.close(); }
@@ -621,11 +625,10 @@ describe("workbook block progression", () => {
       await expect(pendingCompletion).resolves.toMatchObject({ outcome: "rejected", reason: "not-current" });
       expect((await pendingEditor).status).toBe(202);
       await waitForState(server.url, (next) => block(next, blockId)?.revision === 2 && block(next, blockId)?.checkpoint?.status === "accepted");
-      expect(await timelineRecords(dir)).toEqual(expect.not.arrayContaining([
-        expect.objectContaining({ type: "block_summarized", blockId }),
-        expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }),
-        expect.objectContaining({ type: "workbook_completion_summary" })
-      ]));
+      const recordsAfterInvalidation = await timelineRecords(dir);
+      expect(recordsAfterInvalidation.some((record) => record.type === "block_summarized" && record.blockId === blockId)).toBe(false);
+      expect(recordsAfterInvalidation.some((record) => record.type === "lesson_summarized" && record.lessonId === "001-first")).toBe(false);
+      expect(recordsAfterInvalidation.some((record) => record.type === "workbook_completion_summary")).toBe(false);
 
       const completed = await complete(server.url, blockId);
       expect(completed).toMatchObject({ outcome: "completed" });

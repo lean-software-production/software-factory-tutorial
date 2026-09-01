@@ -365,7 +365,11 @@ async function publicState(loaded: LoadedWorkbook, workspaceRootForLesson: (less
     const base = { id: ordered.id, type: ordered.kind, anchorId: ordered.anchorId, origin: ordered.origin, kind: ordered.kind, title: ordered.title, ready, active, completed, ...(completedAt ? { completedAt } : {}), verified: false, emerged: renderedBlockIds.has(ordered.id), workAccepted: workbookProjection.workAcceptedBlockIds.has(ordered.id) };
     if (ordered.origin !== "declared") return base;
     const authored = ordered.block;
-    const currentAttempt = isEvaluatedBlock(authored) ? await attempts.current(ordered.lessonId, ordered.id).catch(() => undefined) : undefined;
+    const storedAttempt = isEvaluatedBlock(authored) ? await attempts.current(ordered.lessonId, ordered.id).catch(() => undefined) : undefined;
+    // Completed editor history is reconstructed from immutable timeline snapshots, not from the
+    // mutable AttemptStore pointer. Active editors still use the store because that is where the
+    // browser-compatible draft/editing lifecycle lives.
+    const currentAttempt = authored.type === "editor-practice" && completed ? undefined : storedAttempt;
     const acceptedRecord = authored.type === "editor-practice" ? latestAcceptedEditors.get(ordered.id)
       : authored.type === "reflection" ? latestAcceptedReflections.get(ordered.id)
         : undefined;
@@ -403,8 +407,8 @@ async function publicState(loaded: LoadedWorkbook, workspaceRootForLesson: (less
       const workspaceRoot = workspaceRootForLesson(ordered.chapter.lesson);
       return { ...withCheckpoint, revision: 0, draftText: workspaceRoot ? await readTargetDraftText(workspaceRoot, authored).catch(() => "") : "", editorStatus: "editing" };
     }
-    if (authored.type === "editor-practice" && durableEditorSnapshot) return { ...withCheckpoint, checkpoint: checkpoint ?? publicCheckpoint(undefined, durableEditorProjection), revision: durableEditorSnapshot.acceptance.version, draftText: durableEditorSnapshot.text, editorStatus: "accepted" };
-    if (authored.type === "editor-practice" && currentAttempt?.status === "accepted") return { ...withCheckpoint, revision: currentAttempt.version, draftText: currentAttempt.evidence.kind === "editor" ? currentAttempt.evidence.text : undefined, editorStatus: "accepted" };
+    if (authored.type === "editor-practice" && completed && durableEditorSnapshot) return { ...withCheckpoint, checkpoint: checkpoint ?? publicCheckpoint(undefined, durableEditorProjection), revision: durableEditorSnapshot.acceptance.version, editorSnapshot: { text: durableEditorSnapshot.text }, editorStatus: "accepted" };
+    if (authored.type === "editor-practice" && !completed && durableEditorSnapshot) return { ...withCheckpoint, checkpoint: checkpoint ?? publicCheckpoint(undefined, durableEditorProjection), revision: durableEditorSnapshot.acceptance.version, draftText: durableEditorSnapshot.text, editorStatus: "accepted" };
     return withCheckpoint;
   }));
 

@@ -20,7 +20,7 @@ const confettiMock = vi.hoisted(() => {
 vi.mock("canvas-confetti", () => ({ default: Object.assign(vi.fn(), { create: confettiMock.create }) }));
 
 vi.mock("@codemirror/state", () => ({
-  EditorState: { create: (config: any) => config }
+  EditorState: { create: (config: any) => config, readOnly: { of: (readOnly: boolean) => ({ readOnly }) } }
 }));
 
 vi.mock("@codemirror/view", () => {
@@ -89,7 +89,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
-import { App, BlockView, ContinuationPageBreak, LessonCompletionConfetti, LessonRail, TerminalHistory, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
+import { App, BlockView, ContinuationPageBreak, EditorHistory, LessonCompletionConfetti, LessonRail, TerminalHistory, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
 
 const stylesCss = readFileSync(new URL("../web-workbook/src/styles.css", import.meta.url), "utf8");
 
@@ -728,7 +728,7 @@ describe("workbook lesson UI", () => {
       activeBlockId: secondId,
       onSend: vi.fn(async () => undefined),
       records,
-      renderTerminalHistory: (record) => record.blockId === firstId
+      renderPracticeHistory: (record) => record.blockId === firstId
         ? createElement(TerminalHistory, { state: firstTerminalState as any })
         : null,
       practiceSurfaceBlockId: secondId,
@@ -926,7 +926,7 @@ describe("workbook lesson UI", () => {
     await act(async () => {
       mountedRoot!.render(createElement(BlockView, {
         block: editorBlock,
-        progress: activeEditorProgress({ active: false, completed: true, editorStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted" } } } as any),
+        progress: activeEditorProgress({ active: false, completed: true, editorStatus: "accepted", editorSnapshot: { text: "accepted" }, checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted" } } } as any),
         refresh: vi.fn()
       }));
     });
@@ -1028,7 +1028,7 @@ describe("workbook lesson UI", () => {
 
     const completedContainer = await mount(createElement(BlockView, {
       block: editorBlock,
-      progress: activeEditorProgress({ active: false, completed: true, revision: 1, draftText: "accepted historical draft", editorStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted historical draft" } } } as any),
+      progress: activeEditorProgress({ active: false, completed: true, revision: 1, editorSnapshot: { text: "accepted historical draft" }, editorStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted historical draft" } } } as any),
       refresh: vi.fn()
     }));
     expect(completedContainer.querySelectorAll(".editor-live-surface, .editor-history")).toHaveLength(1);
@@ -2789,6 +2789,128 @@ describe("workbook lesson UI", () => {
     expect(markup).toContain('class="frozen-terminal-output">$ npm test\nPASS  calculator</pre>');
     expect(markup).toContain("Accepted by the Main Tutor.");
     expect(markup).not.toContain("Terminal session frozen.");
+  });
+
+  it("renders the durable editor snapshot beside editor success", async () => {
+    const container = await mount(createElement(EditorHistory, {
+      block: editorBlock,
+      state: activeEditorProgress({
+        active: false,
+        completed: true,
+        revision: 7,
+        editorStatus: "accepted",
+        editorSnapshot: { text: "durable accepted editor snapshot" },
+        checkpoint: { status: "accepted", successMessage: "Editor accepted by the Main Tutor.", evidence: { kind: "editor", text: "durable accepted editor snapshot" } }
+      } as any).blocks[0]
+    }));
+
+    expect(container.querySelectorAll(".editor-history")).toHaveLength(1);
+    expect(container.querySelector("[role='textbox']")?.getAttribute("contenteditable")).toBe("false");
+    expect(container.textContent).toContain("durable accepted editor snapshot");
+    expect(container.textContent).toContain("Editor accepted by the Main Tutor.");
+    expect(container.querySelectorAll(".practice-feedback-bar.is-success")).toHaveLength(1);
+  });
+
+  it("places completed editor and terminal history once under their authored records while the current ActivityBand remains live", async () => {
+    class FakeWebSocket {
+      static CONNECTING = 0; static OPEN = 1; static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.OPEN;
+      constructor() { FakeWebSocket.instances.push(this); }
+      addEventListener() {} send() {} close() { this.readyState = FakeWebSocket.CLOSED; }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const activeEditorBlock = { ...editorBlock, id: "edit-next", path: "factory/next.md" } as EditorPracticeBlock;
+    const lessonWithPractice = { ...lesson, blocks: [lesson.blocks[1]!, editorBlock, activeEditorBlock] } as Lesson;
+    const progressWithHistory: Progress = {
+      ...progress,
+      activeBlockId: activeEditorBlock.id,
+      blocks: [
+        { id: "practice", type: "terminal-practice", ready: false, active: false, completed: true, verified: true, emerged: true, terminal: { phase: "accepted", message: "Terminal accepted once." }, terminalSnapshot: { transcript: "terminal history transcript" } } as any,
+        { id: editorBlock.id, type: "editor-practice", ready: false, active: false, completed: true, verified: true, emerged: true, revision: 4, editorStatus: "accepted", editorSnapshot: { text: "editor history snapshot" }, checkpoint: { status: "accepted", successMessage: "Editor accepted once.", evidence: { kind: "editor", text: "editor history snapshot" } } } as any,
+        { id: activeEditorBlock.id, type: "editor-practice", ready: true, active: true, completed: false, verified: false, emerged: true, revision: 0, draftText: "active editor draft", editorStatus: "editing" } as any,
+      ],
+    };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: lessonWithPractice })],
+      progress: progressWithHistory,
+      adapter: {},
+      timeline: [
+        { type: "message", id: "terminal-course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "practice", role: "assistant", source: "authored", presentation: "course", text: "## Terminal practice" },
+        { type: "message", id: "editor-course", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Editor practice" },
+        { type: "message", id: "active-editor-course", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: lesson.id, blockId: activeEditorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Active editor" },
+      ],
+    } as any;
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => state })));
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.querySelectorAll(".terminal-history")).toHaveLength(1);
+    expect(container.querySelectorAll(".editor-history")).toHaveLength(1);
+    expect(container.querySelector("#practice .frozen-terminal-output")?.textContent).toContain("terminal history transcript");
+    const editorHistory = container.querySelector(`#${editorBlock.id} .editor-history`)!;
+    expect(editorHistory.querySelector(".editor-target")?.textContent).toContain("factory/answer.md");
+    expect(container.textContent?.match(/Editor practice/g)).toHaveLength(1);
+    expect(editorHistory.textContent).not.toContain(editorBlock.title);
+    expect(editorHistory.textContent).not.toContain(editorBlock.markdown);
+    expect(container.querySelector(`#${editorBlock.id} .editor-history [role='textbox']`)?.getAttribute("contenteditable")).toBe("false");
+    expect(container.querySelector(`#${editorBlock.id} .current-activity-band`)).toBeNull();
+    expect(container.querySelector(`#${activeEditorBlock.id} .current-activity-band [role='textbox']`)?.getAttribute("contenteditable")).toBe("true");
+    expect(container.textContent?.match(/Terminal accepted once\./g)).toHaveLength(1);
+    expect(container.textContent?.match(/Editor accepted once\./g)).toHaveLength(1);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("does not focus or submit when completed editor history is reread", async () => {
+    vi.useFakeTimers();
+    const lessonWithEditor = { ...lesson, blocks: [editorBlock, lesson.blocks[3]!] } as Lesson;
+    const progressWithCompletedEditor: Progress = {
+      ...progress,
+      activeBlockId: "transition",
+      blocks: [
+        { id: editorBlock.id, type: "editor-practice", ready: false, active: false, completed: true, verified: true, emerged: true, revision: 2, editorStatus: "accepted", editorSnapshot: { text: "read-only editor history" }, checkpoint: { status: "accepted", successMessage: "Editor success exactly once.", evidence: { kind: "editor", text: "read-only editor history" } } } as any,
+        { id: "transition", type: "narrative", ready: true, active: true, completed: false, verified: false, emerged: true } as any,
+      ],
+    };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: lessonWithEditor })],
+      progress: progressWithCompletedEditor,
+      adapter: {},
+      timeline: [
+        { type: "message", id: "editor-course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Editor practice" },
+        { type: "message", id: "transition-course", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "transition", role: "assistant", source: "authored", presentation: "course", text: "## Transition" },
+      ],
+    } as any;
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+    const focusSpy = vi.fn();
+
+    const container = await mount(createElement(App), (win) => {
+      stubAppShellGlobals(win);
+      win.HTMLElement.prototype.focus = focusSpy;
+    });
+    await act(async () => { await Promise.resolve(); });
+    const readOnlyEditor = container.querySelector<HTMLElement>(".editor-history [role='textbox']")!;
+
+    readOnlyEditor.textContent = "mutation attempt should not submit";
+    await act(async () => {
+      readOnlyEditor.dispatchEvent(new window.Event("input", { bubbles: true }));
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(readOnlyEditor.getAttribute("contenteditable")).toBe("false");
+    expect(fetchMock.mock.calls.filter(([url, init]) => String(url).endsWith("api/workbook/editor") && (init as RequestInit | undefined)?.method === "POST")).toHaveLength(0);
+    expect(focusSpy).not.toHaveBeenCalled();
+    expect(container.textContent?.match(/Editor success exactly once\./g)).toHaveLength(1);
   });
 
   it("preserves the live terminal instance and WebSocket when terminal work is accepted but incomplete", async () => {

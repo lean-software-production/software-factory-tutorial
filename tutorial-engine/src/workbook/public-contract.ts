@@ -13,6 +13,8 @@ export type PublicTerminal =
   | { phase: "accepted"; message: string };
 /** Sanitized, bounded output captured when a terminal attempt is accepted. */
 export type PublicTerminalSnapshot = { transcript: string };
+/** Browser-safe text captured when an editor attempt is accepted. */
+export type PublicEditorSnapshot = { text: string };
 export type PublicWorkbookBlock =
   | { id: string; type: "narrative"; title: string; markdown: string }
   | { id: string; type: "terminal-practice"; title: string; markdown: string }
@@ -22,7 +24,7 @@ export interface PublicWorkbookLesson { id: string; title: string; dek: string; 
 export interface PublicWorkbookChapter { id: string; title: string; partId?: string; part?: string; partMarkdown?: string; partNumber?: number; lessonNumber: number; lesson?: PublicWorkbookLesson; }
 export type PublicReflectionTurn = { role: "learner" | "tutor"; text: string };
 export interface PublicCheckpoint { status: "working" | "reviewing" | "feedback" | "accepted"; feedback?: string; successMessage?: string; summary?: string; reviewNotice?: string; evidence?: { kind: PublicAttemptKind; text?: string; conversation?: PublicReflectionTurn[] }; }
-export interface PublicWorkbookBlockProgress { id: string; type?: PublicWorkbookBlockKind | string; anchorId?: string; origin?: string; kind?: PublicWorkbookBlockKind | string; title?: string; ready: boolean; active: boolean; completed: boolean; completedAt?: string; verified: boolean; emerged: boolean; workAccepted?: boolean; checkpoint?: PublicCheckpoint; /** Terminal practice uses its dedicated public lifecycle rather than a checkpoint. */ terminal?: PublicTerminal; /** Monotonic browser-public correlation revision for submitted terminal attempts. */ terminalRevision?: number; /** Durable historical output for an accepted terminal practice. */ terminalSnapshot?: PublicTerminalSnapshot; revision?: number; draftText?: string; editorStatus?: PublicEditorStatus; }
+export interface PublicWorkbookBlockProgress { id: string; type?: PublicWorkbookBlockKind | string; anchorId?: string; origin?: string; kind?: PublicWorkbookBlockKind | string; title?: string; ready: boolean; active: boolean; completed: boolean; completedAt?: string; verified: boolean; emerged: boolean; workAccepted?: boolean; checkpoint?: PublicCheckpoint; /** Terminal practice uses its dedicated public lifecycle rather than a checkpoint. */ terminal?: PublicTerminal; /** Monotonic browser-public correlation revision for submitted terminal attempts. */ terminalRevision?: number; /** Durable historical output for an accepted terminal practice. */ terminalSnapshot?: PublicTerminalSnapshot; /** Durable historical text for an accepted editor practice. */ editorSnapshot?: PublicEditorSnapshot; revision?: number; draftText?: string; editorStatus?: PublicEditorStatus; }
 export interface PublicWorkbookProgress { activeLessonId: string; activeBlockId: string; activeAnchorId?: string; completedLessons: string[]; completedBlocks?: string[]; workAcceptedBlocks?: string[]; readyBlocks?: string[]; blocks: PublicWorkbookBlockProgress[]; reflections: Record<string, string>; reflectionConversations: Record<string, PublicReflectionTurn[]>; canComplete?: { blockId: string; eligible: boolean; reason?: string }; workbookComplete?: boolean; }
 export interface PublicWorkbookOrderedBlock { id: string; anchorId: string; origin: string; kind: PublicWorkbookBlockKind | string; title: string; lessonId: string; declaredId?: string; order?: number; }
 export type PublicTimelineMessage = { type: "message"; id: string; sequence: number; at: string; lessonId: string; blockId: string; role: "assistant" | "user"; source: "authored" | "learner" | "main_tutor"; presentation: "course" | "chat" | "review"; text: string; blockInView?: string; };
@@ -39,6 +41,7 @@ function terminal(value: unknown): value is PublicTerminal {
   return value.phase === "accepted" && typeof value.message === "string";
 }
 function terminalSnapshot(value: unknown): value is PublicTerminalSnapshot { return record(value) && typeof value.transcript === "string"; }
+function editorSnapshot(value: unknown): value is PublicEditorSnapshot { return record(value) && typeof value.text === "string"; }
 function lesson(value: unknown): value is PublicWorkbookLesson { return record(value) && typeof value.id === "string" && typeof value.title === "string" && typeof value.dek === "string" && typeof value.introduction === "string" && typeof value.durationMinutes === "number" && strings(value.outcomes) && Array.isArray(value.blocks); }
 function publicTimelineMessage(value: Record<string, unknown>): value is PublicTimelineMessage {
   return value.type === "message"
@@ -64,6 +67,7 @@ function publicBlockProgress(value: unknown): value is PublicWorkbookBlockProgre
     && (value.terminal === undefined || terminal(value.terminal))
     && (value.terminalRevision === undefined || publicRevision(value.terminalRevision))
     && (value.terminalSnapshot === undefined || terminalSnapshot(value.terminalSnapshot))
+    && (value.editorSnapshot === undefined || editorSnapshot(value.editorSnapshot))
     && (value.editorStatus === undefined || editorStatus(value.editorStatus));
 }
 function publicFatal(value: unknown): value is PublicTutorInfrastructureFatalState {

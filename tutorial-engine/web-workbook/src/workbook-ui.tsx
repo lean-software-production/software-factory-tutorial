@@ -345,6 +345,46 @@ export function TerminalHistory({ state }: { state: BlockProgress | undefined })
   </div>;
 }
 
+function ReadOnlyEditorSurface({ path, text }: { path: string; text: string }) {
+  const editorElement = useRef<HTMLDivElement | null>(null);
+  const editor = useRef<EditorView | null>(null);
+
+  useEffect(() => {
+    if (!editorElement.current) return;
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: text,
+        extensions: [
+          keymap.of(defaultKeymap),
+          EditorState.readOnly.of(true),
+          EditorView.editable.of(false),
+        ]
+      }),
+      parent: editorElement.current
+    });
+    editor.current = view;
+    setEditorInteractivity(view, editorElement.current, false);
+    return () => {
+      view.destroy();
+      if (editor.current === view) editor.current = null;
+    };
+  }, [text]);
+
+  return <div ref={editorElement} className="editor-surface editor-history-surface" aria-label={`Completed editor for ${path}`} aria-disabled="true" />;
+}
+
+export function EditorHistory({ block, state }: { block: EditorPracticeBlock; state: BlockProgress | undefined }) {
+  if (!state?.completed || !state.editorSnapshot) return null;
+  const editorSuccess = state.checkpoint?.status === "accepted" ? state.checkpoint.successMessage : undefined;
+  return <div className="editor-history" aria-label="Completed editor draft">
+    <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
+    <div className={editorSuccess ? "editor-completion-surface has-feedback" : "editor-completion-surface"}>
+      <ReadOnlyEditorSurface path={block.path} text={state.editorSnapshot.text} />
+      {editorSuccess && <PracticeFeedbackBar tone="success" markdown={editorSuccess} className="editor-feedback-overlay editor-history-complete" />}
+    </div>
+  </div>;
+}
+
 function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChange, onTerminalCommandRevision }: { block: Block; state: BlockProgress | undefined; disabled?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onTerminalCommandRevision?: TerminalLocalRevisionHandler }) {
   const command = shellCommandFrom(block.markdown);
   const [display, dispatch] = useReducer(reduceTerminalCoachingDisplay, state, initialTerminalDisplay);
@@ -564,12 +604,12 @@ function EditorPracticeBlockView({ block, state, refresh, disabled = false, onLo
   const editorBusy = !disabled && state?.checkpoint?.status === "reviewing";
   const editorTone: PracticeFeedbackTone = localError ? "failure" : acceptedSuccess ? "success" : editorBusy && liveFeedback ? "updating" : liveFeedback ? "feedback" : "status";
   return <div className={`work-block editor-practice ${state?.active ? "is-active" : ""}`} aria-disabled={disabled ? "true" : undefined}>
-    <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
+    {!completed && <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>}
     {lifecycleCanEdit && <div className={`editor-live-surface${liveFeedback || acceptedSuccess || liveStatus ? " has-feedback" : ""}`}>
       <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} aria-disabled={disabled ? "true" : undefined} />
       {(liveFeedback || acceptedSuccess || liveStatus) && <PracticeFeedbackBar tone={editorTone} busy={editorBusy} markdown={acceptedSuccess ?? liveFeedback} status={liveStatus} className="live-block-feedback editor-feedback-overlay" />}
     </div>}
-    {completed ? <PracticeFeedbackBar tone="success" label="Unlocked" title="Accepted revision unlocked the next step." markdown={state?.checkpoint?.successMessage || "The latest accepted editor draft was written to the target file."} className="success-checkpoint editor-unlocked" /> : !lifecycleCanEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
+    {completed ? <EditorHistory block={block} state={state} /> : !lifecycleCanEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
   </div>;
 }
 
@@ -693,6 +733,17 @@ function renderedBlockSource(state: State, blockId: string): PracticeSurfaceSour
     if (block) return { lessonId: chapter.id, block };
   }
   return undefined;
+}
+
+function renderPracticeHistoryFor(state: State, record: PublicTimelineRecord): React.ReactNode {
+  if (record.type !== "message" || record.source !== "authored" || record.presentation !== "course") return null;
+  const blockProgress = state.progress.blocks.find((block) => block.id === record.blockId);
+  if (!blockProgress?.completed) return null;
+  const source = renderedBlockSource(state, record.blockId);
+  if (!source) return null;
+  if (source.block.type === "terminal-practice") return <TerminalHistory state={blockProgress} />;
+  if (source.block.type === "editor-practice") return <EditorHistory block={source.block} state={blockProgress} />;
+  return null;
 }
 
 /** Select the sole practice surface without making non-ready authored content renderable. */
@@ -954,7 +1005,7 @@ export function App() {
     <LessonCompletionConfetti completedLessonIds={state.progress.completedLessons} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
-      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onDoItForMe={!mutationsDisabled && terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} renderTerminalHistory={(record) => <TerminalHistory state={state.progress.blocks.find((block) => block.id === record.blockId)} />} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand key={activitySource.block.id} lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={applyWorkbookState} disabled={mutationsDisabled} onTerminalInsertionChange={registerTerminalInsertion} onEditorLocalRevision={rememberEditorLocalRevision} onTerminalCommandRevision={rememberTerminalCommandRevision} /> : undefined} completionPanel={<CompletionPanel state={state} />} />
+      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onDoItForMe={!mutationsDisabled && terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} renderPracticeHistory={(record) => renderPracticeHistoryFor(state, record)} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand key={activitySource.block.id} lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={applyWorkbookState} disabled={mutationsDisabled} onTerminalInsertionChange={registerTerminalInsertion} onEditorLocalRevision={rememberEditorLocalRevision} onTerminalCommandRevision={rememberTerminalCommandRevision} /> : undefined} completionPanel={<CompletionPanel state={state} />} />
     </article></main>
   </div>;
 }
