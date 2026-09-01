@@ -51,6 +51,15 @@ export interface AuthoredWorkbookEvalArtifactOptions {
   maxFiles?: number;
 }
 
+export interface AuthoredWorkbookEvalPublicArtifactPolicyProjection {
+  scenarioId?: string;
+  artifactAllowlist: readonly string[];
+}
+
+export interface AuthoredWorkbookEvalJudgeTraceCopyOptions {
+  artifactPolicy?: AuthoredWorkbookEvalPublicArtifactPolicyProjection;
+}
+
 export function createEmptyAuthoredWorkbookEvalSessionTrace(scenarioId: string): AuthoredWorkbookEvalSessionTrace {
   return { scenarioId, publicStates: [], terminalTranscript: [], reflections: [], editors: [], internalEvents: [], artifacts: [] };
 }
@@ -98,7 +107,7 @@ export function projectAuthoredWorkbookEvalTrace(trace: AuthoredWorkbookEvalSess
   });
 }
 
-export function projectAuthoredWorkbookEvalTraceForJudge(trace: AuthoredWorkbookEvalTrace): AuthoredWorkbookEvalJudgeTrace {
+export function projectAuthoredWorkbookEvalTraceForJudge(trace: AuthoredWorkbookEvalTrace, options: AuthoredWorkbookEvalJudgeTraceCopyOptions = {}): AuthoredWorkbookEvalJudgeTrace {
   const safeTrace = copyAuthoredWorkbookEvalTrace(trace);
   const seenTimelineRecords = new Set<string>();
   const publicStates: AuthoredWorkbookEvalJudgeRecordedPublicState[] = [];
@@ -110,7 +119,7 @@ export function projectAuthoredWorkbookEvalTraceForJudge(trace: AuthoredWorkbook
     publicStates.push({ label: entry.label, state });
     previousProjectedState = serialized;
   }
-  return {
+  return copyAuthoredWorkbookEvalJudgeTrace({
     scenarioId: safeTrace.scenarioId,
     publicStates,
     terminalTranscript: safeTrace.terminalTranscript,
@@ -118,7 +127,27 @@ export function projectAuthoredWorkbookEvalTraceForJudge(trace: AuthoredWorkbook
     editors: safeTrace.editors,
     progressionEvents: safeTrace.progressionEvents,
     artifacts: safeTrace.artifacts
+  }, options);
+}
+
+export function copyAuthoredWorkbookEvalJudgeTrace(value: unknown, options: AuthoredWorkbookEvalJudgeTraceCopyOptions = {}): AuthoredWorkbookEvalJudgeTrace {
+  if (!isPlainRecord(value)) throw new Error("Invalid authored workbook judge trace.");
+  assertObjectKeys(value, ["scenarioId", "publicStates", "terminalTranscript", "reflections", "editors", "progressionEvents", "artifacts"], [], "authored workbook judge trace");
+  if (!Array.isArray(value.publicStates) || !Array.isArray(value.terminalTranscript) || !Array.isArray(value.reflections) || !Array.isArray(value.editors) || !Array.isArray(value.progressionEvents) || !Array.isArray(value.artifacts)) throw new Error("Invalid authored workbook judge trace.");
+  const scenarioId = copyString(value.scenarioId, "authored workbook judge trace scenario id");
+  const artifactPolicy = copyArtifactPolicyProjection(options.artifactPolicy);
+  if (artifactPolicy?.scenarioId !== undefined && artifactPolicy.scenarioId !== scenarioId) throw new Error("Authored workbook Judge trace scenario does not match the artifact allowlist policy.");
+  const trace: AuthoredWorkbookEvalJudgeTrace = {
+    scenarioId,
+    publicStates: value.publicStates.map(copyJudgeRecordedPublicState),
+    terminalTranscript: value.terminalTranscript.map(copyJudgeTerminalTranscriptEntry),
+    reflections: value.reflections.map(copyJudgeReflectionEntry),
+    editors: value.editors.map(copyJudgeEditorEntry),
+    progressionEvents: value.progressionEvents.map(copyJudgeProgressionEvent),
+    artifacts: value.artifacts.map(copyJudgeArtifactSnapshot)
   };
+  assertArtifactsMatchPolicy(trace.artifacts, artifactPolicy);
+  return deepFreeze(trace);
 }
 
 export function copyAuthoredWorkbookEvalTrace(value: unknown): AuthoredWorkbookEvalTrace {
@@ -258,6 +287,94 @@ export function copyAuthoredWorkbookEvalJudgePublicState(value: unknown): Author
   if (Object.hasOwn(value, "canComplete")) copied.canComplete = copyJudgeCanComplete(value.canComplete);
   if (Object.hasOwn(value, "workbookComplete")) copied.workbookComplete = copyBoolean(value.workbookComplete, "authored workbook judge workbookComplete");
   return copied;
+}
+
+function copyJudgeRecordedPublicState(value: unknown, index: number): AuthoredWorkbookEvalJudgeTrace["publicStates"][number] {
+  if (!isPlainRecord(value)) throw new Error(`Invalid authored workbook judge public state at index ${index}.`);
+  assertObjectKeys(value, ["label", "state"], [], "authored workbook judge public state");
+  return { label: copyString(value.label, "authored workbook judge public state label"), state: copyAuthoredWorkbookEvalJudgePublicState(value.state) };
+}
+
+function copyJudgeTerminalTranscriptEntry(value: unknown, index: number): AuthoredWorkbookEvalJudgeTrace["terminalTranscript"][number] {
+  if (!isPlainRecord(value)) throw new Error(`Invalid authored workbook terminal transcript entry at index ${index}.`);
+  assertObjectKeys(value, ["direction", "text"], ["blockId"], "authored workbook terminal transcript entry");
+  if (value.direction !== "input" && value.direction !== "output" && value.direction !== "observer") throw new Error(`Invalid authored workbook terminal transcript entry at index ${index}.`);
+  const text = copyString(value.text, "authored workbook terminal transcript text");
+  if (Object.hasOwn(value, "blockId")) return { blockId: copyString(value.blockId, "authored workbook terminal transcript block id"), direction: value.direction, text };
+  return { direction: value.direction, text };
+}
+
+function copyJudgeReflectionEntry(value: unknown, index: number): AuthoredWorkbookEvalJudgeTrace["reflections"][number] {
+  if (!isPlainRecord(value)) throw new Error(`Invalid authored workbook reflection entry at index ${index}.`);
+  assertObjectKeys(value, ["blockId", "role", "text"], [], "authored workbook reflection entry");
+  if (value.role !== "learner" && value.role !== "tutor") throw new Error(`Invalid authored workbook reflection entry at index ${index}.`);
+  return { blockId: copyString(value.blockId, "authored workbook reflection block id"), role: value.role, text: copyString(value.text, "authored workbook reflection text") };
+}
+
+function copyJudgeEditorEntry(value: unknown, index: number): AuthoredWorkbookEvalJudgeTrace["editors"][number] {
+  if (!isPlainRecord(value)) throw new Error(`Invalid authored workbook editor entry at index ${index}.`);
+  assertObjectKeys(value, ["blockId", "revision", "status"], ["feedback"], "authored workbook editor entry");
+  if (!Number.isInteger(value.revision) || (value.status !== "reviewing" && value.status !== "feedback" && value.status !== "unlocked")) throw new Error(`Invalid authored workbook editor entry at index ${index}.`);
+  const entry: AuthoredWorkbookEvalJudgeTrace["editors"][number] = { blockId: copyString(value.blockId, "authored workbook editor block id"), revision: value.revision as number, status: value.status };
+  if (Object.hasOwn(value, "feedback")) entry.feedback = copyString(value.feedback, "authored workbook editor feedback");
+  return entry;
+}
+
+function copyJudgeProgressionEvent(value: unknown, index: number): AuthoredWorkbookEvalJudgeTrace["progressionEvents"][number] {
+  if (!isPlainRecord(value) || typeof value.type !== "string") throw new Error(`Invalid authored workbook progression event at index ${index}.`);
+  switch (value.type) {
+    case "session_started":
+    case "workbook_introduction_completed":
+      assertObjectKeys(value, ["type"], [], "authored workbook progression event");
+      return { type: value.type };
+    case "attempt_accepted":
+      assertObjectKeys(value, ["type", "lessonId", "blockId", "kind"], [], "authored workbook progression event");
+      return { type: "attempt_accepted", lessonId: copyString(value.lessonId, "authored workbook progression lesson id"), blockId: copyString(value.blockId, "authored workbook progression block id"), kind: copyPublicAttemptKind(value.kind, "authored workbook progression attempt kind") };
+    case "reflection_submitted":
+    case "reflection_follow_up_submitted":
+    case "reflection_reply_recorded":
+    case "reflection_completed":
+      assertObjectKeys(value, ["type", "lessonId", "blockId"], [], "authored workbook progression event");
+      return { type: value.type, lessonId: copyString(value.lessonId, "authored workbook progression lesson id"), blockId: copyString(value.blockId, "authored workbook progression block id") };
+    case "block_completed": {
+      assertObjectKeys(value, ["type", "blockId"], ["lessonId"], "authored workbook progression event");
+      const blockId = copyString(value.blockId, "authored workbook progression block id");
+      return Object.hasOwn(value, "lessonId") ? { type: "block_completed", lessonId: copyString(value.lessonId, "authored workbook progression lesson id"), blockId } : { type: "block_completed", blockId };
+    }
+    default:
+      throw new Error(`Invalid authored workbook progression event at index ${index}.`);
+  }
+}
+
+function copyJudgeArtifactSnapshot(value: unknown, index: number): AuthoredWorkbookEvalJudgeTrace["artifacts"][number] {
+  if (!isPlainRecord(value)) throw new Error(`Invalid authored workbook artifact snapshot at index ${index}.`);
+  assertObjectKeys(value, ["path", "content"], [], "authored workbook artifact snapshot");
+  const path = assertSafeRelativeArtifactFile(copyString(value.path, "authored workbook artifact path"));
+  return { path, content: copyString(value.content, `authored workbook artifact '${path}'`) };
+}
+
+function copyArtifactPolicyProjection(policy: AuthoredWorkbookEvalPublicArtifactPolicyProjection | undefined): AuthoredWorkbookEvalPublicArtifactPolicyProjection | undefined {
+  if (policy === undefined) return undefined;
+  if (!isPlainRecord(policy) || !Array.isArray(policy.artifactAllowlist)) throw new Error("Invalid authored workbook artifact allowlist policy.");
+  assertObjectKeys(policy, ["artifactAllowlist"], ["scenarioId"], "authored workbook artifact allowlist policy");
+  const artifactAllowlist = policy.artifactAllowlist.map((entry) => assertSafeRelativeArtifactFile(copyString(entry, "authored workbook artifact allowlist entry")));
+  if (new Set(artifactAllowlist).size !== artifactAllowlist.length) throw new Error("Duplicate authored workbook artifact allowlist entry.");
+  const copied: AuthoredWorkbookEvalPublicArtifactPolicyProjection = { artifactAllowlist };
+  if (Object.hasOwn(policy, "scenarioId")) copied.scenarioId = copyString(policy.scenarioId, "authored workbook artifact allowlist scenario id");
+  return copied;
+}
+
+function assertArtifactsMatchPolicy(artifacts: readonly AuthoredWorkbookEvalArtifactSnapshot[], policy: AuthoredWorkbookEvalPublicArtifactPolicyProjection | undefined): void {
+  if (policy === undefined) return;
+  const actual = artifacts.map((artifact) => artifact.path);
+  const expected = policy.artifactAllowlist;
+  if (actual.length !== expected.length || actual.some((path, index) => path !== expected[index])) throw new Error("Authored workbook Judge trace artifacts do not match the scenario artifact allowlist.");
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  for (const key of Reflect.ownKeys(value)) deepFreeze((value as Record<PropertyKey, unknown>)[key]);
+  return Object.freeze(value);
 }
 
 function assertObjectKeys(value: Record<string, unknown>, required: readonly string[], optional: readonly string[], label: string): void {
@@ -529,7 +646,7 @@ export async function snapshotAuthoredWorkbookEvalArtifacts(workspaceRoot: strin
     snapshots.push({ path: stableRelativePath, content: boundedText(content, `artifact '${stableRelativePath}'`) });
     seen.add(stableRelativePath);
   }
-  return snapshots.sort((left, right) => left.path.localeCompare(right.path));
+  return snapshots;
 }
 
 function projectBlockReference(value: unknown): AuthoredWorkbookEvalJudgeBlockReference | undefined {
@@ -634,6 +751,7 @@ function isPublicAttemptKind(value: unknown): value is PublicAttemptKind {
 
 function copyRecordedPublicState(value: unknown, index: number): AuthoredWorkbookEvalRecordedPublicState {
   if (!isPlainRecord(value) || typeof value.label !== "string") throw new Error(`Invalid public state trace entry at index ${index}.`);
+  rejectPrivateTokenField(value, `public state trace entry at index ${index}`);
   let state: PublicWorkbookState;
   try { state = parsePublicWorkbookState(structuredClone(value.state) as unknown); }
   catch { throw new Error(`Invalid public state trace entry at index ${index}.`); }
@@ -642,6 +760,7 @@ function copyRecordedPublicState(value: unknown, index: number): AuthoredWorkboo
 
 function copyTerminalTranscriptEntry(value: unknown, index: number): AuthoredWorkbookEvalTrace["terminalTranscript"][number] {
   if (!isPlainRecord(value) || (value.direction !== "input" && value.direction !== "output" && value.direction !== "observer") || typeof value.text !== "string") throw new Error(`Invalid terminal transcript entry at index ${index}.`);
+  rejectPrivateTokenField(value, `terminal transcript entry at index ${index}`);
   const blockId = value.blockId;
   if ("blockId" in value && typeof blockId !== "string") throw new Error(`Invalid terminal transcript entry at index ${index}.`);
   const text = boundedText(value.text, "terminal transcript");
@@ -650,11 +769,13 @@ function copyTerminalTranscriptEntry(value: unknown, index: number): AuthoredWor
 
 function copyReflectionEntry(value: unknown, index: number): AuthoredWorkbookEvalTrace["reflections"][number] {
   if (!isPlainRecord(value) || typeof value.blockId !== "string" || (value.role !== "learner" && value.role !== "tutor") || typeof value.text !== "string") throw new Error(`Invalid reflection transcript entry at index ${index}.`);
+  rejectPrivateTokenField(value, `reflection transcript entry at index ${index}`);
   return { blockId: value.blockId, role: value.role, text: boundedText(value.text, "reflection transcript") };
 }
 
 function copyEditorEntry(value: unknown, index: number): AuthoredWorkbookEvalTrace["editors"][number] {
   if (!isPlainRecord(value) || typeof value.blockId !== "string" || !Number.isInteger(value.revision) || (value.status !== "reviewing" && value.status !== "feedback" && value.status !== "unlocked")) throw new Error(`Invalid editor trace entry at index ${index}.`);
+  rejectPrivateTokenField(value, `editor trace entry at index ${index}`);
   const revision = value.revision as number;
   const feedback = value.feedback;
   if ("feedback" in value && typeof feedback !== "string") throw new Error(`Invalid editor trace entry at index ${index}.`);
@@ -662,6 +783,7 @@ function copyEditorEntry(value: unknown, index: number): AuthoredWorkbookEvalTra
 }
 
 function copyProgressionEvent(value: unknown, index: number): AuthoredWorkbookEvalProgressionEvent {
+  if (isPlainRecord(value)) rejectPrivateTokenField(value, `progression event at index ${index}`);
   const event = projectAuthoredWorkbookProgressionEvent(value);
   if (event === undefined) throw new Error(`Invalid progression event at index ${index}.`);
   return event;
@@ -669,6 +791,7 @@ function copyProgressionEvent(value: unknown, index: number): AuthoredWorkbookEv
 
 function copyArtifactSnapshot(value: unknown, index: number): AuthoredWorkbookEvalArtifactSnapshot {
   if (!isPlainRecord(value) || typeof value.path !== "string" || typeof value.content !== "string") throw new Error(`Invalid artifact snapshot at index ${index}.`);
+  rejectPrivateTokenField(value, `artifact snapshot at index ${index}`);
   const path = assertSafeRelativeArtifactFile(value.path);
   return { path, content: boundedText(value.content, `artifact '${path}'`) };
 }
@@ -678,6 +801,10 @@ function assertNoKnownLessonJumpFields(record: Record<string, unknown>): void {
     const events = record[field];
     if (Array.isArray(events)) assertNoLessonJumpEvents(events, field);
   }
+}
+
+function rejectPrivateTokenField(record: Record<string, unknown>, label: string): void {
+  if (Object.hasOwn(record, "privateToken")) throw new Error(`Invalid authored workbook ${label}.`);
 }
 
 function assertNoLessonJumpEvents(events: readonly unknown[], channel: string): void {

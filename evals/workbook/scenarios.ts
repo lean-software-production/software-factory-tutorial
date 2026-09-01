@@ -123,6 +123,11 @@ export interface AuthoredWorkbookScenarioGateCheckpointRecorder {
   captureGateCheckpoint(label: AuthoredWorkbookGateCheckpointLabel): void;
 }
 
+export interface AuthoredWorkbookScenarioPublicArtifactPolicy {
+  scenarioId: AuthoredWorkbookScenarioId;
+  artifactAllowlist: readonly string[];
+}
+
 export interface AuthoredWorkbookScenarioDescriptor {
   id: AuthoredWorkbookScenarioId;
   title: string;
@@ -534,6 +539,14 @@ export function authoredWorkbookScenarioPublicDescriptorById(id: string): Author
     title: scenario.title,
     description: scenario.description,
     criteria: scenario.criteria.map((criterion) => ({ id: criterion.id, title: criterion.title, description: criterion.description }))
+  });
+}
+
+export function authoredWorkbookScenarioPublicArtifactPolicyById(id: string): AuthoredWorkbookScenarioPublicArtifactPolicy {
+  const scenario = authoredWorkbookScenarioById(id as AuthoredWorkbookScenarioId);
+  return deepFreeze({
+    scenarioId: scenario.id,
+    artifactAllowlist: freezeStrings(scenario.artifactAllowlist)
   });
 }
 
@@ -1046,19 +1059,18 @@ function snapshotMap(snapshots: readonly AuthoredWorkbookEvalArtifactSnapshot[])
 }
 
 function artifactPathsMatch(input: AuthoredWorkbookScenarioGateInput, expected: readonly string[]): boolean {
-  const expectedPaths = [...expected].sort();
-  return pathsExactlyEqual(input.artifactSnapshots, expectedPaths)
-    && pathsExactlyEqual(input.trace.artifacts, expectedPaths)
-    && pathsExactlyEqual(input.workspaceFileSnapshots, expectedPaths)
+  return pathsExactlyEqual(input.artifactSnapshots, expected)
+    && pathsExactlyEqual(input.trace.artifacts, expected)
+    && pathsExactlyEqual(input.workspaceFileSnapshots, expected)
     && noRawEventArtifactPaths(input.artifactSnapshots)
     && noRawEventArtifactPaths(input.trace.artifacts)
     && noRawEventArtifactPaths(input.workspaceFileSnapshots);
 }
 
-function pathsExactlyEqual(snapshots: readonly AuthoredWorkbookEvalArtifactSnapshot[], expectedSorted: readonly string[]): boolean {
+function pathsExactlyEqual(snapshots: readonly AuthoredWorkbookEvalArtifactSnapshot[], expected: readonly string[]): boolean {
   const actual = snapshots.map((snapshot) => snapshot.path);
   if (new Set(actual).size !== actual.length) return false;
-  return JSON.stringify([...actual].sort()) === JSON.stringify(expectedSorted);
+  return JSON.stringify(actual) === JSON.stringify(expected);
 }
 
 function noRawEventArtifactPaths(snapshots: readonly AuthoredWorkbookEvalArtifactSnapshot[]): boolean {

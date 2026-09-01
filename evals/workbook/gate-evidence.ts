@@ -11,6 +11,7 @@ import { readAuthoredWorkbookTimeline } from "./internal-timeline.js";
 import { projectAuthoredWorkbookEvalTrace } from "./public-trace.js";
 import type { AuthoredWorkbookEvalArtifactSnapshot, AuthoredWorkbookEvalSessionTrace } from "./types.js";
 import {
+  authoredWorkbookScenarioPublicArtifactPolicyById,
   createAuthoredWorkbookScenarioGateCheckpointRecorder,
   type AuthoredCalculatorBehaviorProjection,
   type AuthoredWorkbookGateCheckpointLabel,
@@ -179,8 +180,9 @@ export async function collectAuthoredWorkbookScenarioGateInput(options: Authored
     throwIfAborted(options.signal);
     await options.workspace.assertGuardedStateUnchanged();
     const workspaceRoot = learnerWorkspaceRoot(options.session, options.workspaceId);
-    const capturedArtifacts = workspaceRoot ? await snapshotExactWorkspaceFiles(workspaceRoot, options.scenario.artifactAllowlist, options.signal) : [];
-    assertExactSnapshotPaths(capturedArtifacts, options.scenario.artifactAllowlist, "workspace evidence files");
+    const artifactPolicy = authoredWorkbookScenarioPublicArtifactPolicyById(options.scenario.id);
+    const capturedArtifacts = workspaceRoot ? await snapshotExactWorkspaceFiles(workspaceRoot, artifactPolicy.artifactAllowlist, options.signal) : [];
+    assertExactSnapshotPaths(capturedArtifacts, artifactPolicy.artifactAllowlist, "workspace evidence files");
     const artifactSnapshots = copyArtifactSnapshots(capturedArtifacts);
     const workspaceFileSnapshots = copyArtifactSnapshots(capturedArtifacts);
 
@@ -781,7 +783,7 @@ async function snapshotExactWorkspaceFiles(workspaceRoot: string, files: readonl
     if (total > MAX_PRIVATE_SNAPSHOT_TOTAL_BYTES) throw new AuthoredGateEvidenceError("Workspace evidence files exceeded the total byte limit.");
     snapshots.push({ path: snapshot.path, content: snapshot.content });
   }
-  return snapshots.sort((left, right) => left.path.localeCompare(right.path));
+  return snapshots;
 }
 
 function copyArtifactSnapshots(snapshots: readonly AuthoredWorkbookEvalArtifactSnapshot[]): AuthoredWorkbookEvalArtifactSnapshot[] {
@@ -892,9 +894,9 @@ function allowedMutationDirectories(paths: readonly string[]): Set<string> {
 }
 
 function assertExactSnapshotPaths(snapshots: readonly AuthoredWorkbookEvalArtifactSnapshot[], expected: readonly string[], label: string): void {
-  const actual = snapshots.map((snapshot) => snapshot.path).sort();
-  const normalized = expected.map(safeRelativeFile).sort();
-  if (JSON.stringify(actual) !== JSON.stringify(normalized)) throw new AuthoredGateEvidenceError(`Unexpected ${label} path set.`);
+  const actual = snapshots.map((snapshot) => snapshot.path);
+  const normalized = expected.map(safeRelativeFile);
+  if (new Set(actual).size !== actual.length || JSON.stringify(actual) !== JSON.stringify(normalized)) throw new AuthoredGateEvidenceError(`Unexpected ${label} path set.`);
 }
 
 function safeRelativeFile(file: string): string {

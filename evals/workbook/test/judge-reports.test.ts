@@ -155,8 +155,18 @@ function judgeResult(): AuthoredWorkbookEvalJudgeResult {
   };
 }
 
+function traceWithCatalogArtifacts(descriptor: ReturnType<typeof authoredWorkbookScenarioById>) {
+  const trace = { ...projectedTrace(), scenarioId: descriptor.id };
+  trace.artifacts = descriptor.artifactAllowlist.map((path) => ({ path, content: `Visible catalog artifact for ${path}.\n` }));
+  return trace;
+}
+
 function authoredTrace() {
-  return { ...projectedTrace(), scenarioId: authoredScenario().id };
+  return traceWithCatalogArtifacts(authoredWorkbookScenarioById("lesson-001-headless-boundary"));
+}
+
+function deterministicTrace() {
+  return traceWithCatalogArtifacts(authoredWorkbookScenarioById("lessons-003-004-evidence-feedback"));
 }
 
 function authoredJudgeResult(descriptor: AuthoredWorkbookEvalScenarioPublicDescriptor = authoredScenario()): AuthoredWorkbookEvalJudgeResult {
@@ -187,6 +197,11 @@ function replacePromptTrace(prompt: string, originalTrace: unknown, replacementT
   const replacement = JSON.stringify(replacementTrace, null, 2);
   if (!prompt.includes(original)) throw new Error("Prompt did not contain the expected trace JSON.");
   return prompt.replace(original, replacement);
+}
+
+function duplicateTopLevelJsonKey(original: string, key: string, earlierValue: unknown): string {
+  if (!original.startsWith("{\n")) throw new Error("Expected canonical JSON envelope.");
+  return `{\n  ${JSON.stringify(key)}: ${JSON.stringify(earlierValue)},\n${original.slice(2)}`;
 }
 
 async function authoredJudgedLatestFixture(root: string, runId = "run-authored-001") {
@@ -369,6 +384,21 @@ describe("authored workbook judge prompt and result validation", () => {
     expect(() => buildAuthoredWorkbookJudgePrompt(scenario(), { ...trace, internalEvents: [{ type: "lesson_jump_started", lessonId: "jump" }] } as any, gate())).toThrow(/lesson_jump_started/);
     expect(() => buildAuthoredWorkbookJudgePrompt(scenario(), { ...trace, events: [{ type: "lesson_jump_started", lessonId: "jump" }] } as any, gate())).toThrow(/lesson_jump_started/);
     expect(() => buildAuthoredWorkbookJudgePrompt(scenario(), { ...trace, publicStates: [{ label: "raw", state: { ...publicState(), timeline: [{ type: "lesson_jump_started", id: "raw", sequence: 1, at: "public-at", lessonId, blockId: "block" } as any] } as PublicWorkbookState }] }, gate())).toThrow(/Invalid public state trace entry/);
+  });
+
+  it("rejects unknown privateToken fields in Judge trace channels before prompt construction", () => {
+    const trace = projectedTrace();
+    const variants: Array<[string, typeof trace]> = [
+      ["terminal", { ...trace, terminalTranscript: [{ ...trace.terminalTranscript[0]!, privateToken: "terminal-private-token-secret" } as any] }],
+      ["reflection", { ...trace, reflections: [{ ...trace.reflections[0]!, privateToken: "reflection-private-token-secret" } as any] }],
+      ["editor", { ...trace, editors: [{ ...trace.editors[0]!, privateToken: "editor-private-token-secret" } as any] }],
+      ["progression", { ...trace, progressionEvents: [{ ...trace.progressionEvents[0]!, privateToken: "progression-private-token-secret" } as any] }],
+      ["artifact", { ...trace, artifacts: [{ ...trace.artifacts[0]!, privateToken: "artifact-private-token-secret" } as any] }]
+    ];
+
+    for (const [label, variant] of variants) {
+      expect(() => buildAuthoredWorkbookJudgePrompt(scenario(), variant, gate()), label).toThrow(/Invalid authored workbook/i);
+    }
   });
 
   it("omits private and bulky browser-public state fields from Judge and report inputs", async () => {
@@ -596,7 +626,7 @@ describe("authored workbook report bundle", () => {
     const root = await mkdtemp(join(tmpdir(), "authored-report-deterministic-"));
     tempRoots.push(root);
     const runId = "run-deterministic-001";
-    const trace = { ...projectedTrace(), scenarioId: deterministicScenario().id };
+    const trace = deterministicTrace();
     const written = await writeAuthoredWorkbookEvalReportBundle({
       reportsRoot: root,
       runId,
@@ -682,11 +712,40 @@ describe("authored workbook report bundle", () => {
     } as any)).toThrow(/Judge artifacts/i);
   });
 
+  it("binds report creation artifacts to the exact catalog allowlists", () => {
+    const authored = authoredScenario();
+    expect(() => createAuthoredWorkbookEvalReportBundleObjects({
+      runId: "bad-lesson001-artifact",
+      scenario: authored,
+      trace: { ...authoredTrace(), artifacts: [{ path: "factory/.tmp/public.txt", content: "Lesson 001 must not expose artifacts.\n" }] },
+      gate: gate(),
+      judgeInput: "fabricated",
+      judge: authoredJudgeResult(authored),
+      modelIdentities: modelIdentities()
+    })).toThrow(/artifact allowlist/i);
+
+    const deterministic = deterministicTrace();
+    const deterministicBase = {
+      runId: "bad-deterministic-artifacts",
+      scenario: deterministicScenario(),
+      gate: deterministicGate(),
+      evaluationMode: "deterministic-only" as const,
+      modelIdentities: { "Main Tutor": modelIdentities()["Main Tutor"] }
+    };
+    const replaceArtifact = (index: number, path: string) => deterministic.artifacts.map((artifact, artifactIndex) => artifactIndex === index ? { ...artifact, path } : artifact);
+
+    expect(() => createAuthoredWorkbookEvalReportBundleObjects({ ...deterministicBase, trace: { ...deterministic, artifacts: deterministic.artifacts.slice(1) } })).toThrow(/artifact allowlist/i);
+    expect(() => createAuthoredWorkbookEvalReportBundleObjects({ ...deterministicBase, trace: { ...deterministic, artifacts: [...deterministic.artifacts, { path: "factory/.tmp/extra.txt", content: "extra\n" }] } })).toThrow(/artifact allowlist/i);
+    expect(() => createAuthoredWorkbookEvalReportBundleObjects({ ...deterministicBase, trace: { ...deterministic, artifacts: replaceArtifact(1, deterministic.artifacts[0]!.path) } })).toThrow(/artifact allowlist/i);
+    expect(() => createAuthoredWorkbookEvalReportBundleObjects({ ...deterministicBase, trace: { ...deterministic, artifacts: [...deterministic.artifacts].reverse() } })).toThrow(/artifact allowlist/i);
+    expect(() => createAuthoredWorkbookEvalReportBundleObjects({ ...deterministicBase, trace: { ...deterministic, artifacts: replaceArtifact(0, "factory/refactor/.tmp/events/1-do.jsonl") } })).toThrow(/Raw workbook or station event files|raw event files|artifact allowlist/i);
+  });
+
   it("rejects forged deterministic latest directory content and unknown report files", async () => {
     const root = await mkdtemp(join(tmpdir(), "authored-latest-deterministic-forgery-"));
     tempRoots.push(root);
     const runId = "run-deterministic-forgery";
-    const trace = { ...projectedTrace(), scenarioId: deterministicScenario().id };
+    const trace = deterministicTrace();
     const written = await writeAuthoredWorkbookEvalReportBundle({
       reportsRoot: root,
       runId,
@@ -733,6 +792,12 @@ describe("authored workbook report bundle", () => {
     await expectLatestRejectedAndUnchanged(async () => writeJson(reportPath, { ...originalReport, verdict: { passed: true, percentage: 1, rule: "deterministic-gate-only" } }));
     await expectLatestRejectedAndUnchanged(async () => writeJson(reportPath, { ...originalReport, evaluationMode: "judged" }));
     await expectLatestRejectedAndUnchanged(async () => writeJson(tracePath, { ...originalTraceEnvelope, privateStack: "/tmp/private-secret OPENCODE_API_KEY=sk-secret" }));
+    const originalArtifacts = (originalTraceEnvelope as any).trace.artifacts as Array<{ path: string; content: string }>;
+    await expectLatestRejectedAndUnchanged(async () => writeJson(tracePath, { ...originalTraceEnvelope, trace: { ...(originalTraceEnvelope as any).trace, artifacts: originalArtifacts.slice(1) } }));
+    await expectLatestRejectedAndUnchanged(async () => writeJson(tracePath, { ...originalTraceEnvelope, trace: { ...(originalTraceEnvelope as any).trace, artifacts: [...originalArtifacts, { path: "factory/.tmp/extra.txt", content: "extra\n" }] } }));
+    await expectLatestRejectedAndUnchanged(async () => writeJson(tracePath, { ...originalTraceEnvelope, trace: { ...(originalTraceEnvelope as any).trace, artifacts: originalArtifacts.map((artifact, index) => index === 1 ? { ...artifact, path: originalArtifacts[0]!.path } : artifact) } }));
+    await expectLatestRejectedAndUnchanged(async () => writeJson(tracePath, { ...originalTraceEnvelope, trace: { ...(originalTraceEnvelope as any).trace, artifacts: [...originalArtifacts].reverse() } }));
+    await expectLatestRejectedAndUnchanged(async () => writeJson(tracePath, { ...originalTraceEnvelope, trace: { ...(originalTraceEnvelope as any).trace, artifacts: originalArtifacts.map((artifact, index) => index === 0 ? { ...artifact, path: "factory/refactor/.tmp/events/1-do.jsonl", content: "raw event artifact secret\n" } : artifact) } }));
     await expectLatestRejectedAndUnchanged(async () => {
       const extra = join(written.directory, "private-extra.txt");
       await writeFile(extra, "private /tmp/secret OPENCODE_API_KEY=sk-secret", { mode: 0o600 });
@@ -1052,6 +1117,32 @@ describe("authored workbook report bundle", () => {
     await expectLatestRejectedAndUnchanged(async () => writeJson(judgeInputPath, { ...originalJudgeInput, prompt: "fabricated prompt private-secret OPENCODE_API_KEY=sk-secret" }));
     await expectLatestRejectedAndUnchanged(async () => atomicWriteText(summaryPath, `${originalSummary}\nforged private-secret\n`));
     await expect(readFile(join(root, "latest.json"), "utf8")).resolves.toBe(prior);
+  });
+
+  it("rejects duplicate JSON keys that hide raw curated secrets behind valid parsed values", async () => {
+    const root = await mkdtemp(join(tmpdir(), "authored-latest-duplicate-json-"));
+    tempRoots.push(root);
+    const { latest, latestText: prior } = await authoredJudgedLatestFixture(root, "run-001");
+    const cases: Array<{ file: string; key: string; earlierValue: unknown }> = [
+      { file: "trace.json", key: "trace", earlierValue: { privateToken: "raw trace duplicate OPENCODE_API_KEY=sk-secret" } },
+      { file: "report.json", key: "scenario", earlierValue: { id: "raw-report-secret", privateToken: "OPENCODE_API_KEY=sk-secret" } },
+      { file: "metadata.json", key: "scenario", earlierValue: "raw metadata duplicate OPENCODE_API_KEY=sk-secret" },
+      { file: "judge-input.json", key: "prompt", earlierValue: "raw judge input duplicate OPENCODE_API_KEY=sk-secret" },
+      { file: "judge.json", key: "judge", earlierValue: { summary: "raw judge duplicate OPENCODE_API_KEY=sk-secret" } }
+    ];
+
+    for (const { file, key, earlierValue } of cases) {
+      const path = join(root, "run-001", file);
+      const original = await readFile(path, "utf8");
+      try {
+        await atomicWriteText(path, duplicateTopLevelJsonKey(original, key, earlierValue));
+        await expect(readFile(path, "utf8"), file).resolves.toContain("OPENCODE_API_KEY=sk-secret");
+        await expect(writeAuthoredWorkbookEvalLatestEnvelope(root, latest), file).rejects.toThrow("Unable to update authored workbook latest report.");
+        await expect(readFile(join(root, "latest.json"), "utf8"), file).resolves.toBe(prior);
+      } finally {
+        await atomicWriteText(path, original);
+      }
+    }
   });
 
   it("rejects adversarial latest metadata identity changes without replacing prior latest", async () => {

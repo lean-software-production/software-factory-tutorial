@@ -24,6 +24,7 @@ import {
   AUTHORED_WORKBOOK_PREREQUISITE_SEED_FILES,
   AUTHORED_WORKBOOK_SCENARIOS,
   authoredWorkbookScenarioById,
+  authoredWorkbookScenarioPublicArtifactPolicyById,
   createAuthoredWorkbookScenarioGateCheckpointRecorder,
   type AuthoredWorkbookScenarioDescriptor,
   type AuthoredWorkbookScenarioGateInput,
@@ -441,9 +442,15 @@ describe("authored workbook scenario descriptors", () => {
         expect(prefix).not.toMatch(/^\/|\.\.|\\|\0/);
       }
       const publicDescriptor = copyAuthoredWorkbookEvalScenarioPublicDescriptor(scenario);
+      const artifactPolicy = authoredWorkbookScenarioPublicArtifactPolicyById(scenario.id);
       expect(publicDescriptor).not.toHaveProperty("runnerPrivate");
       expect(publicDescriptor).not.toHaveProperty("gateCheckpoints");
-      const prompt = buildAuthoredWorkbookJudgePrompt(publicDescriptor, { scenarioId: scenario.id as any, publicStates: [], terminalTranscript: [], reflections: [], editors: [], progressionEvents: [], artifacts: [] }, { passed: true, assertions: [] });
+      expect(artifactPolicy).toEqual({ scenarioId: scenario.id, artifactAllowlist: scenario.artifactAllowlist });
+      expect(artifactPolicy).not.toHaveProperty("runnerPrivate");
+      expect(artifactPolicy).not.toHaveProperty("gateEvidence");
+      if (scenario.id === "primer-validation-misconception" || scenario.id === "lesson-001-headless-boundary") expect(artifactPolicy.artifactAllowlist).toEqual([]);
+      const promptArtifacts = scenario.artifactAllowlist.map((path) => ({ path, content: `Visible public artifact for ${path}.\n` }));
+      const prompt = buildAuthoredWorkbookJudgePrompt(publicDescriptor, { scenarioId: scenario.id as any, publicStates: [], terminalTranscript: [], reflections: [], editors: [], progressionEvents: [], artifacts: promptArtifacts }, { passed: true, assertions: [] });
       expect(prompt).not.toContain("runnerPrivate");
       expect(prompt).not.toContain("authored-eval-command-stubs/invocations.jsonl");
       expect(prompt).not.toContain("factory/refactor/.tmp/events/");
