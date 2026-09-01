@@ -452,14 +452,14 @@ describe("workbook block progression", () => {
         if (stage === "block") expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId: failingBlockId }));
         if (stage === "lesson") expect(records).not.toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
         if (stage === "workbook") {
-          expect(records).toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
+          expect(records).not.toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
           expect(records).not.toContainEqual(expect.objectContaining({ type: "workbook_completion_summary" }));
         }
       } finally { await server.close(); }
     }
   });
 
-  it("reuses a block summary after restart when the following lesson summary had failed", async () => {
+  it("regenerates a block summary after restart when the following lesson summary had failed", async () => {
     const dir = await fixture();
     const lessonPath = resolve(dir, "lessons/001-first/lesson.md");
     await writeFile(lessonPath, (await readFile(lessonPath, "utf8")).replace("  - finish\n", ""));
@@ -484,7 +484,7 @@ describe("workbook block progression", () => {
       const failed = await fetch(`${first.url}/api/workbook/complete-block`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer" }) });
       expect(failed.status).toBe(409);
       const partial = await timelineRecords(dir);
-      expect(partial.filter((record) => record.type === "block_summarized" && record.blockId === "lesson--001-first--edit-answer")).toHaveLength(1);
+      expect(partial.filter((record) => record.type === "block_summarized" && record.blockId === "lesson--001-first--edit-answer")).toHaveLength(0);
       expect(partial).not.toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
       expect(partial).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId: "lesson--001-first--edit-answer" }));
     } finally { await first.close(); }
@@ -507,7 +507,7 @@ describe("workbook block progression", () => {
     } finally { await restarted.close(); }
   });
 
-  it("reuses a lesson summary after restart when the following workbook summary had failed", async () => {
+  it("regenerates a lesson summary after restart when the following workbook summary had failed", async () => {
     const dir = await fixture();
     const failingTutor = {
       ...fakeTutor({ outcome: "accepted", message: "Accepted editor answer." }),
@@ -529,7 +529,7 @@ describe("workbook block progression", () => {
       const failed = await fetch(`${first.url}/api/workbook/complete-block`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--finish" }) });
       expect(failed.status).toBe(409);
       const partial = await timelineRecords(dir);
-      expect(partial.filter((record) => record.type === "lesson_summarized" && record.lessonId === "001-first")).toHaveLength(1);
+      expect(partial.filter((record) => record.type === "lesson_summarized" && record.lessonId === "001-first")).toHaveLength(0);
       expect(partial).not.toContainEqual(expect.objectContaining({ type: "workbook_completion_summary" }));
       expect(partial).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId: "lesson--001-first--finish" }));
     } finally { await first.close(); }
@@ -577,6 +577,66 @@ describe("workbook block progression", () => {
       const records = await timelineRecords(dir);
       expect(records).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId }));
       expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId, text: "Summary that should be discarded after invalidation." }));
+    } finally { await server.close(); }
+  });
+
+  it("stages departure summaries so an invalidated last-editor completion leaves no stale summary", async () => {
+    const dir = await fixture();
+    await writeFile(resolve(dir, "lessons/001-first/lesson.md"), ["---", "durationMinutes: 5", "workspace: refactor-line", "blocks:", "  - orientation", "  - edit-answer", "---", "# Run an agent headlessly", "", "Lesson preamble."].join("\n"));
+    await rm(resolve(dir, "lessons/001-first/blocks/finish.md"), { force: true });
+    const lessonSummary = deferred<string>();
+    let stallFirstLessonSummary = true;
+    const tutor = {
+      stalledCalls: 0,
+      async restore() {},
+      async reply() { return "Tutor reply."; },
+      async review() { return { outcome: "accepted" as const, message: "Accepted editor answer." }; },
+      async summarizeBlock(input: any) {
+        const attempt = input.activeContext?.attempts?.at(-1);
+        const text = attempt?.evidence?.kind === "editor" ? attempt.evidence.text : "missing editor text";
+        return `Block summary for ${text}`;
+      },
+      async summarizeLesson(input: any) {
+        if (input.lessonId === "001-first" && stallFirstLessonSummary) {
+          stallFirstLessonSummary = false;
+          this.stalledCalls += 1;
+          return lessonSummary.promise;
+        }
+        return `Lesson summary for ${input.lessonId}.`;
+      },
+      dispose() {}
+    };
+    const blockId = "lesson--001-first--edit-answer";
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor });
+    try {
+      await advanceToEditor(server.url);
+      expect((await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision: 1, text: "accepted v1" }) })).status).toBe(202);
+      await waitForState(server.url, (next) => block(next, blockId)?.checkpoint?.status === "accepted" && next.progress.canComplete?.eligible === true);
+
+      const pendingCompletion = complete(server.url, blockId);
+      await waitUntil(() => tutor.stalledCalls > 0);
+      const pendingEditor = fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision: 2, text: "accepted v2" }) });
+      await sleep(20);
+      lessonSummary.resolve("Stale lesson summary for v1.");
+      await expect(pendingCompletion).resolves.toMatchObject({ outcome: "rejected", reason: "not-current" });
+      expect((await pendingEditor).status).toBe(202);
+      await waitForState(server.url, (next) => block(next, blockId)?.revision === 2 && block(next, blockId)?.checkpoint?.status === "accepted");
+      expect(await timelineRecords(dir)).toEqual(expect.not.arrayContaining([
+        expect.objectContaining({ type: "block_summarized", blockId }),
+        expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }),
+        expect.objectContaining({ type: "workbook_completion_summary" })
+      ]));
+
+      const completed = await complete(server.url, blockId);
+      expect(completed).toMatchObject({ outcome: "completed" });
+      const records = await timelineRecords(dir);
+      expect(records).toContainEqual(expect.objectContaining({ type: "block_summarized", blockId, text: "Block summary for accepted v2" }));
+      expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId, text: "Block summary for accepted v1" }));
+      const blockSummaryIndex = records.findIndex((record) => record.type === "block_summarized" && record.blockId === blockId);
+      const lessonSummaryIndex = records.findIndex((record) => record.type === "lesson_summarized" && record.lessonId === "001-first");
+      const completionIndex = records.findIndex((record) => record.type === "block_completed" && record.blockId === blockId);
+      expect(blockSummaryIndex).toBeLessThan(lessonSummaryIndex);
+      expect(lessonSummaryIndex).toBeLessThan(completionIndex);
     } finally { await server.close(); }
   });
 

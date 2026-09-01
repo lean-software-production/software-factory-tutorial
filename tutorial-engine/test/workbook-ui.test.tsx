@@ -3110,7 +3110,7 @@ describe("workbook lesson UI", () => {
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
   });
 
-  it("hides terminal Continue immediately on Enter until the authoritative terminal revision catches up", async () => {
+  it("hides terminal Continue through multiple local Enters until the authoritative terminal revision catches up", async () => {
     FakeEventSource.reset();
     class FakeWebSocket {
       static OPEN = 1;
@@ -3124,8 +3124,10 @@ describe("workbook lesson UI", () => {
     const terminalBlock = lesson.blocks[1]!;
     const acceptedProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
     acceptedProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
-    const caughtUpProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "accepted", message: "Terminal accepted again." } } as any);
-    caughtUpProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const firstCaughtUpProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "accepted", message: "Terminal accepted again." } } as any);
+    firstCaughtUpProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const secondCaughtUpProgress = activeBlockProgress(terminalBlock, { terminalRevision: 3, terminal: { phase: "accepted", message: "Terminal accepted third." } } as any);
+    secondCaughtUpProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
     let currentState: State = {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
@@ -3148,9 +3150,15 @@ describe("workbook lesson UI", () => {
 
     await act(async () => { terminalDataListeners[0]!("echo after acceptance\r"); });
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+    await act(async () => { terminalDataListeners[0]!("echo before server catches up\r"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
 
-    currentState = { ...currentState, progress: caughtUpProgress };
+    currentState = { ...currentState, progress: firstCaughtUpProgress };
     await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 2 }); await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+
+    currentState = { ...currentState, progress: secondCaughtUpProgress };
+    await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 3 }); await Promise.resolve(); await Promise.resolve(); });
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
   });
 

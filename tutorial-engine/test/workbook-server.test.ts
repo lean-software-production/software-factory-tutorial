@@ -1682,6 +1682,46 @@ describe("workbook browser API", () => {
     } finally { await server.close(); }
   });
 
+  it("records terminal facts that arrive at a completion fence after cancelling completion", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty();
+    const summary = deferred<string>();
+    const tutor = new class extends FakeMainTutor {
+      stalledSummaries = 0;
+      override async summarizeBlock(input: any): Promise<string> {
+        this.blockSummaries.push(input);
+        if (input.blockId !== "lesson--001-first--run-supplied-command") return `Summary of ${input.blockId}.`;
+        this.stalledSummaries += 1;
+        return summary.promise;
+      }
+    }(
+      { outcome: "accepted", message: "Editor accepted." },
+      { outcome: "accepted", message: "Terminal accepted." },
+    );
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: tutor });
+    const blockId = "lesson--001-first--run-supplied-command";
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      await submitTerminalAttempt(server.url, blockId);
+      await waitForWorkbookState(server.url, (next) => block(next, blockId)?.terminal?.phase === "accepted" && next.progress.canComplete?.eligible === true, "terminal acceptance");
+
+      const pendingCompletion = completeBlock(server.url, blockId).then((response) => response.json() as Promise<any>);
+      await waitForWorkbookState(server.url, () => tutor.stalledSummaries > 0, "terminal completion summary start");
+      pty.data?.(`${bashCommandMarker("late observed command")}late output\r\n${bashFinishedMarker()}`);
+      await waitMs(20);
+      expect(await privateTimeline(dir)).not.toContainEqual(expect.objectContaining({ type: "terminal-command-submitted", command: "late observed command" }));
+      expect((await privateTimeline(dir)).filter((record) => record.type === "terminal-command-finished" && record.evidence.command === "late observed command")).toHaveLength(0);
+
+      summary.resolve("Summary that must not complete after a terminal fact.");
+      await expect(pendingCompletion).resolves.toMatchObject({ outcome: "rejected", reason: "not-current" });
+      await waitForPrivateTimeline(dir, (records) =>
+        records.some((record) => record.type === "terminal-command-submitted" && record.command === "late observed command")
+        && records.some((record) => record.type === "terminal-command-finished" && record.evidence.command === "late observed command"), "late terminal facts recorded after fence release");
+      expect(await privateTimeline(dir)).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId }));
+    } finally { await server.close(); }
+  });
+
   it("fences accepted terminal completion so post-fence input is not run through the server socket", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty();

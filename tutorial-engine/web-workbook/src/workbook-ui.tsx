@@ -117,6 +117,20 @@ function shellCommandFrom(markdown: string): string | undefined {
 
 const UNREADABLE_TERMINAL_FRAME = "The embedded terminal received an unreadable message from the workbook server. Refresh the page if the terminal stops responding.";
 
+function noteCommandEnteringInput(bufferRef: React.MutableRefObject<string>, data: string): boolean {
+  let commandEntered = false;
+  let buffer = bufferRef.current;
+  for (const char of data) {
+    if (char === "\r" || char === "\n") {
+      if (buffer.trim()) commandEntered = true;
+      buffer = "";
+    } else if (char === "\b" || char === "\x7f") buffer = buffer.slice(0, -1);
+    else buffer += char;
+  }
+  bufferRef.current = buffer.slice(-4_096);
+  return commandEntered;
+}
+
 /**
  * The terminal socket is addressed the way `request()` addresses HTTP: relative to the document's
  * base, with `api/workbook/` as the prefix this module owns. `WebSocket` accepts no relative URL,
@@ -156,6 +170,7 @@ function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange,
   const socket = useRef<WebSocket | null>(null);
   const interactive = useRef(active);
   const commandEnteringInputRef = useRef(onCommandEnteringInput);
+  const terminalInputBuffer = useRef("");
   const [connected, setConnected] = useState(false);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
 
@@ -192,7 +207,10 @@ function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange,
     };
     const dataDisposable = nextTerminal.onData((data) => {
       if (!interactive.current || ws.readyState !== WebSocket.OPEN) return;
-      if (/[\r\n]/.test(data)) commandEnteringInputRef.current?.();
+      // Browser-side terminal revision tracking is only a suppression hint until Bash emits the
+      // authoritative revision. Blank Enter and full-screen program input cannot be mapped to a
+      // Bash command revision here, so only a non-empty line hides Continue locally.
+      if (noteCommandEnteringInput(terminalInputBuffer, data)) commandEnteringInputRef.current?.();
       ws.send(JSON.stringify({ type: "input", data }));
     });
     ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); sendCurrentDimensions(); });
@@ -765,8 +783,9 @@ export function App() {
     bumpLocalEditorRevisionEpoch();
   }, []);
   const rememberTerminalCommandRevision = useCallback<TerminalLocalRevisionHandler>((blockId, revision) => {
-    if (revision <= (localTerminalRevisions.current.get(blockId) ?? 0)) return;
-    localTerminalRevisions.current.set(blockId, revision);
+    const expectedRevision = Math.max(revision, (localTerminalRevisions.current.get(blockId) ?? 0) + 1);
+    if (expectedRevision <= (localTerminalRevisions.current.get(blockId) ?? 0)) return;
+    localTerminalRevisions.current.set(blockId, expectedRevision);
     bumpLocalTerminalRevisionEpoch();
   }, []);
   const applyWorkbookState = useCallback((next: State) => {

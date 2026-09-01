@@ -23,6 +23,10 @@ const MAX_PUBLIC_TERMINAL_SNAPSHOT_BYTES = 16_000;
 type AcceptedCheckpoint = { summary: string; kind: AttemptEvidence["kind"]; evidence?: PublicCheckpoint["evidence"] };
 type AcceptedAttemptRecord = Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }>;
 type CompleteBlockResult = PublicCompleteBlockResult;
+type StagedSummaryEvent =
+  | { type: "block_summarized"; lessonId: string; blockId: string; text: string; coveredThroughId: string }
+  | { type: "lesson_summarized"; lessonId: string; text: string; coveredThroughId?: string; coveredThroughPreviousStage?: true }
+  | { type: "workbook_completion_summary"; text: string };
 
 type WorkbookProjectionState = {
   stream: OrderedWorkbookBlock[];
@@ -543,9 +547,9 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   const generationIsCurrent = (generation: number): boolean => !closed && !fatal && generation === reloadGeneration;
   const currentGeneration = (): number => reloadGeneration;
   const authoredMessageExists = (lessonId: string, blockId: string): boolean => records.some((record) => record.type === "message" && record.source === "authored" && record.lessonId === lessonId && record.blockId === blockId);
-  const currentWorkbookProjection = (source = records) => projectWorkbookBlocks(stream, source);
-  const activeOrderedBlock = (source = records) => currentWorkbookProjection(source).current;
-  const activeDeclaredBlock = (source = records): DeclaredWorkbookBlock | undefined => {
+  const currentWorkbookProjection = (source: readonly WorkbookTimelineRecord[] = records) => projectWorkbookBlocks(stream, source);
+  const activeOrderedBlock = (source: readonly WorkbookTimelineRecord[] = records) => currentWorkbookProjection(source).current;
+  const activeDeclaredBlock = (source: readonly WorkbookTimelineRecord[] = records): DeclaredWorkbookBlock | undefined => {
     const active = activeOrderedBlock(source);
     return active?.origin === "declared" ? active : undefined;
   };
@@ -630,7 +634,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     }
     return { transcript: transcriptContext.transcript };
   };
-  const activeBlockContext = async (source = records, options: { includeTerminalContext?: boolean } = {}) => {
+  const activeBlockContext = async (source: readonly WorkbookTimelineRecord[] = records, options: { includeTerminalContext?: boolean } = {}) => {
     const active = activeDeclaredBlock(source);
     if (!active) return undefined;
     const terminal = options.includeTerminalContext === false ? undefined : await activeTerminalPrivateContext(active);
@@ -651,11 +655,11 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     if (active.block.type !== "terminal-practice" && active.block.type !== "editor-practice") return undefined;
     return workspaceRootForLesson(active.chapter.lesson);
   };
-  const mainContext = async (options: { includeTerminalContext?: boolean } = {}): Promise<MainTutorContext> => {
-    const projection = currentWorkbookProjection();
+  const mainContext = async (options: { includeTerminalContext?: boolean } = {}, source: readonly WorkbookTimelineRecord[] = records): Promise<MainTutorContext> => {
+    const projection = currentWorkbookProjection(source);
     const active = projection.current;
-    const completeStatus = active ? await canCompleteBlock(active, projection, records, attempts) : { eligible: false };
-    return { records: mainTutorTimelineRecords(loaded, records), activeContext: await activeBlockContext(records, options), activeWorkspaceRoot: activeWorkspaceRootForTutor(active), completionTool: active && completeStatus.eligible ? { blockId: active.id } : undefined };
+    const completeStatus = active ? await canCompleteBlock(active, projection, source, attempts) : { eligible: false };
+    return { records: mainTutorTimelineRecords(loaded, source), activeContext: await activeBlockContext(source, options), activeWorkspaceRoot: activeWorkspaceRootForTutor(active), completionTool: active && completeStatus.eligible ? { blockId: active.id } : undefined };
   };
   const mainContextForTarget = async (_lessonId: string, blockId: string): Promise<MainTutorContext> => {
     const active = activeOrderedBlock();
@@ -1045,109 +1049,167 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   };
 
   const observeTerminalFact = (fact: TerminalObservationFact): Promise<void> => trackOrdinaryCommand(async () => {
-    const job = await transact(async (): Promise<TerminalReviewJob | undefined> => {
-      if (closed || fatal) return undefined;
-      const active = activeDeclaredBlock();
-      if (!active || active.block.type !== "terminal-practice" || active.id !== fact.blockId) return undefined;
-      const fence = matchingCompletionFence(active.id);
-      if (fence) {
-        invalidateCompletionFence(fence);
-        throw new Error("Terminal observation rejected while block completion is fenced.");
+    for (;;) {
+      const preFence = matchingCompletionFence(fact.blockId);
+      if (preFence) {
+        invalidateCompletionFence(preFence);
+        await preFence.released;
+        continue;
       }
+      let job: TerminalReviewJob | undefined;
+      try {
+        job = await transact(async (): Promise<TerminalReviewJob | undefined> => {
+          if (closed || fatal) return undefined;
+          const active = activeDeclaredBlock();
+          if (!active || active.block.type !== "terminal-practice" || active.id !== fact.blockId) return undefined;
+          const fence = matchingCompletionFence(active.id);
+          if (fence) {
+            invalidateCompletionFence(fence);
+            throw new CompletionFenceEncountered(fence);
+          }
 
-      if (fact.type === "terminal-command-submitted") {
-        if (records.some((record) => record.type === "terminal-command-submitted" && record.attemptId === fact.attemptId)) return undefined;
-        await append({
-          type: "terminal-command-submitted",
-          attemptId: fact.attemptId,
-          lessonId: active.lessonId,
-          blockId: active.id,
-          command: fact.command,
-          terminalSessionId
+          if (fact.type === "terminal-command-submitted") {
+            if (records.some((record) => record.type === "terminal-command-submitted" && record.attemptId === fact.attemptId)) return undefined;
+            await append({
+              type: "terminal-command-submitted",
+              attemptId: fact.attemptId,
+              lessonId: active.lessonId,
+              blockId: active.id,
+              command: fact.command,
+              terminalSessionId
+            });
+            notifyStateChanged({ lessonId: active.lessonId, blockId: active.id, status: "working", terminalPhase: "running" });
+            // Bash submission alone starts Running; no model can inspect it before final evidence.
+            return undefined;
+          }
+
+          const submitted = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
+            record.type === "terminal-command-submitted" && record.attemptId === fact.attemptId);
+          const currentSubmission = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
+            record.type === "terminal-command-submitted" && record.blockId === active.id);
+          if (!submitted || currentSubmission?.attemptId !== fact.attemptId || submitted.lessonId !== active.lessonId || submitted.blockId !== active.id || submitted.command !== fact.evidence.command || fact.evidence.blockId !== active.id || fact.evidence.attemptId !== fact.attemptId) return undefined;
+
+          const interactions = fact.evidence.interactions.map((interaction) => ({
+            kind: interaction.type === "interactive-input" ? "input" as const : "output" as const,
+            data: interaction.data
+          }));
+          if (records.some((record) => record.type === "terminal-command-finished" && record.attemptId === fact.attemptId)) return undefined;
+          // The only terminal snapshot is the final, self-contained Bash-finished evidence.
+          const transcriptSnapshot = terminalTranscriptSnapshot({ live: currentActiveTerminalContext?.(), lessonId: active.lessonId, blockId: active.id, interactions });
+          const evidence = validateTerminalEvidence({ kind: "finished", command: fact.evidence.command, interactions, exitStatus: fact.evidence.exitStatus, transcriptSnapshot });
+          await append({ type: "terminal-command-finished", attemptId: fact.attemptId, evidence });
+          notifyStateChanged({ lessonId: active.lessonId, blockId: active.id, status: "reviewing", terminalPhase: "checking" });
+          return {
+            attemptId: fact.attemptId,
+            lessonId: active.lessonId,
+            blockId: active.id,
+            command: submitted.command,
+            exitStatus: fact.evidence.exitStatus,
+            rubric: active.block.tutor,
+            generation: currentGeneration(),
+          };
         });
-        notifyStateChanged({ lessonId: active.lessonId, blockId: active.id, status: "working", terminalPhase: "running" });
-        // Bash submission alone starts Running; no model can inspect it before final evidence.
-        return undefined;
+      } catch (error) {
+        if (error instanceof CompletionFenceEncountered) {
+          await error.fence.released;
+          continue;
+        }
+        throw error;
       }
-
-      const submitted = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
-        record.type === "terminal-command-submitted" && record.attemptId === fact.attemptId);
-      const currentSubmission = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
-        record.type === "terminal-command-submitted" && record.blockId === active.id);
-      if (!submitted || currentSubmission?.attemptId !== fact.attemptId || submitted.lessonId !== active.lessonId || submitted.blockId !== active.id || submitted.command !== fact.evidence.command || fact.evidence.blockId !== active.id || fact.evidence.attemptId !== fact.attemptId) return undefined;
-
-      const interactions = fact.evidence.interactions.map((interaction) => ({
-        kind: interaction.type === "interactive-input" ? "input" as const : "output" as const,
-        data: interaction.data
-      }));
-      if (records.some((record) => record.type === "terminal-command-finished" && record.attemptId === fact.attemptId)) return undefined;
-      // The only terminal snapshot is the final, self-contained Bash-finished evidence.
-      const transcriptSnapshot = terminalTranscriptSnapshot({ live: currentActiveTerminalContext?.(), lessonId: active.lessonId, blockId: active.id, interactions });
-      const evidence = validateTerminalEvidence({ kind: "finished", command: fact.evidence.command, interactions, exitStatus: fact.evidence.exitStatus, transcriptSnapshot });
-      await append({ type: "terminal-command-finished", attemptId: fact.attemptId, evidence });
-      notifyStateChanged({ lessonId: active.lessonId, blockId: active.id, status: "reviewing", terminalPhase: "checking" });
-      return {
-        attemptId: fact.attemptId,
-        lessonId: active.lessonId,
-        blockId: active.id,
-        command: submitted.command,
-        exitStatus: fact.evidence.exitStatus,
-        rubric: active.block.tutor,
-        generation: currentGeneration(),
-      };
-    });
-    if (!job || fatal) return;
-    // Model calls begin only after the finished event write and timeline transaction have completed.
-    launchTerminalMainReview(job);
+      if (!job || fatal) return;
+      // Model calls begin only after the finished event write and timeline transaction have completed.
+      launchTerminalMainReview(job);
+      return;
+    }
   });
 
-  const summarizeDeparture = async (leaving: DeclaredWorkbookBlock, coveredThroughId: string, lessonWillComplete: boolean, generation = currentGeneration(), fence?: CompletionFence): Promise<boolean> => {
-    const current = () => generationIsCurrent(generation) && (!fence || completionFenceIsCurrent(fence));
-    if (!current()) return false;
-    if (isEvaluatedBlock(leaving.block) && !records.some((record) => record.type === "block_summarized" && record.blockId === leaving.id)) {
-      try {
-        const text = requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId }), "block_summary");
-        if (!current()) return false;
-        await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text, coveredThroughId });
-      } catch {
-        if (!current()) return false;
-        logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id });
-        latchTutorInfrastructureFatal("block summary");
-        return false;
+  const stagedSummaryRecords = (staged: readonly StagedSummaryEvent[], coveredThroughId: string): WorkbookTimelineRecord[] => {
+    let sequence = records.at(-1)?.sequence ?? 0;
+    let previousId = records.at(-1)?.id ?? coveredThroughId;
+    return staged.map((stage, index) => {
+      const id = `staged-summary-${index + 1}`;
+      const metadata = { id, sequence: sequence += 1, at: new Date(0).toISOString() };
+      if (stage.type === "block_summarized") {
+        previousId = id;
+        return { ...metadata, ...stage };
       }
-    }
-    if (!current()) return false;
-    if (lessonWillComplete && !records.some((record) => record.type === "lesson_summarized" && record.lessonId === leaving.lessonId)) {
-      const lessonCoveredThroughId = records.at(-1)?.id ?? coveredThroughId;
-      try {
-        const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: leaving.lessonId, coveredThroughId: lessonCoveredThroughId }), "lesson_summary");
-        if (!current()) return false;
-        await append({ type: "lesson_summarized", lessonId: leaving.lessonId, text, coveredThroughId: lessonCoveredThroughId });
-      } catch {
-        if (!current()) return false;
-        logSummaryFailure("lesson_summary", { lessonId: leaving.lessonId, blockId: leaving.id });
-        latchTutorInfrastructureFatal("lesson summary");
-        return false;
+      if (stage.type === "lesson_summarized") {
+        const record = { ...metadata, type: stage.type, lessonId: stage.lessonId, text: stage.text, coveredThroughId: stage.coveredThroughPreviousStage ? previousId : stage.coveredThroughId ?? previousId };
+        previousId = id;
+        return record;
       }
-    }
-    return current();
+      previousId = id;
+      return { ...metadata, ...stage };
+    });
   };
 
-  const requestCompletionSummary = async (coveredThroughId: string, generation = currentGeneration(), fence?: CompletionFence): Promise<boolean> => {
+  const stagedMainContext = async (staged: readonly StagedSummaryEvent[], coveredThroughId: string, options: { includeTerminalContext?: boolean } = {}): Promise<MainTutorContext> =>
+    mainContext(options, [...records, ...stagedSummaryRecords(staged, coveredThroughId)]);
+
+  const summarizeDeparture = async (leaving: DeclaredWorkbookBlock, coveredThroughId: string, lessonWillComplete: boolean, generation = currentGeneration(), fence?: CompletionFence): Promise<StagedSummaryEvent[] | undefined> => {
     const current = () => generationIsCurrent(generation) && (!fence || completionFenceIsCurrent(fence));
-    if (!current()) return false;
-    if (records.some((record) => record.type === "workbook_completion_summary")) return true;
-    const completionCoveredThroughId = records.at(-1)?.id ?? coveredThroughId;
+    const staged: StagedSummaryEvent[] = [];
+    if (!current()) return undefined;
+    if (isEvaluatedBlock(leaving.block) && !records.some((record) => record.type === "block_summarized" && record.blockId === leaving.id)) {
+      try {
+        const text = requireTutorText(await mainTutor.summarizeBlock({ ...(await stagedMainContext(staged, coveredThroughId)), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId }), "block_summary");
+        if (!current()) return undefined;
+        staged.push({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text, coveredThroughId });
+      } catch {
+        if (!current()) return undefined;
+        logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id });
+        latchTutorInfrastructureFatal("block summary");
+        return undefined;
+      }
+    }
+    if (!current()) return undefined;
+    if (lessonWillComplete && !records.some((record) => record.type === "lesson_summarized" && record.lessonId === leaving.lessonId)) {
+      const lessonCoveredThroughId = records.at(-1)?.id ?? coveredThroughId;
+      const coveredThroughPreviousStage = staged.length > 0;
+      try {
+        const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await stagedMainContext(staged, coveredThroughId)), lessonId: leaving.lessonId, coveredThroughId: coveredThroughPreviousStage ? stagedSummaryRecords(staged, coveredThroughId).at(-1)?.id ?? lessonCoveredThroughId : lessonCoveredThroughId }), "lesson_summary");
+        if (!current()) return undefined;
+        staged.push({ type: "lesson_summarized", lessonId: leaving.lessonId, text, coveredThroughId: lessonCoveredThroughId, ...(coveredThroughPreviousStage ? { coveredThroughPreviousStage: true as const } : {}) });
+      } catch {
+        if (!current()) return undefined;
+        logSummaryFailure("lesson_summary", { lessonId: leaving.lessonId, blockId: leaving.id });
+        latchTutorInfrastructureFatal("lesson summary");
+        return undefined;
+      }
+    }
+    return current() ? staged : undefined;
+  };
+
+  const requestCompletionSummary = async (coveredThroughId: string, staged: readonly StagedSummaryEvent[], generation = currentGeneration(), fence?: CompletionFence): Promise<StagedSummaryEvent[] | undefined> => {
+    const current = () => generationIsCurrent(generation) && (!fence || completionFenceIsCurrent(fence));
+    if (!current()) return undefined;
+    if (records.some((record) => record.type === "workbook_completion_summary")) return [];
+    const completionCoveredThroughId = staged.length > 0 ? stagedSummaryRecords(staged, coveredThroughId).at(-1)?.id ?? coveredThroughId : records.at(-1)?.id ?? coveredThroughId;
     try {
-      const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: "workbook", coveredThroughId: completionCoveredThroughId }), "completion_summary");
-      if (!current()) return false;
-      await append({ type: "workbook_completion_summary", text });
-      return true;
+      const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await stagedMainContext(staged, coveredThroughId)), lessonId: "workbook", coveredThroughId: completionCoveredThroughId }), "completion_summary");
+      if (!current()) return undefined;
+      return [{ type: "workbook_completion_summary", text }];
     } catch {
-      if (!current()) return false;
+      if (!current()) return undefined;
       logSummaryFailure("completion_summary", { lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID });
       latchTutorInfrastructureFatal("completion summary");
-      return false;
+      return undefined;
+    }
+  };
+
+  const appendStagedSummaries = async (staged: readonly StagedSummaryEvent[], coveredThroughId: string): Promise<void> => {
+    let previousId = records.at(-1)?.id ?? coveredThroughId;
+    for (const stage of staged) {
+      if (stage.type === "block_summarized") {
+        const record = await append({ type: "block_summarized", lessonId: stage.lessonId, blockId: stage.blockId, text: stage.text, coveredThroughId: stage.coveredThroughId });
+        previousId = record.id;
+      } else if (stage.type === "lesson_summarized") {
+        const record = await append({ type: "lesson_summarized", lessonId: stage.lessonId, text: stage.text, coveredThroughId: stage.coveredThroughPreviousStage ? previousId : stage.coveredThroughId ?? previousId });
+        previousId = record.id;
+      } else {
+        const record = await append({ type: "workbook_completion_summary", text: stage.text });
+        previousId = record.id;
+      }
     }
   };
 
@@ -1173,18 +1235,21 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
         .every((block) => block.id === requested.id || projection.completedBlockIds.has(block.id));
       const workbookWillComplete = stream.every((block) => block.id === requested.id || projection.completedBlockIds.has(block.id));
       if (!completionFenceIsCurrent(fence)) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
-      if (requested.origin === "declared" && !await summarizeDeparture(requested, coveredThroughId, lessonWillComplete, generation, fence)) {
+      const departureSummaries = requested.origin === "declared" ? await summarizeDeparture(requested, coveredThroughId, lessonWillComplete, generation, fence) : [];
+      if (!departureSummaries) {
         assertNoFatal();
         return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
       }
       if (!completionFenceIsCurrent(fence)) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
-      if (workbookWillComplete && !await requestCompletionSummary(coveredThroughId, generation, fence)) {
+      const completionSummaries = workbookWillComplete ? await requestCompletionSummary(coveredThroughId, departureSummaries, generation, fence) : [];
+      if (!completionSummaries) {
         assertNoFatal();
         return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
       }
       if (!completionFenceIsCurrent(fence)) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
 
       fence.committing = true;
+      await appendStagedSummaries([...departureSummaries, ...completionSummaries], coveredThroughId);
       await append({ type: "block_completed", blockId: requested.id });
       if (requested.origin === "declared" && requested.block.type === "terminal-practice") {
         const workspaceRoot = workspaceRootForLesson(requested.chapter.lesson);
