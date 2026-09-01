@@ -117,8 +117,9 @@ npm test            # unit tests, including deterministic eval tests
 npm run check:eval  # deterministic/model-free type-check for synthetic engine eval code
 npm run test:eval   # deterministic/model-free synthetic engine eval tests
 npm run eval -- --help # paid Docker-backed live engine eval CLI
-npm run test:workbook-ux:deterministic # provider-free workbook UX recording + decoded-WebM analysis + report
-npm run test:workbook-ux               # same workbook UX test plus advisory pi review when deterministic checks pass
+npm run test:workbook-ux               # authoritative provider-free UX recording + decoded-WebM analysis + report
+npm run test:workbook-ux:deterministic # explicit alias for the same deterministic UX test
+npm run test:workbook-ux:ai            # deliberate advisory Pi review after deterministic checks pass
 npm run test:visual                    # canonical devcontainer visual gate, including two combined feedback composites
 npm run check       # TypeScript, eval type-check, unit tests, browser build, and browser smoke
 ```

@@ -39,6 +39,15 @@ describe('workbook UX package and CLI contracts', () => {
     expect(parseWorkbookUxCliOptions(['--no-ai'])).toMatchObject({ ai: false, headless: true, analyze: true });
     expect(parseWorkbookUxCliOptions(['--ai'])).toMatchObject({ ai: true, headless: true, analyze: true });
   });
+
+  it('documents AI as an explicit opt-in without masking deterministic failures', async () => {
+    const engineReadme = await readFile(resolve(engineRoot, 'README.md'), 'utf8');
+    const uxReadme = await readFile(resolve(engineRoot, 'test/workbook-ux/README.md'), 'utf8');
+
+    expect(engineReadme).toContain('npm run test:workbook-ux:ai');
+    expect(uxReadme).toContain('test:workbook-ux:ai` is the deliberate manual/weekly opt-in');
+    expect(uxReadme).not.toContain('test:workbook-ux:ai || true');
+  });
 });
 
 describe('workbook UX test report', () => {

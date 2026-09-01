@@ -80,7 +80,7 @@ Run the ordinary non-AI workbook UX test before cutting a tutorial-engine change
 
 ```bash
 npm run --workspace=tutorial-engine test:workbook-ux
-npm run --workspace=tutorial-engine test:workbook-ux:ai || true  # inspect report.md if AI is quota-limited/unavailable
+npm run --workspace=tutorial-engine test:workbook-ux:ai  # AI unavailability is reported but does not fail the command
 ```
 
 No scheduled CI job is installed yet.
