@@ -141,7 +141,7 @@ Usage from the repository root:
   npm run eval:release
   npm run eval -- --scenario v2-exact-command-success  # temporary compatibility alias
 
-A scope is required. --release runs the bounded six-scenario release profile once per scenario. EVAL_JUDGE_MODEL selects the judge model and is mandatory. TUTOR_MODEL optionally selects the workbook tutor model. Before any report directory, workspace, tutor session, or judge session is created, the runner fail-fast checks scope/confirmation, judge model, disposable fixture validity, Docker/workbook-terminal readiness, Main Tutor connectivity, and judge command connectivity. Reports are written under tutorial-engine/evals/reports/.`;
+A scope is required. --release runs the bounded consolidated release profile once each for v2-editor-feedback-locked and v2-transition-completion. EVAL_JUDGE_MODEL selects the judge model and is mandatory. TUTOR_MODEL optionally selects the workbook tutor model. Before any report directory, workspace, tutor session, or judge session is created, the runner fail-fast checks scope/confirmation, judge model, disposable fixture validity, Docker/workbook-terminal readiness, Main Tutor connectivity, and judge command connectivity. Reports are written under tutorial-engine/evals/reports/.`;
 }
 
 export type V2EvalScope = "scenario" | "all" | "release";
@@ -154,11 +154,7 @@ export interface V2EvalCliPlan {
 }
 
 export const v2ReleaseScenarioIds = [
-  "v2-exact-command-success",
   "v2-editor-feedback-locked",
-  "v2-editor-unlocked",
-  "v2-clue-only-task",
-  "v2-reflection-follow-up",
   "v2-transition-completion"
 ] as const;
 

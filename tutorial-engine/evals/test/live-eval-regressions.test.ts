@@ -98,7 +98,7 @@ describe("live v2 evaluator regressions", () => {
     expect(readme).toContain("root `evals/workbook/reports/`");
     expect(readme).toContain("`eval:workbook` name remains reserved and unwired");
     expect(readme).toContain("bounded release profile");
-    expect(readme).toContain("six current engine scenarios exactly once each");
+    expect(readme).toContain("v2-editor-feedback-locked` and `v2-transition-completion` exactly once each");
     expect(readme).toContain("evals/reports/<run-id>/trace.json");
     expect(readme).toContain("evals/reports/<run-id>/judge-input.txt");
     expect(readme).toContain("evals/reports/latest.json");

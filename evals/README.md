@@ -11,7 +11,7 @@ This directory is root-owned. It holds authored-workbook evaluation foundations 
 ## Root aliases
 
 - `npm run eval:engine -- ...` forwards to the tutorial-engine live evaluator.
-- `npm run eval:release` forwards to the bounded six-scenario engine release profile.
+- `npm run eval:release` forwards to the bounded two-scenario engine release profile.
 - `npm run eval -- ...` is a temporary compatibility alias for `eval:engine`. It is not an authored-workbook eval.
 - `npm run eval:workbook -- ...` runs the authored-workbook live evaluator; `--release` runs the four-scenario catalog once.
 

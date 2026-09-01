@@ -162,8 +162,8 @@ The synthetic tutorial-engine mechanics eval lives in [`evals/`](evals/). `npm r
 and `npm run test:eval` are deterministic and model-free. The live command is
 `npm run eval -- --scenario <v2-id>` from this workspace; it is paid, requires Docker, and writes
 active reports under `tutorial-engine/evals/reports/` from the repository root. `npm run eval:release`
-runs the bounded six-scenario release profile once per scenario. Exploratory scopes use `--scenario`,
-`--all --yes`, and optional repeats.
+runs the bounded consolidated release profile once each for `v2-editor-feedback-locked` and
+`v2-transition-completion`. Exploratory scopes use `--scenario`, `--all --yes`, and optional repeats.
 
 From the repository root, `npm run eval:engine -- --scenario <v2-id>` forwards here,
 `npm run eval:release` delegates through `--workspace=tutorial-engine`, and root `npm run eval -- ...`

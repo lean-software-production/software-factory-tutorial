@@ -15,7 +15,7 @@ Run commands from the repository root unless a command says otherwise.
 | `npm run test:workbook` | root | Workbook component release; paid/Docker. |
 | `npm run test` | root | Full release; paid/Docker; aggregates lanes. |
 | `npm run eval:engine -- ...` | root -> engine | Live engine eval; paid/Docker. |
-| `npm run eval:release` | root -> engine | Engine release; six scenarios once. |
+| `npm run eval:release` | root -> engine | Engine release; two consolidated scenarios once. |
 | `npm run eval:workbook -- --list` | root | Authored catalog; zero side effect. |
 | `npm run eval:workbook -- --release` | root | Authored release; four once, budget derived. |
 
@@ -122,7 +122,7 @@ npm run eval:engine -- --release
 npm run eval:release
 ```
 
-The engine release profile runs the six current engine scenarios exactly once each.
+The engine release profile runs `v2-editor-feedback-locked` and `v2-transition-completion` exactly once each; use `--all --yes` for all current engine scenarios.
 
 Run authored-workbook live evals with a scenario, all confirmed scenarios, or the release profile:
 

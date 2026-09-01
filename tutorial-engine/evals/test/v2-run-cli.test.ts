@@ -13,15 +13,16 @@ describe("v2 eval runner CLI parsing", () => {
     expect(() => prepareV2EvalCliRun(["--release"], {})).toThrow("Set EVAL_JUDGE_MODEL");
   });
 
-  it("selects the bounded release profile exactly once with one run per current engine scenario", () => {
+  it("selects the bounded release profile exactly once with one run per consolidated release scenario", () => {
     const plan = parseV2EvalArgs(["--release"]);
 
     expect(plan).toBeDefined();
     expect(plan?.scope).toBe("release");
     expect(plan?.repeat).toBe(1);
     expect(plan?.scenarios.map((scenario) => scenario.id)).toEqual(v2ReleaseScenarioIds);
-    expect(new Set(plan?.scenarios.map((scenario) => scenario.id)).size).toBe(6);
-    expect(plan?.scenarios.map((scenario) => scenario.id)).toEqual(v2Scenarios.map((scenario) => scenario.id));
+    expect(new Set(plan?.scenarios.map((scenario) => scenario.id)).size).toBe(2);
+    expect(plan?.scenarios.map((scenario) => scenario.id)).toEqual(["v2-editor-feedback-locked", "v2-transition-completion"]);
+    expect(v2Scenarios.map((scenario) => scenario.id)).toEqual(expect.arrayContaining(["v2-exact-command-success", "v2-editor-unlocked", "v2-clue-only-task", "v2-reflection-follow-up"]));
     expect(selectV2Scenarios(["--release"]).map((scenario) => scenario.id)).toEqual(v2ReleaseScenarioIds);
   });
 

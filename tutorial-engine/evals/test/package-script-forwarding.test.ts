@@ -141,7 +141,7 @@ describe("evaluator package ownership", () => {
     await expect(npmForwardedArgs("eval", args)).resolves.toEqual(["evals/run.ts", ...args]);
   }, 15_000);
 
-  it("forwards the root release shortcut into the bounded workspace release scope", async () => {
+  it("forwards the root release shortcut into the bounded consolidated workspace release scope", async () => {
     await expect(npmForwardedArgs("eval:release", [])).resolves.toEqual(["evals/run.ts", "--release"]);
     await expect(npmForwardedArgs("eval:release", ["--repeat", "2"])).resolves.toEqual(["evals/run.ts", "--release", "--repeat", "2"]);
   }, 15_000);

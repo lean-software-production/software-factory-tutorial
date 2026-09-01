@@ -234,10 +234,10 @@ function gateReflectionFollowUp(trace: V2SessionTrace): V2GateResult {
 function gateTransitionCompletion(trace: V2SessionTrace): V2GateResult {
   const transitionEvent = trace.events.some((event) => event.type === "block_completed" && matchBlockId(event.blockId, "transition"));
   const completedProjection = trace.publicStates.some((state) => stateIncludesCompletedLesson(state.state));
-  return collectAssertions([
-    publicStateClean(trace),
-    observedAndCompleted("exact-command", trace),
-    observedAndCompleted("clue-only", trace),
+  return collectAssertions(dedupeAssertionsByName([
+    ...gateExactCommandSuccess(trace).assertions,
+    ...gateClueOnlyTask(trace).assertions,
+    ...gateReflectionFollowUp(trace).assertions,
     {
       name: "transition event",
       passed: transitionEvent,
@@ -247,10 +247,8 @@ function gateTransitionCompletion(trace: V2SessionTrace): V2GateResult {
       name: "transition completed",
       passed: completedProjection,
       detail: completedProjection ? "Public projection marks the evaluator lesson complete." : "No public projection marks the evaluator lesson complete."
-    },
-    artifactEquals("factory/.tmp/evaluator-command.txt", "command block complete\n", trace),
-    artifactEquals("factory/.tmp/evaluator-clue.txt", "clue block complete\n", trace)
-  ]);
+    }
+  ]));
 }
 
 
@@ -404,6 +402,15 @@ function stateIncludesCompletedLesson(value: unknown): boolean {
 
 function collectAssertions(assertions: V2GateAssertion[]): V2GateResult {
   return { passed: assertions.every((assertion) => assertion.passed), assertions };
+}
+
+function dedupeAssertionsByName(assertions: V2GateAssertion[]): V2GateAssertion[] {
+  const seen = new Set<string>();
+  return assertions.filter((assertion) => {
+    if (seen.has(assertion.name)) return false;
+    seen.add(assertion.name);
+    return true;
+  });
 }
 
 function assertNever(value: never): never {

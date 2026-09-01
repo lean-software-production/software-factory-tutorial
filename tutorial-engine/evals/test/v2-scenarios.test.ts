@@ -284,16 +284,20 @@ describe("v2 live evaluator scenarios", () => {
     expect(failed.assertions.find((assertion) => assertion.name === "reflection follow-up")?.passed).toBe(false);
   });
 
-  it("gates transition completion on the transition event and completed lesson projection", () => {
+  it("gates transition completion on the consolidated positive-path assertions plus transition completion", () => {
     const trace = clueOnlyTrace();
     trace.scenarioId = "v2-transition-completion";
     trace.reflections.push(
       { blockId: "reflection", role: "learner", text: "The exact command block gave me the command; the clue block made me choose one." },
-      { blockId: "reflection", role: "tutor", text: "Good distinction." }
+      { blockId: "reflection", role: "tutor", text: "What made the clue-only block different?" },
+      { blockId: "reflection", role: "learner", text: "The clue-only block showed the goal but not an exact shell line." },
+      { blockId: "reflection", role: "tutor", text: "Yes: it used public clues, not private tutor guidance." }
     );
     trace.events.push(
       event({ type: "reflection_submitted", lessonId, blockId: "reflection", response: trace.reflections[0]!.text }),
       event({ type: "reflection_reply_recorded", lessonId, blockId: "reflection", response: trace.reflections[1]!.text }),
+      event({ type: "reflection_follow_up_submitted", lessonId, blockId: "reflection", response: trace.reflections[2]!.text }),
+      event({ type: "reflection_reply_recorded", lessonId, blockId: "reflection", response: trace.reflections[3]!.text }),
       event({ type: "block_completed", lessonId, blockId: "reflection" }),
       event({ type: "block_completed", lessonId, blockId: "transition" })
     );
@@ -309,7 +313,22 @@ describe("v2 live evaluator scenarios", () => {
       }
     });
 
-    allGateAssertionsPass(trace);
+    const gate = allGateAssertionsPass(trace);
+    expect(gate.assertions.map((assertion) => assertion.name)).toEqual(expect.arrayContaining([
+      "exact command input",
+      "editor unlocked",
+      "editor-artifacts/evaluator-editor.txt artifact",
+      "clue-only public prompt",
+      "clue-only learner command",
+      "reflection follow-up",
+      "reflection completed",
+      "transition event",
+      "transition completed"
+    ]));
+
+    const missingExactInput = { ...trace, terminalTranscript: trace.terminalTranscript.filter((entry) => !(entry.blockId === "exact-command" && entry.direction === "input")) };
+    const missingExactInputGate = deterministicV2Gate(findV2Scenario(missingExactInput.scenarioId), missingExactInput);
+    expect(missingExactInputGate.assertions.find((assertion) => assertion.name === "exact command input")?.passed).toBe(false);
 
     const incomplete = { ...trace, publicStates: trace.publicStates.slice(0, -1) };
     const failed = deterministicV2Gate(findV2Scenario(incomplete.scenarioId), incomplete);
