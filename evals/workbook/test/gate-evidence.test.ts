@@ -557,7 +557,7 @@ function finishedEvidence(command: string, exitStatus: number, output: string): 
 }
 
 function publicState(blockId: string, terminalRevision: number): any {
-  return { label: `${blockId}:rev`, state: { workbook: { title: "Synthetic" }, introduction: "Intro", introductionComplete: true, chapters: [], progress: { activeLessonId: "001-run-an-agent-headlessly", activeBlockId: blockId, completedLessons: [], blocks: [{ id: blockId, ready: true, active: false, completed: true, verified: true, emerged: true, terminalRevision, checkpoint: { status: "accepted", evidence: { kind: "terminal", text: "ok" } }, terminal: { phase: "complete", message: "ok" } }], reflections: {}, reflectionConversations: {} }, adapter: {}, timeline: [] } };
+  return { label: `${blockId}:rev`, state: { workbook: { title: "Synthetic" }, introduction: "Intro", introductionComplete: true, chapters: [], progress: { activeLessonId: "001-run-an-agent-headlessly", activeBlockId: blockId, completedLessons: [], blocks: [{ id: blockId, ready: true, active: false, completed: true, verified: true, emerged: true, terminalRevision, checkpoint: { status: "accepted", evidence: { kind: "terminal", text: "ok" } }, terminal: { phase: "accepted", message: "ok" } }], reflections: {}, reflectionConversations: {} }, adapter: {}, timeline: [] } };
 }
 
 async function writeLessons003004Final(root: string, options: { extraArtifact?: boolean }) {

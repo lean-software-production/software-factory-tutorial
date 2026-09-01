@@ -237,7 +237,7 @@ describe("authored workbook judge prompt and result validation", () => {
           workAcceptedBlocks: ["terminal-block"],
           readyBlocks: ["reflection-block"],
           canComplete: { blockId: "terminal-block", eligible: true },
-          blocks: [{ id: "terminal-block", type: "terminal-practice", title: "Run the line", ready: true, active: false, completed: true, verified: true, emerged: true, workAccepted: true, checkpoint: { status: "accepted", successMessage: "accepted in public state", evidence: { kind: "terminal", text: "bulky evidence text omitted from state projection" } }, terminal: { phase: "complete", message: "Terminal accepted exactly." }, terminalRevision: 3, terminalSnapshot: { transcript: "snapshot transcript is summarized" } }]
+          blocks: [{ id: "terminal-block", type: "terminal-practice", title: "Run the line", ready: true, active: false, completed: true, verified: true, emerged: true, workAccepted: true, checkpoint: { status: "accepted", successMessage: "accepted in public state", evidence: { kind: "terminal", text: "bulky evidence text omitted from state projection" } }, terminal: { phase: "accepted", message: "Terminal accepted exactly." }, terminalRevision: 3, terminalSnapshot: { transcript: "snapshot transcript is summarized" } }]
         },
         completion: { complete: true, anchorId: "terminal-block", summary: "summary text summarized" }
       } as PublicWorkbookState
@@ -249,7 +249,7 @@ describe("authored workbook judge prompt and result validation", () => {
       completedBlocks: ["terminal-block"],
       workAcceptedBlocks: ["terminal-block"],
       readyBlocks: ["reflection-block"],
-      progressBlocks: [{ id: "terminal-block", completed: true, verified: true, workAccepted: true, terminal: { phase: "complete", message: "Terminal accepted exactly." }, checkpoint: { status: "accepted", successMessage: { bytes: Buffer.byteLength("accepted in public state", "utf8") }, evidence: { kind: "terminal", text: { bytes: Buffer.byteLength("bulky evidence text omitted from state projection", "utf8") } } } }],
+      progressBlocks: [{ id: "terminal-block", completed: true, verified: true, workAccepted: true, terminal: { phase: "accepted", message: "Terminal accepted exactly." }, checkpoint: { status: "accepted", successMessage: { bytes: Buffer.byteLength("accepted in public state", "utf8") }, evidence: { kind: "terminal", text: { bytes: Buffer.byteLength("bulky evidence text omitted from state projection", "utf8") } } } }],
       completion: { complete: true, anchorId: "terminal-block", summary: { bytes: Buffer.byteLength("summary text summarized", "utf8") } }
     });
     expect(JSON.stringify(judgeTrace)).not.toContain("snapshot transcript is summarized");

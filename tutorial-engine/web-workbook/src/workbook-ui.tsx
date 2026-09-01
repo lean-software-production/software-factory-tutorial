@@ -117,18 +117,38 @@ function shellCommandFrom(markdown: string): string | undefined {
 
 const UNREADABLE_TERMINAL_FRAME = "The embedded terminal received an unreadable message from the workbook server. Refresh the page if the terminal stops responding.";
 
-function noteCommandEnteringInput(bufferRef: React.MutableRefObject<string>, data: string): boolean {
-  let commandEntered = false;
-  let buffer = bufferRef.current;
+type TerminalInputLineState = { buffer: string; countedCurrentLine: boolean };
+
+function terminalInputExpectedRevisionDelta(line: TerminalInputLineState, data: string): number {
+  let delta = 0;
+  const clearUnsubmittedLine = () => {
+    if (line.countedCurrentLine) delta -= 1;
+    line.buffer = "";
+    line.countedCurrentLine = false;
+  };
   for (const char of data) {
     if (char === "\r" || char === "\n") {
-      if (buffer.trim()) commandEntered = true;
-      buffer = "";
-    } else if (char === "\b" || char === "\x7f") buffer = buffer.slice(0, -1);
-    else buffer += char;
+      line.buffer = "";
+      line.countedCurrentLine = false;
+      continue;
+    }
+    if (char === "\u0003" || char === "\u0015") {
+      clearUnsubmittedLine();
+      continue;
+    }
+    if (char === "\b" || char === "\x7f") {
+      line.buffer = line.buffer.slice(0, -1);
+      if (line.countedCurrentLine && !line.buffer.trim()) clearUnsubmittedLine();
+      continue;
+    }
+    if (char < " " || char === "\x7f") continue;
+    line.buffer = (line.buffer + char).slice(-4_096);
+    if (!line.countedCurrentLine && line.buffer.trim()) {
+      line.countedCurrentLine = true;
+      delta += 1;
+    }
   }
-  bufferRef.current = buffer.slice(-4_096);
-  return commandEntered;
+  return delta;
 }
 
 /**
@@ -162,19 +182,19 @@ function setTerminalInteractivity(terminal: Terminal | null, element: HTMLDivEle
   if (helperTextarea) helperTextarea.disabled = !interactive;
 }
 
-function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange, onCommandEnteringInput }: { command?: string; active: boolean; onError(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onCommandEnteringInput?(): void }) {
+function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange, onExpectedTerminalRevisionDelta }: { command?: string; active: boolean; onError(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onExpectedTerminalRevisionDelta?(delta: number): void }) {
   const terminalPanel = useRef<HTMLDivElement | null>(null);
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
   const socket = useRef<WebSocket | null>(null);
   const interactive = useRef(active);
-  const commandEnteringInputRef = useRef(onCommandEnteringInput);
-  const terminalInputBuffer = useRef("");
+  const expectedTerminalRevisionDeltaRef = useRef(onExpectedTerminalRevisionDelta);
+  const terminalInputLine = useRef<TerminalInputLineState>({ buffer: "", countedCurrentLine: false });
   const [connected, setConnected] = useState(false);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
 
-  useLayoutEffect(() => { commandEnteringInputRef.current = onCommandEnteringInput; }, [onCommandEnteringInput]);
+  useLayoutEffect(() => { expectedTerminalRevisionDeltaRef.current = onExpectedTerminalRevisionDelta; }, [onExpectedTerminalRevisionDelta]);
 
   // This changes input authority in place. It deliberately does not participate in the setup
   // effect below, so promoting a ready terminal keeps its xterm instance and WebSocket alive.
@@ -208,9 +228,11 @@ function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange,
     const dataDisposable = nextTerminal.onData((data) => {
       if (!interactive.current || ws.readyState !== WebSocket.OPEN) return;
       // Browser-side terminal revision tracking is only a suppression hint until Bash emits the
-      // authoritative revision. Blank Enter and full-screen program input cannot be mapped to a
-      // Bash command revision here, so only a non-empty line hides Continue locally.
-      if (noteCommandEnteringInput(terminalInputBuffer, data)) commandEnteringInputRef.current?.();
+      // authoritative revision. The first meaningful input on a shell line hides Continue before
+      // Enter; Enter itself does not add another local revision. A few ordinary line-cancel edits
+      // can undo that hint, but the server-side terminal manager remains authoritative.
+      const delta = terminalInputExpectedRevisionDelta(terminalInputLine.current, data);
+      if (delta) expectedTerminalRevisionDeltaRef.current?.(delta);
       ws.send(JSON.stringify({ type: "input", data }));
     });
     ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); sendCurrentDimensions(); });
@@ -248,7 +270,11 @@ function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange,
   const insertCommand = useCallback(() => {
     if (!interactive.current || !command) return;
     const data = commandForInsertion(command);
-    if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({ type: "input", data }));
+    if (socket.current?.readyState === WebSocket.OPEN) {
+      const delta = terminalInputExpectedRevisionDelta(terminalInputLine.current, data);
+      if (delta) expectedTerminalRevisionDeltaRef.current?.(delta);
+      socket.current.send(JSON.stringify({ type: "input", data }));
+    }
   }, [command]);
 
   useEffect(() => {
@@ -277,6 +303,11 @@ function useContinueOnce(block: Block, state: BlockProgress | undefined, refresh
     setPending(true);
     completeBlockRequest(block.id).then((result) => {
       refresh(stateFromCompletion(result));
+      if ("outcome" in result && result.outcome === "rejected") {
+        pendingRef.current = false;
+        setPending(false);
+        return;
+      }
       const target = navigationTargetFrom(result);
       if (target) requestAnimationFrame(() => navigateToAnchor(target, historyMode));
     }).catch((error) => {
@@ -392,9 +423,16 @@ function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChan
   const terminalDisabled = useRef(disabled);
   useEffect(() => { terminalDisabled.current = disabled; if (disabled) setTerminalError(undefined); }, [disabled]);
   const handleTerminalError = useCallback((message: string) => { if (!terminalDisabled.current) setTerminalError(message); }, []);
-  const handleCommandEnteringInput = useCallback(() => {
-    onTerminalCommandRevision?.(block.id, (state?.terminalRevision ?? 0) + 1);
-  }, [block.id, onTerminalCommandRevision, state?.terminalRevision]);
+  const terminalServerRevision = state?.terminalRevision ?? 0;
+  const expectedTerminalRevision = useRef(terminalServerRevision);
+  useEffect(() => { expectedTerminalRevision.current = Math.max(expectedTerminalRevision.current, terminalServerRevision); }, [terminalServerRevision]);
+  const handleExpectedTerminalRevisionDelta = useCallback((delta: number) => {
+    const nextRevision = delta > 0
+      ? Math.max(expectedTerminalRevision.current, terminalServerRevision) + delta
+      : Math.max(terminalServerRevision, expectedTerminalRevision.current + delta);
+    expectedTerminalRevision.current = nextRevision;
+    onTerminalCommandRevision?.(block.id, nextRevision);
+  }, [block.id, onTerminalCommandRevision, terminalServerRevision]);
 
   useEffect(() => {
     dispatch({ type: "server-state", terminal: state?.terminal });
@@ -412,7 +450,7 @@ function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChan
   const displayPanel = text ? <PracticeFeedbackBar tone={terminalTone} busy={terminalBusy} status={terminalBusy ? text : undefined} markdown={terminalBusy ? undefined : text} className="live-block-feedback terminal-feedback-overlay" /> : null;
   return <div className={`work-block terminal ${state?.active ? "is-active" : ""}`} aria-disabled={disabled ? "true" : undefined}>
     {showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
-      <EmbeddedTerminal command={command} active={Boolean(state?.active && !disabled)} onError={handleTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} onCommandEnteringInput={handleCommandEnteringInput} />
+      <EmbeddedTerminal command={command} active={Boolean(state?.active && !disabled)} onError={handleTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} onExpectedTerminalRevisionDelta={handleExpectedTerminalRevisionDelta} />
       {displayPanel}
     </div>}
     {!showLiveTerminal && displayPanel}
@@ -464,6 +502,15 @@ function clearSatisfiedLocalTerminalRevisions(next: State, localRevisions: Map<s
     const progress = progressFor(next.progress, blockId);
     if (progress && (progress.terminalRevision ?? 0) >= localRevision) localRevisions.delete(blockId);
   }
+}
+
+function activeEditorLocalRevisionOutrunsState(state: State, localRevisions: ReadonlyMap<string, number>): boolean {
+  const activeId = state.progress.activeBlockId;
+  const localRevision = localRevisions.get(activeId);
+  if (localRevision === undefined) return false;
+  const progress = progressFor(state.progress, activeId);
+  const source = renderedBlockSource(state, activeId);
+  return Boolean(source?.block.type === "editor-practice" && progress && (progress.revision ?? 0) < localRevision);
 }
 
 function activeTerminalLocalRevisionOutrunsState(state: State, localRevisions: ReadonlyMap<string, number>): boolean {
@@ -834,11 +881,15 @@ export function App() {
     bumpLocalEditorRevisionEpoch();
   }, []);
   const rememberTerminalCommandRevision = useCallback<TerminalLocalRevisionHandler>((blockId, revision) => {
-    const expectedRevision = Math.max(revision, (localTerminalRevisions.current.get(blockId) ?? 0) + 1);
-    if (expectedRevision <= (localTerminalRevisions.current.get(blockId) ?? 0)) return;
-    localTerminalRevisions.current.set(blockId, expectedRevision);
+    const progress = state ? progressFor(state.progress, blockId) : undefined;
+    const serverRevision = progress?.terminalRevision ?? 0;
+    const currentRevision = localTerminalRevisions.current.get(blockId);
+    const nextRevision = revision <= serverRevision ? undefined : revision;
+    if (nextRevision === currentRevision) return;
+    if (nextRevision === undefined) localTerminalRevisions.current.delete(blockId);
+    else localTerminalRevisions.current.set(blockId, nextRevision);
     bumpLocalTerminalRevisionEpoch();
-  }, []);
+  }, [state]);
   const applyWorkbookState = useCallback((next: State) => {
     setState((current) => {
       if (!next.fatal && stateLagsLocalEditorRevision(next, localEditorRevisions.current)) return current ?? next;
@@ -905,9 +956,10 @@ export function App() {
   const runwayActiveBlockId = state?.progress.activeBlockId;
   const runwayWorkbookComplete = state?.progress.workbookComplete;
   const runwayFatal = Boolean(state?.fatal);
+  const runwayEditorLocalRevisionPending = state ? activeEditorLocalRevisionOutrunsState(state, localEditorRevisions.current) : false;
   const runwayTerminalLocalRevisionPending = state ? activeTerminalLocalRevisionOutrunsState(state, localTerminalRevisions.current) : false;
   useEffect(() => {
-    if (runwayWorkbookComplete || runwayFatal || runwayTerminalLocalRevisionPending || typeof IntersectionObserver === "undefined") return;
+    if (runwayWorkbookComplete || runwayFatal || runwayEditorLocalRevisionPending || runwayTerminalLocalRevisionPending || typeof IntersectionObserver === "undefined") return;
     const readyId = readySuccessorAnchorId;
     const activeId = runwayActiveBlockId;
     if (!readyId || !activeId) return;
@@ -940,7 +992,7 @@ export function App() {
       removeEventListener("scroll", checkReadySuccessorPosition);
       removeEventListener("resize", checkReadySuccessorPosition);
     };
-  }, [applyWorkbookState, readySuccessorAnchorId, runwayActiveBlockId, runwayWorkbookComplete, runwayFatal, runwayTerminalLocalRevisionPending]);
+  }, [applyWorkbookState, readySuccessorAnchorId, runwayActiveBlockId, runwayWorkbookComplete, runwayFatal, runwayEditorLocalRevisionPending, runwayTerminalLocalRevisionPending]);
   useEffect(() => {
     if (!state) return;
     let timer: ReturnType<typeof setTimeout> | undefined;

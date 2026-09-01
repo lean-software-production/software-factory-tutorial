@@ -777,6 +777,21 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     await recordWorkAccepted(active);
   };
 
+  /** Backfill browser-safe editor history for accepted sessions created before editor snapshots existed. */
+  const backfillAcceptedEditorSnapshotFromCurrentAttempt = async (): Promise<void> => {
+    const latestAcceptedEditors = latestAcceptedAttemptRecords(records, "editor");
+    for (const block of stream) {
+      if (block.origin !== "declared" || block.block.type !== "editor-practice") continue;
+      const current = await attempts.current(block.lessonId, block.id).catch(() => undefined);
+      const acceptance = latestAcceptedEditors.get(block.id);
+      if (!acceptedAttemptMatches(current, acceptance, block)) continue;
+      if (current!.evidence.kind !== "editor" || acceptance!.lessonId !== block.lessonId || acceptance!.blockId !== block.id) continue;
+      const exactSnapshotExists = records.some((record) => record.type === "editor-content-snapshotted" && record.attemptId === current!.id && record.lessonId === block.lessonId && record.blockId === block.id);
+      if (exactSnapshotExists) continue;
+      await append({ type: "editor-content-snapshotted", attemptId: current!.id, lessonId: block.lessonId, blockId: block.id, text: current!.evidence.text });
+    }
+  };
+
   /** Replay the second half of a terminal Main Tutor acceptance if a process stopped after its
    * write-ahead `attempt_accepted` row but before `work_accepted` could advance the workbook. */
   const recoverAcceptedTerminalAttempt = async (): Promise<void> => {
@@ -1292,6 +1307,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       stream = buildWorkbookBlockStream(loaded);
       records = await timeline.readWithinRun();
       await recoverAcceptedActiveAttempt();
+      await backfillAcceptedEditorSnapshotFromCurrentAttempt();
       await recoverAcceptedTerminalAttempt();
       await ensureActiveWorkAcceptance();
       return reloadGeneration;
@@ -1425,7 +1441,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   return {
     start: async () => {
       if (records.length === 0) await transact(async () => { if (records.length === 0) await append({ type: "session_started" }); });
-      await transact(async () => { await recoverAcceptedActiveAttempt(); await recoverAcceptedTerminalAttempt(); await ensureActiveWorkAcceptance(); });
+      await transact(async () => { await recoverAcceptedActiveAttempt(); await backfillAcceptedEditorSnapshotFromCurrentAttempt(); await recoverAcceptedTerminalAttempt(); await ensureActiveWorkAcceptance(); });
       try {
         await mainTutor.restore(await mainContext());
       } catch {

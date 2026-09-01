@@ -329,11 +329,11 @@ export class AuthoredWorkbookDriver {
       const terminal = terminalStateFor(state, blockId);
       const changedTerminal = terminalSignature(terminal) !== baseline.terminalSignature;
       const revisionAdvanced = terminalRevisionAdvanced(state, blockId, baseline.terminalRevision);
-      const relevantTimeline = terminal?.phase === "feedback" || terminal?.phase === "complete" ? hasRelevantTimelineAfter(state, blockId, baseline.timelineSequence, terminal.message) : false;
+      const relevantTimeline = terminal?.phase === "feedback" || terminal?.phase === "accepted" ? hasRelevantTimelineAfter(state, blockId, baseline.timelineSequence, terminal.message) : false;
       if ((terminal?.phase === "running" || terminal?.phase === "checking") && (revisionAdvanced || changedTerminal)) observedReviewTransition = true;
       const correlated = revisionAdvanced || relevantTimeline || changedTerminal || observedReviewTransition;
       if (!correlated) continue;
-      if (terminal?.phase === "complete") {
+      if (terminal?.phase === "accepted") {
         if (expectedFeedback !== undefined) throw new Error(`Expected terminal feedback for ${blockId}, but the attempt was accepted.`);
         return state;
       }
@@ -498,7 +498,7 @@ function terminalCompletionAlreadyApplied(state: WorkbookApiState, blockId: stri
     && block?.completed === true
     && block.verified === true
     && block.workAccepted === true
-    && block.terminal?.phase === "complete";
+    && block.terminal?.phase === "accepted";
 }
 
 function isStructuralWorkbookBlockId(blockId: string): boolean {

@@ -6,7 +6,7 @@ import { createEmptyAuthoredWorkbookEvalSessionTrace } from "../public-trace.js"
 
 const blockId = "lesson--001-public-contract--terminal";
 
-function stateWithTerminal(phase: "running" | "checking" | "feedback" | "complete", message?: string, terminalRevision?: number): PublicWorkbookState {
+function stateWithTerminal(phase: "running" | "checking" | "feedback" | "accepted", message?: string, terminalRevision?: number): PublicWorkbookState {
   return {
     workbook: { title: "Public workbook" },
     introduction: "Intro",
@@ -21,10 +21,10 @@ function stateWithTerminal(phase: "running" | "checking" | "feedback" | "complet
         type: "terminal-practice",
         ready: false,
         active: true,
-        completed: phase === "complete",
-        verified: phase === "complete",
+        completed: phase === "accepted",
+        verified: phase === "accepted",
         emerged: true,
-        workAccepted: phase === "complete",
+        workAccepted: phase === "accepted",
         terminal: phase === "running" || phase === "checking" ? { phase } : { phase, message: message ?? "" },
         ...(terminalRevision === undefined ? {} : { terminalRevision })
       }],
@@ -40,9 +40,9 @@ function stateWithTerminal(phase: "running" | "checking" | "feedback" | "complet
 function stateAfterTerminalAdvanced(message = "Accepted."): PublicWorkbookState {
   const nextBlockId = "lesson--001-public-contract--next";
   return {
-    ...stateWithTerminal("complete", message, 2),
+    ...stateWithTerminal("accepted", message, 2),
     progress: {
-      ...stateWithTerminal("complete", message, 2).progress,
+      ...stateWithTerminal("accepted", message, 2).progress,
       activeBlockId: nextBlockId,
       blocks: [
         {
@@ -54,7 +54,7 @@ function stateAfterTerminalAdvanced(message = "Accepted."): PublicWorkbookState 
           verified: true,
           emerged: true,
           workAccepted: true,
-          terminal: { phase: "complete", message },
+          terminal: { phase: "accepted", message },
           terminalRevision: 2
         },
         {
@@ -116,7 +116,7 @@ function stateWithEditor(revision: number, status: "reviewing" | "feedback" | "a
         emerged: true,
         workAccepted: status === "accepted",
         revision,
-        editorStatus: status === "accepted" ? "unlocked" : status,
+        editorStatus: status,
         checkpoint: { status, ...(feedback === undefined ? {} : { feedback }) }
       }],
       reflections: {},
@@ -350,7 +350,7 @@ describe("authored workbook public driver", () => {
 
   it("parses public terminal frames, drops socket extras, and supports expected feedback followed by a corrected command", async () => {
     const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-feedback-correction");
-    const states = [stateWithTerminal("complete", "At rest."), stateWithTerminal("checking"), stateWithTerminal("feedback", "Try again with the visible filename."), stateWithTerminal("feedback", "Try again with the visible filename."), stateWithTerminal("checking"), stateWithTerminal("complete", "Accepted.")];
+    const states = [stateWithTerminal("accepted", "At rest."), stateWithTerminal("checking"), stateWithTerminal("feedback", "Try again with the visible filename."), stateWithTerminal("feedback", "Try again with the visible filename."), stateWithTerminal("checking"), stateWithTerminal("accepted", "Accepted.")];
     const driver = new AuthoredWorkbookDriver({
       serverUrl: "http://workbook.invalid",
       trace,
@@ -359,7 +359,7 @@ describe("authored workbook public driver", () => {
       terminalReviewTimeoutMs: 1_000,
       fetch: async () => {
         await new Promise((resolve) => setTimeout(resolve, 20));
-        return new Response(JSON.stringify(states.shift() ?? stateWithTerminal("complete", "Accepted.")), { status: 200 });
+        return new Response(JSON.stringify(states.shift() ?? stateWithTerminal("accepted", "Accepted.")), { status: 200 });
       }
     });
 
@@ -367,7 +367,7 @@ describe("authored workbook public driver", () => {
     const completed = await driver.submitTerminalCommand(blockId, "good command", { label: "terminal:corrected", complete: false });
 
     expect(feedback.progress.blocks[0]?.terminal).toEqual({ phase: "feedback", message: "Try again with the visible filename." });
-    expect(completed.progress.blocks[0]?.terminal).toEqual({ phase: "complete", message: "Accepted." });
+    expect(completed.progress.blocks[0]?.terminal).toEqual({ phase: "accepted", message: "Accepted." });
     expect(trace.terminalTranscript).toEqual([
       { blockId, direction: "input", text: "bad command\r" },
       { blockId, direction: "output", text: "visible output\r\n" },
@@ -408,7 +408,7 @@ describe("authored workbook public driver", () => {
       }
     }
     const trace = createEmptyAuthoredWorkbookEvalSessionTrace("private-terminal-prefix");
-    const states = [stateWithTerminal("running"), stateWithTerminal("checking", activation, 1), stateWithTerminal("complete", `${activation} Accepted.`, 2)];
+    const states = [stateWithTerminal("running"), stateWithTerminal("checking", activation, 1), stateWithTerminal("accepted", `${activation} Accepted.`, 2)];
     const driver = new AuthoredWorkbookDriver({
       serverUrl: "http://workbook.invalid",
       trace,
@@ -416,7 +416,7 @@ describe("authored workbook public driver", () => {
       privateTerminalShellPrefix: activation,
       terminalTimeoutMs: 100,
       terminalReviewTimeoutMs: 1_000,
-      fetch: async () => new Response(JSON.stringify(states.shift() ?? stateWithTerminal("complete", `${activation} Accepted.`, 2)), { status: 200 })
+      fetch: async () => new Response(JSON.stringify(states.shift() ?? stateWithTerminal("accepted", `${activation} Accepted.`, 2)), { status: 200 })
     });
 
     await driver.submitTerminalCommand(blockId, "echo logical", { complete: false });
@@ -473,14 +473,14 @@ describe("authored workbook public driver", () => {
       }
     }
     const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-replay-output");
-    const states = [stateWithTerminal("complete", "Accepted.", 1), stateWithTerminal("complete", "Accepted.", 2)];
+    const states = [stateWithTerminal("accepted", "Accepted.", 1), stateWithTerminal("accepted", "Accepted.", 2)];
     const driver = new AuthoredWorkbookDriver({
       serverUrl: "http://workbook.invalid",
       trace,
       WebSocket: EarlyReplayOutputWebSocket as any,
       terminalTimeoutMs: 100,
       terminalReviewTimeoutMs: 1_000,
-      fetch: async () => new Response(JSON.stringify(states.shift() ?? stateWithTerminal("complete", "Accepted.", 2)), { status: 200 })
+      fetch: async () => new Response(JSON.stringify(states.shift() ?? stateWithTerminal("accepted", "Accepted.", 2)), { status: 200 })
     });
 
     await driver.submitTerminalCommand(blockId, "command", { complete: false });
@@ -494,10 +494,10 @@ describe("authored workbook public driver", () => {
   it("completes repeated identical terminal results with no intermediate public state when the public revision advances", async () => {
     const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-identical-complete");
     const states = [
-      stateWithTerminal("complete", "Accepted.", 0),
-      stateWithTerminal("complete", "Accepted.", 1),
-      stateWithTerminal("complete", "Accepted.", 1),
-      stateWithTerminal("complete", "Accepted.", 2),
+      stateWithTerminal("accepted", "Accepted.", 0),
+      stateWithTerminal("accepted", "Accepted.", 1),
+      stateWithTerminal("accepted", "Accepted.", 1),
+      stateWithTerminal("accepted", "Accepted.", 2),
     ];
     const driver = new AuthoredWorkbookDriver({
       serverUrl: "http://workbook.invalid",
@@ -505,7 +505,7 @@ describe("authored workbook public driver", () => {
       WebSocket: ReplayWebSocket as any,
       terminalTimeoutMs: 100,
       terminalReviewTimeoutMs: 1_000,
-      fetch: async () => new Response(JSON.stringify(states.shift() ?? stateWithTerminal("complete", "Accepted.", 2)), { status: 200 })
+      fetch: async () => new Response(JSON.stringify(states.shift() ?? stateWithTerminal("accepted", "Accepted.", 2)), { status: 200 })
     });
 
     await driver.submitTerminalCommand(blockId, "same command", { label: "terminal:first", complete: false });
@@ -521,7 +521,7 @@ describe("authored workbook public driver", () => {
 
   it("continues terminal blocks after correlated completion by default", async () => {
     const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-complete-continues");
-    const states = [stateWithTerminal("running"), stateWithTerminal("complete", "Accepted."), stateWithTerminal("complete", "Advanced.")];
+    const states = [stateWithTerminal("running"), stateWithTerminal("accepted", "Accepted."), stateWithTerminal("accepted", "Advanced.")];
     const posted: unknown[] = [];
     const driver = new AuthoredWorkbookDriver({
       serverUrl: "http://workbook.invalid",
@@ -531,18 +531,18 @@ describe("authored workbook public driver", () => {
       terminalReviewTimeoutMs: 1_000,
       fetch: async (_input, init) => {
         if (init?.method === "POST") posted.push(JSON.parse(String(init.body)));
-        return new Response(JSON.stringify(states.shift() ?? stateWithTerminal("complete", "Advanced.")), { status: 200 });
+        return new Response(JSON.stringify(states.shift() ?? stateWithTerminal("accepted", "Advanced.")), { status: 200 });
       }
     });
 
     const continued = await driver.submitTerminalCommand(blockId, "good command");
 
-    expect(continued.progress.blocks[0]?.terminal).toEqual({ phase: "complete", message: "Advanced." });
+    expect(continued.progress.blocks[0]?.terminal).toEqual({ phase: "accepted", message: "Advanced." });
     expect(posted).toEqual([{ blockId, action: "continue" }]);
   });
 
   it("bounds the terminal post-review completion action", async () => {
-    const states = [stateWithTerminal("running"), stateWithTerminal("complete", "Accepted.")];
+    const states = [stateWithTerminal("running"), stateWithTerminal("accepted", "Accepted.")];
     const driver = new AuthoredWorkbookDriver({
       serverUrl: "http://workbook.invalid",
       trace: createEmptyAuthoredWorkbookEvalSessionTrace("terminal-complete-timeout"),
@@ -552,7 +552,7 @@ describe("authored workbook public driver", () => {
       requestTimeoutMs: 20,
       fetch: async (_input, init) => {
         if (init?.method === "POST") return new Promise<Response>(() => {});
-        return new Response(JSON.stringify(states.shift() ?? stateWithTerminal("complete", "Accepted.")), { status: 200 });
+        return new Response(JSON.stringify(states.shift() ?? stateWithTerminal("accepted", "Accepted.")), { status: 200 });
       }
     });
 
@@ -561,7 +561,7 @@ describe("authored workbook public driver", () => {
 
   it("treats a 409 terminal completion race as success only after the same accepted block advanced", async () => {
     const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-complete-409-applied");
-    const states = [stateWithTerminal("running"), stateWithTerminal("complete", "Accepted."), stateAfterTerminalAdvanced("Accepted.")];
+    const states = [stateWithTerminal("running"), stateWithTerminal("accepted", "Accepted."), stateAfterTerminalAdvanced("Accepted.")];
     const posted: unknown[] = [];
     const driver = new AuthoredWorkbookDriver({
       serverUrl: "http://workbook.invalid",
@@ -588,7 +588,7 @@ describe("authored workbook public driver", () => {
 
   it("does not swallow a genuine 409 terminal completion conflict", async () => {
     const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-complete-409-conflict");
-    const states = [stateWithTerminal("running"), stateWithTerminal("complete", "Accepted."), stateWithTerminal("feedback", "Still active feedback.", 2)];
+    const states = [stateWithTerminal("running"), stateWithTerminal("accepted", "Accepted."), stateWithTerminal("feedback", "Still active feedback.", 2)];
     const driver = new AuthoredWorkbookDriver({
       serverUrl: "http://workbook.invalid",
       trace,
@@ -626,8 +626,8 @@ describe("authored workbook public driver", () => {
   it("does not let post-send output authorize stale complete; it waits through checking for new feedback", async () => {
     const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-stale-complete-after-output");
     const states = [
-      stateWithTerminal("complete", "Accepted."),
-      stateWithTerminal("complete", "Accepted."),
+      stateWithTerminal("accepted", "Accepted."),
+      stateWithTerminal("accepted", "Accepted."),
       stateWithTerminal("checking"),
       stateWithTerminal("feedback", "Run the visible command."),
     ];
@@ -661,7 +661,7 @@ describe("authored workbook public driver", () => {
       stateWithTerminal("feedback", "Old visible feedback."),
       stateWithTerminal("feedback", "Old visible feedback."),
       stateWithTerminal("checking"),
-      stateWithTerminal("complete", "Accepted."),
+      stateWithTerminal("accepted", "Accepted."),
     ];
     let reads = 0;
     const driver = new AuthoredWorkbookDriver({
@@ -672,14 +672,14 @@ describe("authored workbook public driver", () => {
       terminalReviewTimeoutMs: 1_000,
       fetch: async () => {
         reads += 1;
-        return new Response(JSON.stringify(states.shift() ?? stateWithTerminal("complete", "Accepted.")), { status: 200 });
+        return new Response(JSON.stringify(states.shift() ?? stateWithTerminal("accepted", "Accepted.")), { status: 200 });
       }
     });
 
     const reviewed = await driver.submitTerminalCommand(blockId, "fixed command", { complete: false });
 
     expect(reads).toBe(4);
-    expect(reviewed.progress.blocks[0]?.terminal).toEqual({ phase: "complete", message: "Accepted." });
+    expect(reviewed.progress.blocks[0]?.terminal).toEqual({ phase: "accepted", message: "Accepted." });
     expect(trace.publicStates.map((entry) => entry.label)).toEqual([
       "terminal:lesson--001-public-contract--terminal:baseline",
       "terminal:lesson--001-public-contract--terminal:reviewed:2",
@@ -695,7 +695,7 @@ describe("authored workbook public driver", () => {
       WebSocket: ReplayWebSocket as any,
       terminalTimeoutMs: 100,
       terminalReviewTimeoutMs: 80,
-      fetch: async () => new Response(JSON.stringify(stateWithTerminal("complete", "Accepted.")), { status: 200 })
+      fetch: async () => new Response(JSON.stringify(stateWithTerminal("accepted", "Accepted.")), { status: 200 })
     });
 
     await expect(driver.submitTerminalCommand(blockId, "stale command", { complete: false })).rejects.toThrow(/Timed out waiting for terminal review/);
@@ -1005,7 +1005,7 @@ describe("authored workbook public driver", () => {
 
   it("rejects unexpected terminal feedback with the public feedback message", async () => {
     const trace = createEmptyAuthoredWorkbookEvalSessionTrace("terminal-unexpected-feedback");
-    const states = [stateWithTerminal("complete", "At rest."), stateWithTerminal("checking"), stateWithTerminal("feedback", "Visible correction guidance.")];
+    const states = [stateWithTerminal("accepted", "At rest."), stateWithTerminal("checking"), stateWithTerminal("feedback", "Visible correction guidance.")];
     const driver = new AuthoredWorkbookDriver({
       serverUrl: "http://workbook.invalid",
       trace,

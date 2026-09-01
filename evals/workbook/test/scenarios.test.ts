@@ -1231,7 +1231,7 @@ function publicStateWithTerminalRevision(blockId: string, terminalRevision: numb
         activeLessonId: "001-run-an-agent-headlessly",
         activeBlockId: blockId,
         completedLessons: [],
-        blocks: [{ id: blockId, ready: true, active: false, completed: true, verified: true, emerged: true, terminalRevision, checkpoint: { status: "accepted", evidence: { kind: "terminal", text: "ok" } }, terminal: { phase: "complete", message: "ok" } }],
+        blocks: [{ id: blockId, ready: true, active: false, completed: true, verified: true, emerged: true, terminalRevision, checkpoint: { status: "accepted", evidence: { kind: "terminal", text: "ok" } }, terminal: { phase: "accepted", message: "ok" } }],
         reflections: {},
         reflectionConversations: {}
       },

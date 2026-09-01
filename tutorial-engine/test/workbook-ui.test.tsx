@@ -3284,6 +3284,237 @@ describe("workbook lesson UI", () => {
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
   });
 
+  it("keeps passive scroll from completing an accepted editor while a newer local revision is debounced", async () => {
+    vi.useFakeTimers();
+    let observerCallback: ((entries: any[]) => void) | undefined;
+    class FakeIntersectionObserver {
+      active = true;
+      observe = vi.fn();
+      disconnect = vi.fn(() => { this.active = false; });
+      constructor(callback: (entries: any[]) => void) { observerCallback = (entries) => { if (this.active) callback(entries); }; }
+    }
+    const editorLesson = { ...lesson, blocks: [editorBlock, lesson.blocks[3]!] } as Lesson;
+    const editorChapter = { ...chapter(), lesson: editorLesson } as Chapter & { lesson: Lesson };
+    const acceptedProgress = activeEditorProgress({
+      revision: 1,
+      draftText: "accepted answer text",
+      editorStatus: "accepted",
+      checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted answer text" } }
+    } as any);
+    acceptedProgress.readyBlocks = ["transition"];
+    acceptedProgress.canComplete = { blockId: editorBlock.id, eligible: true };
+    acceptedProgress.blocks.push({ id: "transition", type: "narrative", ready: true, active: false, completed: false, verified: false, emerged: true } as any);
+    const reviewingProgress = activeEditorProgress({
+      revision: 2,
+      draftText: "new exact editor revision",
+      editorStatus: "reviewing",
+      checkpoint: { status: "reviewing", evidence: { kind: "editor", text: "new exact editor revision" } }
+    } as any);
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [editorChapter],
+      progress: acceptedProgress,
+      adapter: {},
+      readyBlockIds: ["transition"],
+      timeline: [
+        { type: "message", id: "editor-course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Edit the answer" },
+        { type: "message", id: "transition-course", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "transition", role: "assistant", source: "authored", presentation: "course", text: "## Transition" },
+      ],
+    } as State;
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("api/workbook/editor")) return { ok: true, json: async () => ({ ...state, progress: reviewingProgress }) };
+      if (String(input).endsWith("api/workbook/complete-block")) return { ok: true, json: async () => ({ outcome: "completed", state, navigationTarget: "transition" }) };
+      return { ok: true, json: async () => state };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver as any);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+    const readyElement = container.querySelector<HTMLElement>("#transition")!;
+    readyElement.getBoundingClientRect = () => ({ top: 100, bottom: 300, left: 0, right: 800, width: 800, height: 200, x: 0, y: 100, toJSON: () => ({}) });
+
+    editor.textContent = "new exact editor revision";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); vi.advanceTimersByTime(749); await Promise.resolve(); });
+    await act(async () => {
+      observerCallback?.([{ isIntersecting: true, boundingClientRect: { top: 100 } }]);
+      window.dispatchEvent(new window.Event("scroll"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock.mock.calls.filter(([url, init]) => url === "api/workbook/complete-block" && (init as RequestInit | undefined)?.method === "POST")).toHaveLength(0);
+    await act(async () => { vi.advanceTimersByTime(1); await Promise.resolve(); await Promise.resolve(); });
+    const editorCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/editor")!;
+    expect(JSON.parse((editorCall[1] as RequestInit).body as string)).toEqual({ blockId: editorBlock.id, revision: 2, text: "new exact editor revision" });
+  });
+
+  it("hides terminal Continue and suppresses passive scroll as soon as partial command input begins", async () => {
+    let observerCallback: ((entries: any[]) => void) | undefined;
+    class FakeIntersectionObserver {
+      active = true;
+      observe = vi.fn();
+      disconnect = vi.fn(() => { this.active = false; });
+      constructor(callback: (entries: any[]) => void) { observerCallback = (entries) => { if (this.active) callback(entries); }; }
+    }
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      sent: string[] = [];
+      addEventListener() {}
+      send(message: string) { this.sent.push(message); }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver as any);
+    const terminalBlock = lesson.blocks[1]!;
+    const terminalProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    terminalProgress.readyBlocks = ["transition"];
+    terminalProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    terminalProgress.blocks.push({ id: "transition", type: "narrative", ready: true, active: false, completed: false, verified: false, emerged: true } as any);
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock, lesson.blocks[3]!] } as any })],
+      progress: terminalProgress,
+      adapter: {},
+      readyBlockIds: ["transition"],
+      timeline: [
+        { type: "message", id: "terminal-course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Run command" },
+        { type: "message", id: "transition-course", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "transition", role: "assistant", source: "authored", presentation: "course", text: "## Transition" },
+      ],
+    } as any;
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    await act(async () => { terminalDataListeners[0]!("n"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+    const readyElement = container.querySelector<HTMLElement>("#transition")!;
+    readyElement.getBoundingClientRect = () => ({ top: 100, bottom: 300, left: 0, right: 800, width: 800, height: 200, x: 0, y: 100, toJSON: () => ({}) });
+    await act(async () => {
+      observerCallback?.([{ isIntersecting: true, boundingClientRect: { top: 100 } }]);
+      window.dispatchEvent(new window.Event("scroll"));
+      await Promise.resolve();
+    });
+    expect(fetchMock.mock.calls.filter(([url, init]) => url === "api/workbook/complete-block" && (init as RequestInit | undefined)?.method === "POST")).toHaveLength(0);
+  });
+
+  it("marks Do it for me terminal insertion as local pending work without remounting xterm", async () => {
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      sent: string[] = [];
+      addEventListener(type: string, listener: () => void) { if (type === "open") queueMicrotask(listener); }
+      send(message: string) { this.sent.push(message); }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalBlock = lesson.blocks[1]!;
+    const terminalProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    terminalProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock] } as any })],
+      progress: terminalProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Practice\n\nRun the authored command." }],
+    } as any;
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => state })));
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(terminalInstances).toHaveLength(1);
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    const action = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Do it for me")!;
+    await act(async () => { action.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+
+    expect(terminalInstances).toHaveLength(1);
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+  });
+
+  it("keeps terminal local revision tracking to one expected revision per command line", async () => {
+    FakeEventSource.reset();
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      addEventListener() {}
+      send() {}
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalBlock = lesson.blocks[1]!;
+    const acceptedProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    acceptedProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const firstCaughtUpProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "accepted", message: "Terminal accepted again." } } as any);
+    firstCaughtUpProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const secondCaughtUpProgress = activeBlockProgress(terminalBlock, { terminalRevision: 3, terminal: { phase: "accepted", message: "Terminal accepted third." } } as any);
+    secondCaughtUpProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    let currentState: State = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock] } as any })],
+      progress: acceptedProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Run command" }],
+    } as State;
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => currentState }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", FakeEventSource as any);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { terminalDataListeners[0]!("echo one\r"); terminalDataListeners[0]!("echo two\r"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+
+    currentState = { ...currentState, progress: firstCaughtUpProgress };
+    await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 2 }); await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+
+    currentState = { ...currentState, progress: secondCaughtUpProgress };
+    await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 3 }); await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+  });
+
+  it("restores usable Continue controls when the server rejects completion", async () => {
+    const terminalBlock = lesson.blocks[1]!;
+    const terminalProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    terminalProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock] } as any })],
+      progress: terminalProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Run command" }],
+    } as any;
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => ({ ok: true, json: async () => String(input).endsWith("api/workbook/complete-block") ? { outcome: "rejected", state, reason: "ineligible" } : state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const continueButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Continue")!;
+    await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); await Promise.resolve(); await Promise.resolve(); });
+
+    const restored = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Continue")!;
+    expect(restored).toBeTruthy();
+    expect(restored.disabled).toBe(false);
+    expect(container.textContent).not.toContain("Continuing…");
+    expect(fetchMock.mock.calls.filter(([url]) => url === "api/workbook/state")).toHaveLength(1);
+  });
+
   it("routes active reflection composer sends through the reflection event path without a sticky hint", async () => {
     const reflectionProgress: Progress = {
       ...progress,
