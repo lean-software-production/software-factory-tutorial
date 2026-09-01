@@ -12,18 +12,20 @@ blocks:
 
 A software factory combines multiple agents working together,
 with some kind of feedback or validation loop, allowing them
-to work autonomously towards an outcome you have described.
+to work autonomously towards a desired outcome.
+
+Here's an example of a simple factory:
 
 ```mermaid
 flowchart LR
-    O[Seed] --> A[Plan]
-    A --> B[Work]
-    B --> C[Validate]
+    O[🌱 Seed] --> A[🤖 Plan]
+    A --> B[🤖 Work]
+    B --> C[🤖 Validate]
     C --> A
-    C --> D[Done]
+    C --> D[✅ Done]
 ```
 
-That description of the outcome you want is the _seed_: the raw materials going into the factory. It could be a detailed, formal specification, or a vague idea. 
+The _seed_ is the raw materials going into the factory. What kind of seed you give it depends on what the factory does: It could a detailed specification, a list of PRs to review, the URL of a codebase you want to port to anther language, etc.
 
 An agent then plans some work towards that outcome, another agent picks up and does some of that work, and another agent validates the work when it's complete.
 

@@ -10,9 +10,11 @@ blocks:
 
 # Run a headless agent
 
-We'll start with the first building block of a software factory: an agent you call from the command-line that receives a job, runs it, and exits.
+In this lesson you'll learn how to invoke an agent in "batch" or "headless" or "non-interactive" mode. 
 
-This is an agent working in "batch" or "headless" or "non-interactive" mode. We're used to working with agents where they chat back and forth with us, but this is a single exchange or "turn":
+This is the first building block of a software factory: an agent you call from the command-line that receives a job, runs it, and exits.
+
+We're used to working with agents where they chat back and forth with us, but this is a single exchange or "turn":
 
 * we pass the agent a prompt, describing the job to be done
 * the agent does its best to fulfill our request
