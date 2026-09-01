@@ -1001,31 +1001,41 @@ describe("workbook lesson UI", () => {
     expect(container.textContent).not.toContain("Updating feedback…");
   });
 
-  it("does not render live editor-practice surface or status for inactive and completed blocks", () => {
+  it("keeps accepted editor practice live, and renders completed editor practice as one read-only history surface", async () => {
     const inactiveMarkup = html(createElement(BlockView, {
       block: editorBlock,
       progress: activeEditorProgress({ ready: false, active: false, completed: false, editorStatus: undefined, checkpoint: { status: "feedback", feedback: "Hold this feedback until the block is active." } } as any),
       refresh: vi.fn()
     }));
-    const completedMarkup = html(createElement(BlockView, {
-      block: editorBlock,
-      progress: activeEditorProgress({ active: false, completed: true, editorStatus: "unlocked" } as any),
-      refresh: vi.fn()
-    }));
-
     expect(inactiveMarkup).toContain("factory/answer.md");
     expect(inactiveMarkup).not.toContain("editor-surface");
     expect(inactiveMarkup).not.toContain("editor-live-surface");
-    expect(inactiveMarkup).not.toContain("editor-feedback-overlay");
     expect(inactiveMarkup).not.toMatch(/Editing —|Reviewing your latest revision/);
 
-    expect(completedMarkup).toContain("factory/answer.md");
-    expect(completedMarkup).toContain("Accepted revision unlocked the next step.");
-    expect(completedMarkup).toContain("The latest accepted editor draft was written to the target file.");
-    expect(completedMarkup).not.toContain("editor-surface");
-    expect(completedMarkup).toContain("practice-feedback-bar is-success");
-    expect(completedMarkup).toContain("role=\"status\"");
-    expect(completedMarkup).not.toMatch(/Editing —|Reviewing your latest revision/);
+    const acceptedContainer = await mount(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ active: true, completed: false, revision: 1, draftText: "accepted active draft", editorStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted active draft" } } } as any),
+      refresh: vi.fn()
+    }));
+    const acceptedEditor = acceptedContainer.querySelector<HTMLElement>("[role='textbox']")!;
+    expect(acceptedEditor).toBeTruthy();
+    expect(acceptedEditor.getAttribute("contenteditable")).toBe("true");
+    expect(acceptedContainer.querySelector(".editor-live-surface")).toBeTruthy();
+    expect(acceptedContainer.textContent).toContain("Editor accepted.");
+
+    await act(async () => { mountedRoot!.unmount(); });
+    mountedRoot = undefined;
+
+    const completedContainer = await mount(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ active: false, completed: true, revision: 1, draftText: "accepted historical draft", editorStatus: "completed", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted historical draft" } } } as any),
+      refresh: vi.fn()
+    }));
+    expect(completedContainer.querySelectorAll(".editor-live-surface, .editor-history")).toHaveLength(1);
+    expect(completedContainer.querySelector("[role='textbox']")?.getAttribute("contenteditable")).toBe("false");
+    expect(completedContainer.textContent).toContain("accepted historical draft");
+    expect(completedContainer.textContent).toContain("Editor accepted.");
+    expect(completedContainer.querySelectorAll(".practice-feedback-bar.is-success")).toHaveLength(1);
   });
 
   it("renders a compact terminal activity without duplicating authored content", () => {
@@ -2741,7 +2751,49 @@ describe("workbook lesson UI", () => {
     expect(markup).not.toContain("Terminal session frozen.");
   });
 
-  it("uses one terminal card for public states and never duplicates its DOM surface", async () => {
+  it("preserves the live terminal instance and WebSocket when terminal work is accepted but incomplete", async () => {
+    class FakeWebSocket {
+      static CONNECTING = 0; static OPEN = 1; static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.OPEN;
+      sent: string[] = [];
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      constructor() { FakeWebSocket.instances.push(this); }
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      send(message: string) { this.sent.push(message); }
+      close() { this.readyState = FakeWebSocket.CLOSED; }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalBlock = lesson.blocks[1]!;
+    const render = (terminal: any) => createElement(BlockView, {
+      block: terminalBlock,
+      progress: activeBlockProgress(terminalBlock, { terminal, active: true, completed: false } as any),
+      refresh: vi.fn(),
+    });
+    const container = await mount(render({ phase: "checking" }), (win) => {
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
+    });
+    const liveTerminal = container.querySelector<HTMLElement>(".embedded-terminal")!;
+    expect(liveTerminal).toBeTruthy();
+    expect(terminalInstances).toHaveLength(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    await act(async () => { mountedRoot!.render(render({ phase: "complete", message: "Terminal accepted." })); });
+
+    expect(container.querySelector(".embedded-terminal")).toBe(liveTerminal);
+    expect(container.querySelector(".terminal-live-surface")?.textContent).toContain("Terminal accepted.");
+    expect(container.querySelector(".terminal-history")).toBeNull();
+    expect(terminalInstances).toHaveLength(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(terminalInstances[0]!.options.disableStdin).toBe(false);
+
+    await act(async () => { terminalDataListeners[0]!("echo after acceptance\\r"); });
+    expect(FakeWebSocket.instances[0]!.sent.map((message) => JSON.parse(message)).at(-1)).toEqual({ type: "input", data: "echo after acceptance\\r" });
+  });
+
+  it("uses one terminal card for running and feedback states without duplicating its DOM surface", async () => {
     class FakeWebSocket {
       static CONNECTING = 0; static OPEN = 1; static CLOSED = 3;
       readyState = FakeWebSocket.OPEN;
@@ -2758,18 +2810,14 @@ describe("workbook lesson UI", () => {
       vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
       vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
     });
+    const terminalPanel = container.querySelector(".embedded-terminal-panel");
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
     expect(container.textContent).toContain("Checking…");
 
     await act(async () => { mountedRoot!.render(render({ phase: "feedback", message: "Keep the final feedback." })); });
+    expect(container.querySelector(".embedded-terminal-panel")).toBe(terminalPanel);
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
     expect(container.textContent).toContain("Keep the final feedback.");
-
-    await act(async () => { mountedRoot!.render(render({ phase: "complete", message: "Accepted by the Main Tutor." })); });
-    expect(container.querySelector(".embedded-terminal-panel")).toBeNull();
-    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(0);
-    expect(container.textContent).not.toContain("Accepted by the Main Tutor.");
-    expect(container.querySelectorAll('[role="status"]')).toHaveLength(0);
   });
 
   it("keeps the server state on Enter and replaces it only with Bash-authoritative state", async () => {
@@ -2926,8 +2974,15 @@ describe("workbook lesson UI", () => {
 
   it.each([
     ["terminal", lesson.blocks[1]!, activeBlockProgress(lesson.blocks[1]!, { terminal: { phase: "complete", message: "Terminal accepted." } } as any), "Terminal accepted."],
-    ["editor", editorBlock, activeEditorProgress({ editorStatus: undefined, checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted answer text" } } } as any), "Editor accepted."]
-  ])("renders only the timeline continuation for accepted %s practice in timeline mode", async (_kind, block, acceptedProgress, acceptedText) => {
+    ["editor", editorBlock, activeEditorProgress({ editorStatus: "accepted", draftText: "accepted answer text", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted answer text" } } } as any), "Editor accepted."]
+  ])("keeps accepted-but-incomplete %s practice in the sticky live surface with one continuation", async (kind, block, acceptedProgress, acceptedText) => {
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      addEventListener() {}
+      send() {}
+      close() {}
+    }
     const state = {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
@@ -2944,12 +2999,17 @@ describe("workbook lesson UI", () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? nextState : state }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const container = await mount(createElement(App), stubAppShellGlobals);
+    const container = await mount(createElement(App), (win) => {
+      stubAppShellGlobals(win);
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+      vi.stubGlobal("location", win.location);
+    });
     await act(async () => { await Promise.resolve(); });
 
     expect(container.textContent).toContain(acceptedText);
-    expect(container.querySelector(".current-activity-band")).toBeNull();
-    expect(container.textContent).not.toContain("Get a hint");
+    expect(container.querySelector(".current-activity-band")?.getAttribute("data-activity-type")).toBe(`${kind}-practice`);
+    if (kind === "editor") expect(container.querySelector("[role='textbox']")?.getAttribute("contenteditable")).toBe("true");
+    if (kind === "terminal") expect(container.querySelector(".embedded-terminal")).toBeTruthy();
     const continueButtons = [...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue");
     expect(continueButtons).toHaveLength(1);
     expect(container.querySelectorAll(".continuation-controls")).toHaveLength(1);

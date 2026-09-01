@@ -86,6 +86,62 @@ describe("ActivityBand stability", () => {
     expect(workbookStyles).toMatch(/\.current-activity-band\s*>\s*\.work-block\s*\{[^}]*left:\s*var\(--activity-left-offset\);[^}]*width:\s*var\(--activity-width\);[^}]*transition:\s*left 80ms linear,\s*width 80ms linear;/);
   });
 
+  it("keeps accepted-but-incomplete editor and terminal practice live in the sticky band", async () => {
+    class FakeIntersectionObserver {
+      observe() {}
+      disconnect() {}
+    }
+
+    const acceptedEditorProgress: Progress = {
+      ...completedEditorProgress,
+      blocks: [{ id: editorBlock.id, type: editorBlock.type, ready: false, active: true, completed: false, verified: true, emerged: true, revision: 1, draftText: "accepted editor draft", editorStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted editor draft" } } } as any],
+    };
+    const editorContainer = await mount(createElement(ActivityBand, {
+      lessonId: "part/lesson",
+      activeBlock: editorBlock,
+      progress: acceptedEditorProgress,
+      refresh: vi.fn()
+    }), () => vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver));
+
+    expect(editorContainer.querySelector(".current-activity-band")?.getAttribute("data-activity-type")).toBe("editor-practice");
+    expect(editorContainer.querySelector(".editor-live-surface")).toBeTruthy();
+    expect(editorContainer.querySelector("[role='textbox']")?.getAttribute("contenteditable")).toBe("true");
+    expect(editorContainer.textContent).toContain("Editor accepted.");
+
+    await act(async () => { root!.unmount(); });
+    root = undefined;
+
+    const acceptedTerminalProgress: Progress = {
+      ...completedTerminalProgress,
+      blocks: [{ id: terminalBlock.id, type: terminalBlock.type, ready: false, active: true, completed: false, verified: true, emerged: true, terminal: { phase: "complete", message: "Terminal accepted." } } as any],
+    };
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      addEventListener() {}
+      send() {}
+      close() {}
+    }
+    const terminalContainer = await mount(createElement(ActivityBand, {
+      lessonId: "part/lesson",
+      activeBlock: terminalBlock,
+      progress: acceptedTerminalProgress,
+      refresh: vi.fn()
+    }), (window) => {
+      vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+      vi.stubGlobal("location", window.location);
+      vi.stubGlobal("addEventListener", window.addEventListener.bind(window) as any);
+      vi.stubGlobal("removeEventListener", window.removeEventListener.bind(window) as any);
+    });
+
+    expect(terminalContainer.querySelector(".current-activity-band")?.getAttribute("data-activity-type")).toBe("terminal-practice");
+    expect(terminalContainer.querySelector(".terminal-live-surface")).toBeTruthy();
+    expect(terminalContainer.querySelector(".embedded-terminal")).toBeTruthy();
+    expect(terminalContainer.textContent).toContain("Terminal accepted.");
+    expect(terminalContainer.querySelector(".terminal-history")).toBeNull();
+  });
+
   it("does not auto-focus terminal practice but keeps editor auto-focus", async () => {
     class FakeIntersectionObserver {
       static instances: FakeIntersectionObserver[] = [];

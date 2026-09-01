@@ -28,6 +28,23 @@ async function fixture() {
   return dir;
 }
 
+async function terminalLifecycleFixture() {
+  const dir = await mkdtemp(resolve(tmpdir(), "workbook-terminal-lifecycle-")); dirs.push(dir);
+  await mkdir(resolve(dir, "parts"), { recursive: true });
+  await mkdir(resolve(dir, "lessons/001-first/blocks"), { recursive: true });
+  await writeFile(resolve(dir, "workbook.md"), ["---", "parts:", "  - id: validation-loop", "    lessons:", "      - 001-first", "---", "# Demo workbook", "", "Welcome."].join("\n"));
+  await writeFile(resolve(dir, "parts/validation-loop.md"), ["---", "---", "# Validation loop", "", "Part preamble."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/lesson.md"), ["---", "durationMinutes: 5", "workspace: refactor-line", "blocks:", "  - orientation", "  - run-command", "  - edit-answer", "  - finish", "---", "# Run an agent headlessly", "", "Lesson preamble."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/blocks/orientation.md"), ["---", "type: narrative", "---", "## Orientation", "", "Read this."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/blocks/run-command.md"), ["---", "type: terminal-practice", "outcome: Run the acceptance command.", "tutor: Accept a passing command.", "---", "## Run command", "", "Run this:", "", "```sh command", "npm test", "```"].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/blocks/edit-answer.md"), ["---", "type: editor-practice", "outcome: Write a clear answer to the question.", "path: factory/answer.txt", "tutor: Accept any clear answer.", "---", "## Edit answer", "", "Write the answer."].join("\n"));
+  await mkdir(resolve(dir, "workspaces/refactor-line/factory"), { recursive: true });
+  await writeFile(resolve(dir, "workspaces/refactor-line/factory/answer.txt"), "");
+  await writeFile(resolve(dir, "lessons/001-first/blocks/finish.md"), ["---", "type: narrative", "---", "## Finish", "", "Done."].join("\n"));
+  await mkdir(resolve(dir, "web")); await writeFile(resolve(dir, "web/index.html"), "<!doctype html><div id=\"root\"></div>");
+  return dir;
+}
+
 afterEach(async () => { await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))); dirs = []; });
 
 describe("workbook block progression", () => {
@@ -127,6 +144,116 @@ describe("workbook block progression", () => {
         expect(block(restored, "lesson--001-first--finish")).toMatchObject({ ready: true, active: false, completed: false });
       } finally { await restarted.close(); }
     } finally { await server.close(); }
+  });
+
+  it("keeps accepted editor practice active, editable in public state, and ineligible after a newer revision until reaccepted", async () => {
+    const dir = await fixture();
+    let accepted = true;
+    const tutor = fakeTutor(undefined);
+    tutor.review = async () => accepted ? { outcome: "accepted", message: "Accepted editor answer." } : { outcome: "feedback", message: "Revise the newer draft." };
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor });
+    try {
+      await advanceToEditor(server.url);
+      const first = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", revision: 1, text: "accepted editor text" }) });
+      expect(first.status).toBe(202);
+      const activeAccepted = await waitForState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted");
+      expect(block(activeAccepted, "lesson--001-first--edit-answer")).toMatchObject({ active: true, completed: false, draftText: "accepted editor text", editorStatus: "accepted" });
+      expect(activeAccepted.progress.canComplete).toMatchObject({ blockId: "lesson--001-first--edit-answer", eligible: true });
+      expect(activeAccepted.progress.readyBlocks).toEqual(["lesson--001-first--finish"]);
+
+      accepted = false;
+      const second = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", revision: 2, text: "newer unaccepted editor text" }) });
+      expect(second.status).toBe(202);
+      const reviewing = await second.json() as any;
+      expect(block(reviewing, "lesson--001-first--edit-answer")).toMatchObject({ active: true, completed: false, draftText: "newer unaccepted editor text", editorStatus: "reviewing" });
+      expect(reviewing.progress.canComplete).toMatchObject({ blockId: "lesson--001-first--edit-answer", eligible: false, reason: "awaiting-acceptance" });
+
+      accepted = true;
+      const third = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", revision: 3, text: "reaccepted editor text" }) });
+      expect(third.status).toBe(202);
+      const reaccepted = await waitForState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.revision === 3 && block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted");
+      expect(reaccepted.progress.canComplete).toMatchObject({ blockId: "lesson--001-first--edit-answer", eligible: true });
+    } finally { await server.close(); }
+  });
+
+  it("reconstructs completed editor history from durable accepted content rather than current attempts", async () => {
+    const dir = await fixture();
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor({ outcome: "accepted", message: "Accepted editor answer." }) });
+    try {
+      await advanceToEditor(server.url);
+      const submitted = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", revision: 1, text: "accepted text that must become history" }) });
+      expect(submitted.status).toBe(202);
+      await waitForState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted");
+      const completed = await complete(server.url, "lesson--001-first--edit-answer");
+      expect(block(completed.state, "lesson--001-first--edit-answer")).toMatchObject({ active: false, completed: true, draftText: "accepted text that must become history", editorStatus: "completed", checkpoint: { status: "accepted", successMessage: "Accepted editor answer.", evidence: { kind: "editor", text: "accepted text that must become history" } } });
+    } finally { await server.close(); }
+
+    // Completion history must be event-log durable. Wiping transient attempt presentation state
+    // simulates a restart where AttemptStore no longer has an active current attempt to read.
+    await rm(tutorialStatePath(dir, "workbook", "attempts"), { recursive: true, force: true });
+    const restarted = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const restored = await fetch(`${restarted.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(block(restored, "lesson--001-first--edit-answer")).toMatchObject({ active: false, completed: true, draftText: "accepted text that must become history", editorStatus: "completed", checkpoint: { status: "accepted", successMessage: "Accepted editor answer.", evidence: { kind: "editor", text: "accepted text that must become history" } } });
+    } finally { await restarted.close(); }
+  });
+
+  it("records durable editor content snapshots keyed like terminal transcript snapshots", async () => {
+    const dir = await fixture();
+    const timeline = new WorkbookTimeline(dir);
+
+    await expect(timeline.append({
+      type: "editor-content-snapshotted",
+      attemptId: "editor-attempt-1",
+      lessonId: "001-first",
+      blockId: "lesson--001-first--edit-answer",
+      text: "accepted editor text",
+    } as any)).resolves.toMatchObject({
+      type: "editor-content-snapshotted",
+      attemptId: "editor-attempt-1",
+      lessonId: "001-first",
+      blockId: "lesson--001-first--edit-answer",
+      text: "accepted editor text",
+    });
+  });
+
+  it("uses latest durable terminal submission and accepted snapshot, not old work_accepted, for completion eligibility across restart", async () => {
+    const dir = await terminalLifecycleFixture();
+    await writeTerminalLifecycleRecords(dir, [
+      { type: "block_completed", blockId: "workbook--introduction" },
+      { type: "block_completed", blockId: "part--validation-loop" },
+      { type: "block_completed", blockId: "lesson--001-first" },
+      { type: "block_completed", blockId: "lesson--001-first--orientation" },
+      terminalSubmitted("attempt-1", "npm test"),
+      terminalFinished("attempt-1", "npm test", "v1 PASS"),
+      { type: "terminal-transcript-snapshotted", attemptId: "attempt-1", lessonId: "001-first", blockId: "lesson--001-first--run-command", transcript: "v1 PASS" },
+      { type: "attempt_accepted", attemptId: "attempt-1", lessonId: "001-first", blockId: "lesson--001-first--run-command", version: 1, kind: "terminal", summary: "Accepted v1." },
+      { type: "work_accepted", blockId: "lesson--001-first--run-command" },
+      terminalSubmitted("attempt-2", "npm test --again"),
+      terminalFinished("attempt-2", "npm test --again", "v2 awaiting review"),
+    ]);
+
+    const reviewing = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const state = await fetch(`${reviewing.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(block(state, "lesson--001-first--run-command")).toMatchObject({ active: true, completed: false, terminal: { phase: "checking" }, terminalRevision: 2 });
+      expect(state.progress.canComplete).toMatchObject({ blockId: "lesson--001-first--run-command", eligible: false, reason: "awaiting-acceptance" });
+      expect(state.progress.readyBlocks).toEqual([]);
+    } finally { await reviewing.close(); }
+
+    await writeTerminalLifecycleRecords(dir, [
+      { type: "terminal-transcript-snapshotted", attemptId: "orphan", lessonId: "001-first", blockId: "lesson--001-first--run-command", transcript: "ORPHAN SNAPSHOT" },
+      { type: "terminal-transcript-snapshotted", attemptId: "attempt-2", lessonId: "001-first", blockId: "lesson--001-first--run-command", transcript: "v2 accepted transcript" },
+      { type: "attempt_accepted", attemptId: "attempt-2", lessonId: "001-first", blockId: "lesson--001-first--run-command", version: 2, kind: "terminal", summary: "Accepted v2." },
+      { type: "work_accepted", blockId: "lesson--001-first--run-command" },
+      { type: "block_completed", blockId: "lesson--001-first--run-command", lessonId: "001-first" },
+    ]);
+    const completed = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const state = await fetch(`${completed.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(block(state, "lesson--001-first--run-command")).toMatchObject({ active: false, completed: true, terminal: { phase: "complete", message: "Accepted v2." }, terminalRevision: 2, terminalSnapshot: { transcript: "v2 accepted transcript" } });
+      expect(JSON.stringify(state)).not.toContain("ORPHAN SNAPSHOT");
+    } finally { await completed.close(); }
   });
 
   it("renders completed jump prerequisites and keeps the target evaluation evidence-gated", async () => {
@@ -443,10 +570,30 @@ describe("workbook block progression", () => {
   });
 });
 
+async function advanceToEditor(serverUrl: string) {
+  await complete(serverUrl, "workbook--introduction");
+  await complete(serverUrl, "part--validation-loop");
+  await complete(serverUrl, "lesson--001-first");
+  await complete(serverUrl, "lesson--001-first--orientation");
+}
+
 async function complete(serverUrl: string, blockId: string) {
   const response = await fetch(`${serverUrl}/api/workbook/complete-block`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId }) });
   expect(response.status).toBe(202);
   return response.json() as Promise<any>;
+}
+
+async function writeTerminalLifecycleRecords(dir: string, inputs: any[]) {
+  const timeline = new WorkbookTimeline(dir);
+  for (const input of inputs) await timeline.append(input);
+}
+
+function terminalSubmitted(attemptId: string, command: string) {
+  return { type: "terminal-command-submitted", attemptId, lessonId: "001-first", blockId: "lesson--001-first--run-command", command, terminalSessionId: "terminal-session" };
+}
+
+function terminalFinished(attemptId: string, command: string, output: string) {
+  return { type: "terminal-command-finished", attemptId, evidence: { kind: "finished", command, interactions: [{ kind: "output", data: output }], exitStatus: 0 } };
 }
 
 async function postMessage(serverUrl: string, body: unknown) {
