@@ -1,0 +1,5 @@
+Additional final validation:
+- canonical devcontainer visual affordance gate PASS after recreating a stale pre-marker container from checked-in config; named state volumes preserved
+- final engine eval docs regression 76/76 PASS
+- active docs contain no stale reserved/unwired authored-runner claims
+- final working tree clean.
