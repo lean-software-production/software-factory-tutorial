@@ -1,0 +1,1 @@
+Approved after fixes by independent server/UI reviewers and final terminal lifecycle re-review. Material findings fixed in 51681a4, 110a460, and bd09ac2. Deferred Tutor-message/sub-debounce dirty-work race remains in coordinate-tutor-completion-with-browser-local-dirty-work-2ecu by Matt's explicit choice.
