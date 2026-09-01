@@ -19,7 +19,7 @@ Before running a live eval:
 
 `npm run --workspace=tutorial-engine eval` is the live workspace command. It spends model tokens for the Main Tutor and Judge. A single selected scenario preflights the Main Tutor and Judge, starts a fresh workbook server, drives one learner session, runs deterministic gates, and then calls the Judge once if the gates pass. `--repeat 3` can make three tutor sessions and three Judge calls. `--all --yes` runs every v2 scenario and can spend several times more. `--release` is the bounded release profile: it runs `v2-editor-feedback-locked` and `v2-transition-completion` exactly once each and rejects `--all`, `--scenario`, and `--repeat` combinations.
 
-Do not put `npm run --workspace=tutorial-engine eval` in deterministic checks. `npm run --workspace=tutorial-engine check:eval` and `npm run --workspace=tutorial-engine test:eval` are deterministic and model-free. Root authored-workbook equivalents are `npm run check:eval:workbook` and `npm run test:eval:workbook`; they inspect root `evals/workbook/` foundations and do not call the Main Tutor or Judge. Root `npm run check` remains model-free: it typechecks and unit-tests the evaluator through the tutorial-engine workspace but does not call the Main Tutor or Judge.
+Do not put `npm run --workspace=tutorial-engine eval` in deterministic checks. `npm run --workspace=tutorial-engine check:eval` and `npm run --workspace=tutorial-engine test:eval` are deterministic and model-free. Root authored-workbook equivalents are `npm run check:eval:workbook` and `npm run test:eval:workbook`; they inspect root `evals/workbook/` evaluator foundations and do not call the Main Tutor or Judge. Root `npm run eval:workbook -- ...` is the wired authored-curriculum live runner and writes current reports under root `evals/workbook/reports/`. Root `npm run check` remains model-free: it typechecks and unit-tests the evaluator through the tutorial-engine workspace but does not call the Main Tutor or Judge.
 
 ## Usage
 
@@ -38,7 +38,7 @@ npm run --workspace=tutorial-engine eval -- --release
 npm run --workspace=tutorial-engine eval:release
 ```
 
-From the repository root, `npm run eval:engine -- ...` forwards to the same workspace command. `npm run eval:release` delegates to the tutorial-engine release profile with `--workspace=tutorial-engine`. `npm run eval -- ...` is a temporary compatibility alias for that forwarding command, not an authored-workbook eval. The root `eval:workbook` name remains reserved and unwired until the authored-curriculum live runner lands.
+From the repository root, `npm run eval:engine -- ...` forwards to the same workspace command. `npm run eval:release` delegates to the tutorial-engine release profile with `--workspace=tutorial-engine`. `npm run eval -- ...` is a temporary compatibility alias for that forwarding command, not an authored-workbook eval. Root `npm run eval:workbook -- ...` runs the separate authored-curriculum live evaluator.
 
 The v2 live evaluator does not support the legacy `--lesson` or `--calibrate` scopes.
 
@@ -80,11 +80,11 @@ versioned event log. The Judge is an evaluator-only call after deterministic gat
 workbook role. A release candidate must pass every selected live scenario in one clean run rather than
 passing by rerunning failed scenarios. The transition completion release journey carries the positive-path deterministic assertions covered by the exact-command, editor-unlocked, clue-only, reflection follow-up, and transition gates so the consolidated release profile keeps that coverage with one Judge call for the transition scenario.
 
-Raw `workbook/events.jsonl` rows remain internal and gate-only. They may include private terminal lifecycle rows with submitted/finished inline terminal evidence, summaries, timestamps, and future fields. Automatic Tutor attempt details and the process-local fatal state are not persisted as workbook progress. Deterministic gates model terminal assessment as submitted -> finished -> feedback/accepted (or finished -> checking while a review is pending); there is no public request event prerequisite and no persisted manual retry contract. Before anything is written to reports or sent to a judge, the runner projects the internal trace into an allowlisted public judge trace. That public trace contains learner-visible channels, artifacts, and projected structural progression events built from explicit fields only. Deterministic gates inspect the internal trace before any judge call, but judge input and reports receive only the allowlisted public judge trace plus a public gate summary with assertion counts/pass flags; raw gate assertion details stay out of `report.json` and `judge-input.txt`.
+Raw `workbook/events.jsonl` rows remain internal and gate-only. They may include private terminal lifecycle rows with submitted/finished inline terminal evidence, summaries, timestamps, and extension fields. Automatic Tutor attempt details and the process-local fatal state are not persisted as workbook progress. Deterministic gates model terminal assessment as submitted -> finished -> feedback/accepted (or finished -> checking while a review is pending); there is no public request event prerequisite and no persisted manual retry contract. Before anything is written to reports or sent to a judge, the runner projects the internal trace into an allowlisted public judge trace. That public trace contains learner-visible channels, artifacts, and projected structural progression events built from explicit fields only. Deterministic gates inspect the internal trace before any judge call, but judge input and reports receive only the allowlisted public judge trace plus a public gate summary with assertion counts/pass flags; raw gate assertion details stay out of `report.json` and `judge-input.txt`.
 
 ## Output ownership and schema markers
 
-Every active v2 engine-eval envelope is marked so these synthetic tutorial-engine mechanics outputs cannot be confused with future authored-workbook evals:
+Every active v2 engine-eval envelope is marked so these synthetic tutorial-engine mechanics outputs cannot be confused with authored-workbook evals:
 
 ```json
 {
@@ -99,7 +99,7 @@ The marker fields appear at the top level of per-run `report.json`, per-run `met
 
 ## Results
 
-Each run writes an ignored report directory under `tutorial-engine/evals/reports/<run-id>/` from the repository root (`evals/reports/<run-id>/` relative to the `tutorial-engine` workspace). The historical root `evals/reports/` path is ignored for compatibility only; no active runner writes there. Future authored-workbook live reports belong under root `evals/workbook/reports/`.
+Each engine run writes an ignored report directory under `tutorial-engine/evals/reports/<run-id>/` from the repository root (`evals/reports/<run-id>/` relative to the `tutorial-engine` workspace). The historical root `evals/reports/` path is ignored for compatibility only; no active runner writes there. The separate root authored-workbook live runner writes current reports under root `evals/workbook/reports/`.
 
 Public/curated files are safe to use as the evaluation record:
 

@@ -96,7 +96,9 @@ describe("live v2 evaluator regressions", () => {
     expect(readme).toContain("Judge");
     expect(readme).toContain("tutorial-engine/evals/reports/<run-id>/");
     expect(readme).toContain("root `evals/workbook/reports/`");
-    expect(readme).toContain("`eval:workbook` name remains reserved and unwired");
+    expect(readme).toContain("Root `npm run eval:workbook -- ...` is the wired authored-curriculum live runner");
+    expect(readme).not.toContain("reserved and unwired");
+    expect(readme).not.toContain("future authored-workbook");
     expect(readme).toContain("bounded release profile");
     expect(readme).toContain("v2-editor-feedback-locked` and `v2-transition-completion` exactly once each");
     expect(readme).toContain("evals/reports/<run-id>/trace.json");

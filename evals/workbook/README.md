@@ -1,8 +1,8 @@
 # Authored workbook evaluator
 
-Root-owned evaluator code for the authored learner workbook lives here. It is separate from the synthetic tutorial-engine mechanics evals under `tutorial-engine/evals/`.
+Root-owned evaluator code for the authored learner workbook lives here. It is separate from the synthetic tutorial-engine mechanics evals under `tutorial-engine/evals/`. The repository-root `npm run eval:workbook -- ...` command runs the live authored-workbook evaluator and writes current reports under `evals/workbook/reports/`.
 
-`command-stubs.ts` provides deterministic Pi/npm command stubs for post-Lesson-001 authored scenarios. The stubs are designed for later authored scenario-runner integration. They materialize generated bin/state/evidence under the disposable session workspace's ignored `factory/.tmp/authored-eval-command-stubs/`, which will be visible as `/workspace/factory/.tmp/authored-eval-command-stubs/` through the canonical Docker bind mount.
+`command-stubs.ts` provides deterministic Pi/npm command stubs for post-Lesson-001 authored scenarios. The live scenario runner uses these stubs during post-Lesson-001 scenarios. They materialize generated bin/state/evidence under the disposable session workspace's ignored `factory/.tmp/authored-eval-command-stubs/`, which will be visible as `/workspace/factory/.tmp/authored-eval-command-stubs/` through the canonical Docker bind mount.
 
 `scenarios.ts` declares the four authored release journeys, their honest curriculum slices, exact artifact allowlists, prerequisite seeds, deterministic gates, closed Judge policies, and conservative `expectedModelCalls` budgets. Primer, Lesson 001, and Lesson 013 each expect one scenario-specific Judge call. Lessons 003–004 is deterministic-only: its expected Judge count is zero, and its existing 17-assertion gate is the success verdict. `run.ts` creates a fresh selected slice and normal session for every scenario repetition and creates command stubs only for post-Lesson-001 scenarios.
 

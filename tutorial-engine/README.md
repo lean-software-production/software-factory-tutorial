@@ -173,7 +173,8 @@ runs the bounded consolidated release profile once each for `v2-editor-feedback-
 From the repository root, `npm run eval:engine -- --scenario <v2-id>` forwards here,
 `npm run eval:release` delegates through `--workspace=tutorial-engine`, and root `npm run eval -- ...`
 remains only as a temporary compatibility alias to `eval:engine`. It is not an authored-workbook eval.
-These evals are distinct from the root-owned authored-workbook evaluator foundations in
-[`../evals/workbook/`](../evals/workbook/), whose current deterministic commands are
-`npm run check:eval:workbook` and `npm run test:eval:workbook`. The root `eval:workbook` command is
-reserved until that live runner lands.
+These engine evals are distinct from the root-owned authored-workbook evaluator in
+[`../evals/workbook/`](../evals/workbook/). Its deterministic commands are
+`npm run check:eval:workbook` and `npm run test:eval:workbook`; its wired live runner is
+`npm run eval:workbook -- ...` from the repository root and writes current reports under
+root `evals/workbook/reports/`.
