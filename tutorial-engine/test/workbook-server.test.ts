@@ -1658,10 +1658,11 @@ describe("workbook browser API", () => {
   it("reviews and accepts a second terminal command after earlier acceptance without duplicating successor records", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty();
+    const v2Decision = deferred<TutorDecision>();
     const tutor = new FakeMainTutor(
       { outcome: "accepted", message: "Editor accepted." },
       { outcome: "accepted", message: "Terminal v1 accepted." },
-      { outcome: "accepted", message: "Terminal v2 accepted." },
+      v2Decision.promise,
     );
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: tutor });
     const blockId = "lesson--001-first--run-supplied-command";
@@ -1690,6 +1691,7 @@ describe("workbook browser API", () => {
         && next.progress.canComplete?.eligible === false, "second terminal command pending review");
       expect(v2Pending.progress.canComplete).toMatchObject({ blockId, eligible: false, reason: "awaiting-acceptance" });
       expect(v2Pending.progress.readyBlocks).toEqual([successorId]);
+      v2Decision.resolve({ outcome: "accepted", message: "Terminal v2 accepted." });
 
       const v2Accepted = await waitForWorkbookState(server.url, (next) =>
         block(next, blockId)?.terminalRevision === 2
@@ -1701,7 +1703,7 @@ describe("workbook browser API", () => {
       const records = await privateTimeline(dir);
       expect(records.filter((record) => record.type === "work_accepted" && record.blockId === blockId)).toHaveLength(1);
       expect(records.filter((record) => record.type === "message" && record.source === "authored" && record.blockId === successorId)).toHaveLength(1);
-      expect(records.filter((record) => record.type === "attempt_accepted" && record.kind === "terminal" && record.blockId === blockId).map((record) => record.version)).toEqual([1, 2]);
+      expect(records.filter((record): record is Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }> => record.type === "attempt_accepted" && record.kind === "terminal" && record.blockId === blockId).map((record) => record.version)).toEqual([1, 2]);
 
       const completed = await completeBlock(server.url, blockId).then((response) => response.json() as Promise<any>);
       expect(block(completed.state, blockId)).toMatchObject({

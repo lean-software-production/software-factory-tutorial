@@ -2,7 +2,7 @@ import { validateTerminalEvidence, type TerminalEvidence } from "./terminal-evid
 import type { WorkbookTimelineRecord } from "./timeline.js";
 
 /** The only terminal lifecycle phases that a browser can receive from the server. */
-export type TerminalAttemptState = "running" | "checking" | "feedback" | "complete";
+export type TerminalAttemptState = "running" | "checking" | "feedback" | "accepted";
 
 export type ProjectedTerminalAttempt = {
   state: TerminalAttemptState;
@@ -99,7 +99,7 @@ export function projectTerminalAttempts(
     // A running shell cannot survive workflow restart. Finished evidence remains projected as
     // checking, but no model review is recovered from it after restart.
     if (!attempt.finished && activeTerminalSessionId && attempt.terminalSessionId !== activeTerminalSessionId) continue;
-    if (attempt.accepted !== undefined) projection.set(blockId, { state: "complete", revision: attempt.revision, successMessage: attempt.accepted });
+    if (attempt.accepted !== undefined) projection.set(blockId, { state: "accepted", revision: attempt.revision, successMessage: attempt.accepted });
     else if (attempt.feedback !== undefined) projection.set(blockId, { state: "feedback", revision: attempt.revision, feedback: attempt.feedback });
     else projection.set(blockId, { state: attempt.finished ? "checking" : "running", revision: attempt.revision });
   }

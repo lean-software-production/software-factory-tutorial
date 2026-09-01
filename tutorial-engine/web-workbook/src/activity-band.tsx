@@ -140,7 +140,7 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, disable
   const readyTerminalPreload = Boolean(activeBlock.type === "terminal-practice" && activeProgress?.ready && !activeProgress.active && !activeProgress.completed);
   // Accepted terminal history belongs beneath its authored timeline record, never in the live
   // activity band. A ready terminal may keep this one live surface through same-block promotion.
-  const completedTerminal = activeBlock.type === "terminal-practice" && activeProgress?.terminal?.phase === "complete";
+  const completedTerminal = activeBlock.type === "terminal-practice" && activeProgress?.terminal?.phase === "accepted";
   if (completedTerminal || !activePractical && !readyTerminalPreload || activeProgress?.checkpoint?.status === "accepted" && activeBlock.type !== "terminal-practice") return null;
 
   return <>

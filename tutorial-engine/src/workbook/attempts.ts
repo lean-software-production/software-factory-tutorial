@@ -97,7 +97,7 @@ export class AttemptStore {
     assertIdentifier(input.blockId, "Attempt block ID");
     assertEvidence(input.evidence);
     const previous = await this.current(input.lessonId, input.blockId);
-    if (previous?.status === "accepted") throw new Error("Accepted work cannot be replaced before continuation.");
+    if (previous?.status === "accepted" && (previous.evidence.kind !== "editor" || input.evidence.kind !== "editor")) throw new Error("Accepted work cannot be replaced before continuation.");
     const previousVersion = previous?.version ?? 0;
     const requestedVersion = input.version;
     if (requestedVersion !== undefined && (!Number.isSafeInteger(requestedVersion) || requestedVersion <= previousVersion)) throw new Error("Attempt revision is stale.");

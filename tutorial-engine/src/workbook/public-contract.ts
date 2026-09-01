@@ -4,13 +4,13 @@ import { TUTOR_INFRASTRUCTURE_FATAL_MESSAGE, type PublicTutorInfrastructureFatal
 export type PublicWorkbookBlockType = "narrative" | "terminal-practice" | "editor-practice" | "reflection";
 export type PublicWorkbookBlockKind = PublicWorkbookBlockType | "workbook-introduction" | "part-preamble" | "lesson-preamble";
 export type PublicAttemptKind = "editor" | "terminal" | "reflection";
-export type PublicEditorStatus = "editing" | "waiting" | "reviewing" | "feedback" | "unlocked";
+export type PublicEditorStatus = "editing" | "waiting" | "reviewing" | "feedback" | "accepted";
 /** Browser-safe terminal state: command text, evidence, IDs, review internals, and rubrics are private. */
 export type PublicTerminal =
   | { phase: "running" }
   | { phase: "checking" }
   | { phase: "feedback"; message: string }
-  | { phase: "complete"; message: string };
+  | { phase: "accepted"; message: string };
 /** Sanitized, bounded output captured when a terminal attempt is accepted. */
 export type PublicTerminalSnapshot = { transcript: string };
 export type PublicWorkbookBlock =
@@ -36,7 +36,7 @@ function terminal(value: unknown): value is PublicTerminal {
   if (!record(value)) return false;
   if (value.phase === "running" || value.phase === "checking") return true;
   if (value.phase === "feedback") return typeof value.message === "string" && !("retryFailureId" in value);
-  return value.phase === "complete" && typeof value.message === "string";
+  return value.phase === "accepted" && typeof value.message === "string";
 }
 function terminalSnapshot(value: unknown): value is PublicTerminalSnapshot { return record(value) && typeof value.transcript === "string"; }
 function lesson(value: unknown): value is PublicWorkbookLesson { return record(value) && typeof value.id === "string" && typeof value.title === "string" && typeof value.dek === "string" && typeof value.introduction === "string" && typeof value.durationMinutes === "number" && strings(value.outcomes) && Array.isArray(value.blocks); }
@@ -56,11 +56,15 @@ function publicTimelineMessage(value: Record<string, unknown>): value is PublicT
 function publicTimelineRecord(value: unknown): value is PublicTimelineRecord {
   return record(value) && publicTimelineMessage(value);
 }
+function editorStatus(value: unknown): value is PublicEditorStatus {
+  return value === "editing" || value === "waiting" || value === "reviewing" || value === "feedback" || value === "accepted";
+}
 function publicBlockProgress(value: unknown): value is PublicWorkbookBlockProgress {
   return record(value)
     && (value.terminal === undefined || terminal(value.terminal))
     && (value.terminalRevision === undefined || publicRevision(value.terminalRevision))
-    && (value.terminalSnapshot === undefined || terminalSnapshot(value.terminalSnapshot));
+    && (value.terminalSnapshot === undefined || terminalSnapshot(value.terminalSnapshot))
+    && (value.editorStatus === undefined || editorStatus(value.editorStatus));
 }
 function publicFatal(value: unknown): value is PublicTutorInfrastructureFatalState {
   return record(value) && value.kind === "tutor-infrastructure" && value.message === TUTOR_INFRASTRUCTURE_FATAL_MESSAGE;

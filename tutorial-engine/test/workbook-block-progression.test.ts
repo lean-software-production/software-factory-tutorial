@@ -293,6 +293,33 @@ describe("workbook block progression", () => {
     } finally { await completed.close(); }
   });
 
+  it("keeps completion ineligible after restart when a newer terminal submission from an old session is unfinished", async () => {
+    const dir = await terminalLifecycleFixture();
+    const blockId = "lesson--001-first--run-command";
+    await writeTerminalLifecycleRecords(dir, [
+      { type: "block_completed", blockId: "workbook--introduction" },
+      { type: "block_completed", blockId: "part--validation-loop" },
+      { type: "block_completed", blockId: "lesson--001-first" },
+      { type: "block_completed", blockId: "lesson--001-first--orientation" },
+      terminalSubmitted("attempt-1", "npm test", "old-terminal-session"),
+      terminalFinished("attempt-1", "npm test", "v1 PASS"),
+      { type: "terminal-transcript-snapshotted", attemptId: "attempt-1", lessonId: "001-first", blockId, transcript: "v1 PASS" },
+      { type: "attempt_accepted", attemptId: "attempt-1", lessonId: "001-first", blockId, version: 1, kind: "terminal", summary: "Accepted v1." },
+      { type: "work_accepted", blockId },
+      terminalSubmitted("attempt-2", "npm test --again", "old-terminal-session"),
+    ]);
+
+    const restarted = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const state = await fetch(`${restarted.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(block(state, blockId)).toMatchObject({ active: true, completed: false });
+      expect(block(state, blockId)?.terminal).toBeUndefined();
+      expect(state.progress.canComplete).toMatchObject({ blockId, eligible: false, reason: "awaiting-acceptance" });
+      expect(state.progress.readyBlocks).toEqual(["lesson--001-first--edit-answer"]);
+      await expect(complete(restarted.url, blockId)).resolves.toMatchObject({ outcome: "rejected", reason: "ineligible" });
+    } finally { await restarted.close(); }
+  });
+
   it("renders completed jump prerequisites and keeps the target evaluation evidence-gated", async () => {
     const dir = await fixture();
     const loaded = await loadWorkbook(dir);
@@ -625,8 +652,8 @@ async function writeTerminalLifecycleRecords(dir: string, inputs: any[]) {
   for (const input of inputs) await timeline.append(input);
 }
 
-function terminalSubmitted(attemptId: string, command: string) {
-  return { type: "terminal-command-submitted", attemptId, lessonId: "001-first", blockId: "lesson--001-first--run-command", command, terminalSessionId: "terminal-session" };
+function terminalSubmitted(attemptId: string, command: string, terminalSessionId = "terminal-session") {
+  return { type: "terminal-command-submitted", attemptId, lessonId: "001-first", blockId: "lesson--001-first--run-command", command, terminalSessionId };
 }
 
 function terminalFinished(attemptId: string, command: string, output: string) {

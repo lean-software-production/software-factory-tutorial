@@ -20,7 +20,8 @@ import { TUTOR_INFRASTRUCTURE_FATAL_MESSAGE, publicTutorInfrastructureFatalState
 const WORKFLOW_CLOSE_GRACE_MS = 250;
 const MAX_PUBLIC_TERMINAL_SNAPSHOT_BYTES = 16_000;
 
-type AcceptedCheckpoint = { summary: string; kind: AttemptEvidence["kind"] };
+type AcceptedCheckpoint = { summary: string; kind: AttemptEvidence["kind"]; evidence?: PublicCheckpoint["evidence"] };
+type AcceptedAttemptRecord = Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }>;
 type CompleteBlockResult = PublicCompleteBlockResult;
 
 type WorkbookProjectionState = {
@@ -61,7 +62,7 @@ function publicCheckpoint(attempt: Attempt | undefined, projected: AcceptedCheck
     if (attempt.evidence.kind === "editor" && attempt.status === "reviewing" && attempt.retainedFeedback) return { status: "reviewing", feedback: attempt.retainedFeedback, reviewNotice: "Updating feedback…", evidence };
     return { status: attempt.status, feedback: attempt.status === "feedback" ? attempt.feedback : undefined, evidence };
   }
-  return projected ? { status: "accepted", successMessage: projected.summary, evidence: { kind: projected.kind } } : undefined;
+  return projected ? { status: "accepted", successMessage: projected.summary, evidence: projected.evidence ?? { kind: projected.kind } } : undefined;
 }
 function timelineMessageBlockKind(loaded: LoadedWorkbook, record: TimelineMessage): OrderedWorkbookBlock["kind"] | undefined {
   const source = declaredSourceFromBlockId(record.blockId);
@@ -236,13 +237,70 @@ function publicOrderedBlock(block: OrderedWorkbookBlock, index: number): PublicW
   };
 }
 
+function latestAcceptedAttemptRecords(records: readonly WorkbookTimelineRecord[], kind: AttemptEvidence["kind"]): ReadonlyMap<string, AcceptedAttemptRecord> {
+  const accepted = new Map<string, AcceptedAttemptRecord>();
+  for (const record of records) if (record.type === "attempt_accepted" && record.kind === kind) accepted.set(record.blockId, record);
+  return accepted;
+}
+
+type TerminalSubmissionRecord = Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }>;
+type TerminalSubmissionRevision = { submission: TerminalSubmissionRecord; revision: number };
+
+function latestTerminalSubmission(records: readonly WorkbookTimelineRecord[], blockId: string): TerminalSubmissionRevision | undefined {
+  let latest: TerminalSubmissionRevision | undefined;
+  let revision = 0;
+  for (const record of records) {
+    if (record.type !== "terminal-command-submitted" || record.blockId !== blockId) continue;
+    revision += 1;
+    latest = { submission: record, revision };
+  }
+  return latest;
+}
+
+function finishedTerminalEvidence(records: readonly WorkbookTimelineRecord[], submission: TerminalSubmissionRecord): TerminalEvidence | undefined {
+  const finished = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-finished" }> => record.type === "terminal-command-finished" && record.attemptId === submission.attemptId);
+  if (!finished) return undefined;
+  try {
+    const evidence = validateTerminalEvidence(finished.evidence);
+    return evidence.kind === "finished" && evidence.command === submission.command ? evidence : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function latestDurableTerminalAcceptance(records: readonly WorkbookTimelineRecord[], block: DeclaredWorkbookBlock): AcceptedAttemptRecord | undefined {
+  const latest = latestTerminalSubmission(records, block.id);
+  if (!latest || latest.submission.lessonId !== block.lessonId || latest.submission.blockId !== block.id) return undefined;
+  if (!finishedTerminalEvidence(records, latest.submission)) return undefined;
+  if (records.some((record) => record.type === "terminal-feedback-recorded" && record.attemptId === latest.submission.attemptId)) return undefined;
+  return [...records].reverse().find((record): record is AcceptedAttemptRecord =>
+    record.type === "attempt_accepted"
+    && record.kind === "terminal"
+    && record.attemptId === latest.submission.attemptId
+    && record.lessonId === block.lessonId
+    && record.blockId === block.id
+    && record.version === latest.revision);
+}
+
 function terminalSnapshotProjection(records: readonly WorkbookTimelineRecord[]): ReadonlyMap<string, PublicTerminalSnapshot> {
-  const accepted = new Map(records.flatMap((record) => record.type === "attempt_accepted" && record.kind === "terminal" ? [[record.attemptId, record] as const] : []));
+  const accepted = latestAcceptedAttemptRecords(records, "terminal");
   const snapshots = new Map<string, PublicTerminalSnapshot>();
   for (const record of records) {
     if (record.type !== "terminal-transcript-snapshotted") continue;
-    const acceptance = accepted.get(record.attemptId);
-    if (acceptance && acceptance.lessonId === record.lessonId && acceptance.blockId === record.blockId) snapshots.set(record.blockId, { transcript: record.transcript });
+    const acceptance = accepted.get(record.blockId);
+    if (acceptance?.attemptId === record.attemptId && acceptance.lessonId === record.lessonId && acceptance.blockId === record.blockId) snapshots.set(record.blockId, { transcript: record.transcript });
+  }
+  return snapshots;
+}
+
+type PublicEditorSnapshot = { text: string; acceptance: AcceptedAttemptRecord };
+function editorSnapshotProjection(records: readonly WorkbookTimelineRecord[]): ReadonlyMap<string, PublicEditorSnapshot> {
+  const accepted = latestAcceptedAttemptRecords(records, "editor");
+  const snapshots = new Map<string, PublicEditorSnapshot>();
+  for (const record of records) {
+    if (record.type !== "editor-content-snapshotted") continue;
+    const acceptance = accepted.get(record.blockId);
+    if (acceptance?.attemptId === record.attemptId && acceptance.lessonId === record.lessonId && acceptance.blockId === record.blockId) snapshots.set(record.blockId, { text: record.text, acceptance });
   }
   return snapshots;
 }
@@ -279,13 +337,16 @@ async function publicState(loaded: LoadedWorkbook, workspaceRootForLesson: (less
   const stream = buildWorkbookBlockStream(loaded);
   const terminalAttempts = terminalAttemptProjection(records, terminalSessionId);
   const terminalSnapshots = terminalSnapshotProjection(records);
+  const editorSnapshots = editorSnapshotProjection(records);
+  const latestAcceptedEditors = latestAcceptedAttemptRecords(records, "editor");
+  const latestAcceptedReflections = latestAcceptedAttemptRecords(records, "reflection");
   const workbookProjection = projectWorkbookBlocks(stream, records);
   const current = workbookProjection.current;
   const completedLessons = loaded.chapters.flatMap((chapter) => {
     const lessonIds = [lessonPreambleBlockIdForServer(chapter.lesson.id), ...chapter.lesson.blocks.map((block) => declaredBlockId(chapter.lesson.id, block.id))];
     return lessonIds.every((id) => workbookProjection.completedBlockIds.has(id)) ? [chapter.lesson.id] : [];
   });
-  const canComplete = current ? canCompleteBlock(current, workbookProjection) : { eligible: false as const, reason: "complete" as const };
+  const canComplete = current ? await canCompleteBlock(current, workbookProjection, records, attempts) : { eligible: false as const, reason: "complete" as const };
   const orderedBlocks = stream.map(publicOrderedBlock);
   const revealedBlockIds = new Set(stream.slice(0, workbookProjection.activeIndex + 1).map((block) => block.id));
   const renderedBlockIds = new Set([...revealedBlockIds, ...workbookProjection.readyBlockIds]);
@@ -301,8 +362,17 @@ async function publicState(loaded: LoadedWorkbook, workspaceRootForLesson: (less
     if (ordered.origin !== "declared") return base;
     const authored = ordered.block;
     const currentAttempt = isEvaluatedBlock(authored) ? await attempts.current(ordered.lessonId, ordered.id).catch(() => undefined) : undefined;
-    const acceptedRecord = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }> => record.type === "attempt_accepted" && record.blockId === ordered.id);
-    const acceptedProjection = currentAttempt?.status === "accepted" && acceptedRecord && workbookProjection.workAcceptedBlockIds.has(ordered.id) ? { status: "accepted" as const, summary: currentAttempt.successMessage ?? acceptedRecord.summary, kind: currentAttempt.evidence.kind } : undefined;
+    const acceptedRecord = authored.type === "editor-practice" ? latestAcceptedEditors.get(ordered.id)
+      : authored.type === "reflection" ? latestAcceptedReflections.get(ordered.id)
+        : undefined;
+    const currentAcceptedProjection = currentAttempt?.status === "accepted" && acceptedRecord && currentAttempt.id === acceptedRecord.attemptId && currentAttempt.version === acceptedRecord.version && workbookProjection.workAcceptedBlockIds.has(ordered.id)
+      ? { status: "accepted" as const, summary: currentAttempt.successMessage ?? acceptedRecord.summary, kind: currentAttempt.evidence.kind }
+      : undefined;
+    const durableEditorSnapshot = authored.type === "editor-practice" ? editorSnapshots.get(ordered.id) : undefined;
+    const durableEditorProjection = durableEditorSnapshot
+      ? { status: "accepted" as const, summary: durableEditorSnapshot.acceptance.summary, kind: "editor" as const, evidence: { kind: "editor" as const, text: durableEditorSnapshot.text } }
+      : undefined;
+    const acceptedProjection = currentAcceptedProjection ?? (authored.type === "editor-practice" && (completed || !currentAttempt) ? durableEditorProjection : undefined);
     const checkpoint = publicCheckpoint(currentAttempt, acceptedProjection);
     const withCheckpoint = checkpoint ? { ...base, checkpoint } : base;
     if (authored.type === "terminal-practice") {
@@ -315,21 +385,22 @@ async function publicState(loaded: LoadedWorkbook, workspaceRootForLesson: (less
       const terminal = terminalAttempt?.state === "running" ? { phase: "running" as const }
         : terminalAttempt?.state === "checking" ? { phase: "checking" as const }
           : terminalAttempt?.state === "feedback" && terminalAttempt.feedback ? { phase: "feedback" as const, message: terminalAttempt.feedback }
-            : terminalAttempt?.state === "complete" && terminalAttempt.successMessage ? { phase: "complete" as const, message: terminalAttempt.successMessage }
+            : terminalAttempt?.state === "accepted" && terminalAttempt.successMessage ? { phase: "accepted" as const, message: terminalAttempt.successMessage }
               : undefined;
       return {
         ...base,
-        verified: terminal?.phase === "complete",
+        verified: terminal?.phase === "accepted",
         ...(terminal ? { terminal, terminalRevision: terminalAttempt!.revision } : {}),
-        ...(terminal?.phase === "complete" && terminalSnapshots.has(ordered.id) ? { terminalSnapshot: terminalSnapshots.get(ordered.id)! } : {})
+        ...(terminal?.phase === "accepted" && terminalSnapshots.has(ordered.id) ? { terminalSnapshot: terminalSnapshots.get(ordered.id)! } : {})
       };
     }
     if (authored.type === "editor-practice" && active && !completed) {
-      if (currentAttempt?.evidence.kind === "editor") return { ...withCheckpoint, revision: currentAttempt.version, draftText: currentAttempt.evidence.text, editorStatus: checkpoint?.status === "reviewing" ? "reviewing" : checkpoint?.status === "feedback" ? "feedback" : checkpoint?.status === "accepted" ? "unlocked" : "editing" };
+      if (currentAttempt?.evidence.kind === "editor") return { ...withCheckpoint, revision: currentAttempt.version, draftText: currentAttempt.evidence.text, editorStatus: checkpoint?.status === "reviewing" ? "reviewing" : checkpoint?.status === "feedback" ? "feedback" : checkpoint?.status === "accepted" ? "accepted" : "editing" };
       const workspaceRoot = workspaceRootForLesson(ordered.chapter.lesson);
       return { ...withCheckpoint, revision: 0, draftText: workspaceRoot ? await readTargetDraftText(workspaceRoot, authored).catch(() => "") : "", editorStatus: "editing" };
     }
-    if (authored.type === "editor-practice" && currentAttempt?.status === "accepted") return { ...withCheckpoint, revision: currentAttempt.version, editorStatus: "unlocked" };
+    if (authored.type === "editor-practice" && durableEditorSnapshot) return { ...withCheckpoint, checkpoint: checkpoint ?? publicCheckpoint(undefined, durableEditorProjection), revision: durableEditorSnapshot.acceptance.version, draftText: durableEditorSnapshot.text, editorStatus: "accepted" };
+    if (authored.type === "editor-practice" && currentAttempt?.status === "accepted") return { ...withCheckpoint, revision: currentAttempt.version, draftText: currentAttempt.evidence.kind === "editor" ? currentAttempt.evidence.text : undefined, editorStatus: "accepted" };
     return withCheckpoint;
   }));
 
@@ -358,8 +429,35 @@ async function publicState(loaded: LoadedWorkbook, workspaceRootForLesson: (less
 
 function lessonPreambleBlockIdForServer(lessonId: string): string { return `lesson--${lessonId}`; }
 
-function canCompleteBlock(block: OrderedWorkbookBlock, projection: WorkbookProjectionState): { eligible: boolean; reason?: "ineligible" | "awaiting-acceptance" } {
+function workAcceptedCompletion(block: OrderedWorkbookBlock, projection: WorkbookProjectionState): { eligible: boolean; reason?: "ineligible" | "awaiting-acceptance" } {
   return projection.workAcceptedBlockIds.has(block.id) ? { eligible: true } : { eligible: false, reason: "awaiting-acceptance" };
+}
+
+function acceptedAttemptMatches(attempt: Attempt | undefined, acceptance: AcceptedAttemptRecord | undefined, block: DeclaredWorkbookBlock): boolean {
+  return Boolean(
+    attempt
+    && acceptance
+    && attempt.status === "accepted"
+    && attempt.id === acceptance.attemptId
+    && attempt.version === acceptance.version
+    && attempt.lessonId === acceptance.lessonId
+    && attempt.blockId === acceptance.blockId
+    && evidenceMatchesBlock(attempt.evidence, block.block)
+  );
+}
+
+async function canCompleteBlock(
+  block: OrderedWorkbookBlock,
+  projection: WorkbookProjectionState,
+  records: readonly WorkbookTimelineRecord[],
+  attempts: AttemptStore,
+): Promise<{ eligible: boolean; reason?: "ineligible" | "awaiting-acceptance" }> {
+  if (block.origin !== "declared") return workAcceptedCompletion(block, projection);
+  if (!isEvaluatedBlock(block.block)) return workAcceptedCompletion(block, projection);
+  if (block.block.type === "terminal-practice") return latestDurableTerminalAcceptance(records, block) ? { eligible: true } : { eligible: false, reason: "awaiting-acceptance" };
+  const current = await attempts.current(block.lessonId, block.id).catch(() => undefined);
+  const acceptance = latestAcceptedAttemptRecords(records, block.block.type === "editor-practice" ? "editor" : "reflection").get(block.id);
+  return acceptedAttemptMatches(current, acceptance, block) ? { eligible: true } : { eligible: false, reason: "awaiting-acceptance" };
 }
 
 export interface WorkbookWorkflowDependencies {
@@ -538,7 +636,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   const mainContext = async (options: { includeTerminalContext?: boolean } = {}): Promise<MainTutorContext> => {
     const projection = currentWorkbookProjection();
     const active = projection.current;
-    const completeStatus = active ? canCompleteBlock(active, projection) : { eligible: false };
+    const completeStatus = active ? await canCompleteBlock(active, projection, records, attempts) : { eligible: false };
     return { records: mainTutorTimelineRecords(loaded, records), activeContext: await activeBlockContext(records, options), activeWorkspaceRoot: activeWorkspaceRootForTutor(active), completionTool: active && completeStatus.eligible ? { blockId: active.id } : undefined };
   };
   const mainContextForTarget = async (_lessonId: string, blockId: string): Promise<MainTutorContext> => {
@@ -601,7 +699,8 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   const appendTerminalAcceptedCheckpoint = async (input: { lessonId: string; blockId: string; attemptId: string }, summary: string): Promise<void> => {
     const existing = records.find((record): record is Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }> => record.type === "attempt_accepted" && record.attemptId === input.attemptId);
     if (existing) return;
-    await append({ type: "attempt_accepted", lessonId: input.lessonId, blockId: input.blockId, attemptId: input.attemptId, version: 1, kind: "terminal", summary });
+    const version = terminalAttemptProjection(records, terminalSessionId).get(input.blockId)?.revision ?? 1;
+    await append({ type: "attempt_accepted", lessonId: input.lessonId, blockId: input.blockId, attemptId: input.attemptId, version, kind: "terminal", summary });
   };
   /** Replay an interrupted two-store acceptance commit for the one block that can still advance. */
   const recoverAcceptedActiveAttempt = async (): Promise<void> => {
@@ -694,6 +793,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
         }
         // `attempt_accepted` is a write-ahead acceptance commit. Recovery replays it into the
         // AttemptStore and work_accepted projection if any subsequent write is interrupted.
+        if (current.evidence.kind === "editor") await append({ type: "editor-content-snapshotted", attemptId: current.id, lessonId: current.lessonId, blockId: current.blockId, text: current.evidence.text });
         await appendAcceptedCheckpoint(current, message);
         const accepted = await attempts.acceptCurrent(current.id, message);
         if (!accepted) return;
@@ -793,7 +893,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     const latestSubmission = [...records].reverse().find((record): record is Extract<WorkbookTimelineRecord, { type: "terminal-command-submitted" }> =>
       record.type === "terminal-command-submitted" && record.blockId === job.blockId);
     if (!submission || latestSubmission?.attemptId !== job.attemptId || submission.lessonId !== job.lessonId || submission.blockId !== job.blockId || submission.command !== job.command) return undefined;
-    if (records.some((record) => record.type === "attempt_accepted" && record.attemptId === job.attemptId) || records.some((record) => record.type === "work_accepted" && record.blockId === job.blockId)) return undefined;
+    if (records.some((record) => record.type === "attempt_accepted" && record.attemptId === job.attemptId)) return undefined;
     if (records.some((record) => record.type === "terminal-feedback-recorded" && record.attemptId === job.attemptId)) return undefined;
     if (!matchingFinishedEvidence({ attemptId: job.attemptId, command: job.command, exitStatus: job.exitStatus })) return undefined;
     return active;
@@ -818,7 +918,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       id: job.attemptId,
       lessonId: job.lessonId,
       blockId: job.blockId,
-      version: 1,
+      version: terminalAttemptProjection(records, terminalSessionId).get(job.blockId)?.revision ?? 1,
       status: "reviewing",
       evidence: { kind: "terminal", transcript: JSON.stringify(reviewEvidence, null, 2), terminalHtml: "" }
     };
@@ -854,7 +954,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       await appendTerminalAcceptedCheckpoint(job, result.message);
       await recordWorkAccepted(active);
       logTerminalReviewDecision(job, "accepted");
-      notifyStateChanged({ lessonId: job.lessonId, blockId: job.blockId, status: "accepted", terminalPhase: "complete" });
+      notifyStateChanged({ lessonId: job.lessonId, blockId: job.blockId, status: "accepted", terminalPhase: "accepted" });
     });
   };
   const launchTerminalMainReview = (job: TerminalReviewJob): void => {
@@ -1002,7 +1102,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     if (!requested) return { outcome: "rejected", state: await stateBefore(), reason: "unrevealed" };
     if (!isRendered(projection, requested.id) && requested.id !== projection.current?.id) return { outcome: "rejected", state: await stateBefore(), reason: "unrevealed" };
     if (projection.current?.id !== requested.id) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
-    const eligibility = canCompleteBlock(requested, projection);
+    const eligibility = await canCompleteBlock(requested, projection, records, attempts);
     if (!eligibility.eligible) return { outcome: "rejected", state: await stateBefore(), reason: "ineligible" };
 
     const coveredThroughId = records.at(-1)?.id ?? randomUUID();

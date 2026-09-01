@@ -313,7 +313,7 @@ function initialTerminalDisplay(state: BlockProgress | undefined): TerminalCoach
 
 export function TerminalHistory({ state }: { state: BlockProgress | undefined }) {
   if (!state?.terminalSnapshot) return null;
-  const terminalSuccess = state.terminal?.phase === "complete" ? state.terminal.message : undefined;
+  const terminalSuccess = state.terminal?.phase === "accepted" ? state.terminal.message : undefined;
   return <div className="terminal-history" aria-label="Completed terminal output">
     <div className={terminalSuccess ? "terminal-completion-surface has-feedback" : undefined}>
       <FrozenTerminal text={state.terminalSnapshot.transcript} />
@@ -335,7 +335,7 @@ function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChan
     // A later authoritative lifecycle state replaces a transport error in the same one card.
     if (state?.terminal) setTerminalError(undefined);
   }, [state?.terminal]);
-  const complete = state?.terminal?.phase === "complete" || display.phase === "complete";
+  const complete = state?.terminal?.phase === "accepted" || display.phase === "accepted";
   const showLiveTerminal = !state?.completed && !complete;
   const preloading = Boolean(state?.ready && !state.active && !state.completed);
   const lifecycleText = display.phase === "idle" || disabled && (display.phase === "running" || display.phase === "checking") ? undefined : display.text;
@@ -356,7 +356,7 @@ function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChan
 }
 
 function editorStatusText(state: BlockProgress | undefined, completed: boolean): string {
-  if (completed || state?.editorStatus === "unlocked" || state?.checkpoint?.status === "accepted") return "Unlocked — the accepted revision has been written to the target file.";
+  if (completed || state?.editorStatus === "accepted" || state?.checkpoint?.status === "accepted") return "Unlocked — the accepted revision has been written to the target file.";
   if (state?.checkpoint?.status === "reviewing" || state?.editorStatus === "reviewing") return "Reviewing your latest revision…";
   if (state?.checkpoint?.status === "working") return "Keep writing — the tutor will review after you pause.";
   if (state?.editorStatus === "waiting") return "Keep writing — the reviewer will check again after you pause.";
@@ -407,7 +407,7 @@ function EditorPracticeBlockView({ block, state, refresh, disabled = false, onLo
   const [localError, setLocalError] = useState<string>();
   const [retainedFeedback, setRetainedFeedback] = useState<string | undefined>(state?.checkpoint?.feedback);
   const accepted = state?.checkpoint?.status === "accepted";
-  const completed = Boolean(state?.completed || state?.editorStatus === "unlocked");
+  const completed = Boolean(state?.completed || state?.editorStatus === "accepted");
   const lifecycleCanEdit = Boolean(state?.active && !completed && !accepted);
   const canEdit = lifecycleCanEdit && !disabled;
   const initialText = state?.draftText ?? "";
@@ -654,10 +654,10 @@ function renderedBlockSource(state: State, blockId: string): PracticeSurfaceSour
 function practiceSurfaceSource(state: State): PracticeSurfaceSource | undefined {
   const active = progressFor(state.progress, state.progress.activeBlockId);
   const activeSource = renderedBlockSource(state, state.progress.activeBlockId);
-  if (active?.active && !active.completed && activeSource && ["terminal-practice", "editor-practice"].includes(activeSource.block.type) && !(activeSource.block.type === "terminal-practice" && active.terminal?.phase === "complete")) return activeSource;
+  if (active?.active && !active.completed && activeSource && ["terminal-practice", "editor-practice"].includes(activeSource.block.type) && !(activeSource.block.type === "terminal-practice" && active.terminal?.phase === "accepted")) return activeSource;
   // A terminal's accepted snapshot replaces its live xterm before the learner continues. Do not
   // preload a distinct ready terminal from the old shell; continuation resets that transport.
-  if (activeSource?.block.type === "terminal-practice" && active?.terminal?.phase === "complete") return undefined;
+  if (activeSource?.block.type === "terminal-practice" && active?.terminal?.phase === "accepted") return undefined;
 
   const readyId = readySuccessorId(state.progress);
   const ready = readyId ? progressFor(state.progress, readyId) : undefined;
@@ -874,7 +874,7 @@ export function App() {
       if (next.progress.activeBlockId !== before || next.progress.workbookComplete && !state.progress.workbookComplete) requestAnimationFrame(() => navigateToAnchor(next.progress.activeAnchorId ?? next.progress.activeBlockId, "push"));
     });
   };
-  const activeContinuationEligible = !state.introductionComplete ? true : state.progress.canComplete ? state.progress.canComplete.blockId === effectiveActiveBlockId && state.progress.canComplete.eligible : Boolean(effectiveActiveBlockProgress?.active && effectiveActiveBlockProgress.ready && !effectiveActiveBlockProgress.completed && (activeBlock?.type === "narrative" || effectiveActiveBlockProgress.checkpoint?.status === "accepted" || effectiveActiveBlockProgress.terminal?.phase === "complete"));
+  const activeContinuationEligible = !state.introductionComplete ? true : state.progress.canComplete ? state.progress.canComplete.blockId === effectiveActiveBlockId && state.progress.canComplete.eligible : Boolean(effectiveActiveBlockProgress?.active && effectiveActiveBlockProgress.ready && !effectiveActiveBlockProgress.completed && (activeBlock?.type === "narrative" || effectiveActiveBlockProgress.checkpoint?.status === "accepted" || effectiveActiveBlockProgress.terminal?.phase === "accepted"));
   const activeReflectionReviewing = Boolean(state.introductionComplete && activeBlock?.type === "reflection" && activeBlockProgress?.checkpoint?.status === "reviewing");
   const reflectionComposerDisabled = mutationsDisabled || Boolean(state.introductionComplete && activeBlock?.type === "reflection" && ["reviewing", "accepted"].includes(activeBlockProgress?.checkpoint?.status ?? ""));
   const stableRunwayIds = scrollRunwayBlockIds(state);
