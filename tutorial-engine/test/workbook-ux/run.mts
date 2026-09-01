@@ -113,7 +113,7 @@ export async function runWorkbookUxTest(options: WorkbookUxTestRunOptions = {}, 
   };
 }
 
-function parseCliOptions(argv: readonly string[]): WorkbookUxTestRunOptions {
+export function parseWorkbookUxCliOptions(argv: readonly string[]): WorkbookUxTestRunOptions {
   let ai = false;
   let headless = true;
   let runRoot: string | undefined;
@@ -217,13 +217,13 @@ function serializeError(error: unknown): SerializedError {
 }
 
 function printHelp(): void {
-  console.log(`Usage: tsx test/workbook-ux/run.mts [--ai|--no-ai] [--headed] [--run-root=PATH] [--ai-command=pi] [--ai-model=MODEL] [--ai-timeout-ms=MS]\n\nRuns the workbook UX test: checked-out engine input -> provider-free fixture walkthrough/WebM -> deterministic decoded-WebM analysis -> optional advisory pi review -> durable report.\n\nExit is nonzero only when the recording/deterministic station fails. AI unavailability or findings never gate exit.`);
+  console.log(`Usage: tsx test/workbook-ux/run.mts [--ai|--no-ai] [--headed] [--run-root=PATH] [--ai-command=pi] [--ai-model=MODEL] [--ai-timeout-ms=MS]\n\nRuns the workbook UX test: checked-out engine input -> provider-free fixture walkthrough/WebM -> deterministic decoded-WebM analysis -> optional advisory pi review -> durable report. AI is opt-in; omit --ai or pass --no-ai to skip it.\n\nExit is nonzero only when the recording/deterministic station fails. AI unavailability or findings never gate exit.`);
 }
 
 const consoleProgress: WorkbookUxProgressSink = (event) => console.log(event.message);
 
 if (basename(process.argv[1] ?? '') === 'run.mts') {
-  runWorkbookUxTest({ ...parseCliOptions(process.argv.slice(2)), progress: consoleProgress }).then((result) => {
+  runWorkbookUxTest({ ...parseWorkbookUxCliOptions(process.argv.slice(2)), progress: consoleProgress }).then((result) => {
     console.log(`Deterministic verdict: ${result.deterministicPassed ? 'PASSED' : 'FAILED'}`);
     console.log(`Exit verdict: ${result.exitCode === 0 ? 'PASS' : 'FAIL'} (exit code ${result.exitCode})`);
     console.log(`Report: ${result.reportPath}`);

@@ -4,11 +4,42 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AnalyzerReport } from './analyzer.js';
 import { writeUxTestReport, type UxTestStationResult } from './report.js';
-import { runWorkbookUxTest } from './run.mjs';
+import { parseWorkbookUxCliOptions, runWorkbookUxTest } from './run.mjs';
 import { buildPiArgs, runAiReview, type AiReviewResult, type ExecFileRunner } from './review-ai.js';
 import { formatWorkbookUxPreparationMessage, type WorkbookUxTestRecorderOptions, type WorkbookUxTestRecorderResult, type WorkbookUxTestWalkthrough } from './record.mjs';
 
 const now = '2026-01-02T03:04:05.000Z';
+const engineRoot = resolve(import.meta.dirname, '../..');
+
+type PackageJson = { scripts: Record<string, string> };
+
+async function readPackageJson(path: string): Promise<PackageJson> {
+  return JSON.parse(await readFile(path, 'utf8')) as PackageJson;
+}
+
+function requiredScript(manifest: PackageJson, name: string): string {
+  const script = manifest.scripts[name];
+  expect(script, `${name} script is not declared`).toBeDefined();
+  return script as string;
+}
+
+describe('workbook UX package and CLI contracts', () => {
+  it('keeps the ordinary package script deterministic and exposes explicit AI opt-in', async () => {
+    const manifest = await readPackageJson(resolve(engineRoot, 'package.json'));
+
+    expect(requiredScript(manifest, 'test:workbook-ux')).toBe('tsx test/workbook-ux/run.mts --no-ai');
+    expect(requiredScript(manifest, 'test:workbook-ux:deterministic')).toBe('tsx test/workbook-ux/run.mts --no-ai');
+    expect(requiredScript(manifest, 'test:workbook-ux:ai')).toBe('tsx test/workbook-ux/run.mts --ai');
+    expect(requiredScript(manifest, 'test:workbook-ux:record')).toBe('tsx test/workbook-ux/record.mts --record-only');
+    expect(requiredScript(manifest, 'test:workbook-ux:analyser')).toBe('tsx test/workbook-ux/synthetic-contract.mts');
+  });
+
+  it('keeps the CLI default no-AI while preserving explicit --ai opt-in', () => {
+    expect(parseWorkbookUxCliOptions([])).toMatchObject({ ai: false, headless: true, analyze: true });
+    expect(parseWorkbookUxCliOptions(['--no-ai'])).toMatchObject({ ai: false, headless: true, analyze: true });
+    expect(parseWorkbookUxCliOptions(['--ai'])).toMatchObject({ ai: true, headless: true, analyze: true });
+  });
+});
 
 describe('workbook UX test report', () => {
   it('writes pass reports with authoritative deterministic verdict', async () => {

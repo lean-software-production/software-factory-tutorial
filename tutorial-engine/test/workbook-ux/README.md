@@ -23,11 +23,13 @@ npm run --workspace=tutorial-engine test:workbook-ux:analyser
 npm run --workspace=tutorial-engine test:workbook-ux:record
 npm run --workspace=tutorial-engine test:workbook-ux:deterministic
 npm run --workspace=tutorial-engine test:workbook-ux
+npm run --workspace=tutorial-engine test:workbook-ux:ai
 ```
 
 - `test:workbook-ux:record` records only and preserves the recording-only command contract.
-- `test:workbook-ux:deterministic` runs the linear UX test without AI and exits nonzero only if recording semantics or deterministic analyzer findings fail.
-- `test:workbook-ux` runs the full UX test with `--ai`. AI findings or AI unavailability never gate exit.
+- `test:workbook-ux` is the ordinary authoritative UX test: it runs without AI and exits nonzero only if recording semantics or deterministic analyzer findings fail.
+- `test:workbook-ux:deterministic` remains the explicit deterministic alias and uses the same no-AI recorder/analyzer path.
+- `test:workbook-ux:ai` is the deliberate manual/weekly opt-in for the advisory Pi review (`--ai`). AI findings or AI unavailability never gate exit.
 
 The default commands are headless. A full deterministic run may take several minutes while Chromium records the journey and the analyzer decodes the WebM. Progress is intentionally coarse: stage lines plus one line per semantic checkpoint, for example:
 
@@ -74,11 +76,11 @@ The deterministic recorder/analyzer is authoritative. Its semantic failures and 
 
 ## Periodic invocation example
 
-Run the non-AI workbook UX test before cutting a tutorial-engine change, and optionally run the full advisory version during a weekly visual-health sweep:
+Run the ordinary non-AI workbook UX test before cutting a tutorial-engine change, and optionally run the advisory AI version during a weekly visual-health sweep:
 
 ```bash
-npm run --workspace=tutorial-engine test:workbook-ux:deterministic
-npm run --workspace=tutorial-engine test:workbook-ux || true  # inspect report.md if AI is quota-limited/unavailable
+npm run --workspace=tutorial-engine test:workbook-ux
+npm run --workspace=tutorial-engine test:workbook-ux:ai || true  # inspect report.md if AI is quota-limited/unavailable
 ```
 
 No scheduled CI job is installed yet.
