@@ -838,17 +838,23 @@ export function App() {
   useEffect(() => {
     if (!state) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const selectViewed = () => {
-      const id = canonicalBlockInView(state);
+    const commitViewed = (id: string | undefined) => {
       const lesson = state.orderedBlocks?.find((block) => block.id === id)?.lessonId;
       if (lesson && !lesson.startsWith("workbook--") && !lesson.startsWith("part--")) setViewed(lesson.replace(/^lesson--/, ""));
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => { if (id && typeof history !== "undefined" && Date.now() > suppressPassiveHistoryUntil) history.replaceState(null, "", `#${id}`); }, 120);
     };
-    selectViewed(); addEventListener("scroll", selectViewed, { passive: true });
+    const commitPassiveScroll = () => {
+      const id = canonicalBlockInView(state);
+      commitViewed(id);
+      if (id && typeof history !== "undefined" && Date.now() > suppressPassiveHistoryUntil) history.replaceState(null, "", `#${id}`);
+    };
+    const schedulePassiveScrollCommit = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(commitPassiveScroll, 120);
+    };
+    commitViewed(canonicalBlockInView(state)); addEventListener("scroll", schedulePassiveScrollCommit, { passive: true });
     const pop = () => { const id = typeof location === "undefined" ? "" : decodeURIComponent(location.hash.replace(/^#/, "")); if (id) navigateToAnchor(id, "none"); };
     addEventListener("popstate", pop);
-    return () => { removeEventListener("scroll", selectViewed); removeEventListener("popstate", pop); if (timer) clearTimeout(timer); };
+    return () => { removeEventListener("scroll", schedulePassiveScrollCommit); removeEventListener("popstate", pop); if (timer) clearTimeout(timer); };
   }, [state]);
   if (!state) return <p className="loading">Loading workbook…</p>;
   const fatal = state.fatal;
