@@ -130,7 +130,6 @@ async function exists(path: string): Promise<boolean> { try { await stat(path); 
 
 async function collectInputMetadata(runRoot: string, bundleStatus: ReturnType<typeof ensureFreshWebBundle>, browserVersion?: string): Promise<Record<string, unknown>> {
   const packageJson = JSON.parse(await readFile(resolve(ENGINE_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
-  const packageLock = JSON.parse(await readFile(resolve(ENGINE_ROOT, "../package-lock.json"), "utf8")) as Record<string, unknown>;
   const status = shell("git status --short", resolve(ENGINE_ROOT, "..")).split("\n").filter(Boolean);
   const metadata = {
     generatedAt: isoNow(),
@@ -141,7 +140,7 @@ async function collectInputMetadata(runRoot: string, bundleStatus: ReturnType<ty
       status,
     },
     engine: { root: ENGINE_ROOT, fixtureRoot: FIXTURE_ROOT, runRoot, webBundle: bundleStatus },
-    package: { name: packageJson.name, version: packageJson.version, playwright: (packageJson.devDependencies as Record<string, string> | undefined)?.playwright, lockfileVersion: packageLock.lockfileVersion },
+    package: { name: packageJson.name, version: packageJson.version, playwright: (packageJson.devDependencies as Record<string, string> | undefined)?.playwright },
     browser: { name: "playwright chromium", version: browserVersion },
     viewport: { ...VIEWPORT, deviceScaleFactor: 1, reducedMotion: "no-preference" },
   };

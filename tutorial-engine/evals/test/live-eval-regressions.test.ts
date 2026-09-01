@@ -79,14 +79,13 @@ describe("live v2 evaluator regressions", () => {
     const readme = await readFile("evals/README.md", "utf8");
 
     expect(readme).toContain("# Synthetic tutorial-engine mechanics evals");
-    expect(readme).toContain("not the root-owned authored-workbook eval suite");
-    expect(readme).toContain("npm run --workspace=tutorial-engine eval -- --scenario v2-exact-command-success");
-    expect(readme).toContain("npm run --workspace=tutorial-engine eval -- --all --yes");
-    expect(readme).toContain("npm run --workspace=tutorial-engine eval -- --release");
-    expect(readme).toContain("npm run --workspace=tutorial-engine eval:release");
-    expect(readme).toContain("npm run eval:engine -- ...");
+    expect(readme).toContain("not any consuming workbook's authored curriculum");
+    expect(readme).toContain("npm run eval -- --scenario v2-exact-command-success");
+    expect(readme).toContain("npm run eval -- --all --yes");
+    expect(readme).toContain("npm run eval -- --release");
     expect(readme).toContain("npm run eval:release");
-    expect(readme).toContain("temporary compatibility alias");
+    expect(readme).not.toContain("eval:engine");
+    expect(readme).not.toContain("temporary compatibility alias");
     expect(readme).toContain("EVAL_JUDGE_MODEL");
     expect(readme).toContain("TUTOR_MODEL");
     expect(readme).toContain("OPENCODE_API_KEY");
@@ -94,9 +93,9 @@ describe("live v2 evaluator regressions", () => {
     expect(readme).toMatch(/paid|cost|tokens/i);
     expect(readme).toContain("Main Tutor");
     expect(readme).toContain("Judge");
-    expect(readme).toContain("tutorial-engine/evals/reports/<run-id>/");
-    expect(readme).toContain("root `evals/workbook/reports/`");
-    expect(readme).toContain("Root `npm run eval:workbook -- ...` is the wired authored-curriculum live runner");
+    expect(readme).toContain("evals/reports/<run-id>/");
+    expect(readme).not.toContain("root `evals/workbook/reports/`");
+    expect(readme).not.toContain("eval:workbook");
     expect(readme).not.toContain("reserved and unwired");
     expect(readme).not.toContain("future authored-workbook");
     expect(readme).toContain("bounded release profile");
@@ -104,6 +103,7 @@ describe("live v2 evaluator regressions", () => {
     expect(readme).toContain("evals/reports/<run-id>/trace.json");
     expect(readme).toContain("evals/reports/<run-id>/judge-input.txt");
     expect(readme).toContain("evals/reports/latest.json");
+    expect(readme).toContain("The runner copies `evals/workbook/` into a disposable temporary content root");
     expect(readme).toContain("Raw `workbook/events.jsonl` rows remain internal and gate-only");
     expect(readme).toContain("allowlisted public judge trace");
     expect(readme).toContain("projected structural progression events");

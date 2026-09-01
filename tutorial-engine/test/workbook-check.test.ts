@@ -1,13 +1,6 @@
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { runWorkbookCheck } from "../src/workbook/check.js";
 import type { LoadedWorkbook } from "../src/workbook/load.js";
-
-// This test file lives at tutorial-engine/test/workbook-check.test.ts; the
-// default workbook target is the tutorial/ workspace two levels up from it.
-const REPOSITORY_ROOT = resolve(fileURLToPath(import.meta.url), "../../..");
-const TUTORIAL_ROOT = resolve(REPOSITORY_ROOT, "tutorial");
 
 function chapter(partNumber: number | undefined): LoadedWorkbook["chapters"][number] {
   return {
@@ -25,7 +18,7 @@ describe("workbook check", () => {
       expect(target).toBe("/tmp/workbook");
       return {
         workspace: "/tmp/workbook",
-        identity: { title: "Refactoring Workbook" },
+        identity: { title: "Synthetic Workbook" },
         introduction: "",
         chapters: [chapter(1), chapter(1), chapter(2)],
       };
@@ -39,7 +32,7 @@ describe("workbook check", () => {
     expect(writeError).not.toHaveBeenCalled();
     expect(writeLine).toHaveBeenCalledOnce();
     const [message] = writeLine.mock.calls[0]!;
-    expect(message).toContain("Refactoring Workbook");
+    expect(message).toContain("Synthetic Workbook");
     expect(message).toContain("3");
     expect(message).toContain("2");
   });
@@ -53,30 +46,22 @@ describe("workbook check", () => {
 
     const exitCode = await runWorkbookCheck(["/tmp/broken-workbook"], { load, writeLine, writeError });
 
-    expect(exitCode).not.toBe(0);
+    expect(exitCode).toBe(1);
     expect(writeLine).not.toHaveBeenCalled();
     expect(writeError).toHaveBeenCalledWith(expect.stringContaining("workbook.md must have exactly one H1 title heading"));
   });
 
-  it("defaults the target to the tutorial workspace when none is given, regardless of cwd", async () => {
-    const load = vi.fn(async (target: string): Promise<LoadedWorkbook> => {
-      expect(target).toBe(TUTORIAL_ROOT);
-      return { workspace: target, identity: { title: "Untitled" }, introduction: "", chapters: [] };
-    });
+  it("requires exactly one workbook target argument", async () => {
+    const load = vi.fn();
+    const writeLine = vi.fn();
+    const writeError = vi.fn();
 
-    const exitCode = await runWorkbookCheck([], { load, writeLine: vi.fn(), writeError: vi.fn() });
+    await expect(runWorkbookCheck([], { load, writeLine, writeError })).resolves.toBe(2);
+    await expect(runWorkbookCheck(["/tmp/workbook", "/tmp/other"], { load, writeLine, writeError })).resolves.toBe(2);
 
-    expect(exitCode).toBe(0);
-  });
-
-  it("still honors an explicit target argument instead of the tutorial workspace default", async () => {
-    const load = vi.fn(async (target: string): Promise<LoadedWorkbook> => {
-      expect(target).toBe("/tmp/some-other-workbook");
-      return { workspace: target, identity: { title: "Untitled" }, introduction: "", chapters: [] };
-    });
-
-    const exitCode = await runWorkbookCheck(["/tmp/some-other-workbook"], { load, writeLine: vi.fn(), writeError: vi.fn() });
-
-    expect(exitCode).toBe(0);
+    expect(load).not.toHaveBeenCalled();
+    expect(writeLine).not.toHaveBeenCalled();
+    expect(writeError).toHaveBeenCalledTimes(2);
+    expect(writeError).toHaveBeenCalledWith("Usage: npm run check:workbook -- /path/to/workbook");
   });
 });

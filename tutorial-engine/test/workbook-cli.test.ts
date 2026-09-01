@@ -183,10 +183,10 @@ describe("workbook CLI", () => {
       watchContent: false,
     }));
     expect(lines).toEqual([
-      "Created tutorial session: session-20260824-120000-a1b2c3d4",
+      "Created workbook session: session-20260824-120000-a1b2c3d4",
       "Session state: /content/.tutorial/session-20260824-120000-a1b2c3d4",
       "Learner workspaces: refactor-line=/content/.tutorial/session-20260824-120000-a1b2c3d4/workspaces/refactor-line",
-      "Reopen with: npm run tutorial:workbook -- --session session-20260824-120000-a1b2c3d4",
+      "Reopen with the same workbook target and --session session-20260824-120000-a1b2c3d4",
     ]);
     expect(startServer.mock.calls[0]![0]).not.toHaveProperty("terminalPtyFactory");
     expect(startServer.mock.calls[0]![0]).not.toHaveProperty("terminalObserver");
@@ -295,7 +295,7 @@ describe("workbook CLI", () => {
       target: "/content",
       session: sessionFixture("lesson-007"),
     }));
-    expect(lines[0]).toBe("Reopened tutorial session: lesson-007");
+    expect(lines[0]).toBe("Reopened workbook session: lesson-007");
     expect(lines).toContain("Learner workspaces: refactor-line=/content/.tutorial/lesson-007/workspaces/refactor-line");
   });
 
@@ -318,7 +318,7 @@ describe("workbook CLI", () => {
     const options = startServer.mock.calls[0]![0];
     expect(options.session).toEqual(existing);
     await expect(readFile(resolve(existing.workspaceRoots["refactor-line"]!, "factory/resume-note.md"), "utf8")).resolves.toBe("keep this session-local file\n");
-    expect(lines[0]).toBe("Reopened tutorial session: resume-me");
+    expect(lines[0]).toBe("Reopened workbook session: resume-me");
     expect(lines).toContain(`Learner workspaces: refactor-line=${existing.workspaceRoots["refactor-line"]!}`);
   });
 
@@ -349,7 +349,7 @@ describe("workbook CLI", () => {
     await expect(readFile(resolve(session.workspaceRoots["refactor-line"]!, "calculator/src/index.ts"), "utf8")).resolves.toBe("export const value = 1;\n");
     await expect(stat(resolve(session.workspaceRoots["refactor-line"]!, ".git"))).resolves.toBeDefined();
     await expect(readFile(resolve(contentRoot, ".tutorial/.tmp/workbook/events.jsonl"), "utf8")).resolves.toBe("legacy state stays put\n");
-    expect(lines[0]).toBe(`Created tutorial session: ${session.sessionId}`);
+    expect(lines[0]).toBe(`Created workbook session: ${session.sessionId}`);
     expect(lines).toContain(`Learner workspaces: refactor-line=${session.workspaceRoots["refactor-line"]!}`);
   });
 });

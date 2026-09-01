@@ -114,7 +114,7 @@ async function validateSessionWorkspaceRoots(contentRoot: string, session: Workb
   if (!inside(stateRoot, sessionRoot)) throw new Error("Workbook session root must stay inside the tutorial state directory.");
   const sessionId = "sessionId" in session && typeof session.sessionId === "string" ? session.sessionId : basename(sessionRoot);
   validateSessionId(sessionId);
-  if (sessionRoot !== resolve(stateRoot, sessionId)) throw new Error("Workbook session root must be the exact real tutorial session directory.");
+  if (sessionRoot !== resolve(stateRoot, sessionId)) throw new Error("Workbook session root must be the exact real workbook session directory.");
 
   const expectedWorkspacesRoot = resolve(sessionRoot, SESSION_WORKSPACES_DIRECTORY);
   const workspacesRoot = await requireRealDirectory(session.workspacesRoot ?? expectedWorkspacesRoot, "Workbook session workspaces root");

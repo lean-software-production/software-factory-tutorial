@@ -3,6 +3,7 @@ set -euo pipefail
 
 image="lean-software-production/workbook-terminal:latest"
 expected_environment=(
+  "HOME=/home/learner"
   "GIT_CONFIG_NOSYSTEM=1"
   "GIT_CONFIG_GLOBAL=/dev/null"
   "GIT_TERMINAL_PROMPT=0"
@@ -25,23 +26,23 @@ cleanup() {
 trap cleanup EXIT
 
 container="$(docker create "$image")"
-docker cp "${container}:/usr/bin/git" "$temporary_directory/git" >/dev/null
-if [[ ! -f "$temporary_directory/git" || ! -x "$temporary_directory/git" ]]; then
-  printf 'Expected /usr/bin/git in %s to be an executable file\n' "$image" >&2
-  exit 1
-fi
-
-if [[ "$(docker run --rm --network none "$image" sh -lc 'readlink /workspace/node_modules')" != "/opt/workbook/node_modules" ]]; then
-  printf 'Expected /workspace/node_modules to point at baked /opt/workbook/node_modules\n' >&2
-  exit 1
-fi
+for executable in /usr/local/bin/node /usr/bin/git /usr/bin/jq /usr/local/bin/pi; do
+  docker cp "${container}:${executable}" "$temporary_directory/$(basename "$executable")" >/dev/null
+  if [[ ! -f "$temporary_directory/$(basename "$executable")" || ! -x "$temporary_directory/$(basename "$executable")" ]]; then
+    printf 'Expected %s in %s to be an executable file\n' "$executable" "$image" >&2
+    exit 1
+  fi
+done
 
 docker run --rm --network none "$image" sh -lc '
-  test -x /opt/workbook/node_modules/.bin/vitest
-  test -x /opt/workbook/node_modules/.bin/eslint
-  test -x /opt/workbook/node_modules/.bin/knip
-  find /opt/workbook/node_modules/@rollup -maxdepth 2 -path "*/rollup-linux-*/package.json" -type f | grep -q .
-  find /opt/workbook/node_modules/@oxc-parser -maxdepth 2 -path "*/binding-linux-*/package.json" -type f | grep -q .
+  test "$(pwd)" = /workspace
+  test -d /workspace
+  test -d /home/learner/.pi/agent
+  test ! -e /workspace/node_modules
+  node --version >/dev/null
+  git --version >/dev/null
+  jq --version >/dev/null
+  pi --version >/dev/null
 '
 
-printf 'Verified Git, isolated Git environment, lockfile-installed Linux calculator deps, and /workspace/node_modules symlink in %s.\n' "$image"
+printf 'Verified Node, Git, jq, pinned Pi, learner home, /workspace, and isolated Git environment in generic %s.\n' "$image"

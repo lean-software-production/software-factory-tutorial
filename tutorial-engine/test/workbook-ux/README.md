@@ -16,14 +16,14 @@ Input checked-out tutorial-engine version → copied fixture workbook → provid
 
 ## Commands
 
-From the repository root:
+From `tutorial-engine/`:
 
 ```bash
-npm run --workspace=tutorial-engine test:workbook-ux:analyser
-npm run --workspace=tutorial-engine test:workbook-ux:record
-npm run --workspace=tutorial-engine test:workbook-ux:deterministic
-npm run --workspace=tutorial-engine test:workbook-ux
-npm run --workspace=tutorial-engine test:workbook-ux:ai
+npm run test:workbook-ux:analyser
+npm run test:workbook-ux:record
+npm run test:workbook-ux:deterministic
+npm run test:workbook-ux
+npm run test:workbook-ux:ai
 ```
 
 - `test:workbook-ux:record` records only and preserves the recording-only command contract.
@@ -79,12 +79,12 @@ The deterministic recorder/analyzer is authoritative. Its semantic failures and 
 Run the ordinary non-AI workbook UX test before cutting a tutorial-engine change, and optionally run the advisory AI version during a weekly visual-health sweep:
 
 ```bash
-npm run --workspace=tutorial-engine test:workbook-ux
-npm run --workspace=tutorial-engine test:workbook-ux:ai  # AI unavailability is reported but does not fail the command
+npm run test:workbook-ux
+npm run test:workbook-ux:ai  # AI unavailability is reported but does not fail the command
 ```
 
 No scheduled CI job is installed yet.
 
 ## Synthetic analyzer contract
 
-`npm run --workspace=tutorial-engine test:workbook-ux:analyser` records a synthetic workbook-like page and verifies stable analyzer finding code/step pairs for deliberate failures. It uses pinned Playwright Chromium, the shared marker protocol, and no ffmpeg/ffprobe, sidecar motion telemetry, pixel-golden baseline, internet access, or AI calls. Leading/trailing invalid marker samples are counted but tolerated outside the valid marker envelope; invalid marker gaps inside the envelope fail closed.
+`npm run test:workbook-ux:analyser` records a synthetic workbook-like page and verifies stable analyzer finding code/step pairs for deliberate failures. It uses pinned Playwright Chromium, the shared marker protocol, and no ffmpeg/ffprobe, sidecar motion telemetry, pixel-golden baseline, internet access, or AI calls. Leading/trailing invalid marker samples are counted but tolerated outside the valid marker envelope; invalid marker gaps inside the envelope fail closed.

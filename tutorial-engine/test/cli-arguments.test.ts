@@ -46,11 +46,11 @@ describe("parseArguments", () => {
 
   it("asks for a directory when none is named", () => {
     expect(() => parseArguments([])).toThrow(ArgumentError);
-    expect(() => parseArguments(["--no-open"])).toThrow(/Name the tutorial directory/);
+    expect(() => parseArguments(["--no-open"])).toThrow(/Name the workbook directory/);
   });
 
   it("refuses to guess between two directories", () => {
-    expect(() => parseArguments(["/one", "/two"])).toThrow(/one tutorial directory at a time/);
+    expect(() => parseArguments(["/one", "/two"])).toThrow(/one workbook directory at a time/);
   });
 
   it("rejects an unknown option rather than ignoring a typo", () => {

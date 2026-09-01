@@ -1,10 +1,10 @@
 /**
- * Command-line parsing for the tutorial server, kept separate from startup so the
+ * Command-line parsing for the workbook server, kept separate from startup so the
  * rules stay testable. Every flag value is consumed positionally, so a value can
- * never be mistaken for the tutorial directory however the flags are ordered.
+ * never be mistaken for the workbook directory however the flags are ordered.
  */
 
-export const USAGE = "Usage: tutorial-engine <tutorial-directory> [--session <id> | --lesson <id>] [--port 4310] [--host 0.0.0.0] [--watch] [--no-open]";
+export const USAGE = "Usage: tutorial-engine <workbook-directory> [--session <id> | --lesson <id>] [--port 4310] [--host 0.0.0.0] [--watch] [--no-open]";
 
 export interface TutorialArguments {
   target: string;
@@ -91,8 +91,8 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
   }
 
   const [target, ...extra] = positional;
-  if (!target) throw new ArgumentError("Name the tutorial directory to serve.");
-  if (extra.length > 0) throw new ArgumentError(`Serve one tutorial directory at a time; got ${positional.length} (${positional.join(", ")}).`);
+  if (!target) throw new ArgumentError("Name the workbook directory to serve.");
+  if (extra.length > 0) throw new ArgumentError(`Serve one workbook directory at a time; got ${positional.length} (${positional.join(", ")}).`);
   if (session && lesson) throw new ArgumentError("--lesson creates a fresh session and cannot be used with --session.");
   return { kind: "run", options: { target, port, host, noOpen, watch, session, lesson } };
 }
