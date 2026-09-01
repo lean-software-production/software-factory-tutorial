@@ -170,6 +170,8 @@ export async function startWorkbookServer(options: WorkbookServerOptions): Promi
     attempts,
     mainTutor,
     activeTerminalContext: () => terminal?.activeTranscriptContext(),
+    acquireTerminalCompletionFence: (block) => terminal?.acquireCompletionFence(block) ?? true,
+    releaseTerminalCompletionFence: (block) => terminal?.releaseCompletionFence(block),
     onTerminalContinued: (block) => terminal?.resetAfterTerminalContinuation(block),
     log
   });

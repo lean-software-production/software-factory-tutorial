@@ -222,7 +222,7 @@ export class V2WorkbookDriver {
       await delay(25);
       const state = await this.readState(`${label}:reviewed:${++attempt}`);
       const terminal = state.progress?.blocks?.find((candidate: any) => candidate?.id === blockId)?.terminal;
-      if (terminal?.phase === "complete") {
+      if (terminal?.phase === "accepted" || terminal?.phase === "complete") {
         if (expectedFeedback !== undefined) throw new Error(`Expected terminal feedback for ${blockId}, but the attempt was accepted.`);
         return state;
       }

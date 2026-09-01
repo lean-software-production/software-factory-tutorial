@@ -36,6 +36,12 @@ export type TerminalLifecycleInput =
 
 export type TerminalLifecycleEvent = TerminalLifecycleInput & TimelineMetadata;
 
+/** Durable browser-safe editor lifecycle snapshots. Text is written only for accepted revisions. */
+export type EditorLifecycleInput =
+  | { type: "editor-content-snapshotted"; attemptId: string; lessonId: string; blockId: string; text: string };
+
+export type EditorLifecycleEvent = EditorLifecycleInput & TimelineMetadata;
+
 export type WorkbookWorkflowInput =
   | { type: "session_started" }
   | { type: "lesson_jump_started"; lessonId: string }
@@ -87,10 +93,11 @@ export type WorkbookCompletionSummary = TimelineMetadata & {
   text: string;
 };
 
-export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TerminalLifecycleEvent | TimelineMessage | BlockSummary | LessonSummary | WorkbookCompletionSummary;
+export type WorkbookTimelineRecord = WorkbookWorkflowEvent | TerminalLifecycleEvent | EditorLifecycleEvent | TimelineMessage | BlockSummary | LessonSummary | WorkbookCompletionSummary;
 export type TimelineAppendInput =
   | WorkbookWorkflowInput
   | TerminalLifecycleInput
+  | EditorLifecycleInput
   | Omit<TimelineMessage, keyof TimelineMetadata>
   | Omit<BlockSummary, keyof TimelineMetadata>
   | Omit<LessonSummary, keyof TimelineMetadata>
@@ -110,6 +117,7 @@ const CURRENT_RECORD_TYPES = new Set<string>([
   "terminal-command-finished",
   "terminal-transcript-snapshotted",
   "terminal-feedback-recorded",
+  "editor-content-snapshotted",
   "message",
   "block_summarized",
   "lesson_summarized",
@@ -162,6 +170,19 @@ function assertPositiveIntegerField(value: Record<string, unknown>, key: string,
   const field = value[key];
   if (!Number.isInteger(field) || (field as number) <= 0) throw new Error(`Invalid workbook timeline record at line ${line}: ${key} is required.`);
   return field as number;
+}
+
+function normalizeEditorLifecycleRecord(value: Record<string, unknown>, line: number, metadata: TimelineMetadata): EditorLifecycleEvent {
+  assertExactKeys(value, line, ["type", "id", "sequence", "at", "attemptId", "lessonId", "blockId", "text"]);
+  if (typeof value.text !== "string") throw new Error(`Invalid workbook timeline record at line ${line}: text is required.`);
+  return {
+    ...metadata,
+    type: "editor-content-snapshotted",
+    attemptId: assertStringField(value, "attemptId", line),
+    lessonId: assertStringField(value, "lessonId", line),
+    blockId: assertStringField(value, "blockId", line),
+    text: value.text,
+  };
 }
 
 function normalizeTerminalLifecycleRecord(value: Record<string, unknown>, line: number, metadata: TimelineMetadata): TerminalLifecycleEvent {
@@ -228,6 +249,7 @@ export function normalizeWorkbookTimelineRecord(value: unknown, line: number): W
   const at = assertStringField(value, "at", line);
   const metadata = { id, sequence, at };
   if (value.type.startsWith("terminal-")) return normalizeTerminalLifecycleRecord(value, line, metadata);
+  if (value.type === "editor-content-snapshotted") return normalizeEditorLifecycleRecord(value, line, metadata);
   if (value.type === "message") {
     if (value.source !== "authored" && value.source !== "learner" && value.source !== "main_tutor") throw new Error(`Invalid workbook timeline record at line ${line}: message source is invalid.`);
   }

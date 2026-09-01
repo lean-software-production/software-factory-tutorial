@@ -69,6 +69,50 @@ describe("TimelineThread", () => {
     expect(markup.match(/Ready terminal canvas/g)).toHaveLength(1);
   });
 
+  it("places one matching practice history surface under its authored record while keeping the live surface under the current record", () => {
+    const markup = renderToStaticMarkup(createElement(TimelineThread, {
+      activeLessonId: "lesson",
+      activeBlockId: "editor-b",
+      onSend: noopSend,
+      practiceSurfaceBlockId: "editor-b",
+      practiceSurface: createElement("output", { "aria-label": "Live editor B" }, "live editor B"),
+      renderPracticeHistory: (record) => record.blockId === "terminal-a"
+        ? createElement("output", { "aria-label": "History terminal A" }, "history terminal A")
+        : null,
+      records: [
+        { type: "message", id: "intro", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson", blockId: "intro", role: "assistant", source: "authored", presentation: "course", text: "## Intro" },
+        { type: "message", id: "terminal-a", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "terminal-a", role: "assistant", source: "authored", presentation: "course", text: "## Terminal A" },
+        { type: "message", id: "editor-b", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "lesson", blockId: "editor-b", role: "assistant", source: "authored", presentation: "course", text: "## Editor B" },
+      ]
+    }));
+
+    expect(markup.indexOf("Terminal A")).toBeLessThan(markup.indexOf("history terminal A"));
+    expect(markup.indexOf("history terminal A")).toBeLessThan(markup.indexOf("Editor B"));
+    expect(markup.indexOf("Editor B")).toBeLessThan(markup.indexOf("live editor B"));
+    expect(markup.match(/History terminal A/g)).toHaveLength(1);
+    expect(markup.match(/Live editor B/g)).toHaveLength(1);
+    expect(markup).not.toContain("history intro");
+  });
+
+  it("uses the generic practice history seam once even if the renderer returns nodes for duplicate authored records", () => {
+    const records = [
+      { type: "message", id: "first", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson", blockId: "practice", role: "assistant", source: "authored", presentation: "course", text: "## Practice" },
+      { type: "message", id: "duplicate", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "practice", role: "assistant", source: "authored", presentation: "course", text: "## Practice again" },
+    ] as const;
+
+    const markup = renderToStaticMarkup(createElement(TimelineThread, {
+      activeLessonId: "lesson",
+      activeBlockId: "next",
+      onSend: noopSend,
+      records,
+      renderPracticeHistory: (record) => record.blockId === "practice"
+        ? createElement("output", { "aria-label": `History for ${record.id}` }, "historical surface")
+        : null,
+    }));
+
+    expect(markup.match(/historical surface/g)).toHaveLength(1);
+  });
+
   it("only gives authored course records the Mermaid diagram path", () => {
     const diagram = "```mermaid\ngraph TD\n  A --> B\n```";
     const markup = renderToStaticMarkup(createElement(TimelineThread, {

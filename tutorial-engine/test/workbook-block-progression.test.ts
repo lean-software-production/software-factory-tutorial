@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import { startWorkbookServer } from "../src/workbook/server.js";
 import { tutorialStatePath } from "../src/workbook/tutorial-state.js";
 import { DefaultMainWorkbookTutor, type WorkbookTutorSessionFactoryRequest } from "../src/workbook/tutor.js";
 import { WorkbookTimeline, type WorkbookTimelineRecord } from "../src/workbook/timeline.js";
+import { AttemptStore } from "../src/workbook/attempts.js";
 import { initializeLessonJump, resolveLessonJump } from "../src/workbook/lesson-jump.js";
 import { buildWorkbookBlockStream } from "../src/workbook/workbook-blocks.js";
 
@@ -20,6 +21,23 @@ async function fixture() {
   await writeFile(resolve(dir, "parts/validation-loop.md"), ["---", "---", "# Validation loop", "", "Part preamble."].join("\n"));
   await writeFile(resolve(dir, "lessons/001-first/lesson.md"), ["---", "durationMinutes: 5", "workspace: refactor-line", "blocks:", "  - orientation", "  - edit-answer", "  - finish", "---", "# Run an agent headlessly", "", "Lesson preamble.", "", "Full lesson introduction before declared blocks."].join("\n"));
   await writeFile(resolve(dir, "lessons/001-first/blocks/orientation.md"), ["---", "type: narrative", "---", "## Orientation", "", "Read this."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/blocks/edit-answer.md"), ["---", "type: editor-practice", "outcome: Write a clear answer to the question.", "path: factory/answer.txt", "tutor: Accept any clear answer.", "---", "## Edit answer", "", "Write the answer."].join("\n"));
+  await mkdir(resolve(dir, "workspaces/refactor-line/factory"), { recursive: true });
+  await writeFile(resolve(dir, "workspaces/refactor-line/factory/answer.txt"), "");
+  await writeFile(resolve(dir, "lessons/001-first/blocks/finish.md"), ["---", "type: narrative", "---", "## Finish", "", "Done."].join("\n"));
+  await mkdir(resolve(dir, "web")); await writeFile(resolve(dir, "web/index.html"), "<!doctype html><div id=\"root\"></div>");
+  return dir;
+}
+
+async function terminalLifecycleFixture() {
+  const dir = await mkdtemp(resolve(tmpdir(), "workbook-terminal-lifecycle-")); dirs.push(dir);
+  await mkdir(resolve(dir, "parts"), { recursive: true });
+  await mkdir(resolve(dir, "lessons/001-first/blocks"), { recursive: true });
+  await writeFile(resolve(dir, "workbook.md"), ["---", "parts:", "  - id: validation-loop", "    lessons:", "      - 001-first", "---", "# Demo workbook", "", "Welcome."].join("\n"));
+  await writeFile(resolve(dir, "parts/validation-loop.md"), ["---", "---", "# Validation loop", "", "Part preamble."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/lesson.md"), ["---", "durationMinutes: 5", "workspace: refactor-line", "blocks:", "  - orientation", "  - run-command", "  - edit-answer", "  - finish", "---", "# Run an agent headlessly", "", "Lesson preamble."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/blocks/orientation.md"), ["---", "type: narrative", "---", "## Orientation", "", "Read this."].join("\n"));
+  await writeFile(resolve(dir, "lessons/001-first/blocks/run-command.md"), ["---", "type: terminal-practice", "outcome: Run the acceptance command.", "tutor: Accept a passing command.", "---", "## Run command", "", "Run this:", "", "```sh command", "npm test", "```"].join("\n"));
   await writeFile(resolve(dir, "lessons/001-first/blocks/edit-answer.md"), ["---", "type: editor-practice", "outcome: Write a clear answer to the question.", "path: factory/answer.txt", "tutor: Accept any clear answer.", "---", "## Edit answer", "", "Write the answer."].join("\n"));
   await mkdir(resolve(dir, "workspaces/refactor-line/factory"), { recursive: true });
   await writeFile(resolve(dir, "workspaces/refactor-line/factory/answer.txt"), "");
@@ -127,6 +145,266 @@ describe("workbook block progression", () => {
         expect(block(restored, "lesson--001-first--finish")).toMatchObject({ ready: true, active: false, completed: false });
       } finally { await restarted.close(); }
     } finally { await server.close(); }
+  });
+
+  it("keeps accepted editor practice active, editable in public state, and ineligible after a newer revision until reaccepted", async () => {
+    const dir = await fixture();
+    let accepted = true;
+    const tutor = fakeTutor(undefined);
+    tutor.review = async () => accepted ? { outcome: "accepted", message: "Accepted editor answer." } : { outcome: "feedback", message: "Revise the newer draft." };
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor });
+    try {
+      await advanceToEditor(server.url);
+      const first = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", revision: 1, text: "accepted editor text" }) });
+      expect(first.status).toBe(202);
+      const activeAccepted = await waitForState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted");
+      expect(block(activeAccepted, "lesson--001-first--edit-answer")).toMatchObject({ active: true, completed: false, draftText: "accepted editor text", editorStatus: "accepted" });
+      expect(activeAccepted.progress.canComplete).toMatchObject({ blockId: "lesson--001-first--edit-answer", eligible: true });
+      expect(activeAccepted.progress.readyBlocks).toEqual(["lesson--001-first--finish"]);
+
+      accepted = false;
+      const second = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", revision: 2, text: "newer unaccepted editor text" }) });
+      expect(second.status).toBe(202);
+      const reviewing = await second.json() as any;
+      expect(block(reviewing, "lesson--001-first--edit-answer")).toMatchObject({ active: true, completed: false, draftText: "newer unaccepted editor text", editorStatus: "reviewing" });
+      expect(reviewing.progress.canComplete).toMatchObject({ blockId: "lesson--001-first--edit-answer", eligible: false, reason: "awaiting-acceptance" });
+
+      accepted = true;
+      const third = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", revision: 3, text: "reaccepted editor text" }) });
+      expect(third.status).toBe(202);
+      const reaccepted = await waitForState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.revision === 3 && block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted" && next.progress.canComplete?.eligible === true);
+      expect(reaccepted.progress.canComplete).toMatchObject({ blockId: "lesson--001-first--edit-answer", eligible: true });
+    } finally { await server.close(); }
+  });
+
+  it("emits editor content snapshots and restores completed history from the latest accepted matching snapshot", async () => {
+    const dir = await fixture();
+    const blockId = "lesson--001-first--edit-answer";
+    let firstAttemptId = "";
+    let secondAttemptId = "";
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor({ outcome: "accepted", message: "Accepted editor answer." }) });
+    try {
+      await advanceToEditor(server.url);
+
+      const first = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision: 1, text: "v1 accepted editor text" }) });
+      expect(first.status).toBe(202);
+      const firstRecords = await waitForRecords(dir, (records) => {
+        const acceptance = acceptedAttempts(records, blockId).find((record) => record.version === 1);
+        return Boolean(acceptance && editorSnapshots(records, blockId).some((snapshot) => snapshot.attemptId === acceptance.attemptId && snapshot.text === "v1 accepted editor text"));
+      }, "the first editor acceptance snapshot");
+      const firstAcceptance = acceptedAttempts(firstRecords, blockId).find((record) => record.version === 1)!;
+      firstAttemptId = firstAcceptance.attemptId;
+      expect(editorSnapshots(firstRecords, blockId).find((record) => record.attemptId === firstAttemptId)).toMatchObject({
+        type: "editor-content-snapshotted",
+        attemptId: firstAttemptId,
+        lessonId: "001-first",
+        blockId,
+        text: "v1 accepted editor text",
+      });
+
+      const second = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision: 2, text: "v2 accepted editor text" }) });
+      expect(second.status).toBe(202);
+      const secondRecords = await waitForRecords(dir, (records) => {
+        const acceptance = acceptedAttempts(records, blockId).find((record) => record.version === 2);
+        return Boolean(acceptance && editorSnapshots(records, blockId).some((snapshot) => snapshot.attemptId === acceptance.attemptId && snapshot.text === "v2 accepted editor text"));
+      }, "the second editor acceptance snapshot");
+      const secondAcceptance = acceptedAttempts(secondRecords, blockId).find((record) => record.version === 2)!;
+      secondAttemptId = secondAcceptance.attemptId;
+      expect(secondAttemptId).not.toBe(firstAttemptId);
+      expect(editorSnapshots(secondRecords, blockId).find((record) => record.attemptId === secondAttemptId)).toMatchObject({
+        type: "editor-content-snapshotted",
+        attemptId: secondAttemptId,
+        lessonId: "001-first",
+        blockId,
+        text: "v2 accepted editor text",
+      });
+    } finally { await server.close(); }
+
+    await appendRawTimelineRecords(dir, [
+      { type: "editor-content-snapshotted", attemptId: "orphan-editor-attempt", lessonId: "001-first", blockId, text: "ORPHAN EDITOR SNAPSHOT" },
+      { type: "editor-content-snapshotted", attemptId: firstAttemptId, lessonId: "001-first", blockId, text: "STALE V1 EDITOR SNAPSHOT" },
+    ]);
+
+    const restarted = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const completed = await complete(restarted.url, blockId);
+      expect(block(completed.state, blockId)).toMatchObject({
+        active: false,
+        completed: true,
+        editorSnapshot: { text: "v2 accepted editor text" },
+        editorStatus: "accepted",
+        checkpoint: { status: "accepted", successMessage: "Accepted editor answer.", evidence: { kind: "editor", text: "v2 accepted editor text" } }
+      });
+      expect(block(completed.state, blockId)).not.toHaveProperty("draftText");
+      expect(JSON.stringify(completed.state)).not.toContain("ORPHAN EDITOR SNAPSHOT");
+      expect(JSON.stringify(completed.state)).not.toContain("STALE V1 EDITOR SNAPSHOT");
+    } finally { await restarted.close(); }
+
+    await writeFile(resolve(dir, "workspaces/refactor-line/factory/answer.txt"), "MUTATED WORKSPACE FILE MUST NOT BECOME HISTORY");
+    await rm(tutorialStatePath(dir, "workbook", "attempts"), { recursive: true, force: true });
+    const restoredServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const restored = await fetch(`${restoredServer.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(block(restored, blockId)).toMatchObject({
+        active: false,
+        completed: true,
+        editorSnapshot: { text: "v2 accepted editor text" },
+        editorStatus: "accepted",
+        checkpoint: { status: "accepted", successMessage: "Accepted editor answer.", evidence: { kind: "editor", text: "v2 accepted editor text" } }
+      });
+      expect(block(restored, blockId)).not.toHaveProperty("draftText");
+      expect(JSON.stringify(restored)).not.toContain("MUTATED WORKSPACE FILE");
+      expect(JSON.stringify(restored)).not.toContain("ORPHAN EDITOR SNAPSHOT");
+      expect(JSON.stringify(restored)).not.toContain("STALE V1 EDITOR SNAPSHOT");
+    } finally { await restoredServer.close(); }
+  });
+
+  it("backfills a legacy active accepted editor snapshot from the matching durable acceptance before Continue", async () => {
+    const dir = await fixture();
+    const blockId = "lesson--001-first--edit-answer";
+    const attempts = new AttemptStore(dir);
+    const attempt = await attempts.create({ lessonId: "001-first", blockId, version: 1, evidence: { kind: "editor", text: "legacy accepted editor text" } });
+    await attempts.acceptCurrent(attempt.id, "Legacy editor accepted.");
+    await writeTerminalLifecycleRecords(dir, [
+      { type: "block_completed", blockId: "workbook--introduction" },
+      { type: "block_completed", blockId: "part--validation-loop" },
+      { type: "block_completed", blockId: "lesson--001-first" },
+      { type: "block_completed", blockId: "lesson--001-first--orientation" },
+      { type: "attempt_accepted", attemptId: attempt.id, lessonId: "001-first", blockId, version: 1, kind: "editor", summary: "Legacy editor accepted." },
+      { type: "work_accepted", blockId },
+    ]);
+
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const restored = await fetch(`${server.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(block(restored, blockId)).toMatchObject({ active: true, completed: false, draftText: "legacy accepted editor text", editorStatus: "accepted" });
+      let records = await timelineRecords(dir);
+      expect(editorSnapshots(records, blockId)).toEqual([expect.objectContaining({ attemptId: attempt.id, lessonId: "001-first", blockId, text: "legacy accepted editor text" })]);
+
+      await writeFile(resolve(dir, "workspaces/refactor-line/factory/answer.txt"), "MUTATED WORKSPACE FILE MUST NOT BECOME HISTORY");
+      const completed = await complete(server.url, blockId);
+      expect(block(completed.state, blockId)).toMatchObject({ active: false, completed: true, editorSnapshot: { text: "legacy accepted editor text" }, checkpoint: { status: "accepted", evidence: { kind: "editor", text: "legacy accepted editor text" } } });
+      expect(JSON.stringify(completed.state)).not.toContain("MUTATED WORKSPACE FILE");
+      records = await timelineRecords(dir);
+      expect(editorSnapshots(records, blockId)).toHaveLength(1);
+    } finally { await server.close(); }
+  });
+
+  it("backfills a legacy already-completed editor snapshot on restart without reading the workspace", async () => {
+    const dir = await fixture();
+    const blockId = "lesson--001-first--edit-answer";
+    const attempts = new AttemptStore(dir);
+    const attempt = await attempts.create({ lessonId: "001-first", blockId, version: 1, evidence: { kind: "editor", text: "completed legacy accepted text" } });
+    await attempts.acceptCurrent(attempt.id, "Completed legacy editor accepted.");
+    await writeFile(resolve(dir, "workspaces/refactor-line/factory/answer.txt"), "MUTATED COMPLETED WORKSPACE FILE");
+    await writeTerminalLifecycleRecords(dir, [
+      { type: "block_completed", blockId: "workbook--introduction" },
+      { type: "block_completed", blockId: "part--validation-loop" },
+      { type: "block_completed", blockId: "lesson--001-first" },
+      { type: "block_completed", blockId: "lesson--001-first--orientation" },
+      { type: "attempt_accepted", attemptId: attempt.id, lessonId: "001-first", blockId, version: 1, kind: "editor", summary: "Completed legacy editor accepted." },
+      { type: "work_accepted", blockId },
+      { type: "block_completed", blockId },
+    ]);
+
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const restored = await fetch(`${server.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(block(restored, blockId)).toMatchObject({ active: false, completed: true, editorSnapshot: { text: "completed legacy accepted text" }, editorStatus: "accepted", checkpoint: { status: "accepted", evidence: { kind: "editor", text: "completed legacy accepted text" } } });
+      expect(JSON.stringify(restored)).not.toContain("MUTATED COMPLETED WORKSPACE FILE");
+      expect(editorSnapshots(await timelineRecords(dir), blockId)).toEqual([expect.objectContaining({ attemptId: attempt.id, text: "completed legacy accepted text" })]);
+    } finally { await server.close(); }
+  });
+
+  it("does not backfill an editor snapshot from an unrelated current AttemptStore pointer", async () => {
+    const dir = await fixture();
+    const blockId = "lesson--001-first--edit-answer";
+    const attempts = new AttemptStore(dir);
+    const attempt = await attempts.create({ lessonId: "001-first", blockId, version: 1, evidence: { kind: "editor", text: "unrelated current pointer text" } });
+    await attempts.acceptCurrent(attempt.id, "Unrelated current accepted.");
+    await writeTerminalLifecycleRecords(dir, [
+      { type: "block_completed", blockId: "workbook--introduction" },
+      { type: "block_completed", blockId: "part--validation-loop" },
+      { type: "block_completed", blockId: "lesson--001-first" },
+      { type: "block_completed", blockId: "lesson--001-first--orientation" },
+      { type: "attempt_accepted", attemptId: "00000000-0000-4000-8000-000000000123", lessonId: "001-first", blockId, version: 1, kind: "editor", summary: "Different durable acceptance." },
+      { type: "work_accepted", blockId },
+      { type: "block_completed", blockId },
+    ]);
+
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const restored = await fetch(`${server.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(block(restored, blockId)).not.toHaveProperty("editorSnapshot");
+      expect(JSON.stringify(restored)).not.toContain("unrelated current pointer text");
+      expect(editorSnapshots(await timelineRecords(dir), blockId)).toHaveLength(0);
+    } finally { await server.close(); }
+  });
+
+  it("uses latest durable terminal submission and accepted snapshot, not old work_accepted, for completion eligibility across restart", async () => {
+    const dir = await terminalLifecycleFixture();
+    await writeTerminalLifecycleRecords(dir, [
+      { type: "block_completed", blockId: "workbook--introduction" },
+      { type: "block_completed", blockId: "part--validation-loop" },
+      { type: "block_completed", blockId: "lesson--001-first" },
+      { type: "block_completed", blockId: "lesson--001-first--orientation" },
+      terminalSubmitted("attempt-1", "npm test"),
+      terminalFinished("attempt-1", "npm test", "v1 PASS"),
+      { type: "terminal-transcript-snapshotted", attemptId: "attempt-1", lessonId: "001-first", blockId: "lesson--001-first--run-command", transcript: "v1 PASS" },
+      { type: "attempt_accepted", attemptId: "attempt-1", lessonId: "001-first", blockId: "lesson--001-first--run-command", version: 1, kind: "terminal", summary: "Accepted v1." },
+      { type: "work_accepted", blockId: "lesson--001-first--run-command" },
+      terminalSubmitted("attempt-2", "npm test --again"),
+      terminalFinished("attempt-2", "npm test --again", "v2 awaiting review"),
+    ]);
+
+    const reviewing = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const state = await fetch(`${reviewing.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(block(state, "lesson--001-first--run-command")).toMatchObject({ active: true, completed: false, terminal: { phase: "checking" }, terminalRevision: 2 });
+      expect(state.progress.canComplete).toMatchObject({ blockId: "lesson--001-first--run-command", eligible: false, reason: "awaiting-acceptance" });
+      expect(state.progress.readyBlocks).toEqual(["lesson--001-first--edit-answer"]);
+    } finally { await reviewing.close(); }
+
+    await writeTerminalLifecycleRecords(dir, [
+      { type: "terminal-transcript-snapshotted", attemptId: "orphan", lessonId: "001-first", blockId: "lesson--001-first--run-command", transcript: "ORPHAN SNAPSHOT" },
+      { type: "terminal-transcript-snapshotted", attemptId: "attempt-2", lessonId: "001-first", blockId: "lesson--001-first--run-command", transcript: "v2 accepted transcript" },
+      { type: "attempt_accepted", attemptId: "attempt-2", lessonId: "001-first", blockId: "lesson--001-first--run-command", version: 2, kind: "terminal", summary: "Accepted v2." },
+      { type: "work_accepted", blockId: "lesson--001-first--run-command" },
+      { type: "block_completed", blockId: "lesson--001-first--run-command", lessonId: "001-first" },
+    ]);
+    const completed = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const state = await fetch(`${completed.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(block(state, "lesson--001-first--run-command")).toMatchObject({ active: false, completed: true, terminal: { phase: "accepted", message: "Accepted v2." }, terminalRevision: 2, terminalSnapshot: { transcript: "v2 accepted transcript" } });
+      expect(JSON.stringify(state)).not.toContain("ORPHAN SNAPSHOT");
+    } finally { await completed.close(); }
+  });
+
+  it("keeps completion ineligible after restart when a newer terminal submission from an old session is unfinished", async () => {
+    const dir = await terminalLifecycleFixture();
+    const blockId = "lesson--001-first--run-command";
+    await writeTerminalLifecycleRecords(dir, [
+      { type: "block_completed", blockId: "workbook--introduction" },
+      { type: "block_completed", blockId: "part--validation-loop" },
+      { type: "block_completed", blockId: "lesson--001-first" },
+      { type: "block_completed", blockId: "lesson--001-first--orientation" },
+      terminalSubmitted("attempt-1", "npm test", "old-terminal-session"),
+      terminalFinished("attempt-1", "npm test", "v1 PASS"),
+      { type: "terminal-transcript-snapshotted", attemptId: "attempt-1", lessonId: "001-first", blockId, transcript: "v1 PASS" },
+      { type: "attempt_accepted", attemptId: "attempt-1", lessonId: "001-first", blockId, version: 1, kind: "terminal", summary: "Accepted v1." },
+      { type: "work_accepted", blockId },
+      terminalSubmitted("attempt-2", "npm test --again", "old-terminal-session"),
+    ]);
+
+    const restarted = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const state = await fetch(`${restarted.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(block(state, blockId)).toMatchObject({ active: true, completed: false });
+      expect(block(state, blockId)?.terminal).toBeUndefined();
+      expect(state.progress.canComplete).toMatchObject({ blockId, eligible: false, reason: "awaiting-acceptance" });
+      expect(state.progress.readyBlocks).toEqual(["lesson--001-first--edit-answer"]);
+      await expect(complete(restarted.url, blockId)).resolves.toMatchObject({ outcome: "rejected", reason: "ineligible" });
+    } finally { await restarted.close(); }
   });
 
   it("renders completed jump prerequisites and keeps the target evaluation evidence-gated", async () => {
@@ -261,14 +539,14 @@ describe("workbook block progression", () => {
         if (stage === "block") expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId: failingBlockId }));
         if (stage === "lesson") expect(records).not.toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
         if (stage === "workbook") {
-          expect(records).toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
+          expect(records).not.toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
           expect(records).not.toContainEqual(expect.objectContaining({ type: "workbook_completion_summary" }));
         }
       } finally { await server.close(); }
     }
   });
 
-  it("reuses a block summary after restart when the following lesson summary had failed", async () => {
+  it("regenerates a block summary after restart when the following lesson summary had failed", async () => {
     const dir = await fixture();
     const lessonPath = resolve(dir, "lessons/001-first/lesson.md");
     await writeFile(lessonPath, (await readFile(lessonPath, "utf8")).replace("  - finish\n", ""));
@@ -293,7 +571,7 @@ describe("workbook block progression", () => {
       const failed = await fetch(`${first.url}/api/workbook/complete-block`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer" }) });
       expect(failed.status).toBe(409);
       const partial = await timelineRecords(dir);
-      expect(partial.filter((record) => record.type === "block_summarized" && record.blockId === "lesson--001-first--edit-answer")).toHaveLength(1);
+      expect(partial.filter((record) => record.type === "block_summarized" && record.blockId === "lesson--001-first--edit-answer")).toHaveLength(0);
       expect(partial).not.toContainEqual(expect.objectContaining({ type: "lesson_summarized", lessonId: "001-first" }));
       expect(partial).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId: "lesson--001-first--edit-answer" }));
     } finally { await first.close(); }
@@ -316,7 +594,7 @@ describe("workbook block progression", () => {
     } finally { await restarted.close(); }
   });
 
-  it("reuses a lesson summary after restart when the following workbook summary had failed", async () => {
+  it("regenerates a lesson summary after restart when the following workbook summary had failed", async () => {
     const dir = await fixture();
     const failingTutor = {
       ...fakeTutor({ outcome: "accepted", message: "Accepted editor answer." }),
@@ -338,7 +616,7 @@ describe("workbook block progression", () => {
       const failed = await fetch(`${first.url}/api/workbook/complete-block`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--finish" }) });
       expect(failed.status).toBe(409);
       const partial = await timelineRecords(dir);
-      expect(partial.filter((record) => record.type === "lesson_summarized" && record.lessonId === "001-first")).toHaveLength(1);
+      expect(partial.filter((record) => record.type === "lesson_summarized" && record.lessonId === "001-first")).toHaveLength(0);
       expect(partial).not.toContainEqual(expect.objectContaining({ type: "workbook_completion_summary" }));
       expect(partial).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId: "lesson--001-first--finish" }));
     } finally { await first.close(); }
@@ -355,6 +633,97 @@ describe("workbook block progression", () => {
       expect(lessonSummaryIndex).toBeLessThan(workbookSummaryIndex);
       expect(workbookSummaryIndex).toBeLessThan(completionIndex);
     } finally { await restarted.close(); }
+  });
+
+  it("cancels slow accepted-editor completion when a newer editor submission arrives and keeps that draft", async () => {
+    const dir = await fixture();
+    const deferredSummary = deferred<string>();
+    const tutor = new SummaryStallTutor("block", deferredSummary.promise);
+    const blockId = "lesson--001-first--edit-answer";
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor });
+    try {
+      await advanceToEditor(server.url);
+      const first = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision: 1, text: "accepted v1" }) });
+      expect(first.status).toBe(202);
+      await waitForState(server.url, (next) => block(next, blockId)?.checkpoint?.status === "accepted" && next.progress.canComplete?.eligible === true);
+
+      const pendingCompletion = complete(server.url, blockId);
+      await waitUntil(() => tutor.stalledCalls > 0);
+      const pendingEditor = fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision: 2, text: "newer v2 while summary waits" }) });
+      await sleep(20);
+      expect(await timelineRecords(dir)).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId }));
+
+      deferredSummary.resolve("Summary that should be discarded after invalidation.");
+      const completion = await pendingCompletion;
+      const editorResponse = await pendingEditor;
+      expect(editorResponse.status).toBe(202);
+      expect(completion).toMatchObject({ outcome: "rejected", reason: "not-current" });
+      const afterEditor = await editorResponse.json() as any;
+      expect(block(afterEditor, blockId)).toMatchObject({ active: true, completed: false, revision: 2, draftText: "newer v2 while summary waits" });
+      await waitForState(server.url, (next) => block(next, blockId)?.revision === 2 && block(next, blockId)?.checkpoint?.status === "accepted");
+      const records = await timelineRecords(dir);
+      expect(records).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId }));
+      expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId, text: "Summary that should be discarded after invalidation." }));
+    } finally { await server.close(); }
+  });
+
+  it("stages departure summaries so an invalidated last-editor completion leaves no stale summary", async () => {
+    const dir = await fixture();
+    await writeFile(resolve(dir, "lessons/001-first/lesson.md"), ["---", "durationMinutes: 5", "workspace: refactor-line", "blocks:", "  - orientation", "  - edit-answer", "---", "# Run an agent headlessly", "", "Lesson preamble."].join("\n"));
+    await rm(resolve(dir, "lessons/001-first/blocks/finish.md"), { force: true });
+    const lessonSummary = deferred<string>();
+    let stallFirstLessonSummary = true;
+    const tutor = {
+      stalledCalls: 0,
+      async restore() {},
+      async reply() { return "Tutor reply."; },
+      async review() { return { outcome: "accepted" as const, message: "Accepted editor answer." }; },
+      async summarizeBlock(input: any) {
+        const attempt = input.activeContext?.attempts?.at(-1);
+        const text = attempt?.evidence?.kind === "editor" ? attempt.evidence.text : "missing editor text";
+        return `Block summary for ${text}`;
+      },
+      async summarizeLesson(input: any) {
+        if (input.lessonId === "001-first" && stallFirstLessonSummary) {
+          stallFirstLessonSummary = false;
+          this.stalledCalls += 1;
+          return lessonSummary.promise;
+        }
+        return `Lesson summary for ${input.lessonId}.`;
+      },
+      dispose() {}
+    };
+    const blockId = "lesson--001-first--edit-answer";
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor });
+    try {
+      await advanceToEditor(server.url);
+      expect((await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision: 1, text: "accepted v1" }) })).status).toBe(202);
+      await waitForState(server.url, (next) => block(next, blockId)?.checkpoint?.status === "accepted" && next.progress.canComplete?.eligible === true);
+
+      const pendingCompletion = complete(server.url, blockId);
+      await waitUntil(() => tutor.stalledCalls > 0);
+      const pendingEditor = fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision: 2, text: "accepted v2" }) });
+      await sleep(20);
+      lessonSummary.resolve("Stale lesson summary for v1.");
+      await expect(pendingCompletion).resolves.toMatchObject({ outcome: "rejected", reason: "not-current" });
+      expect((await pendingEditor).status).toBe(202);
+      await waitForState(server.url, (next) => block(next, blockId)?.revision === 2 && block(next, blockId)?.checkpoint?.status === "accepted");
+      const recordsAfterInvalidation = await timelineRecords(dir);
+      expect(recordsAfterInvalidation.some((record) => record.type === "block_summarized" && record.blockId === blockId)).toBe(false);
+      expect(recordsAfterInvalidation.some((record) => record.type === "lesson_summarized" && record.lessonId === "001-first")).toBe(false);
+      expect(recordsAfterInvalidation.some((record) => record.type === "workbook_completion_summary")).toBe(false);
+
+      const completed = await complete(server.url, blockId);
+      expect(completed).toMatchObject({ outcome: "completed" });
+      const records = await timelineRecords(dir);
+      expect(records).toContainEqual(expect.objectContaining({ type: "block_summarized", blockId, text: "Block summary for accepted v2" }));
+      expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId, text: "Block summary for accepted v1" }));
+      const blockSummaryIndex = records.findIndex((record) => record.type === "block_summarized" && record.blockId === blockId);
+      const lessonSummaryIndex = records.findIndex((record) => record.type === "lesson_summarized" && record.lessonId === "001-first");
+      const completionIndex = records.findIndex((record) => record.type === "block_completed" && record.blockId === blockId);
+      expect(blockSummaryIndex).toBeLessThan(lessonSummaryIndex);
+      expect(lessonSummaryIndex).toBeLessThan(completionIndex);
+    } finally { await server.close(); }
   });
 
   it("does not write late summaries after closing during completion compaction", async () => {
@@ -443,10 +812,30 @@ describe("workbook block progression", () => {
   });
 });
 
+async function advanceToEditor(serverUrl: string) {
+  await complete(serverUrl, "workbook--introduction");
+  await complete(serverUrl, "part--validation-loop");
+  await complete(serverUrl, "lesson--001-first");
+  await complete(serverUrl, "lesson--001-first--orientation");
+}
+
 async function complete(serverUrl: string, blockId: string) {
   const response = await fetch(`${serverUrl}/api/workbook/complete-block`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId }) });
   expect(response.status).toBe(202);
   return response.json() as Promise<any>;
+}
+
+async function writeTerminalLifecycleRecords(dir: string, inputs: any[]) {
+  const timeline = new WorkbookTimeline(dir);
+  for (const input of inputs) await timeline.append(input);
+}
+
+function terminalSubmitted(attemptId: string, command: string, terminalSessionId = "terminal-session") {
+  return { type: "terminal-command-submitted", attemptId, lessonId: "001-first", blockId: "lesson--001-first--run-command", command, terminalSessionId };
+}
+
+function terminalFinished(attemptId: string, command: string, output: string) {
+  return { type: "terminal-command-finished", attemptId, evidence: { kind: "finished", command, interactions: [{ kind: "output", data: output }], exitStatus: 0 } };
 }
 
 async function postMessage(serverUrl: string, body: unknown) {
@@ -461,6 +850,17 @@ async function timelineRecords(dir: string): Promise<WorkbookTimelineRecord[]> {
 }
 async function workAcceptedEvents(dir: string, blockId: string) {
   return (await timelineRecords(dir)).filter((record) => record.type === "work_accepted" && record.blockId === blockId);
+}
+function acceptedAttempts(records: readonly WorkbookTimelineRecord[], blockId: string) {
+  return records.filter((record): record is Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }> => record.type === "attempt_accepted" && record.blockId === blockId);
+}
+function editorSnapshots(records: readonly WorkbookTimelineRecord[], blockId: string) {
+  return records.filter((record: any) => record.type === "editor-content-snapshotted" && record.blockId === blockId) as Array<{ type: "editor-content-snapshotted"; attemptId: string; lessonId: string; blockId: string; text: string }>;
+}
+async function appendRawTimelineRecords(dir: string, inputs: Array<Record<string, unknown>>) {
+  const existing = await timelineRecords(dir).catch(() => []);
+  const lines = inputs.map((input, index) => JSON.stringify({ id: `raw-test-event-${existing.length + index + 1}`, sequence: (existing.at(-1)?.sequence ?? 0) + index + 1, at: new Date().toISOString(), ...input }));
+  await appendFile(tutorialStatePath(dir, "workbook", "events.jsonl"), `${lines.join("\n")}\n`, "utf8");
 }
 /**
  * Polls the on-disk event log. The server writes an attempt's checkpoint status before appending

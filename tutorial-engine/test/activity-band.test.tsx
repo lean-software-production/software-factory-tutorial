@@ -19,11 +19,11 @@ const editorBlock: Block = {
   path: "factory/answer.md"
 };
 
-const completedEditorProgress: Progress = {
+const activeEditorProgress: Progress = {
   activeLessonId: "part/lesson",
   activeBlockId: editorBlock.id,
   completedLessons: [],
-  blocks: [{ id: editorBlock.id, type: editorBlock.type, ready: true, active: true, completed: true, verified: true, emerged: true, editorStatus: "unlocked" }],
+  blocks: [{ id: editorBlock.id, type: editorBlock.type, ready: true, active: true, completed: false, verified: true, emerged: true, editorStatus: "editing" } as any],
   reflections: {},
   reflectionConversations: {}
 };
@@ -35,11 +35,11 @@ const terminalBlock: Block = {
   markdown: "Run the command."
 };
 
-const completedTerminalProgress: Progress = {
+const activeTerminalProgress: Progress = {
   activeLessonId: "part/lesson",
   activeBlockId: terminalBlock.id,
   completedLessons: [],
-  blocks: [{ id: terminalBlock.id, type: terminalBlock.type, ready: true, active: true, completed: true, verified: true, emerged: true }],
+  blocks: [{ id: terminalBlock.id, type: terminalBlock.type, ready: true, active: true, completed: false, verified: true, emerged: true }],
   reflections: {},
   reflectionConversations: {}
 };
@@ -59,6 +59,15 @@ async function mount(element: ReturnType<typeof createElement>, setup?: (window:
   dom = new JSDOM("<!doctype html><html><body><div id=\"root\"></div></body></html>", { url: "http://localhost/workbook" });
   vi.stubGlobal("window", dom.window as unknown as Window & typeof globalThis);
   vi.stubGlobal("document", dom.window.document);
+  vi.stubGlobal("Window", dom.window.Window);
+  vi.stubGlobal("MutationObserver", dom.window.MutationObserver);
+  Object.defineProperty(dom.window, "requestAnimationFrame", { value: (callback: FrameRequestCallback) => { const handle = dom!.window.setTimeout(() => callback(Date.now()), 0); return Number(handle); }, configurable: true });
+  Object.defineProperty(dom.window, "cancelAnimationFrame", { value: (handle: number) => dom!.window.clearTimeout(handle), configurable: true });
+  Object.defineProperty(dom.window, "matchMedia", { value: () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }), configurable: true });
+  class DefaultFakeWebSocket { static OPEN = 1; readyState = DefaultFakeWebSocket.OPEN; addEventListener() {} send() {} close() {} }
+  vi.stubGlobal("WebSocket", DefaultFakeWebSocket);
+  vi.stubGlobal("addEventListener", dom.window.addEventListener.bind(dom.window) as any);
+  vi.stubGlobal("removeEventListener", dom.window.removeEventListener.bind(dom.window) as any);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   setup?.(dom.window);
   const container = dom.window.document.getElementById("root")!;
@@ -86,6 +95,62 @@ describe("ActivityBand stability", () => {
     expect(workbookStyles).toMatch(/\.current-activity-band\s*>\s*\.work-block\s*\{[^}]*left:\s*var\(--activity-left-offset\);[^}]*width:\s*var\(--activity-width\);[^}]*transition:\s*left 80ms linear,\s*width 80ms linear;/);
   });
 
+  it("keeps accepted-but-incomplete editor and terminal practice live in the sticky band", async () => {
+    class FakeIntersectionObserver {
+      observe() {}
+      disconnect() {}
+    }
+
+    const acceptedEditorProgress: Progress = {
+      ...activeEditorProgress,
+      blocks: [{ id: editorBlock.id, type: editorBlock.type, ready: false, active: true, completed: false, verified: true, emerged: true, revision: 1, draftText: "accepted editor draft", editorStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted editor draft" } } } as any],
+    };
+    const editorContainer = await mount(createElement(ActivityBand, {
+      lessonId: "part/lesson",
+      activeBlock: editorBlock,
+      progress: acceptedEditorProgress,
+      refresh: vi.fn()
+    }), () => vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver));
+
+    expect(editorContainer.querySelector(".current-activity-band")?.getAttribute("data-activity-type")).toBe("editor-practice");
+    expect(editorContainer.querySelector(".editor-live-surface")).toBeTruthy();
+    expect(editorContainer.querySelector("[role='textbox']")?.getAttribute("contenteditable")).toBe("true");
+    expect(editorContainer.textContent).toContain("Editor accepted.");
+
+    await act(async () => { root!.unmount(); });
+    root = undefined;
+
+    const acceptedTerminalProgress: Progress = {
+      ...activeTerminalProgress,
+      blocks: [{ id: terminalBlock.id, type: terminalBlock.type, ready: false, active: true, completed: false, verified: true, emerged: true, terminal: { phase: "accepted", message: "Terminal accepted." } } as any],
+    };
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      addEventListener() {}
+      send() {}
+      close() {}
+    }
+    const terminalContainer = await mount(createElement(ActivityBand, {
+      lessonId: "part/lesson",
+      activeBlock: terminalBlock,
+      progress: acceptedTerminalProgress,
+      refresh: vi.fn()
+    }), (window) => {
+      vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+      vi.stubGlobal("location", window.location);
+      vi.stubGlobal("addEventListener", window.addEventListener.bind(window) as any);
+      vi.stubGlobal("removeEventListener", window.removeEventListener.bind(window) as any);
+    });
+
+    expect(terminalContainer.querySelector(".current-activity-band")?.getAttribute("data-activity-type")).toBe("terminal-practice");
+    expect(terminalContainer.querySelector(".terminal-live-surface")).toBeTruthy();
+    expect(terminalContainer.querySelector(".embedded-terminal")).toBeTruthy();
+    expect(terminalContainer.textContent).toContain("Terminal accepted.");
+    expect(terminalContainer.querySelector(".terminal-history")).toBeNull();
+  });
+
   it("does not auto-focus terminal practice but keeps editor auto-focus", async () => {
     class FakeIntersectionObserver {
       static instances: FakeIntersectionObserver[] = [];
@@ -98,7 +163,7 @@ describe("ActivityBand stability", () => {
     const container = await mount(createElement(ActivityBand, {
       lessonId: "part/lesson",
       activeBlock: terminalBlock,
-      progress: completedTerminalProgress,
+      progress: activeTerminalProgress,
       refresh: vi.fn()
     }), () => vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver));
 
@@ -107,12 +172,12 @@ describe("ActivityBand stability", () => {
     await act(async () => { root!.render(createElement(ActivityBand, {
       lessonId: "part/lesson",
       activeBlock: editorBlock,
-      progress: completedEditorProgress,
+      progress: activeEditorProgress,
       refresh: vi.fn()
     })); });
 
-    expect(FakeIntersectionObserver.instances).toHaveLength(1);
-    expect(FakeIntersectionObserver.instances[0]!.observed).toEqual([container.querySelector(".current-activity-band")]);
+    const band = container.querySelector(".current-activity-band");
+    expect(FakeIntersectionObserver.instances.some((observer) => observer.observed.includes(band!))).toBe(true);
   });
 
   it("registers terminal practice for scroll-linked geometry and expands as the band rises", async () => {
@@ -134,7 +199,7 @@ describe("ActivityBand stability", () => {
       createElement(ActivityBand, {
         lessonId: "part/lesson",
         activeBlock: terminalBlock,
-        progress: completedTerminalProgress,
+        progress: activeTerminalProgress,
         refresh: vi.fn()
       })
     ), (window) => {
@@ -151,16 +216,14 @@ describe("ActivityBand stability", () => {
     const main = container.querySelector<HTMLElement>("main")!;
     const inlineSource = container.querySelector("[data-inline-source]")!;
     const band = container.querySelector<HTMLElement>(".current-activity-band")!;
-    const observer = FakeResizeObserver.instances[0]!;
     Object.defineProperty(main, "offsetTop", { value: 80, configurable: true });
     Object.defineProperty(band, "offsetTop", { value: 240, configurable: true });
     Object.defineProperty(band, "offsetParent", { value: main, configurable: true });
     Object.defineProperty(main, "getBoundingClientRect", { value: () => rect(100, 1000), configurable: true });
     Object.defineProperty(inlineSource, "getBoundingClientRect", { value: () => rect(240, 720), configurable: true });
 
-    expect(FakeResizeObserver.instances).toHaveLength(1);
-    expect(observer.observed).toContain(inlineSource);
-    expect(observer.observed).toContain(main);
+    const observer = FakeResizeObserver.instances.find((instance) => instance.observed.includes(inlineSource) && instance.observed.includes(main))!;
+    expect(observer).toBeTruthy();
     expect(listenerTypes).toContain("scroll");
     expect(listenerTypes).toContain("resize");
     expect(band.getAttribute("data-activity-layout")).toBe("scroll-linked");
@@ -192,7 +255,7 @@ describe("ActivityBand stability", () => {
       createElement(ActivityBand, {
         lessonId: "part/lesson",
         activeBlock: editorBlock,
-        progress: completedEditorProgress,
+        progress: activeEditorProgress,
         refresh: vi.fn()
       })
     ), (window) => {

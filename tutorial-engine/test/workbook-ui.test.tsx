@@ -20,7 +20,7 @@ const confettiMock = vi.hoisted(() => {
 vi.mock("canvas-confetti", () => ({ default: Object.assign(vi.fn(), { create: confettiMock.create }) }));
 
 vi.mock("@codemirror/state", () => ({
-  EditorState: { create: (config: any) => config }
+  EditorState: { create: (config: any) => config, readOnly: { of: (readOnly: boolean) => ({ readOnly }) } }
 }));
 
 vi.mock("@codemirror/view", () => {
@@ -89,7 +89,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
-import { App, BlockView, ContinuationPageBreak, LessonCompletionConfetti, LessonRail, TerminalHistory, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
+import { App, BlockView, ContinuationPageBreak, EditorHistory, LessonCompletionConfetti, LessonRail, TerminalHistory, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
 
 const stylesCss = readFileSync(new URL("../web-workbook/src/styles.css", import.meta.url), "utf8");
 
@@ -465,7 +465,7 @@ describe("workbook lesson UI", () => {
       timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Edit the answer" }],
     } as State;
     const firstReviewState = { ...initialState, progress: activeEditorProgress({ revision: 1, draftText: "submitted draft", editorStatus: "reviewing", checkpoint: { status: "reviewing", evidence: { kind: "editor", text: "submitted draft" } } } as any) } as State;
-    const staleAcceptedState = { ...initialState, progress: activeEditorProgress({ revision: 1, draftText: "submitted draft", editorStatus: "unlocked", completed: true, checkpoint: { status: "accepted", successMessage: "Old draft accepted.", evidence: { kind: "editor", text: "submitted draft" } } } as any) } as State;
+    const staleAcceptedState = { ...initialState, progress: activeEditorProgress({ revision: 1, draftText: "submitted draft", editorStatus: "accepted", completed: true, checkpoint: { status: "accepted", successMessage: "Old draft accepted.", evidence: { kind: "editor", text: "submitted draft" } } } as any) } as State;
     let stateFetches = 0;
     const fetchMock = vi.fn(async (input?: RequestInfo | URL, _init?: RequestInit) => {
       if (String(input).endsWith("api/workbook/editor")) return { ok: true, json: async () => firstReviewState };
@@ -722,13 +722,13 @@ describe("workbook lesson UI", () => {
       { type: "message", id: "first", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "001-first", blockId: firstId, role: "assistant", source: "authored", presentation: "course", text: "## First terminal" },
       { type: "message", id: "second", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "001-first", blockId: secondId, role: "assistant", source: "authored", presentation: "course", text: "## Second terminal" },
     ] as const;
-    const firstTerminalState = { id: firstId, type: "terminal-practice", ready: false, active: false, completed: true, verified: true, emerged: true, terminal: { phase: "complete" as const, message: "Accepted." }, terminalSnapshot: { transcript: "terminal A only" } };
+    const firstTerminalState = { id: firstId, type: "terminal-practice", ready: false, active: false, completed: true, verified: true, emerged: true, terminal: { phase: "accepted" as const, message: "Accepted." }, terminalSnapshot: { transcript: "terminal A only" } };
     const markup = html(createElement(TimelineThread, {
       activeLessonId: "001-first",
       activeBlockId: secondId,
       onSend: vi.fn(async () => undefined),
       records,
-      renderTerminalHistory: (record) => record.blockId === firstId
+      renderPracticeHistory: (record) => record.blockId === firstId
         ? createElement(TerminalHistory, { state: firstTerminalState as any })
         : null,
       practiceSurfaceBlockId: secondId,
@@ -926,7 +926,7 @@ describe("workbook lesson UI", () => {
     await act(async () => {
       mountedRoot!.render(createElement(BlockView, {
         block: editorBlock,
-        progress: activeEditorProgress({ active: false, completed: true, editorStatus: "unlocked", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted" } } } as any),
+        progress: activeEditorProgress({ active: false, completed: true, editorStatus: "accepted", editorSnapshot: { text: "accepted" }, checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted" } } } as any),
         refresh: vi.fn()
       }));
     });
@@ -1001,31 +1001,41 @@ describe("workbook lesson UI", () => {
     expect(container.textContent).not.toContain("Updating feedback…");
   });
 
-  it("does not render live editor-practice surface or status for inactive and completed blocks", () => {
+  it("keeps accepted editor practice live, and renders completed editor practice as one read-only history surface", async () => {
     const inactiveMarkup = html(createElement(BlockView, {
       block: editorBlock,
       progress: activeEditorProgress({ ready: false, active: false, completed: false, editorStatus: undefined, checkpoint: { status: "feedback", feedback: "Hold this feedback until the block is active." } } as any),
       refresh: vi.fn()
     }));
-    const completedMarkup = html(createElement(BlockView, {
-      block: editorBlock,
-      progress: activeEditorProgress({ active: false, completed: true, editorStatus: "unlocked" } as any),
-      refresh: vi.fn()
-    }));
-
     expect(inactiveMarkup).toContain("factory/answer.md");
     expect(inactiveMarkup).not.toContain("editor-surface");
     expect(inactiveMarkup).not.toContain("editor-live-surface");
-    expect(inactiveMarkup).not.toContain("editor-feedback-overlay");
     expect(inactiveMarkup).not.toMatch(/Editing —|Reviewing your latest revision/);
 
-    expect(completedMarkup).toContain("factory/answer.md");
-    expect(completedMarkup).toContain("Accepted revision unlocked the next step.");
-    expect(completedMarkup).toContain("The latest accepted editor draft was written to the target file.");
-    expect(completedMarkup).not.toContain("editor-surface");
-    expect(completedMarkup).toContain("practice-feedback-bar is-success");
-    expect(completedMarkup).toContain("role=\"status\"");
-    expect(completedMarkup).not.toMatch(/Editing —|Reviewing your latest revision/);
+    const acceptedContainer = await mount(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ active: true, completed: false, revision: 1, draftText: "accepted active draft", editorStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted active draft" } } } as any),
+      refresh: vi.fn()
+    }));
+    const acceptedEditor = acceptedContainer.querySelector<HTMLElement>("[role='textbox']")!;
+    expect(acceptedEditor).toBeTruthy();
+    expect(acceptedEditor.getAttribute("contenteditable")).toBe("true");
+    expect(acceptedContainer.querySelector(".editor-live-surface")).toBeTruthy();
+    expect(acceptedContainer.textContent).toContain("Editor accepted.");
+
+    await act(async () => { mountedRoot!.unmount(); });
+    mountedRoot = undefined;
+
+    const completedContainer = await mount(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ active: false, completed: true, revision: 1, editorSnapshot: { text: "accepted historical draft" }, editorStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted historical draft" } } } as any),
+      refresh: vi.fn()
+    }));
+    expect(completedContainer.querySelectorAll(".editor-live-surface, .editor-history")).toHaveLength(1);
+    expect(completedContainer.querySelector("[role='textbox']")?.getAttribute("contenteditable")).toBe("false");
+    expect(completedContainer.textContent).toContain("accepted historical draft");
+    expect(completedContainer.textContent).toContain("Editor accepted.");
+    expect(completedContainer.querySelectorAll(".practice-feedback-bar.is-success")).toHaveLength(1);
   });
 
   it("renders a compact terminal activity without duplicating authored content", () => {
@@ -1121,6 +1131,44 @@ describe("workbook lesson UI", () => {
     const refreshedEditor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']");
     expect(refreshedEditor).not.toBeNull();
     expect(document.activeElement).toBe(refreshedEditor);
+  });
+
+  it("keeps a focused active editor mounted and editable when acceptance arrives, then submits a newer revision", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 3, draftText: "newer accepted-local draft", editorStatus: "reviewing", checkpoint: { status: "reviewing", evidence: { kind: "editor", text: "newer accepted-local draft" } } } as any)) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const refresh = vi.fn();
+    const container = await mount(createElement(BlockView, {
+      block: editorBlock,
+      progress: activeEditorProgress({ revision: 2, draftText: "draft under review", editorStatus: "reviewing", checkpoint: { status: "reviewing", evidence: { kind: "editor", text: "draft under review" } } } as any),
+      refresh,
+    }));
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+    editor.focus();
+    expect(document.activeElement).toBe(editor);
+
+    await act(async () => {
+      mountedRoot!.render(createElement(BlockView, {
+        block: editorBlock,
+        progress: activeEditorProgress({ revision: 2, draftText: "draft under review", editorStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "draft under review" } } } as any),
+        refresh,
+      }));
+    });
+
+    expect(container.querySelector("[role='textbox'][contenteditable='true']")).toBe(editor);
+    expect(document.activeElement).toBe(editor);
+    expect(editor.getAttribute("contenteditable")).toBe("true");
+    expect(container.textContent).toContain("Editor accepted.");
+    expect(container.querySelectorAll(".practice-feedback-bar.is-success")).toHaveLength(1);
+    expect(container.querySelector(".success-checkpoint")).toBeNull();
+
+    editor.textContent = "newer accepted-local draft";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); vi.advanceTimersByTime(749); await Promise.resolve(); });
+    expect(fetchMock).not.toHaveBeenCalled();
+    await act(async () => { vi.advanceTimersByTime(1); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ blockId: "edit-answer", revision: 3, text: "newer accepted-local draft" });
   });
 
   it("automatically reviews a fresh seeded editor after the quiet period and keeps focus through the refresh", async () => {
@@ -1444,7 +1492,7 @@ describe("workbook lesson UI", () => {
         active: block.id === "practice",
         ready: block.id === "practice",
         emerged: block.id === "practice" ? true : block.emerged,
-        terminal: block.id === "practice" ? { phase: "complete", message: "Accepted." } : block.terminal,
+        terminal: block.id === "practice" ? { phase: "accepted", message: "Accepted." } : block.terminal,
       })),
     };
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => workbookState(acceptedProgress) })));
@@ -1536,7 +1584,7 @@ describe("workbook lesson UI", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      first.resolve({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, editorStatus: "unlocked", completed: true, checkpoint: { status: "accepted", successMessage: "Old draft accepted.", evidence: { kind: "editor", text: "submitted draft" } } } as any)) } as Response);
+      first.resolve({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, editorStatus: "accepted", completed: true, checkpoint: { status: "accepted", successMessage: "Old draft accepted.", evidence: { kind: "editor", text: "submitted draft" } } } as any)) } as Response);
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1693,7 +1741,7 @@ describe("workbook lesson UI", () => {
     expect(feedbackMarkup).not.toContain("Retry review");
 
     const successMarkup = html(createElement(TerminalHistory, {
-      state: activeBlockProgress(terminalBlock, { terminal: { phase: "complete", message: "Terminal accepted." }, terminalSnapshot: { transcript: "$ npm test\nPASS" } } as any).blocks[0]
+      state: activeBlockProgress(terminalBlock, { active: false, completed: true, terminal: { phase: "accepted", message: "Terminal accepted." }, terminalSnapshot: { transcript: "$ npm test\nPASS" } } as any).blocks[0]
     }));
     expect(successMarkup).toContain("terminal-completion-surface");
     expect(successMarkup).toContain("practice-feedback-bar is-success");
@@ -2919,7 +2967,9 @@ describe("workbook lesson UI", () => {
     const snapshot = "$ npm test\nPASS  calculator";
     const markup = html(createElement(TerminalHistory, {
       state: activeBlockProgress(lesson.blocks[1]!, {
-        terminal: { phase: "complete", message: "Accepted by the Main Tutor." },
+        active: false,
+        completed: true,
+        terminal: { phase: "accepted", message: "Accepted by the Main Tutor." },
         terminalSnapshot: { transcript: snapshot }
       } as any).blocks[0]
     }));
@@ -2930,7 +2980,171 @@ describe("workbook lesson UI", () => {
     expect(markup).not.toContain("Terminal session frozen.");
   });
 
-  it("uses one terminal card for public states and never duplicates its DOM surface", async () => {
+  it("renders the durable editor snapshot beside editor success", async () => {
+    const container = await mount(createElement(EditorHistory, {
+      block: editorBlock,
+      state: activeEditorProgress({
+        active: false,
+        completed: true,
+        revision: 7,
+        editorStatus: "accepted",
+        editorSnapshot: { text: "durable accepted editor snapshot" },
+        checkpoint: { status: "accepted", successMessage: "Editor accepted by the Main Tutor.", evidence: { kind: "editor", text: "durable accepted editor snapshot" } }
+      } as any).blocks[0]
+    }));
+
+    expect(container.querySelectorAll(".editor-history")).toHaveLength(1);
+    expect(container.querySelector("[role='textbox']")?.getAttribute("contenteditable")).toBe("false");
+    expect(container.textContent).toContain("durable accepted editor snapshot");
+    expect(container.textContent).toContain("Editor accepted by the Main Tutor.");
+    expect(container.querySelectorAll(".practice-feedback-bar.is-success")).toHaveLength(1);
+  });
+
+  it("places completed editor and terminal history once under their authored records while the current ActivityBand remains live", async () => {
+    class FakeWebSocket {
+      static CONNECTING = 0; static OPEN = 1; static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.OPEN;
+      constructor() { FakeWebSocket.instances.push(this); }
+      addEventListener() {} send() {} close() { this.readyState = FakeWebSocket.CLOSED; }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const activeEditorBlock = { ...editorBlock, id: "edit-next", path: "factory/next.md" } as EditorPracticeBlock;
+    const lessonWithPractice = { ...lesson, blocks: [lesson.blocks[1]!, editorBlock, activeEditorBlock] } as Lesson;
+    const progressWithHistory: Progress = {
+      ...progress,
+      activeBlockId: activeEditorBlock.id,
+      blocks: [
+        { id: "practice", type: "terminal-practice", ready: false, active: false, completed: true, verified: true, emerged: true, terminal: { phase: "accepted", message: "Terminal accepted once." }, terminalSnapshot: { transcript: "terminal history transcript" } } as any,
+        { id: editorBlock.id, type: "editor-practice", ready: false, active: false, completed: true, verified: true, emerged: true, revision: 4, editorStatus: "accepted", editorSnapshot: { text: "editor history snapshot" }, checkpoint: { status: "accepted", successMessage: "Editor accepted once.", evidence: { kind: "editor", text: "editor history snapshot" } } } as any,
+        { id: activeEditorBlock.id, type: "editor-practice", ready: true, active: true, completed: false, verified: false, emerged: true, revision: 0, draftText: "active editor draft", editorStatus: "editing" } as any,
+      ],
+    };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: lessonWithPractice })],
+      progress: progressWithHistory,
+      adapter: {},
+      timeline: [
+        { type: "message", id: "terminal-course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: "practice", role: "assistant", source: "authored", presentation: "course", text: "## Terminal practice" },
+        { type: "message", id: "editor-course", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Editor practice" },
+        { type: "message", id: "active-editor-course", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: lesson.id, blockId: activeEditorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Active editor" },
+      ],
+    } as any;
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => state })));
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.querySelectorAll(".terminal-history")).toHaveLength(1);
+    expect(container.querySelectorAll(".editor-history")).toHaveLength(1);
+    expect(container.querySelector("#practice .frozen-terminal-output")?.textContent).toContain("terminal history transcript");
+    const editorHistory = container.querySelector(`#${editorBlock.id} .editor-history`)!;
+    expect(editorHistory.querySelector(".editor-target")?.textContent).toContain("factory/answer.md");
+    expect(container.textContent?.match(/Editor practice/g)).toHaveLength(1);
+    expect(editorHistory.textContent).not.toContain(editorBlock.title);
+    expect(editorHistory.textContent).not.toContain(editorBlock.markdown);
+    expect(container.querySelector(`#${editorBlock.id} .editor-history [role='textbox']`)?.getAttribute("contenteditable")).toBe("false");
+    expect(container.querySelector(`#${editorBlock.id} .current-activity-band`)).toBeNull();
+    expect(container.querySelector(`#${activeEditorBlock.id} .current-activity-band [role='textbox']`)?.getAttribute("contenteditable")).toBe("true");
+    expect(container.textContent?.match(/Terminal accepted once\./g)).toHaveLength(1);
+    expect(container.textContent?.match(/Editor accepted once\./g)).toHaveLength(1);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("does not focus or submit when completed editor history is reread", async () => {
+    vi.useFakeTimers();
+    const lessonWithEditor = { ...lesson, blocks: [editorBlock, lesson.blocks[3]!] } as Lesson;
+    const progressWithCompletedEditor: Progress = {
+      ...progress,
+      activeBlockId: "transition",
+      blocks: [
+        { id: editorBlock.id, type: "editor-practice", ready: false, active: false, completed: true, verified: true, emerged: true, revision: 2, editorStatus: "accepted", editorSnapshot: { text: "read-only editor history" }, checkpoint: { status: "accepted", successMessage: "Editor success exactly once.", evidence: { kind: "editor", text: "read-only editor history" } } } as any,
+        { id: "transition", type: "narrative", ready: true, active: true, completed: false, verified: false, emerged: true } as any,
+      ],
+    };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: lessonWithEditor })],
+      progress: progressWithCompletedEditor,
+      adapter: {},
+      timeline: [
+        { type: "message", id: "editor-course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Editor practice" },
+        { type: "message", id: "transition-course", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "transition", role: "assistant", source: "authored", presentation: "course", text: "## Transition" },
+      ],
+    } as any;
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+    const focusSpy = vi.fn();
+
+    const container = await mount(createElement(App), (win) => {
+      stubAppShellGlobals(win);
+      win.HTMLElement.prototype.focus = focusSpy;
+    });
+    await act(async () => { await Promise.resolve(); });
+    const readOnlyEditor = container.querySelector<HTMLElement>(".editor-history [role='textbox']")!;
+
+    readOnlyEditor.textContent = "mutation attempt should not submit";
+    await act(async () => {
+      readOnlyEditor.dispatchEvent(new window.Event("input", { bubbles: true }));
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(readOnlyEditor.getAttribute("contenteditable")).toBe("false");
+    expect(fetchMock.mock.calls.filter(([url, init]) => String(url).endsWith("api/workbook/editor") && (init as RequestInit | undefined)?.method === "POST")).toHaveLength(0);
+    expect(focusSpy).not.toHaveBeenCalled();
+    expect(container.textContent?.match(/Editor success exactly once\./g)).toHaveLength(1);
+  });
+
+  it("preserves the live terminal instance and WebSocket when terminal work is accepted but incomplete", async () => {
+    class FakeWebSocket {
+      static CONNECTING = 0; static OPEN = 1; static CLOSED = 3;
+      static instances: FakeWebSocket[] = [];
+      readyState = FakeWebSocket.OPEN;
+      sent: string[] = [];
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      constructor() { FakeWebSocket.instances.push(this); }
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+      send(message: string) { this.sent.push(message); }
+      close() { this.readyState = FakeWebSocket.CLOSED; }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalBlock = lesson.blocks[1]!;
+    const render = (terminal: any) => createElement(BlockView, {
+      block: terminalBlock,
+      progress: activeBlockProgress(terminalBlock, { terminal, active: true, completed: false } as any),
+      refresh: vi.fn(),
+    });
+    const container = await mount(render({ phase: "checking" }), (win) => {
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
+      vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
+    });
+    const liveTerminal = container.querySelector<HTMLElement>(".embedded-terminal")!;
+    expect(liveTerminal).toBeTruthy();
+    expect(terminalInstances).toHaveLength(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    await act(async () => { mountedRoot!.render(render({ phase: "accepted", message: "Terminal accepted." })); });
+
+    expect(container.querySelector(".embedded-terminal")).toBe(liveTerminal);
+    expect(container.querySelector(".terminal-live-surface")?.textContent).toContain("Terminal accepted.");
+    expect(container.querySelector(".terminal-history")).toBeNull();
+    expect(terminalInstances).toHaveLength(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(terminalInstances[0]!.options.disableStdin).toBe(false);
+
+    await act(async () => { terminalDataListeners[0]!("echo after acceptance\\r"); });
+    expect(FakeWebSocket.instances[0]!.sent.map((message) => JSON.parse(message)).at(-1)).toEqual({ type: "input", data: "echo after acceptance\\r" });
+  });
+
+  it("uses one terminal card for running and feedback states without duplicating its DOM surface", async () => {
     class FakeWebSocket {
       static CONNECTING = 0; static OPEN = 1; static CLOSED = 3;
       readyState = FakeWebSocket.OPEN;
@@ -2947,18 +3161,14 @@ describe("workbook lesson UI", () => {
       vi.stubGlobal("addEventListener", win.addEventListener.bind(win) as any);
       vi.stubGlobal("removeEventListener", win.removeEventListener.bind(win) as any);
     });
+    const terminalPanel = container.querySelector(".embedded-terminal-panel");
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
     expect(container.textContent).toContain("Checking…");
 
     await act(async () => { mountedRoot!.render(render({ phase: "feedback", message: "Keep the final feedback." })); });
+    expect(container.querySelector(".embedded-terminal-panel")).toBe(terminalPanel);
     expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(1);
     expect(container.textContent).toContain("Keep the final feedback.");
-
-    await act(async () => { mountedRoot!.render(render({ phase: "complete", message: "Accepted by the Main Tutor." })); });
-    expect(container.querySelector(".embedded-terminal-panel")).toBeNull();
-    expect(container.querySelectorAll(".live-block-feedback")).toHaveLength(0);
-    expect(container.textContent).not.toContain("Accepted by the Main Tutor.");
-    expect(container.querySelectorAll('[role="status"]')).toHaveLength(0);
   });
 
   it("keeps the server state on Enter and replaces it only with Bash-authoritative state", async () => {
@@ -3114,9 +3324,16 @@ describe("workbook lesson UI", () => {
   });
 
   it.each([
-    ["terminal", lesson.blocks[1]!, activeBlockProgress(lesson.blocks[1]!, { terminal: { phase: "complete", message: "Terminal accepted." } } as any), "Terminal accepted."],
-    ["editor", editorBlock, activeEditorProgress({ editorStatus: undefined, checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted answer text" } } } as any), "Editor accepted."]
-  ])("renders only the timeline continuation for accepted %s practice in timeline mode", async (_kind, block, acceptedProgress, acceptedText) => {
+    ["terminal", lesson.blocks[1]!, activeBlockProgress(lesson.blocks[1]!, { terminal: { phase: "accepted", message: "Terminal accepted." } } as any), "Terminal accepted."],
+    ["editor", editorBlock, activeEditorProgress({ editorStatus: "accepted", draftText: "accepted answer text", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted answer text" } } } as any), "Editor accepted."]
+  ])("keeps accepted-but-incomplete %s practice in the sticky live surface with one continuation", async (kind, block, acceptedProgress, acceptedText) => {
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      addEventListener() {}
+      send() {}
+      close() {}
+    }
     const state = {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
@@ -3133,12 +3350,17 @@ describe("workbook lesson UI", () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? nextState : state }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const container = await mount(createElement(App), stubAppShellGlobals);
+    const container = await mount(createElement(App), (win) => {
+      stubAppShellGlobals(win);
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+      vi.stubGlobal("location", win.location);
+    });
     await act(async () => { await Promise.resolve(); });
 
     expect(container.textContent).toContain(acceptedText);
-    expect(container.querySelector(".current-activity-band")).toBeNull();
-    expect(container.textContent).not.toContain("Get a hint");
+    expect(container.querySelector(".current-activity-band")?.getAttribute("data-activity-type")).toBe(`${kind}-practice`);
+    if (kind === "editor") expect(container.querySelector("[role='textbox']")?.getAttribute("contenteditable")).toBe("true");
+    if (kind === "terminal") expect(container.querySelector(".embedded-terminal")).toBeTruthy();
     const continueButtons = [...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue");
     expect(continueButtons).toHaveLength(1);
     expect(container.querySelectorAll(".continuation-controls")).toHaveLength(1);
@@ -3148,6 +3370,410 @@ describe("workbook lesson UI", () => {
     const eventCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/complete-block");
     expect(eventCall).toBeTruthy();
     expect(JSON.parse((eventCall![1] as RequestInit).body as string)).toEqual({ blockId: block.id });
+  });
+
+  it("hides accepted editor Continue immediately after a local edit until accepted state catches up", async () => {
+    vi.useFakeTimers();
+    FakeEventSource.reset();
+    const editorLesson = { ...lesson, blocks: [editorBlock] } as Lesson;
+    const editorChapter = { ...chapter(), lesson: editorLesson } as Chapter & { lesson: Lesson };
+    const acceptedProgress = activeEditorProgress({
+      revision: 1,
+      draftText: "accepted answer text",
+      editorStatus: "accepted",
+      checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted answer text" } }
+    } as any);
+    acceptedProgress.canComplete = { blockId: editorBlock.id, eligible: true };
+    const caughtUpProgress = activeEditorProgress({
+      revision: 2,
+      draftText: "new accepted answer text",
+      editorStatus: "accepted",
+      checkpoint: { status: "accepted", successMessage: "Editor accepted again.", evidence: { kind: "editor", text: "new accepted answer text" } }
+    } as any);
+    caughtUpProgress.canComplete = { blockId: editorBlock.id, eligible: true };
+    let currentState: State = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [editorChapter],
+      progress: acceptedProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Edit the answer" }],
+    } as State;
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => {
+      expect(String(input)).toMatch(/api\/workbook\/state$/);
+      return { ok: true, json: async () => currentState };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", FakeEventSource as any);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+    editor.textContent = "new accepted answer text";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+
+    currentState = { ...currentState, progress: caughtUpProgress };
+    await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: editorBlock.id, revision: 2 }); await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+  });
+
+  it("hides terminal Continue for a multiline command until one authoritative terminal revision catches up", async () => {
+    FakeEventSource.reset();
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      sent: string[] = [];
+      addEventListener() {}
+      send(message: string) { this.sent.push(message); }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalBlock = lesson.blocks[1]!;
+    const acceptedProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    acceptedProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const caughtUpProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "accepted", message: "Terminal accepted again." } } as any);
+    caughtUpProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    let currentState: State = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock] } as any })],
+      progress: acceptedProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Run command" }],
+    } as State;
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => {
+      expect(String(input)).toMatch(/api\/workbook\/state$/);
+      return { ok: true, json: async () => currentState };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", FakeEventSource as any);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    await act(async () => { terminalDataListeners[0]!("echo after acceptance \\\r"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+    await act(async () => { terminalDataListeners[0]!("  && echo before server catches up\r"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+
+    currentState = { ...currentState, progress: caughtUpProgress };
+    await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 2 }); await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+  });
+
+  it("keeps terminal Continue hidden for separate commands through intermediate non-accepted revisions", async () => {
+    FakeEventSource.reset();
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      addEventListener() {}
+      send() {}
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalBlock = lesson.blocks[1]!;
+    const acceptedProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    acceptedProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const runningProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "running" } } as any);
+    runningProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const checkingProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "checking" } } as any);
+    checkingProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const feedbackProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "feedback", message: "Try again." } } as any);
+    feedbackProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const latestAcceptedProgress = activeBlockProgress(terminalBlock, { terminalRevision: 3, terminal: { phase: "accepted", message: "Terminal accepted latest." } } as any);
+    latestAcceptedProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    let currentState: State = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock] } as any })],
+      progress: acceptedProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Run command" }],
+    } as State;
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => currentState })));
+    vi.stubGlobal("EventSource", FakeEventSource as any);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    await act(async () => { terminalDataListeners[0]!("echo one\r"); terminalDataListeners[0]!("echo two\r"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+
+    for (const progressState of [runningProgress, checkingProgress, feedbackProgress]) {
+      currentState = { ...currentState, progress: progressState };
+      await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 2 }); await Promise.resolve(); await Promise.resolve(); });
+      expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+    }
+
+    currentState = { ...currentState, progress: latestAcceptedProgress };
+    await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 3 }); await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+  });
+
+  it("keeps passive scroll from completing an accepted editor while a newer local revision is debounced", async () => {
+    vi.useFakeTimers();
+    let observerCallback: ((entries: any[]) => void) | undefined;
+    class FakeIntersectionObserver {
+      active = true;
+      observe = vi.fn();
+      disconnect = vi.fn(() => { this.active = false; });
+      constructor(callback: (entries: any[]) => void) { observerCallback = (entries) => { if (this.active) callback(entries); }; }
+    }
+    const editorLesson = { ...lesson, blocks: [editorBlock, lesson.blocks[3]!] } as Lesson;
+    const editorChapter = { ...chapter(), lesson: editorLesson } as Chapter & { lesson: Lesson };
+    const acceptedProgress = activeEditorProgress({
+      revision: 1,
+      draftText: "accepted answer text",
+      editorStatus: "accepted",
+      checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted answer text" } }
+    } as any);
+    acceptedProgress.readyBlocks = ["transition"];
+    acceptedProgress.canComplete = { blockId: editorBlock.id, eligible: true };
+    acceptedProgress.blocks.push({ id: "transition", type: "narrative", ready: true, active: false, completed: false, verified: false, emerged: true } as any);
+    const reviewingProgress = activeEditorProgress({
+      revision: 2,
+      draftText: "new exact editor revision",
+      editorStatus: "reviewing",
+      checkpoint: { status: "reviewing", evidence: { kind: "editor", text: "new exact editor revision" } }
+    } as any);
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [editorChapter],
+      progress: acceptedProgress,
+      adapter: {},
+      readyBlockIds: ["transition"],
+      timeline: [
+        { type: "message", id: "editor-course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Edit the answer" },
+        { type: "message", id: "transition-course", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "transition", role: "assistant", source: "authored", presentation: "course", text: "## Transition" },
+      ],
+    } as State;
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("api/workbook/editor")) return { ok: true, json: async () => ({ ...state, progress: reviewingProgress }) };
+      if (String(input).endsWith("api/workbook/complete-block")) return { ok: true, json: async () => ({ outcome: "completed", state, navigationTarget: "transition" }) };
+      return { ok: true, json: async () => state };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver as any);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const editor = container.querySelector<HTMLElement>("[role='textbox'][contenteditable='true']")!;
+    const readyElement = container.querySelector<HTMLElement>("#transition")!;
+    readyElement.getBoundingClientRect = () => ({ top: 100, bottom: 300, left: 0, right: 800, width: 800, height: 200, x: 0, y: 100, toJSON: () => ({}) });
+
+    editor.textContent = "new exact editor revision";
+    await act(async () => { editor.dispatchEvent(new window.Event("input", { bubbles: true })); vi.advanceTimersByTime(749); await Promise.resolve(); });
+    await act(async () => {
+      observerCallback?.([{ isIntersecting: true, boundingClientRect: { top: 100 } }]);
+      window.dispatchEvent(new window.Event("scroll"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock.mock.calls.filter(([url, init]) => url === "api/workbook/complete-block" && (init as RequestInit | undefined)?.method === "POST")).toHaveLength(0);
+    await act(async () => { vi.advanceTimersByTime(1); await Promise.resolve(); await Promise.resolve(); });
+    const editorCall = fetchMock.mock.calls.find(([url]) => url === "api/workbook/editor")!;
+    expect(JSON.parse((editorCall[1] as RequestInit).body as string)).toEqual({ blockId: editorBlock.id, revision: 2, text: "new exact editor revision" });
+  });
+
+  it("hides terminal Continue and suppresses passive scroll as soon as partial command input begins", async () => {
+    let observerCallback: ((entries: any[]) => void) | undefined;
+    class FakeIntersectionObserver {
+      active = true;
+      observe = vi.fn();
+      disconnect = vi.fn(() => { this.active = false; });
+      constructor(callback: (entries: any[]) => void) { observerCallback = (entries) => { if (this.active) callback(entries); }; }
+    }
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      sent: string[] = [];
+      addEventListener() {}
+      send(message: string) { this.sent.push(message); }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver as any);
+    const terminalBlock = lesson.blocks[1]!;
+    const terminalProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    terminalProgress.readyBlocks = ["transition"];
+    terminalProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    terminalProgress.blocks.push({ id: "transition", type: "narrative", ready: true, active: false, completed: false, verified: false, emerged: true } as any);
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock, lesson.blocks[3]!] } as any })],
+      progress: terminalProgress,
+      adapter: {},
+      readyBlockIds: ["transition"],
+      timeline: [
+        { type: "message", id: "terminal-course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Run command" },
+        { type: "message", id: "transition-course", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "transition", role: "assistant", source: "authored", presentation: "course", text: "## Transition" },
+      ],
+    } as any;
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    await act(async () => { terminalDataListeners[0]!("n"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+    const readyElement = container.querySelector<HTMLElement>("#transition")!;
+    readyElement.getBoundingClientRect = () => ({ top: 100, bottom: 300, left: 0, right: 800, width: 800, height: 200, x: 0, y: 100, toJSON: () => ({}) });
+    await act(async () => {
+      observerCallback?.([{ isIntersecting: true, boundingClientRect: { top: 100 } }]);
+      window.dispatchEvent(new window.Event("scroll"));
+      await Promise.resolve();
+    });
+    expect(fetchMock.mock.calls.filter(([url, init]) => url === "api/workbook/complete-block" && (init as RequestInit | undefined)?.method === "POST")).toHaveLength(0);
+  });
+
+  it("restores terminal Continue after partial input is erased or cancelled", async () => {
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      addEventListener() {}
+      send() {}
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalBlock = lesson.blocks[1]!;
+    const terminalProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    terminalProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock] } as any })],
+      progress: terminalProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Run command" }],
+    } as any;
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => String(input).endsWith("api/workbook/complete-block") ? { outcome: "completed", state, navigationTarget: "workbook--complete" } : state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    await act(async () => { terminalDataListeners[0]!("n"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+    await act(async () => { terminalDataListeners[0]!("\x7f"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    await act(async () => { terminalDataListeners[0]!("n\u0003"); });
+    const restored = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Continue")!;
+    expect(restored).toBeTruthy();
+    await act(async () => { restored.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); await Promise.resolve(); await Promise.resolve(); });
+    expect(fetchMock.mock.calls.filter(([url, init]) => url === "api/workbook/complete-block" && (init as RequestInit | undefined)?.method === "POST")).toHaveLength(1);
+  });
+
+  it("marks Do it for me terminal insertion as local pending work without remounting xterm", async () => {
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      sent: string[] = [];
+      addEventListener(type: string, listener: () => void) { if (type === "open") queueMicrotask(listener); }
+      send(message: string) { this.sent.push(message); }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalBlock = lesson.blocks[1]!;
+    const terminalProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    terminalProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock] } as any })],
+      progress: terminalProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Practice\n\nRun the authored command." }],
+    } as any;
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => state })));
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(terminalInstances).toHaveLength(1);
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    const action = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Do it for me")!;
+    await act(async () => { action.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+
+    expect(terminalInstances).toHaveLength(1);
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+  });
+
+  it("ignores terminal arrow keys when deciding whether Continue should be hidden", async () => {
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      addEventListener() {}
+      send() {}
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalBlock = lesson.blocks[1]!;
+    const terminalProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    terminalProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock] } as any })],
+      progress: terminalProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Run command" }],
+    } as any;
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => state })));
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    await act(async () => { terminalDataListeners[0]!("\x1b["); terminalDataListeners[0]!("A"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+  });
+
+  it("restores usable Continue controls when the server rejects completion", async () => {
+    const terminalBlock = lesson.blocks[1]!;
+    const terminalProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    terminalProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock] } as any })],
+      progress: terminalProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Run command" }],
+    } as any;
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => ({ ok: true, json: async () => String(input).endsWith("api/workbook/complete-block") ? { outcome: "rejected", state, reason: "ineligible" } : state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const continueButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Continue")!;
+    await act(async () => { continueButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); await Promise.resolve(); await Promise.resolve(); });
+
+    const restored = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Continue")!;
+    expect(restored).toBeTruthy();
+    expect(restored.disabled).toBe(false);
+    expect(container.textContent).not.toContain("Continuing…");
+    expect(fetchMock.mock.calls.filter(([url]) => url === "api/workbook/state")).toHaveLength(1);
   });
 
   it("routes active reflection composer sends through the reflection event path without a sticky hint", async () => {

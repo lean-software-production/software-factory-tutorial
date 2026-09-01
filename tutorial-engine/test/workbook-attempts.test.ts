@@ -60,6 +60,22 @@ describe("AttemptStore", () => {
     await expect(store.read(reflection.id)).resolves.toMatchObject({ evidence: reflection.evidence });
   });
 
+  it("lets editor revisions supersede accepted active attempts while protecting reflection acceptance", async () => {
+    const workspace = await temporaryWorkspace("workbook-attempt-accepted-revision-");
+    const store = new AttemptStore(workspace);
+
+    const editor = await store.create({ lessonId: "lesson-id", blockId: "editor-block", evidence: { kind: "editor", text: "accepted editor draft" } });
+    await store.acceptCurrent(editor.id, "Editor accepted.");
+    await expect(store.create({ lessonId: "lesson-id", blockId: "editor-block", evidence: { kind: "editor", text: "newer editor draft" } })).resolves.toMatchObject({ version: 2, status: "working", evidence: { kind: "editor", text: "newer editor draft" } });
+    await expect(store.read(editor.id)).resolves.toMatchObject({ status: "superseded", evidence: { kind: "editor", text: "accepted editor draft" } });
+    await expect(store.current("lesson-id", "editor-block")).resolves.toMatchObject({ status: "working", evidence: { kind: "editor", text: "newer editor draft" } });
+
+    const reflection = await store.create({ lessonId: "lesson-id", blockId: "reflection-block", evidence: { kind: "reflection", response: "Accepted reflection.", conversation: [] } });
+    await store.acceptCurrent(reflection.id, "Reflection accepted.");
+    await expect(store.create({ lessonId: "lesson-id", blockId: "reflection-block", evidence: { kind: "reflection", response: "Second reflection.", conversation: [] } })).rejects.toThrow(/accepted work/i);
+    await expect(store.current("lesson-id", "reflection-block")).resolves.toMatchObject({ id: reflection.id, status: "accepted" });
+  });
+
   it("lists every versioned attempt for a block in ascending version order", async () => {
     const workspace = await temporaryWorkspace("workbook-attempt-history-");
     const attempts = new AttemptStore(workspace);

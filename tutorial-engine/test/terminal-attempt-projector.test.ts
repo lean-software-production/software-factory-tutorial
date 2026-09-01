@@ -27,7 +27,7 @@ describe("projectTerminalAttempts", () => {
     expect(JSON.stringify(feedback)).not.toMatch(/attempt-1|npm test|evidence|rubric|handoff|request/i);
 
     events.push(record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-1", version: 1, kind: "terminal", summary: "Accepted directly." }, 3));
-    expect(projectTerminalAttempts(events, "terminal-1").get("block")).toEqual({ state: "complete", revision: 1, successMessage: "Accepted directly." });
+    expect(projectTerminalAttempts(events, "terminal-1").get("block")).toEqual({ state: "accepted", revision: 1, successMessage: "Accepted directly." });
   });
 
   it("does not project feedback or acceptance before valid Bash-finished evidence", () => {
@@ -64,7 +64,7 @@ describe("projectTerminalAttempts", () => {
       finished("attempt-private-1"),
       record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-private-1", version: 1, kind: "terminal", summary: "Same public result." }, 3),
     ];
-    expect(projectTerminalAttempts(firstAccepted, "terminal-1").get("block")).toEqual({ state: "complete", revision: 1, successMessage: "Same public result." });
+    expect(projectTerminalAttempts(firstAccepted, "terminal-1").get("block")).toEqual({ state: "accepted", revision: 1, successMessage: "Same public result." });
 
     const repeated: WorkbookTimelineRecord[] = [
       ...firstAccepted,
@@ -73,7 +73,7 @@ describe("projectTerminalAttempts", () => {
       record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "attempt-private-2", version: 2, kind: "terminal", summary: "Same public result." }, 6),
     ];
     const projection = projectTerminalAttempts(repeated, "terminal-1").get("block");
-    expect(projection).toEqual({ state: "complete", revision: 2, successMessage: "Same public result." });
+    expect(projection).toEqual({ state: "accepted", revision: 2, successMessage: "Same public result." });
     expect(JSON.stringify(projection)).not.toMatch(/attempt-private|request-private|npm test|terminal-1/);
   });
 
@@ -85,6 +85,16 @@ describe("projectTerminalAttempts", () => {
       finished("old"),
       record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "old", version: 1, kind: "terminal", summary: "Already accepted." }, 3),
     ];
-    expect(projectTerminalAttempts(completed, "after-restart").get("block")).toEqual({ state: "complete", revision: 1, successMessage: "Already accepted." });
+    expect(projectTerminalAttempts(completed, "after-restart").get("block")).toEqual({ state: "accepted", revision: 1, successMessage: "Already accepted." });
+  });
+
+  it("hides stale accepted terminal presentation when a later old-session command is unfinished", () => {
+    const events: WorkbookTimelineRecord[] = [
+      submitted("accepted-old", "before-restart", 1),
+      finished("accepted-old", 2),
+      record({ type: "attempt_accepted", lessonId: "lesson", blockId: "block", attemptId: "accepted-old", version: 1, kind: "terminal", summary: "Accepted old command." }, 3),
+      record({ type: "terminal-command-submitted", attemptId: "unfinished-new", lessonId: "lesson", blockId: "block", command: "npm test", terminalSessionId: "before-restart" }, 4),
+    ];
+    expect(projectTerminalAttempts(events, "after-restart").get("block")).toBeUndefined();
   });
 });

@@ -13,6 +13,7 @@ import { TimelineThread } from "./timeline-thread.js";
 import { isPublicWorkbookState, parsePublicCompleteBlockResult, parsePublicWorkbookState } from "../../src/workbook/public-contract.js";
 import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookChapter, PublicWorkbookLesson, PublicWorkbookProgress, PublicWorkbookState } from "../../src/workbook/public-contract.js";
 import { parsePublicTerminalMessage, type PublicTerminalFrame } from "../../src/workbook/public-terminal-contract.js";
+import { TerminalLineInputTracker, type TerminalLineInputActivity } from "../../src/workbook/terminal-line-input-tracker.js";
 import { createTerminalCoachingDisplayState, reduceTerminalCoachingDisplay, type TerminalCoachingDisplayState } from "./terminal-coaching-display.js";
 
 // A short local vocabulary for the contract types this module uses constantly. Only names that
@@ -177,15 +178,19 @@ function setTerminalInteractivity(terminal: Terminal | null, element: HTMLDivEle
   if (helperTextarea) helperTextarea.disabled = !interactive;
 }
 
-function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange }: { command?: string; active: boolean; onError(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange, onTerminalInputActivity }: { command?: string; active: boolean; onError(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onTerminalInputActivity?(activity: TerminalLineInputActivity): void }) {
   const terminalPanel = useRef<HTMLDivElement | null>(null);
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
   const socket = useRef<WebSocket | null>(null);
   const interactive = useRef(active);
+  const terminalInputActivityRef = useRef(onTerminalInputActivity);
+  const terminalInputTracker = useRef(new TerminalLineInputTracker());
   const [connected, setConnected] = useState(false);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
+
+  useLayoutEffect(() => { terminalInputActivityRef.current = onTerminalInputActivity; }, [onTerminalInputActivity]);
 
   // This changes input authority in place. It deliberately does not participate in the setup
   // effect below, so promoting a ready terminal keeps its xterm instance and WebSocket alive.
@@ -217,7 +222,13 @@ function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange 
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: nextTerminal.cols, rows: nextTerminal.rows }));
     };
     const dataDisposable = nextTerminal.onData((data) => {
-      if (interactive.current && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data }));
+      if (!interactive.current || ws.readyState !== WebSocket.OPEN) return;
+      // Browser-side terminal revision tracking is only a suppression hint until Bash emits the
+      // authoritative revision. The shared tracker ignores navigation/control escape sequences and
+      // reports only meaningful physical line starts or current-line cancellations.
+      const activity = terminalInputTracker.current.consume(data);
+      if (activity.started || activity.cancelled) terminalInputActivityRef.current?.(activity);
+      ws.send(JSON.stringify({ type: "input", data }));
     });
     ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); sendCurrentDimensions(); });
     ws.addEventListener("message", (event) => {
@@ -254,7 +265,11 @@ function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange 
   const insertCommand = useCallback(() => {
     if (!interactive.current || !command) return;
     const data = commandForInsertion(command);
-    if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({ type: "input", data }));
+    if (socket.current?.readyState === WebSocket.OPEN) {
+      const activity = terminalInputTracker.current.consume(data);
+      if (activity.started || activity.cancelled) terminalInputActivityRef.current?.(activity);
+      socket.current.send(JSON.stringify({ type: "input", data }));
+    }
   }, [command]);
 
   useEffect(() => {
@@ -283,6 +298,11 @@ function useContinueOnce(block: Block, state: BlockProgress | undefined, refresh
     setPending(true);
     completeBlockRequest(block.id).then((result) => {
       refresh(stateFromCompletion(result));
+      if ("outcome" in result && result.outcome === "rejected") {
+        pendingRef.current = false;
+        setPending(false);
+        return;
+      }
       const target = navigationTargetFrom(result);
       if (target) requestAnimationFrame(() => navigateToAnchor(target, historyMode));
     }).catch((error) => {
@@ -341,8 +361,8 @@ function initialTerminalDisplay(state: BlockProgress | undefined): TerminalCoach
 }
 
 export function TerminalHistory({ state }: { state: BlockProgress | undefined }) {
-  if (!state?.terminalSnapshot) return null;
-  const terminalSuccess = state.terminal?.phase === "complete" ? state.terminal.message : undefined;
+  if (!state?.completed || !state.terminalSnapshot) return null;
+  const terminalSuccess = state.terminal?.phase === "accepted" ? state.terminal.message : undefined;
   return <div className="terminal-history" aria-label="Completed terminal output">
     <div className={terminalSuccess ? "terminal-completion-surface has-feedback" : undefined}>
       <FrozenTerminal text={state.terminalSnapshot.transcript} />
@@ -351,41 +371,106 @@ export function TerminalHistory({ state }: { state: BlockProgress | undefined })
   </div>;
 }
 
-function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChange }: { block: Block; state: BlockProgress | undefined; disabled?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void }) {
+function ReadOnlyEditorSurface({ path, text }: { path: string; text: string }) {
+  const editorElement = useRef<HTMLDivElement | null>(null);
+  const editor = useRef<EditorView | null>(null);
+
+  useEffect(() => {
+    if (!editorElement.current) return;
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: text,
+        extensions: [
+          keymap.of(defaultKeymap),
+          EditorState.readOnly.of(true),
+          EditorView.editable.of(false),
+        ]
+      }),
+      parent: editorElement.current
+    });
+    editor.current = view;
+    setEditorInteractivity(view, editorElement.current, false);
+    return () => {
+      view.destroy();
+      if (editor.current === view) editor.current = null;
+    };
+  }, [text]);
+
+  return <div ref={editorElement} className="editor-surface editor-history-surface" aria-label={`Completed editor for ${path}`} aria-disabled="true" />;
+}
+
+export function EditorHistory({ block, state }: { block: EditorPracticeBlock; state: BlockProgress | undefined }) {
+  if (!state?.completed || !state.editorSnapshot) return null;
+  const editorSuccess = state.checkpoint?.status === "accepted" ? state.checkpoint.successMessage : undefined;
+  return <div className="editor-history" aria-label="Completed editor draft">
+    <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
+    <div className={editorSuccess ? "editor-completion-surface has-feedback" : "editor-completion-surface"}>
+      <ReadOnlyEditorSurface path={block.path} text={state.editorSnapshot.text} />
+      {editorSuccess && <PracticeFeedbackBar tone="success" markdown={editorSuccess} className="editor-feedback-overlay editor-history-complete" />}
+    </div>
+  </div>;
+}
+
+function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChange, onTerminalCommandRevision }: { block: Block; state: BlockProgress | undefined; disabled?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onTerminalCommandRevision?: TerminalLocalRevisionHandler }) {
   const command = shellCommandFrom(block.markdown);
   const [display, dispatch] = useReducer(reduceTerminalCoachingDisplay, state, initialTerminalDisplay);
   const [terminalError, setTerminalError] = useState<string>();
   const terminalDisabled = useRef(disabled);
   useEffect(() => { terminalDisabled.current = disabled; if (disabled) setTerminalError(undefined); }, [disabled]);
   const handleTerminalError = useCallback((message: string) => { if (!terminalDisabled.current) setTerminalError(message); }, []);
+  const terminalServerRevision = state?.terminalRevision ?? 0;
+  const terminalServerRevisionRef = useRef(terminalServerRevision);
+  const pendingTerminalInput = useRef<{ physicalLines: number; targetRevision?: number }>({ physicalLines: 0 });
+  useLayoutEffect(() => { terminalServerRevisionRef.current = terminalServerRevision; }, [terminalServerRevision]);
+  useEffect(() => {
+    const pending = pendingTerminalInput.current;
+    if (pending.targetRevision !== undefined && terminalServerRevision >= pending.targetRevision && state?.terminal?.phase === "accepted") {
+      pending.physicalLines = 0;
+      pending.targetRevision = undefined;
+    }
+  }, [state?.terminal?.phase, terminalServerRevision]);
+  useEffect(() => {
+    pendingTerminalInput.current = { physicalLines: 0 };
+  }, [block.id]);
+  const handleTerminalInputActivity = useCallback((activity: TerminalLineInputActivity) => {
+    const pending = pendingTerminalInput.current;
+    pending.physicalLines = Math.max(0, pending.physicalLines + activity.started - activity.cancelled);
+    if (activity.started > 0 && pending.targetRevision === undefined) {
+      pending.targetRevision = terminalServerRevisionRef.current + 1;
+      onTerminalCommandRevision?.(block.id, pending.targetRevision);
+    }
+    if (pending.physicalLines === 0 && pending.targetRevision !== undefined) {
+      pending.targetRevision = undefined;
+      onTerminalCommandRevision?.(block.id, terminalServerRevisionRef.current);
+    }
+  }, [block.id, onTerminalCommandRevision]);
 
   useEffect(() => {
     dispatch({ type: "server-state", terminal: state?.terminal });
     // A later authoritative lifecycle state replaces a transport error in the same one card.
     if (state?.terminal) setTerminalError(undefined);
   }, [state?.terminal]);
-  const complete = state?.terminal?.phase === "complete" || display.phase === "complete";
-  const showLiveTerminal = !state?.completed && !complete;
+  const showLiveTerminal = !state?.completed;
   const preloading = Boolean(state?.ready && !state.active && !state.completed);
   const lifecycleText = display.phase === "idle" || disabled && (display.phase === "running" || display.phase === "checking") ? undefined : display.text;
   const text = terminalError ?? lifecycleText;
   const terminalBusy = !disabled && (display.phase === "running" || display.phase === "checking");
-  const terminalTone: PracticeFeedbackTone = terminalError ? "failure" : display.phase === "feedback" ? "feedback" : "status";
-  // Exactly one in-place learner-facing node represents status, feedback, completion, or a
-  // transport error. It is never moved into the activity/timeline portal.
+  const terminalTone: PracticeFeedbackTone = terminalError ? "failure" : display.phase === "accepted" ? "success" : display.phase === "feedback" ? "feedback" : "status";
+  // Exactly one in-place learner-facing node represents status, feedback, acceptance, or a
+  // transport error. It stays welded to the live surface until block completion moves history below.
   const displayPanel = text ? <PracticeFeedbackBar tone={terminalTone} busy={terminalBusy} status={terminalBusy ? text : undefined} markdown={terminalBusy ? undefined : text} className="live-block-feedback terminal-feedback-overlay" /> : null;
   return <div className={`work-block terminal ${state?.active ? "is-active" : ""}`} aria-disabled={disabled ? "true" : undefined}>
     {showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
-      <EmbeddedTerminal command={command} active={Boolean(state?.active && !disabled)} onError={handleTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} />
+      <EmbeddedTerminal command={command} active={Boolean(state?.active && !disabled)} onError={handleTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} onTerminalInputActivity={handleTerminalInputActivity} />
       {displayPanel}
     </div>}
-    {!showLiveTerminal && !complete && displayPanel}
+    {!showLiveTerminal && displayPanel}
     {preloading && <p className="terminal-coaching-activity subtle">Preparing terminal…</p>}
   </div>;
 }
 
 function editorStatusText(state: BlockProgress | undefined, completed: boolean): string {
-  if (completed || state?.editorStatus === "unlocked" || state?.checkpoint?.status === "accepted") return "Unlocked — the accepted revision has been written to the target file.";
+  if (completed || state?.editorStatus === "accepted" || state?.checkpoint?.status === "accepted") return "Unlocked — the accepted revision has been written to the target file.";
   if (state?.checkpoint?.status === "reviewing" || state?.editorStatus === "reviewing") return "Reviewing your latest revision…";
   if (state?.checkpoint?.status === "working") return "Keep writing — the tutor will review after you pause.";
   if (state?.editorStatus === "waiting") return "Keep writing — the reviewer will check again after you pause.";
@@ -406,6 +491,7 @@ function setEditorInteractivity(view: EditorView | null, element: HTMLDivElement
 }
 
 type EditorLocalRevisionHandler = (blockId: string, revision: number) => void;
+type TerminalLocalRevisionHandler = (blockId: string, revision: number) => void;
 
 function stateLagsLocalEditorRevision(next: State, localRevisions: ReadonlyMap<string, number>): boolean {
   for (const [blockId, localRevision] of localRevisions) {
@@ -422,6 +508,39 @@ function clearSatisfiedLocalEditorRevisions(next: State, localRevisions: Map<str
   }
 }
 
+function terminalLocalRevisionSatisfied(progress: BlockProgress | undefined, canComplete: Progress["canComplete"], localRevision: number): boolean {
+  return Boolean(progress
+    && (progress.terminalRevision ?? 0) >= localRevision
+    && progress.terminal?.phase === "accepted"
+    && canComplete?.blockId === progress.id
+    && canComplete.eligible);
+}
+
+function clearSatisfiedLocalTerminalRevisions(next: State, localRevisions: Map<string, number>): void {
+  for (const [blockId, localRevision] of localRevisions) {
+    const progress = progressFor(next.progress, blockId);
+    if (terminalLocalRevisionSatisfied(progress, next.progress.canComplete, localRevision)) localRevisions.delete(blockId);
+  }
+}
+
+function activeEditorLocalRevisionOutrunsState(state: State, localRevisions: ReadonlyMap<string, number>): boolean {
+  const activeId = state.progress.activeBlockId;
+  const localRevision = localRevisions.get(activeId);
+  if (localRevision === undefined) return false;
+  const progress = progressFor(state.progress, activeId);
+  const source = renderedBlockSource(state, activeId);
+  return Boolean(source?.block.type === "editor-practice" && progress && (progress.revision ?? 0) < localRevision);
+}
+
+function activeTerminalLocalRevisionOutrunsState(state: State, localRevisions: ReadonlyMap<string, number>): boolean {
+  const activeId = state.progress.activeBlockId;
+  const localRevision = localRevisions.get(activeId);
+  if (localRevision === undefined) return false;
+  const progress = progressFor(state.progress, activeId);
+  const source = renderedBlockSource(state, activeId);
+  return Boolean(source?.block.type === "terminal-practice" && progress && !terminalLocalRevisionSatisfied(progress, state.progress.canComplete, localRevision));
+}
+
 function EditorPracticeBlockView({ block, state, refresh, disabled = false, onLocalRevision }: { block: EditorPracticeBlock; state: BlockProgress | undefined; refresh(state: State): void; disabled?: boolean; onLocalRevision?: EditorLocalRevisionHandler }) {
   const editorElement = useRef<HTMLDivElement | null>(null);
   const editor = useRef<EditorView | null>(null);
@@ -436,8 +555,9 @@ function EditorPracticeBlockView({ block, state, refresh, disabled = false, onLo
   const [localError, setLocalError] = useState<string>();
   const [retainedFeedback, setRetainedFeedback] = useState<string | undefined>(state?.checkpoint?.feedback);
   const accepted = state?.checkpoint?.status === "accepted";
-  const completed = Boolean(state?.completed || state?.editorStatus === "unlocked");
-  const lifecycleCanEdit = Boolean(state?.active && !completed && !accepted);
+  const suppressInitialAutoReview = useRef(accepted);
+  const completed = Boolean(state?.completed);
+  const lifecycleCanEdit = Boolean(state?.active && !completed);
   const canEdit = lifecycleCanEdit && !disabled;
   const initialText = state?.draftText ?? "";
 
@@ -455,6 +575,7 @@ function EditorPracticeBlockView({ block, state, refresh, disabled = false, onLo
       baseRevision.current = revision;
       latestSubmittedRevision.current = revision;
       pendingDraftRevision.current = revision;
+      suppressInitialAutoReview.current = accepted;
       latestDraftGeneration.current += 1;
       return;
     }
@@ -462,7 +583,7 @@ function EditorPracticeBlockView({ block, state, refresh, disabled = false, onLo
       baseRevision.current = Math.max(baseRevision.current, revision);
       latestSubmittedRevision.current = Math.max(latestSubmittedRevision.current, revision);
     }
-  }, [block.id, state?.revision]);
+  }, [accepted, block.id, state?.revision]);
   useEffect(() => {
     const feedback = state?.checkpoint?.feedback?.trim();
     if (feedback) setRetainedFeedback(feedback);
@@ -527,7 +648,7 @@ function EditorPracticeBlockView({ block, state, refresh, disabled = false, onLo
     editor.current = view;
     const seededDraft = latestDraftText.current;
     setEditorInteractivity(view, editorElement.current, canEdit);
-    if (canEdit && baseRevision.current === 0 && seededDraft.trim()) scheduleReview(seededDraft);
+    if (canEdit && baseRevision.current === 0 && seededDraft.trim() && !suppressInitialAutoReview.current) scheduleReview(seededDraft);
     return () => {
       activeRef.current = false;
       if (timer.current) clearTimeout(timer.current);
@@ -543,24 +664,25 @@ function EditorPracticeBlockView({ block, state, refresh, disabled = false, onLo
   const checkpointFeedback = state?.checkpoint?.feedback;
   const showingRetainedFeedback = Boolean(checkpointFeedback || retainedFeedback && (state?.checkpoint?.status === "reviewing" || localError));
   const liveFeedback = showingRetainedFeedback ? checkpointFeedback ?? retainedFeedback : undefined;
+  const acceptedSuccess = accepted ? state?.checkpoint?.successMessage || "The latest accepted editor draft was written to the target file." : undefined;
   const reviewNotice = disabled ? localError : localError ?? state?.checkpoint?.reviewNotice ?? (liveFeedback && state?.checkpoint?.status === "reviewing" ? "Updating feedback…" : undefined);
-  const liveStatus = liveFeedback ? reviewNotice : disabled ? undefined : editorStatusText(state, completed);
+  const liveStatus = liveFeedback || acceptedSuccess ? reviewNotice : disabled ? undefined : editorStatusText(state, completed);
   const editorBusy = !disabled && state?.checkpoint?.status === "reviewing";
-  const editorTone: PracticeFeedbackTone = localError ? "failure" : editorBusy && liveFeedback ? "updating" : liveFeedback ? "feedback" : "status";
+  const editorTone: PracticeFeedbackTone = localError ? "failure" : acceptedSuccess ? "success" : editorBusy && liveFeedback ? "updating" : liveFeedback ? "feedback" : "status";
   return <div className={`work-block editor-practice ${state?.active ? "is-active" : ""}`} aria-disabled={disabled ? "true" : undefined}>
-    <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>
-    {lifecycleCanEdit && <div className={`editor-live-surface${liveFeedback || liveStatus ? " has-feedback" : ""}`}>
+    {!completed && <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>}
+    {lifecycleCanEdit && <div className={`editor-live-surface${liveFeedback || acceptedSuccess || liveStatus ? " has-feedback" : ""}`}>
       <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} aria-disabled={disabled ? "true" : undefined} />
-      {(liveFeedback || liveStatus) && <PracticeFeedbackBar tone={editorTone} busy={editorBusy} markdown={liveFeedback} status={liveStatus} className="live-block-feedback editor-feedback-overlay" />}
+      {(liveFeedback || acceptedSuccess || liveStatus) && <PracticeFeedbackBar tone={editorTone} busy={editorBusy} markdown={acceptedSuccess ?? liveFeedback} status={liveStatus} className="live-block-feedback editor-feedback-overlay" />}
     </div>}
-    {completed ? <PracticeFeedbackBar tone="success" label="Unlocked" title="Accepted revision unlocked the next step." markdown={state?.checkpoint?.successMessage || "The latest accepted editor draft was written to the target file."} className="success-checkpoint editor-unlocked" /> : !lifecycleCanEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
+    {completed ? <EditorHistory block={block} state={state} /> : !lifecycleCanEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
   </div>;
 }
 
-export function BlockView({ lessonId, block, progress, refresh, disabled = false, onTerminalInsertionChange, onEditorLocalRevision }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; disabled?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onEditorLocalRevision?: EditorLocalRevisionHandler }) {
+export function BlockView({ lessonId, block, progress, refresh, disabled = false, onTerminalInsertionChange, onEditorLocalRevision, onTerminalCommandRevision }: { lessonId?: string; block: Block; progress: Progress; refresh(state: State): void; disabled?: boolean; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onEditorLocalRevision?: EditorLocalRevisionHandler; onTerminalCommandRevision?: TerminalLocalRevisionHandler }) {
   const resolvedLessonId = lessonId ?? progress.activeLessonId;
   const state = stateForBlock(progress, resolvedLessonId, block);
-  if (block.type === "terminal-practice") return <TerminalBlock block={block} state={state} disabled={disabled} onTerminalInsertionChange={onTerminalInsertionChange} />;
+  if (block.type === "terminal-practice") return <TerminalBlock block={block} state={state} disabled={disabled} onTerminalInsertionChange={onTerminalInsertionChange} onTerminalCommandRevision={onTerminalCommandRevision} />;
   if (block.type === "editor-practice") return <EditorPracticeBlockView key={block.id} block={block} state={state} refresh={refresh} disabled={disabled} onLocalRevision={onEditorLocalRevision} />;
   return null;
 }
@@ -679,14 +801,22 @@ function renderedBlockSource(state: State, blockId: string): PracticeSurfaceSour
   return undefined;
 }
 
+function renderPracticeHistoryFor(state: State, record: PublicTimelineRecord): React.ReactNode {
+  if (record.type !== "message" || record.source !== "authored" || record.presentation !== "course") return null;
+  const blockProgress = state.progress.blocks.find((block) => block.id === record.blockId);
+  if (!blockProgress?.completed) return null;
+  const source = renderedBlockSource(state, record.blockId);
+  if (!source) return null;
+  if (source.block.type === "terminal-practice") return <TerminalHistory state={blockProgress} />;
+  if (source.block.type === "editor-practice") return <EditorHistory block={source.block} state={blockProgress} />;
+  return null;
+}
+
 /** Select the sole practice surface without making non-ready authored content renderable. */
 function practiceSurfaceSource(state: State): PracticeSurfaceSource | undefined {
   const active = progressFor(state.progress, state.progress.activeBlockId);
   const activeSource = renderedBlockSource(state, state.progress.activeBlockId);
-  if (active?.active && !active.completed && activeSource && ["terminal-practice", "editor-practice"].includes(activeSource.block.type) && !(activeSource.block.type === "terminal-practice" && active.terminal?.phase === "complete")) return activeSource;
-  // A terminal's accepted snapshot replaces its live xterm before the learner continues. Do not
-  // preload a distinct ready terminal from the old shell; continuation resets that transport.
-  if (activeSource?.block.type === "terminal-practice" && active?.terminal?.phase === "complete") return undefined;
+  if (active?.active && !active.completed && activeSource && ["terminal-practice", "editor-practice"].includes(activeSource.block.type)) return activeSource;
 
   const readyId = readySuccessorId(state.progress);
   const ready = readyId ? progressFor(state.progress, readyId) : undefined;
@@ -764,13 +894,29 @@ export function App() {
   const sseStateRequestSequence = useRef(0);
   const initialAnchorReconciled = useRef(false);
   const localEditorRevisions = useRef(new Map<string, number>());
+  const localTerminalRevisions = useRef(new Map<string, number>());
+  const [, bumpLocalEditorRevisionEpoch] = useReducer((epoch: number) => epoch + 1, 0);
+  const [, bumpLocalTerminalRevisionEpoch] = useReducer((epoch: number) => epoch + 1, 0);
   const rememberEditorLocalRevision = useCallback<EditorLocalRevisionHandler>((blockId, revision) => {
-    if (revision > (localEditorRevisions.current.get(blockId) ?? 0)) localEditorRevisions.current.set(blockId, revision);
+    if (revision <= (localEditorRevisions.current.get(blockId) ?? 0)) return;
+    localEditorRevisions.current.set(blockId, revision);
+    bumpLocalEditorRevisionEpoch();
   }, []);
+  const rememberTerminalCommandRevision = useCallback<TerminalLocalRevisionHandler>((blockId, revision) => {
+    const progress = state ? progressFor(state.progress, blockId) : undefined;
+    const serverRevision = progress?.terminalRevision ?? 0;
+    const currentRevision = localTerminalRevisions.current.get(blockId);
+    const nextRevision = revision <= serverRevision ? undefined : revision;
+    if (nextRevision === currentRevision) return;
+    if (nextRevision === undefined) localTerminalRevisions.current.delete(blockId);
+    else localTerminalRevisions.current.set(blockId, nextRevision);
+    bumpLocalTerminalRevisionEpoch();
+  }, [state]);
   const applyWorkbookState = useCallback((next: State) => {
     setState((current) => {
       if (!next.fatal && stateLagsLocalEditorRevision(next, localEditorRevisions.current)) return current ?? next;
       clearSatisfiedLocalEditorRevisions(next, localEditorRevisions.current);
+      clearSatisfiedLocalTerminalRevisions(next, localTerminalRevisions.current);
       return next;
     });
   }, []);
@@ -840,11 +986,13 @@ export function App() {
   const runwayActiveBlockId = state?.progress.activeBlockId;
   const runwayWorkbookComplete = state?.progress.workbookComplete;
   const runwayFatal = Boolean(state?.fatal);
+  const runwayEditorLocalRevisionPending = state ? activeEditorLocalRevisionOutrunsState(state, localEditorRevisions.current) : false;
+  const runwayTerminalLocalRevisionPending = state ? activeTerminalLocalRevisionOutrunsState(state, localTerminalRevisions.current) : false;
   useEffect(() => {
     if (state) commitViewedCanonicalBlock(state);
   }, [commitViewedCanonicalBlock, state]);
   useEffect(() => {
-    if (runwayWorkbookComplete || runwayFatal || typeof IntersectionObserver === "undefined") return;
+    if (runwayWorkbookComplete || runwayFatal || runwayEditorLocalRevisionPending || runwayTerminalLocalRevisionPending || typeof IntersectionObserver === "undefined") return;
     const readyId = readySuccessorAnchorId;
     const activeId = runwayActiveBlockId;
     if (!readyId || !activeId) return;
@@ -877,7 +1025,7 @@ export function App() {
       removeEventListener("scroll", checkReadySuccessorPosition);
       removeEventListener("resize", checkReadySuccessorPosition);
     };
-  }, [applyWorkbookState, readySuccessorAnchorId, runwayActiveBlockId, runwayWorkbookComplete, runwayFatal]);
+  }, [applyWorkbookState, readySuccessorAnchorId, runwayActiveBlockId, runwayWorkbookComplete, runwayFatal, runwayEditorLocalRevisionPending, runwayTerminalLocalRevisionPending]);
   useEffect(() => {
     if (!hasInitialState) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -912,6 +1060,10 @@ export function App() {
   const effectiveActiveBlockId = state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID;
   const effectiveActiveBlockProgress = state.progress.blocks.find((block) => block.id === effectiveActiveBlockId) ?? (!state.introductionComplete ? { id: INTRODUCTION_BLOCK_ID, type: "workbook-introduction", ready: true, active: true, completed: false, verified: false, emerged: true } as BlockProgress : activeBlockProgress);
   const blockInView = () => canonicalBlockInView(state, viewedCanonicalBlock.current);
+  const localActiveEditorRevision = localEditorRevisions.current.get(effectiveActiveBlockId);
+  const localActiveEditorRevisionOutrunsState = Boolean(activeBlock?.type === "editor-practice" && localActiveEditorRevision !== undefined && (effectiveActiveBlockProgress?.revision ?? 0) < localActiveEditorRevision);
+  const localActiveTerminalRevision = localTerminalRevisions.current.get(effectiveActiveBlockId);
+  const localActiveTerminalRevisionOutrunsState = Boolean(activeBlock?.type === "terminal-practice" && localActiveTerminalRevision !== undefined && effectiveActiveBlockProgress && !terminalLocalRevisionSatisfied(effectiveActiveBlockProgress, state.progress.canComplete, localActiveTerminalRevision));
   const sendTutorText = (text: string) => {
     if (mutationsDisabled) return Promise.resolve();
     if (state.introductionComplete && activeBlock?.type === "reflection") {
@@ -924,7 +1076,7 @@ export function App() {
       if (next.progress.activeBlockId !== before || next.progress.workbookComplete && !state.progress.workbookComplete) requestAnimationFrame(() => navigateToAnchor(next.progress.activeAnchorId ?? next.progress.activeBlockId, "push"));
     });
   };
-  const activeContinuationEligible = !state.introductionComplete ? true : state.progress.canComplete ? state.progress.canComplete.blockId === effectiveActiveBlockId && state.progress.canComplete.eligible : Boolean(effectiveActiveBlockProgress?.active && effectiveActiveBlockProgress.ready && !effectiveActiveBlockProgress.completed && (activeBlock?.type === "narrative" || effectiveActiveBlockProgress.checkpoint?.status === "accepted" || effectiveActiveBlockProgress.terminal?.phase === "complete"));
+  const activeContinuationEligible = !state.introductionComplete ? true : localActiveEditorRevisionOutrunsState || localActiveTerminalRevisionOutrunsState ? false : state.progress.canComplete ? state.progress.canComplete.blockId === effectiveActiveBlockId && state.progress.canComplete.eligible : Boolean(effectiveActiveBlockProgress?.active && effectiveActiveBlockProgress.ready && !effectiveActiveBlockProgress.completed && (activeBlock?.type === "narrative" || effectiveActiveBlockProgress.checkpoint?.status === "accepted" || effectiveActiveBlockProgress.terminal?.phase === "accepted"));
   const activeReflectionReviewing = Boolean(state.introductionComplete && activeBlock?.type === "reflection" && activeBlockProgress?.checkpoint?.status === "reviewing");
   const reflectionComposerDisabled = mutationsDisabled || Boolean(state.introductionComplete && activeBlock?.type === "reflection" && ["reviewing", "accepted"].includes(activeBlockProgress?.checkpoint?.status ?? ""));
   const stableRunwayIds = scrollRunwayBlockIds(state);
@@ -945,7 +1097,7 @@ export function App() {
     <LessonCompletionConfetti completedLessonIds={state.progress.completedLessons} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">
-      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onDoItForMe={!mutationsDisabled && terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} renderTerminalHistory={(record) => <TerminalHistory state={state.progress.blocks.find((block) => block.id === record.blockId)} />} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand key={activitySource.block.id} lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={applyWorkbookState} disabled={mutationsDisabled} onTerminalInsertionChange={registerTerminalInsertion} onEditorLocalRevision={rememberEditorLocalRevision} /> : undefined} completionPanel={<CompletionPanel state={state} />} />
+      <TimelineThread records={state.timeline} activeLessonId={effectiveActiveLessonId} activeBlockId={effectiveActiveBlockId} onSend={sendTutorText} onDoItForMe={!mutationsDisabled && terminalInsertion?.blockId === effectiveActiveBlockId ? terminalInsertion.insertCommand : undefined} inputDisabled={reflectionComposerDisabled} activeReflectionReviewing={activeReflectionReviewing} renderContinuation={renderTimelineContinuation} renderPracticeHistory={(record) => renderPracticeHistoryFor(state, record)} readyBlockIds={stableRunwayIds} practiceSurfaceBlockId={activitySource?.block.id} practiceSurface={activitySource ? <ActivityBand key={activitySource.block.id} lessonId={activitySource.lessonId} activeBlock={activitySource.block} progress={state.progress} refresh={applyWorkbookState} disabled={mutationsDisabled} onTerminalInsertionChange={registerTerminalInsertion} onEditorLocalRevision={rememberEditorLocalRevision} onTerminalCommandRevision={rememberTerminalCommandRevision} /> : undefined} completionPanel={<CompletionPanel state={state} />} />
     </article></main>
   </div>;
 }

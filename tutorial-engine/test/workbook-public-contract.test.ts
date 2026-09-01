@@ -119,4 +119,17 @@ describe("public workbook state contract", () => {
       expect(isPublicWorkbookState(bad), String(terminalRevision)).toBe(false);
     }
   });
+
+  it("validates optional public editor snapshots", () => {
+    const state = validState();
+    state.progress.blocks = [{ id: "editor", ready: false, active: false, completed: true, verified: true, emerged: true, editorStatus: "accepted", editorSnapshot: { text: "accepted editor text" } }];
+    expect(parsePublicWorkbookState(state)).toBe(state);
+
+    for (const editorSnapshot of [null, {}, { text: 12 }, { content: "accepted editor text" }]) {
+      const bad = validState();
+      bad.progress.blocks = [{ id: "editor", ready: false, active: false, completed: true, verified: true, emerged: true, editorStatus: "accepted", editorSnapshot } as any];
+      expect(isPublicWorkbookState(bad), JSON.stringify(editorSnapshot)).toBe(false);
+      expect(() => parsePublicWorkbookState(bad)).toThrow(/invalid public state/i);
+    }
+  });
 });

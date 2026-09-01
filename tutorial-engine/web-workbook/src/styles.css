@@ -918,6 +918,12 @@ p {
   --practice-feedback-border: #c5cbc3;
   --practice-feedback-join: rgb(154 185 223 / 0.82);
 }
+.editor-completion-surface {
+  position: relative;
+  --practice-surface-radius: 9px;
+  --practice-feedback-border: #c5cbc3;
+  --practice-feedback-join: rgb(154 185 223 / 0.82);
+}
 .terminal-live-surface,
 .terminal-completion-surface {
   --practice-feedback-border: #263949;
@@ -1057,6 +1063,11 @@ p {
 .terminal-live-surface .practice-feedback-bar,
 .terminal-completion-surface .practice-feedback-bar,
 .editor-live-surface .practice-feedback-bar {
+  margin: 0 0 12px;
+  border-top-color: var(--practice-feedback-join);
+  border-radius: 0 0 var(--practice-surface-radius) var(--practice-surface-radius);
+}
+.editor-completion-surface .practice-feedback-bar {
   margin: 0 0 12px;
   border-top-color: var(--practice-feedback-join);
   border-radius: 0 0 var(--practice-surface-radius) var(--practice-surface-radius);
@@ -1264,7 +1275,15 @@ p {
 .editor-live-surface .editor-surface {
   margin-bottom: 0;
 }
+.editor-completion-surface .editor-surface {
+  margin-bottom: 0;
+}
 .editor-live-surface.has-feedback .editor-surface {
+  border-bottom: 0;
+  border-radius: 9px 9px 0 0;
+  box-shadow: none;
+}
+.editor-completion-surface.has-feedback .editor-surface {
   border-bottom: 0;
   border-radius: 9px 9px 0 0;
   box-shadow: none;
@@ -1298,6 +1317,12 @@ p {
   min-height: 300px;
   padding: 14px;
   caret-color: var(--blue);
+}
+.editor-history {
+  margin: 4px 0 12px;
+}
+.editor-history-surface .cm-content[contenteditable="false"] {
+  caret-color: transparent;
 }
 .editor-surface .cm-focused {
   outline: none;
