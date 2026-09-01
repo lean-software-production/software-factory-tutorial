@@ -308,11 +308,19 @@ describe("local test command contract", () => {
     assert.equal(evalWorkbook.actual, "tsx evals/workbook/run.ts");
     assert.equal(evalWorkbook.aligned, true);
 
-    const engineFast = report.find((entry) => entry.packageName === "tutorial-engine" && entry.script === "test:fast");
-    assert.equal(engineFast.status, "wired");
-    assert.equal(engineFast.expectedCommand, "npm run lint && tsc --noEmit && tsc -p tsconfig.check.json && npm run check:eval && npm run test && npm run build:web:workbook && npm run browser:smoke");
-    assert.equal(engineFast.actual, engineFast.expectedCommand);
-    assert.equal(engineFast.aligned, true);
+    for (const [script, command] of [
+      ["build:typescript", "rm -rf dist && tsc -p tsconfig.json"],
+      ["build", "npm run build:typescript && npm run build:web:workbook"],
+      ["test:fast", "npm run lint && tsc -p tsconfig.check.json && npm run check:eval && npm run test && npm run build:web:workbook && npm run browser:smoke"],
+      ["check", "npm run build:typescript && npm run test:fast && npm run check:workbook-terminal-image"],
+      ["prepublishOnly", "npm run check"]
+    ]) {
+      const entry = report.find((candidate) => candidate.packageName === "tutorial-engine" && candidate.script === script);
+      assert.equal(entry.status, "wired", `tutorial-engine ${script} should be wired`);
+      assert.equal(entry.expectedCommand, command);
+      assert.equal(entry.actual, command);
+      assert.equal(entry.aligned, true);
+    }
   });
 
   it("preserves npm run check as a compatibility command for the deterministic fast loop", () => {

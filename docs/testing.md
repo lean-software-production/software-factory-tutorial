@@ -36,9 +36,11 @@ received screenshots only when the current lane changed those files during this 
 ```sh
 npm install
 npm run setup
-npm run check
 npm run test:fast
 ```
+
+`npm run check` remains supported as a compatibility alias for the same deterministic fast gate;
+do not run both back-to-back.
 
 ### Focused deterministic lanes
 

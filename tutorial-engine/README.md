@@ -112,16 +112,18 @@ and transitions.
 ## Commands
 
 ```sh
-npm run build       # compile server and browser client
-npm test            # unit tests, including deterministic eval tests
-npm run check:eval  # deterministic/model-free type-check for synthetic engine eval code
-npm run test:eval   # deterministic/model-free synthetic engine eval tests
-npm run eval -- --help # paid Docker-backed live engine eval CLI
+npm run build:typescript # compile engine TypeScript into dist/
+npm run build            # compile server and browser client
+npm test                 # unit tests, including deterministic eval tests
+npm run check:eval       # deterministic/model-free type-check for synthetic engine eval code
+npm run test:eval        # deterministic/model-free synthetic engine eval tests
+npm run test:fast        # lint, strict no-emit type-check, eval checks, unit tests, web build, browser smoke
+npm run eval -- --help   # paid Docker-backed live engine eval CLI
 npm run test:workbook-ux               # authoritative provider-free UX recording + decoded-WebM analysis + report
 npm run test:workbook-ux:deterministic # explicit alias for the same deterministic UX test
 npm run test:workbook-ux:ai            # deliberate advisory Pi review after deterministic checks pass
 npm run test:visual                    # canonical devcontainer visual gate, including two combined feedback composites
-npm run check       # TypeScript, eval type-check, unit tests, browser build, and browser smoke
+npm run check            # build TypeScript, run test:fast, then build/readiness-check the terminal image
 ```
 
 The workbook UX test family lives in [`test/workbook-ux/`](test/workbook-ux/). It writes a durable `report.md` and `ux-test-result.json`; deterministic findings gate exit, while the optional AI review is advisory and marked `@needs-human`.
@@ -140,8 +142,8 @@ exists, so run `npm run build:web:workbook` before driving one of those by hand.
 
 Playwright is a declared development dependency, but Chromium itself is downloaded separately.
 The devcontainer handles this: its image carries Chromium's system libraries and `post-create.sh`
-downloads the browser, so `npm run check` works in a fresh container with no extra step. On a host
-outside the container, provision it once after `npm install`:
+downloads the browser, so `npm run test:fast` works in a fresh container with no extra browser step.
+On a host outside the container, provision it once after `npm install`:
 
 ```sh
 npm run browser:install
@@ -151,12 +153,15 @@ If Chromium is present but fails to start with a missing shared library such as 
 system dependencies are absent rather than the browser; `npm run browser:install:ci` installs both
 and needs root.
 
-`npm run check` is the deterministic package gate: it type-checks the engine, workbook UI, and
-synthetic engine eval code, runs engine and deterministic eval tests once, builds the workbook browser
-bundle, and runs the Chromium smoke test. `prepublishOnly` runs `build` then this check, so publishing
-cannot omit the browser smoke. CI provisions Chromium with its Linux dependencies through
-`npm run browser:install:ci`. Docker terminal-image builds and live provider-backed evaluations are
-intentionally separate from this mandatory gate.
+`npm run test:fast` is the deterministic package gate: it lints the workbook UI, runs the strict
+no-emit type-check for engine, tests, and workbook UI, checks synthetic engine eval types, runs the
+engine tests once, builds the workbook browser bundle exactly once, and runs the Chromium smoke test.
+
+`npm run check` is the engine release/package gate: it first runs `build:typescript` to prove package
+emit, then `test:fast`, then `check:workbook-terminal-image` to build and readiness-check the Docker
+terminal image. `prepublishOnly` delegates once to this check. CI provisions Chromium with its Linux
+dependencies through `npm run browser:install:ci` before invoking the check. Live provider-backed
+evaluations remain separate from this mandatory gate.
 
 The synthetic tutorial-engine mechanics eval lives in [`evals/`](evals/). `npm run check:eval`
 and `npm run test:eval` are deterministic and model-free. The live command is

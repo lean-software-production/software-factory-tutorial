@@ -28,7 +28,6 @@ npm start
 npm run tutorial:workbook -- --session <id>
 npm run --workspace=tutorial-engine check:workbook
 
-npm run check
 npm run test:fast
 npm run test:engine:fast
 npm run test:workbook:fast
@@ -42,9 +41,10 @@ npm run eval:workbook -- --release
 ```
 
 See [`docs/testing.md`](docs/testing.md) for the authoritative testing workflow, command matrix,
-live-eval prerequisites, report privacy rules, visual approval process, and current `test:fast`
-benchmark. In short: `check` aliases deterministic `test:fast`; `test` is the paid/Docker-backed
-release gate; `eval:workbook -- --list` has zero side effects.
+live-eval prerequisites, report privacy rules, visual approval process, and `test:fast`
+benchmark notes. In short: `test:fast` is the normal deterministic gate; `check` remains a
+compatibility alias for it; `test` is the paid/Docker-backed release gate; `eval:workbook -- --list`
+has zero side effects.
 `npm run eval -- ...` is a temporary compatibility alias for `eval:engine`, not an authored eval.
 `eval:workbook` is the authored-curriculum live runner.
 

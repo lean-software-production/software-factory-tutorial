@@ -19,5 +19,4 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run --workspace=tutorial-engine browser:install:ci
-      - run: npm run --workspace=tutorial-engine build
       - run: npm run --workspace=tutorial-engine check

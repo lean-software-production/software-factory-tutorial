@@ -3,13 +3,35 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 type PackageJson = { scripts: Record<string, string>; workspaces?: string[] };
-type TsconfigJson = { include?: string[]; exclude?: string[] };
+type TsconfigJson = {
+  extends?: string;
+  compilerOptions?: {
+    strict?: boolean;
+    noEmit?: boolean;
+    rootDir?: string;
+    jsx?: string;
+  };
+  include?: string[];
+  exclude?: string[];
+};
 
 const repoRoot = resolve(import.meta.dirname, "../../..");
 const engineRoot = resolve(repoRoot, "tutorial-engine");
 
 async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, "utf8")) as T;
+}
+
+function requiredScript(packageJson: PackageJson, name: string): string {
+  const command = packageJson.scripts[name];
+  if (typeof command !== "string") {
+    throw new Error(`Missing package script: ${name}`);
+  }
+  return command;
+}
+
+function shellChain(command: string): string[] {
+  return command.split(" && ");
 }
 
 describe("evaluator package scripts", () => {
@@ -44,12 +66,24 @@ describe("evaluator package scripts", () => {
     expect(testEval).not.toContain("evals/run.ts");
     expect(enginePackageJson.scripts.eval).toBe("npm run build && tsx evals/run.ts");
     expect(enginePackageJson.scripts["eval:release"]).toBe("npm run eval -- --release");
-    expect(enginePackageJson.scripts["test:fast"]).toBe("npm run lint && tsc --noEmit && tsc -p tsconfig.check.json && npm run check:eval && npm run test && npm run build:web:workbook && npm run browser:smoke");
 
     expect(tsconfig.include).toEqual(["run.ts", "v2/**/*.ts", "test/**/*.test.ts"]);
     expect(tsconfig.exclude).toEqual(expect.arrayContaining(["harness", "scenarios", "reports"]));
 
-    expect(enginePackageJson.scripts.check).toBe("npm run test:fast && npm run check:workbook-terminal-image");
+    expect(requiredScript(enginePackageJson, "build:typescript")).toBe("rm -rf dist && tsc -p tsconfig.json");
+    expect(shellChain(requiredScript(enginePackageJson, "build"))).toEqual(["npm run build:typescript", "npm run build:web:workbook"]);
+    expect(shellChain(requiredScript(enginePackageJson, "test:fast"))).toEqual([
+      "npm run lint",
+      "tsc -p tsconfig.check.json",
+      "npm run check:eval",
+      "npm run test",
+      "npm run build:web:workbook",
+      "npm run browser:smoke"
+    ]);
+    expect(requiredScript(enginePackageJson, "test:fast")).not.toContain("tsc --noEmit");
+    expect(requiredScript(enginePackageJson, "test:fast").match(/build:web:workbook/g) ?? []).toHaveLength(1);
+    expect(shellChain(requiredScript(enginePackageJson, "check"))).toEqual(["npm run build:typescript", "npm run test:fast", "npm run check:workbook-terminal-image"]);
+    expect(requiredScript(enginePackageJson, "prepublishOnly")).toBe("npm run check");
     expect(enginePackageJson.scripts["test:fast"]).toContain("npm run check:eval");
     expect(enginePackageJson.scripts["test:fast"]).toContain("npm run test");
     expect(enginePackageJson.scripts.check).toContain("npm run check:workbook-terminal-image");
@@ -65,5 +99,36 @@ describe("evaluator package scripts", () => {
     expect(packageJson.scripts.check).not.toContain("test:eval");
     expect(packageJson.scripts.check).not.toContain("tsx evals/run.ts");
     expect(packageJson.scripts.check).not.toContain("EVAL_JUDGE_MODEL");
+  });
+
+  it("runs the release workflow through the engine check exactly once", async () => {
+    const workflow = await readFile(resolve(repoRoot, ".github/workflows/release-gates.yml"), "utf8");
+    const runSteps = [...workflow.matchAll(/^\s*- run: (.+)$/gm)].map((match) => match[1]);
+
+    expect(runSteps).toEqual([
+      "npm ci",
+      "npm run --workspace=tutorial-engine browser:install:ci",
+      "npm run --workspace=tutorial-engine check"
+    ]);
+    expect(runSteps).not.toContain("npm run --workspace=tutorial-engine build");
+  });
+
+  it("keeps tsconfig.check.json as a strict no-emit superset before test:fast drops redundant tsc --noEmit", async () => {
+    const buildTsconfig = await readJson<TsconfigJson>(resolve(engineRoot, "tsconfig.json"));
+    const checkTsconfig = await readJson<TsconfigJson>(resolve(engineRoot, "tsconfig.check.json"));
+
+    expect(buildTsconfig.compilerOptions?.strict).toBe(true);
+    expect(checkTsconfig.extends).toBe("./tsconfig.json");
+    expect(checkTsconfig.compilerOptions?.noEmit).toBe(true);
+    expect(checkTsconfig.include).toEqual(expect.arrayContaining(buildTsconfig.include ?? []));
+    expect(checkTsconfig.include).toEqual(expect.arrayContaining([
+      "test/**/*.ts",
+      "test/**/*.tsx",
+      "test/**/*.mts",
+      "web-workbook/src/**/*.ts",
+      "web-workbook/src/**/*.tsx",
+      "web-workbook/src/**/*.d.ts"
+    ]));
+    expect(new Set(checkTsconfig.include).size).toBe(checkTsconfig.include?.length);
   });
 });

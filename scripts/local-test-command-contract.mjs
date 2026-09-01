@@ -149,7 +149,11 @@ export const PACKAGE_SCRIPT_WIRING_CONTRACT = Object.freeze([
   packageScript({ script: "test:eval:workbook", status: WIRING_WIRED, command: "vitest run evals/workbook/test/*.test.ts" }),
   packageScript({ script: "eval:engine", status: WIRING_WIRED, command: "npm run --workspace=tutorial-engine eval --" }),
   packageScript({ script: "eval:workbook", status: WIRING_WIRED, command: `tsx ${WORKBOOK_EVAL_MODULE}` }),
-  packageScript({ packageName: "tutorial-engine", workspace: ENGINE_WORKSPACE, script: "test:fast", status: WIRING_WIRED, command: "npm run lint && tsc --noEmit && tsc -p tsconfig.check.json && npm run check:eval && npm run test && npm run build:web:workbook && npm run browser:smoke" })
+  packageScript({ packageName: "tutorial-engine", workspace: ENGINE_WORKSPACE, script: "build:typescript", status: WIRING_WIRED, command: "rm -rf dist && tsc -p tsconfig.json" }),
+  packageScript({ packageName: "tutorial-engine", workspace: ENGINE_WORKSPACE, script: "build", status: WIRING_WIRED, command: "npm run build:typescript && npm run build:web:workbook" }),
+  packageScript({ packageName: "tutorial-engine", workspace: ENGINE_WORKSPACE, script: "test:fast", status: WIRING_WIRED, command: "npm run lint && tsc -p tsconfig.check.json && npm run check:eval && npm run test && npm run build:web:workbook && npm run browser:smoke" }),
+  packageScript({ packageName: "tutorial-engine", workspace: ENGINE_WORKSPACE, script: "check", status: WIRING_WIRED, command: "npm run build:typescript && npm run test:fast && npm run check:workbook-terminal-image" }),
+  packageScript({ packageName: "tutorial-engine", workspace: ENGINE_WORKSPACE, script: "prepublishOnly", status: WIRING_WIRED, command: "npm run check" })
 ]);
 
 const packageScriptByKey = new Map(PACKAGE_SCRIPT_WIRING_CONTRACT.map((entry) => [`${entry.packageName}:${entry.script}`, entry]));
