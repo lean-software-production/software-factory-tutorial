@@ -777,6 +777,14 @@ export function App() {
   const registerTerminalInsertion = useCallback((blockId: string, insertCommand: (() => void) | undefined) => {
     setTerminalInsertion((current) => insertCommand ? { blockId, insertCommand } : current?.blockId === blockId ? undefined : current);
   }, []);
+  const commitViewedCanonicalBlock = useCallback((current: State | undefined = latestState.current) => {
+    if (!current) return undefined;
+    const id = canonicalBlockInView(current, viewedCanonicalBlock.current);
+    viewedCanonicalBlock.current = id;
+    const lesson = current.orderedBlocks?.find((block) => block.id === id)?.lessonId;
+    if (lesson && !lesson.startsWith("workbook--") && !lesson.startsWith("part--")) setViewed(lesson.replace(/^lesson--/, ""));
+    return id;
+  }, []);
   useEffect(() => { readWorkbookState().then(applyWorkbookState).catch((error) => console.error(error)); }, [applyWorkbookState]);
   const hasInitialState = Boolean(state);
   useEffect(() => {
@@ -833,6 +841,9 @@ export function App() {
   const runwayWorkbookComplete = state?.progress.workbookComplete;
   const runwayFatal = Boolean(state?.fatal);
   useEffect(() => {
+    if (state) commitViewedCanonicalBlock(state);
+  }, [commitViewedCanonicalBlock, state]);
+  useEffect(() => {
     if (runwayWorkbookComplete || runwayFatal || typeof IntersectionObserver === "undefined") return;
     const readyId = readySuccessorAnchorId;
     const activeId = runwayActiveBlockId;
@@ -870,18 +881,7 @@ export function App() {
   useEffect(() => {
     if (!hasInitialState) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const commitViewed = (state: State, id: string | undefined) => {
-      const lesson = state.orderedBlocks?.find((block) => block.id === id)?.lessonId;
-      if (lesson && !lesson.startsWith("workbook--") && !lesson.startsWith("part--")) setViewed(lesson.replace(/^lesson--/, ""));
-    };
-    const commitViewedFromScroll = () => {
-      const current = latestState.current;
-      if (!current) return undefined;
-      const id = canonicalBlockInView(current, viewedCanonicalBlock.current);
-      viewedCanonicalBlock.current = id;
-      commitViewed(current, id);
-      return id;
-    };
+    const commitViewedFromScroll = () => commitViewedCanonicalBlock();
     const commitPassiveHistory = () => {
       const id = viewedCanonicalBlock.current;
       if (id && typeof history !== "undefined" && Date.now() > suppressPassiveHistoryUntil) history.replaceState(null, "", `#${id}`);
@@ -899,7 +899,7 @@ export function App() {
     const pop = () => { const id = typeof location === "undefined" ? "" : decodeURIComponent(location.hash.replace(/^#/, "")); if (id) navigateToAnchor(id, "none"); };
     addEventListener("popstate", pop);
     return () => { removeEventListener("scroll", onScroll); removeEventListener("popstate", pop); if (timer) clearTimeout(timer); };
-  }, [hasInitialState]);
+  }, [commitViewedCanonicalBlock, hasInitialState]);
   if (!state) return <p className="loading">Loading workbook…</p>;
   const fatal = state.fatal;
   const mutationsDisabled = Boolean(fatal);

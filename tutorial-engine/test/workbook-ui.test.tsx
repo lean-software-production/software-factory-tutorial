@@ -1998,6 +1998,93 @@ describe("workbook lesson UI", () => {
     expect(pushState).not.toHaveBeenCalled();
   });
 
+  it("opens the next lesson rail after one scroll promotes a ready successor in that lesson", async () => {
+    const firstLesson = { ...lesson, id: "lesson-one", title: "First lesson", blocks: [{ id: "lesson-one-block", type: "narrative", title: "First block", markdown: "First copy." }] } as Lesson;
+    const secondLesson = { ...lesson, id: "lesson-two", title: "Second lesson", blocks: [{ id: "lesson-two-block", type: "narrative", title: "Second block", markdown: "Second copy." }] } as Lesson;
+    const chapters = [
+      { id: firstLesson.id, title: firstLesson.title, part: "Part One", partMarkdown: "", partNumber: 1, lessonNumber: 1, lesson: firstLesson },
+      { id: secondLesson.id, title: secondLesson.title, part: "Part One", partMarkdown: "", partNumber: 1, lessonNumber: 2, lesson: secondLesson },
+    ];
+    const initialState = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters,
+      progress: {
+        activeLessonId: firstLesson.id,
+        activeBlockId: "lesson-one-block",
+        activeAnchorId: "lesson-one-block",
+        completedLessons: [],
+        completedBlocks: [],
+        workAcceptedBlocks: ["lesson-one-block"],
+        readyBlocks: ["lesson-two-block"],
+        blocks: [
+          { id: "lesson-one-block", type: "narrative", ready: false, active: true, completed: false, verified: false, emerged: true, workAccepted: true },
+          { id: "lesson-two-block", type: "narrative", ready: true, active: false, completed: false, verified: false, emerged: true },
+        ],
+        reflections: {},
+        reflectionConversations: {},
+        canComplete: { blockId: "lesson-one-block", eligible: true },
+      },
+      adapter: {},
+      revealedBlockIds: ["lesson-one-block"],
+      renderedBlockIds: ["lesson-one-block", "lesson-two-block"],
+      readyBlockIds: ["lesson-two-block"],
+      orderedBlocks: [
+        { id: "lesson-one-block", anchorId: "lesson-one-block", title: "First block", origin: "declared", kind: "narrative", lessonId: firstLesson.id },
+        { id: "lesson-two-block", anchorId: "lesson-two-block", title: "Second block", origin: "declared", kind: "narrative", lessonId: secondLesson.id },
+      ],
+      timeline: [
+        { type: "message", id: "first", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: firstLesson.id, blockId: "lesson-one-block", role: "assistant", source: "authored", presentation: "course", text: "# First block\n\nFirst copy." },
+        { type: "message", id: "second", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: secondLesson.id, blockId: "lesson-two-block", role: "assistant", source: "authored", presentation: "course", text: "# Second block\n\nSecond copy." },
+      ],
+    } as any;
+    const completedState = {
+      ...initialState,
+      progress: {
+        ...initialState.progress,
+        activeLessonId: secondLesson.id,
+        activeBlockId: "lesson-two-block",
+        activeAnchorId: "lesson-two-block",
+        completedLessons: [firstLesson.id],
+        completedBlocks: ["lesson-one-block"],
+        readyBlocks: [],
+        blocks: initialState.progress.blocks.map((block: any) => block.id === "lesson-one-block" ? { ...block, active: false, completed: true } : { ...block, active: true, ready: false, workAccepted: true }),
+      },
+      revealedBlockIds: ["lesson-one-block", "lesson-two-block"],
+      readyBlockIds: [],
+    } as any;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({ ok: true, json: async () => init?.method === "POST" ? { outcome: "completed", state: completedState, navigationTarget: "lesson-two-block" } : initialState }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("IntersectionObserver", class { observe = vi.fn(); disconnect = vi.fn(); } as any);
+
+    const container = await mount(createElement(App), (win) => {
+      stubAppShellGlobals(win);
+      vi.stubGlobal("location", win.location);
+      vi.stubGlobal("history", win.history);
+      win.HTMLElement.prototype.getBoundingClientRect = function () {
+        const top = this.id === "lesson-two-block" ? 100 : 0;
+        return { top, bottom: top + 200, left: 0, right: 800, width: 800, height: 200, x: 0, y: top, toJSON: () => ({}) };
+      };
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    const openLessonNumbers = () => [...container.querySelectorAll<HTMLDetailsElement>("details.lesson-nav")]
+      .filter((details) => details.open)
+      .map((details) => details.querySelector("summary")?.textContent?.trim());
+    expect(openLessonNumbers()).toEqual(["Lesson 1: First lesson"]);
+
+    await act(async () => {
+      window.dispatchEvent(new window.Event("scroll"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock.mock.calls.filter(([url, init]) => url === "api/workbook/complete-block" && (init as RequestInit | undefined)?.method === "POST")).toHaveLength(1);
+    expect(location.hash).toBe("#lesson-two-block");
+    expect(openLessonNumbers()).toEqual(["Lesson 2: Second lesson"]);
+  });
+
   it("replaces the URL without adding history when scrolling promotes a ready successor", async () => {
     vi.useFakeTimers();
     const initialState = {
