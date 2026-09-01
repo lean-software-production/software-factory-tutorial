@@ -1,0 +1,3 @@
+High: legacy v1 accepted editor sessions without editor-content-snapshotted can complete with no editor history; add acceptance-correlated migration/recovery before completion.
+High but explicitly deferred by Matt: Tutor request can complete stale accepted editor during sub-debounce local edit; tracked in coordinate-tutor-completion-with-browser-local-dirty-work-2ecu and is not a blocker for this implementation.
+Reviewer: 11b81e07-9b22-48f; 180 focused tests passed.
