@@ -1825,6 +1825,7 @@ describe("workbook lesson UI", () => {
 
   it("debounces sidebar lesson selection while scroll settles at a lesson boundary", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T00:00:00.000Z"));
     let secondTop = 180;
     const firstLesson = { ...lesson, id: "lesson-one", title: "First lesson", blocks: [{ id: "lesson-one-block", type: "narrative", title: "First block", markdown: "First copy." }] } as Lesson;
     const secondLesson = { ...lesson, id: "lesson-two", title: "Second lesson", blocks: [{ id: "lesson-two-block", type: "narrative", title: "Second block", markdown: "Second copy." }] } as Lesson;
@@ -1837,16 +1838,16 @@ describe("workbook lesson UI", () => {
         { id: secondLesson.id, title: secondLesson.title, part: "Part One", partMarkdown: "", partNumber: 1, lessonNumber: 2, lesson: secondLesson },
       ],
       progress: {
-        activeLessonId: firstLesson.id,
-        activeBlockId: "lesson-one-block",
-        activeAnchorId: "lesson-one-block",
-        completedLessons: [],
-        completedBlocks: [],
+        activeLessonId: secondLesson.id,
+        activeBlockId: "lesson-two-block",
+        activeAnchorId: "lesson-two-block",
+        completedLessons: [firstLesson.id],
+        completedBlocks: ["lesson-one-block"],
         workAcceptedBlocks: [],
         readyBlocks: [],
         blocks: [
-          { id: "lesson-one-block", type: "narrative", ready: true, active: true, completed: false, verified: false, emerged: true },
-          { id: "lesson-two-block", type: "narrative", ready: false, active: false, completed: false, verified: false, emerged: true },
+          { id: "lesson-one-block", type: "narrative", ready: true, active: false, completed: true, verified: false, emerged: true },
+          { id: "lesson-two-block", type: "narrative", ready: true, active: true, completed: false, verified: false, emerged: true },
         ],
         reflections: {},
         reflectionConversations: {},
@@ -1872,8 +1873,11 @@ describe("workbook lesson UI", () => {
 
     const container = await mount(createElement(App), (win) => {
       stubAppShellGlobals(win);
+      win.history.replaceState(null, "", "#lesson-one-block");
+      const replaceState = vi.spyOn(win.history, "replaceState");
       vi.stubGlobal("location", win.location);
       vi.stubGlobal("history", win.history);
+      replaceState.mockClear();
       win.HTMLElement.prototype.getBoundingClientRect = function () {
         const top = this.id === "lesson-two-block" ? secondTop : 0;
         return { top, bottom: top + 200, left: 0, right: 800, width: 800, height: 200, x: 0, y: top, toJSON: () => ({}) };
@@ -1885,22 +1889,38 @@ describe("workbook lesson UI", () => {
       .filter((details) => details.open)
       .map((details) => details.querySelector("summary")?.textContent?.trim());
     expect(openLessonNumbers()).toEqual(["Lesson 1: First lesson"]);
+    expect(history.replaceState).not.toHaveBeenCalled();
 
+    await act(async () => { vi.advanceTimersByTime(451); });
     secondTop = 100;
     await act(async () => {
       window.dispatchEvent(new window.Event("scroll"));
+      secondTop = 180;
       vi.advanceTimersByTime(119);
     });
     expect(openLessonNumbers()).toEqual(["Lesson 1: First lesson"]);
+    expect(history.replaceState).not.toHaveBeenCalled();
 
+    await act(async () => { vi.advanceTimersByTime(1); });
+    expect(openLessonNumbers()).toEqual(["Lesson 1: First lesson"]);
+    expect(history.replaceState).toHaveBeenCalledTimes(1);
+    expect(history.replaceState).toHaveBeenLastCalledWith(null, "", "#lesson-one-block");
+
+    vi.mocked(history.replaceState).mockClear();
+    secondTop = 100;
     await act(async () => {
+      window.dispatchEvent(new window.Event("scroll"));
+      vi.advanceTimersByTime(80);
       window.dispatchEvent(new window.Event("scroll"));
       vi.advanceTimersByTime(119);
     });
     expect(openLessonNumbers()).toEqual(["Lesson 1: First lesson"]);
+    expect(history.replaceState).not.toHaveBeenCalled();
 
     await act(async () => { vi.advanceTimersByTime(1); });
     expect(openLessonNumbers()).toEqual(["Lesson 2: Second lesson"]);
+    expect(history.replaceState).toHaveBeenCalledTimes(1);
+    expect(history.replaceState).toHaveBeenLastCalledWith(null, "", "#lesson-two-block");
   });
 
   it("completes only the active predecessor when the ready successor crosses the reading line", async () => {

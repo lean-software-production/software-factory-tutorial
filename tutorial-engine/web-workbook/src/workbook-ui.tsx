@@ -728,6 +728,8 @@ export function App() {
   const [viewed, setViewed] = useState<string>();
   const [terminalInsertion, setTerminalInsertion] = useState<{ blockId: string; insertCommand: () => void }>();
   const [contentReloadError, setContentReloadError] = useState<string>();
+  const latestState = useRef<State | undefined>(undefined);
+  latestState.current = state;
   const scrollCompletionPending = useRef(false);
   const sseStateRequestSequence = useRef(0);
   const initialAnchorReconciled = useRef(false);
@@ -836,26 +838,30 @@ export function App() {
     };
   }, [applyWorkbookState, readySuccessorAnchorId, runwayActiveBlockId, runwayWorkbookComplete, runwayFatal]);
   useEffect(() => {
-    if (!state) return;
+    if (!hasInitialState) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const commitViewed = (id: string | undefined) => {
+    const commitViewed = (state: State, id: string | undefined) => {
       const lesson = state.orderedBlocks?.find((block) => block.id === id)?.lessonId;
       if (lesson && !lesson.startsWith("workbook--") && !lesson.startsWith("part--")) setViewed(lesson.replace(/^lesson--/, ""));
     };
     const commitPassiveScroll = () => {
-      const id = canonicalBlockInView(state);
-      commitViewed(id);
+      const current = latestState.current;
+      if (!current) return;
+      const id = canonicalBlockInView(current);
+      commitViewed(current, id);
       if (id && typeof history !== "undefined" && Date.now() > suppressPassiveHistoryUntil) history.replaceState(null, "", `#${id}`);
     };
     const schedulePassiveScrollCommit = () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(commitPassiveScroll, 120);
     };
-    commitViewed(canonicalBlockInView(state)); addEventListener("scroll", schedulePassiveScrollCommit, { passive: true });
+    const current = latestState.current;
+    if (current) commitViewed(current, canonicalBlockInView(current));
+    addEventListener("scroll", schedulePassiveScrollCommit, { passive: true });
     const pop = () => { const id = typeof location === "undefined" ? "" : decodeURIComponent(location.hash.replace(/^#/, "")); if (id) navigateToAnchor(id, "none"); };
     addEventListener("popstate", pop);
     return () => { removeEventListener("scroll", schedulePassiveScrollCommit); removeEventListener("popstate", pop); if (timer) clearTimeout(timer); };
-  }, [state]);
+  }, [hasInitialState]);
   if (!state) return <p className="loading">Loading workbook…</p>;
   const fatal = state.fatal;
   const mutationsDisabled = Boolean(fatal);
