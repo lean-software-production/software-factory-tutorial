@@ -24,7 +24,7 @@ The workbook terminal image is generic. It provides Node, Git, jq, the pinned Pi
 
 ## Consequences
 
-Engine tests become less effective as automated copy protection for authored curriculum regressions. Authors are responsible for reviewing content changes, maintaining workbook-specific tests outside the engine, and running manual or dynamic play-throughs before release.
+Engine tests become less effective as automated copy protection for authored curriculum regressions. Authors are responsible for reviewing and editing content changes directly, and for using occasional human or dynamic agent play-throughs as non-gating observations before release. They should not replace the removed authored-workbook lane with deterministic content-contract tests that pin workbook prose, IDs, order, counts, filenames, commands, vocabulary, or lesson-specific learner behavior.
 
 The engine package is more reusable and can evolve its generic contracts without importing caller policy. Consuming repositories must be explicit about workbook paths and runtime provisioning, which makes integration seams more visible.
 

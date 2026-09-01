@@ -113,7 +113,7 @@ describe("v2 public judge trace projection", () => {
   it("reports only structural judge command labels in successful preflight", async () => {
     const root = await mkdtemp(join(tmpdir(), "v2-judge-label-"));
     const command = join(root, "judge.sh");
-    await writeFile(command, "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":true}'\n", { mode: 0o700 });
+    await writeFile(command, "#!/bin/sh\nprintf '{\"ok\":true}'\n", { mode: 0o700 });
     try {
       await expect(probeV2JudgeCommandModel({ EVAL_JUDGE_MODEL: "provider/model", EVAL_JUDGE_COMMAND: `${command} --private-arg`, PATH: process.env.PATH, HOME: process.env.HOME })).resolves.toEqual({
         commandLabel: "configured-command",

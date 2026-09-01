@@ -162,5 +162,5 @@ During `npm run test`, independent lanes continue after ordinary failures. The f
 non-zero if any lane fails. The summary reports only current-run changed reports: changed engine
 `latest.json`, and changed visual `.received.png` screenshots.
 
-Visual failures report received screenshots. Inspect them before deciding whether to fix the code,
-fix the authored UI, or approve the new baseline in the canonical devcontainer.
+Visual failures report received screenshots. Inspect them before deciding whether to fix engine code,
+fix workbook UI rendering, or approve the new baseline in the canonical devcontainer.
