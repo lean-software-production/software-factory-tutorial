@@ -465,7 +465,7 @@ describe("workbook lesson UI", () => {
       timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: editorBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Edit the answer" }],
     } as State;
     const firstReviewState = { ...initialState, progress: activeEditorProgress({ revision: 1, draftText: "submitted draft", editorStatus: "reviewing", checkpoint: { status: "reviewing", evidence: { kind: "editor", text: "submitted draft" } } } as any) } as State;
-    const staleAcceptedState = { ...initialState, progress: activeEditorProgress({ revision: 1, draftText: "submitted draft", editorStatus: "unlocked", completed: true, checkpoint: { status: "accepted", successMessage: "Old draft accepted.", evidence: { kind: "editor", text: "submitted draft" } } } as any) } as State;
+    const staleAcceptedState = { ...initialState, progress: activeEditorProgress({ revision: 1, draftText: "submitted draft", editorStatus: "accepted", completed: true, checkpoint: { status: "accepted", successMessage: "Old draft accepted.", evidence: { kind: "editor", text: "submitted draft" } } } as any) } as State;
     let stateFetches = 0;
     const fetchMock = vi.fn(async (input?: RequestInfo | URL, _init?: RequestInit) => {
       if (String(input).endsWith("api/workbook/editor")) return { ok: true, json: async () => firstReviewState };
@@ -722,7 +722,7 @@ describe("workbook lesson UI", () => {
       { type: "message", id: "first", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "001-first", blockId: firstId, role: "assistant", source: "authored", presentation: "course", text: "## First terminal" },
       { type: "message", id: "second", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "001-first", blockId: secondId, role: "assistant", source: "authored", presentation: "course", text: "## Second terminal" },
     ] as const;
-    const firstTerminalState = { id: firstId, type: "terminal-practice", ready: false, active: false, completed: true, verified: true, emerged: true, terminal: { phase: "complete" as const, message: "Accepted." }, terminalSnapshot: { transcript: "terminal A only" } };
+    const firstTerminalState = { id: firstId, type: "terminal-practice", ready: false, active: false, completed: true, verified: true, emerged: true, terminal: { phase: "accepted" as const, message: "Accepted." }, terminalSnapshot: { transcript: "terminal A only" } };
     const markup = html(createElement(TimelineThread, {
       activeLessonId: "001-first",
       activeBlockId: secondId,
@@ -926,7 +926,7 @@ describe("workbook lesson UI", () => {
     await act(async () => {
       mountedRoot!.render(createElement(BlockView, {
         block: editorBlock,
-        progress: activeEditorProgress({ active: false, completed: true, editorStatus: "unlocked", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted" } } } as any),
+        progress: activeEditorProgress({ active: false, completed: true, editorStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted" } } } as any),
         refresh: vi.fn()
       }));
     });
@@ -1028,7 +1028,7 @@ describe("workbook lesson UI", () => {
 
     const completedContainer = await mount(createElement(BlockView, {
       block: editorBlock,
-      progress: activeEditorProgress({ active: false, completed: true, revision: 1, draftText: "accepted historical draft", editorStatus: "completed", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted historical draft" } } } as any),
+      progress: activeEditorProgress({ active: false, completed: true, revision: 1, draftText: "accepted historical draft", editorStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted historical draft" } } } as any),
       refresh: vi.fn()
     }));
     expect(completedContainer.querySelectorAll(".editor-live-surface, .editor-history")).toHaveLength(1);
@@ -1454,7 +1454,7 @@ describe("workbook lesson UI", () => {
         active: block.id === "practice",
         ready: block.id === "practice",
         emerged: block.id === "practice" ? true : block.emerged,
-        terminal: block.id === "practice" ? { phase: "complete", message: "Accepted." } : block.terminal,
+        terminal: block.id === "practice" ? { phase: "accepted", message: "Accepted." } : block.terminal,
       })),
     };
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => workbookState(acceptedProgress) })));
@@ -1546,7 +1546,7 @@ describe("workbook lesson UI", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      first.resolve({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, editorStatus: "unlocked", completed: true, checkpoint: { status: "accepted", successMessage: "Old draft accepted.", evidence: { kind: "editor", text: "submitted draft" } } } as any)) } as Response);
+      first.resolve({ ok: true, json: async () => workbookState(activeEditorProgress({ revision: 1, editorStatus: "accepted", completed: true, checkpoint: { status: "accepted", successMessage: "Old draft accepted.", evidence: { kind: "editor", text: "submitted draft" } } } as any)) } as Response);
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1703,7 +1703,7 @@ describe("workbook lesson UI", () => {
     expect(feedbackMarkup).not.toContain("Retry review");
 
     const successMarkup = html(createElement(TerminalHistory, {
-      state: activeBlockProgress(terminalBlock, { terminal: { phase: "complete", message: "Terminal accepted." }, terminalSnapshot: { transcript: "$ npm test\nPASS" } } as any).blocks[0]
+      state: activeBlockProgress(terminalBlock, { terminal: { phase: "accepted", message: "Terminal accepted." }, terminalSnapshot: { transcript: "$ npm test\nPASS" } } as any).blocks[0]
     }));
     expect(successMarkup).toContain("terminal-completion-surface");
     expect(successMarkup).toContain("practice-feedback-bar is-success");
@@ -2740,7 +2740,7 @@ describe("workbook lesson UI", () => {
     const snapshot = "$ npm test\nPASS  calculator";
     const markup = html(createElement(TerminalHistory, {
       state: activeBlockProgress(lesson.blocks[1]!, {
-        terminal: { phase: "complete", message: "Accepted by the Main Tutor." },
+        terminal: { phase: "accepted", message: "Accepted by the Main Tutor." },
         terminalSnapshot: { transcript: snapshot }
       } as any).blocks[0]
     }));
@@ -2780,7 +2780,7 @@ describe("workbook lesson UI", () => {
     expect(terminalInstances).toHaveLength(1);
     expect(FakeWebSocket.instances).toHaveLength(1);
 
-    await act(async () => { mountedRoot!.render(render({ phase: "complete", message: "Terminal accepted." })); });
+    await act(async () => { mountedRoot!.render(render({ phase: "accepted", message: "Terminal accepted." })); });
 
     expect(container.querySelector(".embedded-terminal")).toBe(liveTerminal);
     expect(container.querySelector(".terminal-live-surface")?.textContent).toContain("Terminal accepted.");
@@ -2973,7 +2973,7 @@ describe("workbook lesson UI", () => {
   });
 
   it.each([
-    ["terminal", lesson.blocks[1]!, activeBlockProgress(lesson.blocks[1]!, { terminal: { phase: "complete", message: "Terminal accepted." } } as any), "Terminal accepted."],
+    ["terminal", lesson.blocks[1]!, activeBlockProgress(lesson.blocks[1]!, { terminal: { phase: "accepted", message: "Terminal accepted." } } as any), "Terminal accepted."],
     ["editor", editorBlock, activeEditorProgress({ editorStatus: "accepted", draftText: "accepted answer text", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted answer text" } } } as any), "Editor accepted."]
   ])("keeps accepted-but-incomplete %s practice in the sticky live surface with one continuation", async (kind, block, acceptedProgress, acceptedText) => {
     class FakeWebSocket {

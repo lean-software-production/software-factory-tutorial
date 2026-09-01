@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -176,45 +176,82 @@ describe("workbook block progression", () => {
     } finally { await server.close(); }
   });
 
-  it("reconstructs completed editor history from durable accepted content rather than current attempts", async () => {
+  it("emits editor content snapshots and restores completed history from the latest accepted matching snapshot", async () => {
     const dir = await fixture();
+    const blockId = "lesson--001-first--edit-answer";
+    let firstAttemptId = "";
+    let secondAttemptId = "";
     const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor({ outcome: "accepted", message: "Accepted editor answer." }) });
     try {
       await advanceToEditor(server.url);
-      const submitted = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId: "lesson--001-first--edit-answer", revision: 1, text: "accepted text that must become history" }) });
-      expect(submitted.status).toBe(202);
-      await waitForState(server.url, (next) => block(next, "lesson--001-first--edit-answer")?.checkpoint?.status === "accepted");
-      const completed = await complete(server.url, "lesson--001-first--edit-answer");
-      expect(block(completed.state, "lesson--001-first--edit-answer")).toMatchObject({ active: false, completed: true, draftText: "accepted text that must become history", editorStatus: "completed", checkpoint: { status: "accepted", successMessage: "Accepted editor answer.", evidence: { kind: "editor", text: "accepted text that must become history" } } });
+
+      const first = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision: 1, text: "v1 accepted editor text" }) });
+      expect(first.status).toBe(202);
+      const firstRecords = await waitForRecords(dir, (records) => {
+        const acceptance = acceptedAttempts(records, blockId).find((record) => record.version === 1);
+        return Boolean(acceptance && editorSnapshots(records, blockId).some((snapshot) => snapshot.attemptId === acceptance.attemptId && snapshot.text === "v1 accepted editor text"));
+      }, "the first editor acceptance snapshot");
+      const firstAcceptance = acceptedAttempts(firstRecords, blockId).find((record) => record.version === 1)!;
+      firstAttemptId = firstAcceptance.attemptId;
+      expect(editorSnapshots(firstRecords, blockId).find((record) => record.attemptId === firstAttemptId)).toMatchObject({
+        type: "editor-content-snapshotted",
+        attemptId: firstAttemptId,
+        lessonId: "001-first",
+        blockId,
+        text: "v1 accepted editor text",
+      });
+
+      const second = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision: 2, text: "v2 accepted editor text" }) });
+      expect(second.status).toBe(202);
+      const secondRecords = await waitForRecords(dir, (records) => {
+        const acceptance = acceptedAttempts(records, blockId).find((record) => record.version === 2);
+        return Boolean(acceptance && editorSnapshots(records, blockId).some((snapshot) => snapshot.attemptId === acceptance.attemptId && snapshot.text === "v2 accepted editor text"));
+      }, "the second editor acceptance snapshot");
+      const secondAcceptance = acceptedAttempts(secondRecords, blockId).find((record) => record.version === 2)!;
+      secondAttemptId = secondAcceptance.attemptId;
+      expect(secondAttemptId).not.toBe(firstAttemptId);
+      expect(editorSnapshots(secondRecords, blockId).find((record) => record.attemptId === secondAttemptId)).toMatchObject({
+        type: "editor-content-snapshotted",
+        attemptId: secondAttemptId,
+        lessonId: "001-first",
+        blockId,
+        text: "v2 accepted editor text",
+      });
     } finally { await server.close(); }
 
-    // Completion history must be event-log durable. Wiping transient attempt presentation state
-    // simulates a restart where AttemptStore no longer has an active current attempt to read.
-    await rm(tutorialStatePath(dir, "workbook", "attempts"), { recursive: true, force: true });
+    await appendRawTimelineRecords(dir, [
+      { type: "editor-content-snapshotted", attemptId: "orphan-editor-attempt", lessonId: "001-first", blockId, text: "ORPHAN EDITOR SNAPSHOT" },
+      { type: "editor-content-snapshotted", attemptId: firstAttemptId, lessonId: "001-first", blockId, text: "STALE V1 EDITOR SNAPSHOT" },
+    ]);
+
     const restarted = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
     try {
-      const restored = await fetch(`${restarted.url}/api/workbook/state`).then((response) => response.json() as any);
-      expect(block(restored, "lesson--001-first--edit-answer")).toMatchObject({ active: false, completed: true, draftText: "accepted text that must become history", editorStatus: "completed", checkpoint: { status: "accepted", successMessage: "Accepted editor answer.", evidence: { kind: "editor", text: "accepted text that must become history" } } });
+      const completed = await complete(restarted.url, blockId);
+      expect(block(completed.state, blockId)).toMatchObject({
+        active: false,
+        completed: true,
+        draftText: "v2 accepted editor text",
+        editorStatus: "accepted",
+        checkpoint: { status: "accepted", successMessage: "Accepted editor answer.", evidence: { kind: "editor", text: "v2 accepted editor text" } }
+      });
+      expect(JSON.stringify(completed.state)).not.toContain("ORPHAN EDITOR SNAPSHOT");
+      expect(JSON.stringify(completed.state)).not.toContain("STALE V1 EDITOR SNAPSHOT");
     } finally { await restarted.close(); }
-  });
 
-  it("records durable editor content snapshots keyed like terminal transcript snapshots", async () => {
-    const dir = await fixture();
-    const timeline = new WorkbookTimeline(dir);
-
-    await expect(timeline.append({
-      type: "editor-content-snapshotted",
-      attemptId: "editor-attempt-1",
-      lessonId: "001-first",
-      blockId: "lesson--001-first--edit-answer",
-      text: "accepted editor text",
-    } as any)).resolves.toMatchObject({
-      type: "editor-content-snapshotted",
-      attemptId: "editor-attempt-1",
-      lessonId: "001-first",
-      blockId: "lesson--001-first--edit-answer",
-      text: "accepted editor text",
-    });
+    await rm(tutorialStatePath(dir, "workbook", "attempts"), { recursive: true, force: true });
+    const restoredServer = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
+    try {
+      const restored = await fetch(`${restoredServer.url}/api/workbook/state`).then((response) => response.json() as any);
+      expect(block(restored, blockId)).toMatchObject({
+        active: false,
+        completed: true,
+        draftText: "v2 accepted editor text",
+        editorStatus: "accepted",
+        checkpoint: { status: "accepted", successMessage: "Accepted editor answer.", evidence: { kind: "editor", text: "v2 accepted editor text" } }
+      });
+      expect(JSON.stringify(restored)).not.toContain("ORPHAN EDITOR SNAPSHOT");
+      expect(JSON.stringify(restored)).not.toContain("STALE V1 EDITOR SNAPSHOT");
+    } finally { await restoredServer.close(); }
   });
 
   it("uses latest durable terminal submission and accepted snapshot, not old work_accepted, for completion eligibility across restart", async () => {
@@ -238,7 +275,7 @@ describe("workbook block progression", () => {
       const state = await fetch(`${reviewing.url}/api/workbook/state`).then((response) => response.json() as any);
       expect(block(state, "lesson--001-first--run-command")).toMatchObject({ active: true, completed: false, terminal: { phase: "checking" }, terminalRevision: 2 });
       expect(state.progress.canComplete).toMatchObject({ blockId: "lesson--001-first--run-command", eligible: false, reason: "awaiting-acceptance" });
-      expect(state.progress.readyBlocks).toEqual([]);
+      expect(state.progress.readyBlocks).toEqual(["lesson--001-first--edit-answer"]);
     } finally { await reviewing.close(); }
 
     await writeTerminalLifecycleRecords(dir, [
@@ -251,7 +288,7 @@ describe("workbook block progression", () => {
     const completed = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: fakeTutor() });
     try {
       const state = await fetch(`${completed.url}/api/workbook/state`).then((response) => response.json() as any);
-      expect(block(state, "lesson--001-first--run-command")).toMatchObject({ active: false, completed: true, terminal: { phase: "complete", message: "Accepted v2." }, terminalRevision: 2, terminalSnapshot: { transcript: "v2 accepted transcript" } });
+      expect(block(state, "lesson--001-first--run-command")).toMatchObject({ active: false, completed: true, terminal: { phase: "accepted", message: "Accepted v2." }, terminalRevision: 2, terminalSnapshot: { transcript: "v2 accepted transcript" } });
       expect(JSON.stringify(state)).not.toContain("ORPHAN SNAPSHOT");
     } finally { await completed.close(); }
   });
@@ -608,6 +645,17 @@ async function timelineRecords(dir: string): Promise<WorkbookTimelineRecord[]> {
 }
 async function workAcceptedEvents(dir: string, blockId: string) {
   return (await timelineRecords(dir)).filter((record) => record.type === "work_accepted" && record.blockId === blockId);
+}
+function acceptedAttempts(records: readonly WorkbookTimelineRecord[], blockId: string) {
+  return records.filter((record): record is Extract<WorkbookTimelineRecord, { type: "attempt_accepted" }> => record.type === "attempt_accepted" && record.blockId === blockId);
+}
+function editorSnapshots(records: readonly WorkbookTimelineRecord[], blockId: string) {
+  return records.filter((record: any) => record.type === "editor-content-snapshotted" && record.blockId === blockId) as Array<{ type: "editor-content-snapshotted"; attemptId: string; lessonId: string; blockId: string; text: string }>;
+}
+async function appendRawTimelineRecords(dir: string, inputs: Array<Record<string, unknown>>) {
+  const existing = await timelineRecords(dir).catch(() => []);
+  const lines = inputs.map((input, index) => JSON.stringify({ id: `raw-test-event-${existing.length + index + 1}`, sequence: (existing.at(-1)?.sequence ?? 0) + index + 1, at: new Date().toISOString(), ...input }));
+  await appendFile(tutorialStatePath(dir, "workbook", "events.jsonl"), `${lines.join("\n")}\n`, "utf8");
 }
 /**
  * Polls the on-disk event log. The server writes an attempt's checkpoint status before appending

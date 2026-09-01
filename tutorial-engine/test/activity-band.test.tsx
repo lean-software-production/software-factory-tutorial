@@ -23,7 +23,7 @@ const completedEditorProgress: Progress = {
   activeLessonId: "part/lesson",
   activeBlockId: editorBlock.id,
   completedLessons: [],
-  blocks: [{ id: editorBlock.id, type: editorBlock.type, ready: true, active: true, completed: true, verified: true, emerged: true, editorStatus: "unlocked" }],
+  blocks: [{ id: editorBlock.id, type: editorBlock.type, ready: true, active: true, completed: true, verified: true, emerged: true, editorStatus: "accepted" } as any],
   reflections: {},
   reflectionConversations: {}
 };
@@ -113,7 +113,7 @@ describe("ActivityBand stability", () => {
 
     const acceptedTerminalProgress: Progress = {
       ...completedTerminalProgress,
-      blocks: [{ id: terminalBlock.id, type: terminalBlock.type, ready: false, active: true, completed: false, verified: true, emerged: true, terminal: { phase: "complete", message: "Terminal accepted." } } as any],
+      blocks: [{ id: terminalBlock.id, type: terminalBlock.type, ready: false, active: true, completed: false, verified: true, emerged: true, terminal: { phase: "accepted", message: "Terminal accepted." } } as any],
     };
     class FakeWebSocket {
       static OPEN = 1;

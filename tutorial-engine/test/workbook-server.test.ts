@@ -1630,7 +1630,7 @@ describe("workbook browser API", () => {
       await acceptEditor(server.url, tutor);
       await submitTerminalAttempt(server.url, blockId);
       const accepted = await waitForWorkbookState(server.url, (next) =>
-        block(next, blockId)?.terminal?.phase === "complete"
+        block(next, blockId)?.terminal?.phase === "accepted"
         && typeof block(next, blockId)?.terminalSnapshot?.transcript === "string", "durable terminal snapshot");
 
       const snapshot = block(accepted, blockId).terminalSnapshot;
@@ -1650,9 +1650,69 @@ describe("workbook browser API", () => {
     const reloaded = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, embeddedTerminal: false, mainTutor: new FakeMainTutor() });
     try {
       const restored = await state(reloaded.url);
-      expect(block(restored, blockId)?.terminal).toEqual({ phase: "complete", message: "Terminal accepted." });
+      expect(block(restored, blockId)?.terminal).toEqual({ phase: "accepted", message: "Terminal accepted." });
       expect(block(restored, blockId)?.terminalSnapshot).toEqual({ transcript: expect.stringContaining(`ran:run ${blockId}`) });
     } finally { await reloaded.close(); }
+  });
+
+  it("reviews and accepts a second terminal command after earlier acceptance without duplicating successor records", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty();
+    const tutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      { outcome: "accepted", message: "Terminal v1 accepted." },
+      { outcome: "accepted", message: "Terminal v2 accepted." },
+    );
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: tutor });
+    const blockId = "lesson--001-first--run-supplied-command";
+    const successorId = "lesson--001-first--change-job";
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      const ws = await connect(server.url, server.url);
+
+      const firstOutput = waitFor(ws, (message) => message.type === "output" && message.data.includes("ran:terminal-v1"));
+      ws.send(JSON.stringify({ type: "input", data: "terminal-v1\r" }));
+      await firstOutput;
+      const v1Accepted = await waitForWorkbookState(server.url, (next) =>
+        block(next, blockId)?.terminal?.phase === "accepted"
+        && next.progress.canComplete?.blockId === blockId
+        && next.progress.canComplete?.eligible === true, "first terminal acceptance");
+      expect(v1Accepted.progress.readyBlocks).toEqual([successorId]);
+
+      const secondOutput = waitFor(ws, (message) => message.type === "output" && message.data.includes("ran:terminal-v2"));
+      ws.send(JSON.stringify({ type: "input", data: "terminal-v2\r" }));
+      await secondOutput;
+      const v2Pending = await waitForWorkbookState(server.url, (next) =>
+        block(next, blockId)?.terminalRevision === 2
+        && block(next, blockId)?.terminal?.phase === "checking"
+        && next.progress.canComplete?.blockId === blockId
+        && next.progress.canComplete?.eligible === false, "second terminal command pending review");
+      expect(v2Pending.progress.canComplete).toMatchObject({ blockId, eligible: false, reason: "awaiting-acceptance" });
+      expect(v2Pending.progress.readyBlocks).toEqual([successorId]);
+
+      const v2Accepted = await waitForWorkbookState(server.url, (next) =>
+        block(next, blockId)?.terminalRevision === 2
+        && block(next, blockId)?.terminal?.phase === "accepted"
+        && next.progress.canComplete?.blockId === blockId
+        && next.progress.canComplete?.eligible === true, "second terminal acceptance");
+      expect(v2Accepted.progress.readyBlocks).toEqual([successorId]);
+
+      const records = await privateTimeline(dir);
+      expect(records.filter((record) => record.type === "work_accepted" && record.blockId === blockId)).toHaveLength(1);
+      expect(records.filter((record) => record.type === "message" && record.source === "authored" && record.blockId === successorId)).toHaveLength(1);
+      expect(records.filter((record) => record.type === "attempt_accepted" && record.kind === "terminal" && record.blockId === blockId).map((record) => record.version)).toEqual([1, 2]);
+
+      const completed = await completeBlock(server.url, blockId).then((response) => response.json() as Promise<any>);
+      expect(block(completed.state, blockId)).toMatchObject({
+        completed: true,
+        terminal: { phase: "accepted", message: "Terminal v2 accepted." },
+        terminalRevision: 2,
+        terminalSnapshot: { transcript: expect.stringContaining("ran:terminal-v2") }
+      });
+      expect(block(completed.state, blockId).terminalSnapshot.transcript).not.toContain("ran:terminal-v1");
+      ws.close();
+    } finally { await server.close(); }
   });
 
   it("latches safe fatal state after exhausted terminal review without failure events", async () => {
