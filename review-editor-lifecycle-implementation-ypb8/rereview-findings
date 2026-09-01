@@ -1,2 +1,0 @@
-Server re-review approved legacy snapshot backfill and eval contract changes.
-UI re-review found remaining terminal input issues: cancelled/erased partial lines remain server-unobserved forever; physical multiline Bash input overcounts expected public revisions; printable CSI/escape bytes can create false pending work.

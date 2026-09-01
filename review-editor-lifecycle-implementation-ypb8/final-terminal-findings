@@ -1,2 +1,0 @@
-High: App cleared local pending target on first revision even if latest separate command still running; retain through non-accepted lifecycle until accepted current completion eligibility.
-High: stale observation promise after terminal retirement/recreation on same block key can acknowledge new input; scope epoch acknowledgement to terminal lifecycle generation.
