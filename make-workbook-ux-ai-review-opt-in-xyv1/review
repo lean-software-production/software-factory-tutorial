@@ -1,1 +1,0 @@
-Implementation complete; independent review in progress. One maintainer-doc concern to resolve: do not use || true around the advisory-AI script because it would also mask authoritative deterministic failures.
