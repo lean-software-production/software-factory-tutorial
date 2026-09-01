@@ -13,6 +13,7 @@ import { TimelineThread } from "./timeline-thread.js";
 import { isPublicWorkbookState, parsePublicCompleteBlockResult, parsePublicWorkbookState } from "../../src/workbook/public-contract.js";
 import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookChapter, PublicWorkbookLesson, PublicWorkbookProgress, PublicWorkbookState } from "../../src/workbook/public-contract.js";
 import { parsePublicTerminalMessage, type PublicTerminalFrame } from "../../src/workbook/public-terminal-contract.js";
+import { TerminalLineInputTracker, type TerminalLineInputActivity } from "../../src/workbook/terminal-line-input-tracker.js";
 import { createTerminalCoachingDisplayState, reduceTerminalCoachingDisplay, type TerminalCoachingDisplayState } from "./terminal-coaching-display.js";
 
 // A short local vocabulary for the contract types this module uses constantly. Only names that
@@ -117,40 +118,6 @@ function shellCommandFrom(markdown: string): string | undefined {
 
 const UNREADABLE_TERMINAL_FRAME = "The embedded terminal received an unreadable message from the workbook server. Refresh the page if the terminal stops responding.";
 
-type TerminalInputLineState = { buffer: string; countedCurrentLine: boolean };
-
-function terminalInputExpectedRevisionDelta(line: TerminalInputLineState, data: string): number {
-  let delta = 0;
-  const clearUnsubmittedLine = () => {
-    if (line.countedCurrentLine) delta -= 1;
-    line.buffer = "";
-    line.countedCurrentLine = false;
-  };
-  for (const char of data) {
-    if (char === "\r" || char === "\n") {
-      line.buffer = "";
-      line.countedCurrentLine = false;
-      continue;
-    }
-    if (char === "\u0003" || char === "\u0015") {
-      clearUnsubmittedLine();
-      continue;
-    }
-    if (char === "\b" || char === "\x7f") {
-      line.buffer = line.buffer.slice(0, -1);
-      if (line.countedCurrentLine && !line.buffer.trim()) clearUnsubmittedLine();
-      continue;
-    }
-    if (char < " " || char === "\x7f") continue;
-    line.buffer = (line.buffer + char).slice(-4_096);
-    if (!line.countedCurrentLine && line.buffer.trim()) {
-      line.countedCurrentLine = true;
-      delta += 1;
-    }
-  }
-  return delta;
-}
-
 /**
  * The terminal socket is addressed the way `request()` addresses HTTP: relative to the document's
  * base, with `api/workbook/` as the prefix this module owns. `WebSocket` accepts no relative URL,
@@ -182,19 +149,19 @@ function setTerminalInteractivity(terminal: Terminal | null, element: HTMLDivEle
   if (helperTextarea) helperTextarea.disabled = !interactive;
 }
 
-function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange, onExpectedTerminalRevisionDelta }: { command?: string; active: boolean; onError(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onExpectedTerminalRevisionDelta?(delta: number): void }) {
+function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange, onTerminalInputActivity }: { command?: string; active: boolean; onError(message: string): void; onTerminalInsertionChange?(insertCommand: (() => void) | undefined): void; onTerminalInputActivity?(activity: TerminalLineInputActivity): void }) {
   const terminalPanel = useRef<HTMLDivElement | null>(null);
   const terminalElement = useRef<HTMLDivElement | null>(null);
   const terminal = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
   const socket = useRef<WebSocket | null>(null);
   const interactive = useRef(active);
-  const expectedTerminalRevisionDeltaRef = useRef(onExpectedTerminalRevisionDelta);
-  const terminalInputLine = useRef<TerminalInputLineState>({ buffer: "", countedCurrentLine: false });
+  const terminalInputActivityRef = useRef(onTerminalInputActivity);
+  const terminalInputTracker = useRef(new TerminalLineInputTracker());
   const [connected, setConnected] = useState(false);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
 
-  useLayoutEffect(() => { expectedTerminalRevisionDeltaRef.current = onExpectedTerminalRevisionDelta; }, [onExpectedTerminalRevisionDelta]);
+  useLayoutEffect(() => { terminalInputActivityRef.current = onTerminalInputActivity; }, [onTerminalInputActivity]);
 
   // This changes input authority in place. It deliberately does not participate in the setup
   // effect below, so promoting a ready terminal keeps its xterm instance and WebSocket alive.
@@ -228,11 +195,10 @@ function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange,
     const dataDisposable = nextTerminal.onData((data) => {
       if (!interactive.current || ws.readyState !== WebSocket.OPEN) return;
       // Browser-side terminal revision tracking is only a suppression hint until Bash emits the
-      // authoritative revision. The first meaningful input on a shell line hides Continue before
-      // Enter; Enter itself does not add another local revision. A few ordinary line-cancel edits
-      // can undo that hint, but the server-side terminal manager remains authoritative.
-      const delta = terminalInputExpectedRevisionDelta(terminalInputLine.current, data);
-      if (delta) expectedTerminalRevisionDeltaRef.current?.(delta);
+      // authoritative revision. The shared tracker ignores navigation/control escape sequences and
+      // reports only meaningful physical line starts or current-line cancellations.
+      const activity = terminalInputTracker.current.consume(data);
+      if (activity.started || activity.cancelled) terminalInputActivityRef.current?.(activity);
       ws.send(JSON.stringify({ type: "input", data }));
     });
     ws.addEventListener("open", () => { setConnected(true); setConnectionEpoch((epoch) => epoch + 1); sendCurrentDimensions(); });
@@ -271,8 +237,8 @@ function EmbeddedTerminal({ command, active, onError, onTerminalInsertionChange,
     if (!interactive.current || !command) return;
     const data = commandForInsertion(command);
     if (socket.current?.readyState === WebSocket.OPEN) {
-      const delta = terminalInputExpectedRevisionDelta(terminalInputLine.current, data);
-      if (delta) expectedTerminalRevisionDeltaRef.current?.(delta);
+      const activity = terminalInputTracker.current.consume(data);
+      if (activity.started || activity.cancelled) terminalInputActivityRef.current?.(activity);
       socket.current.send(JSON.stringify({ type: "input", data }));
     }
   }, [command]);
@@ -424,15 +390,31 @@ function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChan
   useEffect(() => { terminalDisabled.current = disabled; if (disabled) setTerminalError(undefined); }, [disabled]);
   const handleTerminalError = useCallback((message: string) => { if (!terminalDisabled.current) setTerminalError(message); }, []);
   const terminalServerRevision = state?.terminalRevision ?? 0;
-  const expectedTerminalRevision = useRef(terminalServerRevision);
-  useEffect(() => { expectedTerminalRevision.current = Math.max(expectedTerminalRevision.current, terminalServerRevision); }, [terminalServerRevision]);
-  const handleExpectedTerminalRevisionDelta = useCallback((delta: number) => {
-    const nextRevision = delta > 0
-      ? Math.max(expectedTerminalRevision.current, terminalServerRevision) + delta
-      : Math.max(terminalServerRevision, expectedTerminalRevision.current + delta);
-    expectedTerminalRevision.current = nextRevision;
-    onTerminalCommandRevision?.(block.id, nextRevision);
-  }, [block.id, onTerminalCommandRevision, terminalServerRevision]);
+  const terminalServerRevisionRef = useRef(terminalServerRevision);
+  const pendingTerminalInput = useRef<{ physicalLines: number; targetRevision?: number }>({ physicalLines: 0 });
+  useLayoutEffect(() => { terminalServerRevisionRef.current = terminalServerRevision; }, [terminalServerRevision]);
+  useEffect(() => {
+    const pending = pendingTerminalInput.current;
+    if (pending.targetRevision !== undefined && terminalServerRevision >= pending.targetRevision) {
+      pending.physicalLines = 0;
+      pending.targetRevision = undefined;
+    }
+  }, [terminalServerRevision]);
+  useEffect(() => {
+    pendingTerminalInput.current = { physicalLines: 0 };
+  }, [block.id]);
+  const handleTerminalInputActivity = useCallback((activity: TerminalLineInputActivity) => {
+    const pending = pendingTerminalInput.current;
+    pending.physicalLines = Math.max(0, pending.physicalLines + activity.started - activity.cancelled);
+    if (activity.started > 0 && pending.targetRevision === undefined) {
+      pending.targetRevision = terminalServerRevisionRef.current + 1;
+      onTerminalCommandRevision?.(block.id, pending.targetRevision);
+    }
+    if (pending.physicalLines === 0 && pending.targetRevision !== undefined) {
+      pending.targetRevision = undefined;
+      onTerminalCommandRevision?.(block.id, terminalServerRevisionRef.current);
+    }
+  }, [block.id, onTerminalCommandRevision]);
 
   useEffect(() => {
     dispatch({ type: "server-state", terminal: state?.terminal });
@@ -450,7 +432,7 @@ function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChan
   const displayPanel = text ? <PracticeFeedbackBar tone={terminalTone} busy={terminalBusy} status={terminalBusy ? text : undefined} markdown={terminalBusy ? undefined : text} className="live-block-feedback terminal-feedback-overlay" /> : null;
   return <div className={`work-block terminal ${state?.active ? "is-active" : ""}`} aria-disabled={disabled ? "true" : undefined}>
     {showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
-      <EmbeddedTerminal command={command} active={Boolean(state?.active && !disabled)} onError={handleTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} onExpectedTerminalRevisionDelta={handleExpectedTerminalRevisionDelta} />
+      <EmbeddedTerminal command={command} active={Boolean(state?.active && !disabled)} onError={handleTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} onTerminalInputActivity={handleTerminalInputActivity} />
       {displayPanel}
     </div>}
     {!showLiveTerminal && displayPanel}

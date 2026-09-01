@@ -3232,7 +3232,7 @@ describe("workbook lesson UI", () => {
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
   });
 
-  it("hides terminal Continue through multiple local Enters until the authoritative terminal revision catches up", async () => {
+  it("hides terminal Continue for a multiline command until one authoritative terminal revision catches up", async () => {
     FakeEventSource.reset();
     class FakeWebSocket {
       static OPEN = 1;
@@ -3246,10 +3246,8 @@ describe("workbook lesson UI", () => {
     const terminalBlock = lesson.blocks[1]!;
     const acceptedProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
     acceptedProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
-    const firstCaughtUpProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "accepted", message: "Terminal accepted again." } } as any);
-    firstCaughtUpProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
-    const secondCaughtUpProgress = activeBlockProgress(terminalBlock, { terminalRevision: 3, terminal: { phase: "accepted", message: "Terminal accepted third." } } as any);
-    secondCaughtUpProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const caughtUpProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "accepted", message: "Terminal accepted again." } } as any);
+    caughtUpProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
     let currentState: State = {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
@@ -3270,17 +3268,13 @@ describe("workbook lesson UI", () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
 
-    await act(async () => { terminalDataListeners[0]!("echo after acceptance\r"); });
+    await act(async () => { terminalDataListeners[0]!("echo after acceptance \\\r"); });
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
-    await act(async () => { terminalDataListeners[0]!("echo before server catches up\r"); });
+    await act(async () => { terminalDataListeners[0]!("  && echo before server catches up\r"); });
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
 
-    currentState = { ...currentState, progress: firstCaughtUpProgress };
+    currentState = { ...currentState, progress: caughtUpProgress };
     await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 2 }); await Promise.resolve(); await Promise.resolve(); });
-    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
-
-    currentState = { ...currentState, progress: secondCaughtUpProgress };
-    await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 3 }); await Promise.resolve(); await Promise.resolve(); });
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
   });
 
@@ -3388,7 +3382,7 @@ describe("workbook lesson UI", () => {
         { type: "message", id: "transition-course", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: lesson.id, blockId: "transition", role: "assistant", source: "authored", presentation: "course", text: "## Transition" },
       ],
     } as any;
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => state }));
+    const fetchMock = vi.fn(async (_input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => state }));
     vi.stubGlobal("fetch", fetchMock);
 
     const container = await mount(createElement(App), stubAppShellGlobals);
@@ -3405,6 +3399,46 @@ describe("workbook lesson UI", () => {
       await Promise.resolve();
     });
     expect(fetchMock.mock.calls.filter(([url, init]) => url === "api/workbook/complete-block" && (init as RequestInit | undefined)?.method === "POST")).toHaveLength(0);
+  });
+
+  it("restores terminal Continue after partial input is erased or cancelled", async () => {
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      addEventListener() {}
+      send() {}
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalBlock = lesson.blocks[1]!;
+    const terminalProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    terminalProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const state = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock] } as any })],
+      progress: terminalProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Run command" }],
+    } as any;
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL, _init?: RequestInit) => ({ ok: true, json: async () => String(input).endsWith("api/workbook/complete-block") ? { outcome: "completed", state, navigationTarget: "workbook--complete" } : state }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    await act(async () => { terminalDataListeners[0]!("n"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+    await act(async () => { terminalDataListeners[0]!("\x7f"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    await act(async () => { terminalDataListeners[0]!("n\u0003"); });
+    const restored = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Continue")!;
+    expect(restored).toBeTruthy();
+    await act(async () => { restored.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); await Promise.resolve(); await Promise.resolve(); });
+    expect(fetchMock.mock.calls.filter(([url, init]) => url === "api/workbook/complete-block" && (init as RequestInit | undefined)?.method === "POST")).toHaveLength(1);
   });
 
   it("marks Do it for me terminal insertion as local pending work without remounting xterm", async () => {
@@ -3443,8 +3477,7 @@ describe("workbook lesson UI", () => {
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
   });
 
-  it("keeps terminal local revision tracking to one expected revision per command line", async () => {
-    FakeEventSource.reset();
+  it("ignores terminal arrow keys when deciding whether Continue should be hidden", async () => {
     class FakeWebSocket {
       static OPEN = 1;
       readyState = FakeWebSocket.OPEN;
@@ -3454,36 +3487,24 @@ describe("workbook lesson UI", () => {
     }
     vi.stubGlobal("WebSocket", FakeWebSocket);
     const terminalBlock = lesson.blocks[1]!;
-    const acceptedProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
-    acceptedProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
-    const firstCaughtUpProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "accepted", message: "Terminal accepted again." } } as any);
-    firstCaughtUpProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
-    const secondCaughtUpProgress = activeBlockProgress(terminalBlock, { terminalRevision: 3, terminal: { phase: "accepted", message: "Terminal accepted third." } } as any);
-    secondCaughtUpProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
-    let currentState: State = {
+    const terminalProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    terminalProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const state = {
       workbook: { title: "Workbook" },
       introduction: "Intro.",
       introductionComplete: true,
       chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock] } as any })],
-      progress: acceptedProgress,
+      progress: terminalProgress,
       adapter: {},
       timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Run command" }],
-    } as State;
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => currentState }));
-    vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("EventSource", FakeEventSource as any);
+    } as any;
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => state })));
 
     const container = await mount(createElement(App), stubAppShellGlobals);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    await act(async () => { terminalDataListeners[0]!("echo one\r"); terminalDataListeners[0]!("echo two\r"); });
-    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
 
-    currentState = { ...currentState, progress: firstCaughtUpProgress };
-    await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 2 }); await Promise.resolve(); await Promise.resolve(); });
-    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
-
-    currentState = { ...currentState, progress: secondCaughtUpProgress };
-    await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 3 }); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { terminalDataListeners[0]!("\x1b["); terminalDataListeners[0]!("A"); });
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
   });
 

@@ -7,6 +7,7 @@ import type { TutorialLogger } from "./runtime-log.js";
 import { createTutorialLogger } from "./runtime-log.js";
 import { NO_RUNTIME_PROVISION, type TrustedRuntimeProvision } from "./runtime-provision.js";
 import { publicTerminalFrame } from "./public-terminal-contract.js";
+import { TerminalLineInputTracker, type TerminalLineInputActivity } from "./terminal-line-input-tracker.js";
 import { TerminalObservation, type TerminalObservationFact } from "./terminal-observation.js";
 import { TerminalShellProtocol } from "./terminal-shell-protocol.js";
 
@@ -394,6 +395,7 @@ export class WorkbookTerminalManager {
   #client: TerminalClient | undefined;
   #replay = "";
   #terminalShellProtocol = new TerminalShellProtocol();
+  #terminalInputTracker = new TerminalLineInputTracker();
   #terminalObservation: TerminalObservation | undefined;
   #terminalObservationBlockKey: string | undefined;
   #activeTranscript = "";
@@ -454,7 +456,7 @@ export class WorkbookTerminalManager {
       this.#ensurePtyForActiveBlock(block);
       const shell = this.#pty;
       if (!shell) return;
-      this.#advanceInputEpoch(key);
+      this.#applyInputActivity(key, this.#terminalInputTracker.consume(message.data));
       this.#appendActiveTranscript("input", message.data);
       this.#terminalObservation?.observeInteractiveInput(message.data);
       shell.write(message.data);
@@ -528,6 +530,7 @@ export class WorkbookTerminalManager {
     this.#activePublicTranscriptBlockKey = undefined;
     this.#replay = "";
     this.#terminalShellProtocol = new TerminalShellProtocol();
+    this.#terminalInputTracker = new TerminalLineInputTracker();
     if (retiringKey) {
       this.#inputEpochByBlock.delete(retiringKey);
       this.#observedInputEpochByBlock.delete(retiringKey);
@@ -595,8 +598,20 @@ export class WorkbookTerminalManager {
     this.#client?.send(publicTerminalFrame({ type: "output", data }));
   }
 
+  #applyInputActivity(key: string, activity: TerminalLineInputActivity): void {
+    for (let index = 0; index < activity.started; index += 1) this.#advanceInputEpoch(key);
+    for (let index = 0; index < activity.cancelled; index += 1) this.#cancelInputEpoch(key);
+  }
+
   #advanceInputEpoch(key: string): void {
     this.#inputEpochByBlock.set(key, (this.#inputEpochByBlock.get(key) ?? 0) + 1);
+  }
+
+  #cancelInputEpoch(key: string): void {
+    const current = this.#inputEpochByBlock.get(key) ?? 0;
+    const observed = this.#observedInputEpochByBlock.get(key) ?? 0;
+    if (current <= observed) return;
+    this.#inputEpochByBlock.set(key, current - 1);
   }
 
   #markInputObserved(key: string, epoch: number): void {

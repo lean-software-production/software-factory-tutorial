@@ -466,6 +466,65 @@ describe("WorkbookTerminalManager", () => {
     expect(manager.hasUnobservedInput(activePractice)).toBe(false);
   });
 
+  it("cancels erased partial input epochs and collapses multiline input on one Bash observation", async () => {
+    const submittedSink = deferred<void>();
+    const facts: TerminalObservationFact[] = [];
+    const ptys: FakePty[] = [];
+    const manager = new WorkbookTerminalManager({
+      workspace: "/tmp/workspace",
+      getActiveBlock: () => activePractice,
+      observationSink: async (fact) => { facts.push(fact); await submittedSink.promise; },
+      ptyFactory: () => {
+        const pty = new FakePty();
+        ptys.push(pty);
+        return pty;
+      },
+    });
+    manager.attach(new FakeClient());
+
+    expect(manager.acquireCompletionFence(activePractice)).toBe(true);
+    manager.releaseCompletionFence(activePractice);
+
+    manager.receive({ type: "input", data: "\x1b[" });
+    manager.receive({ type: "input", data: "A" });
+    expect(manager.hasUnobservedInput(activePractice)).toBe(false);
+    expect(manager.acquireCompletionFence(activePractice)).toBe(true);
+    manager.releaseCompletionFence(activePractice);
+
+    manager.receive({ type: "input", data: "np" });
+    expect(manager.hasUnobservedInput(activePractice)).toBe(true);
+    expect(manager.acquireCompletionFence(activePractice)).toBe(false);
+    manager.receive({ type: "input", data: "\x7f\x7f" });
+    expect(manager.hasUnobservedInput(activePractice)).toBe(false);
+    expect(manager.acquireCompletionFence(activePractice)).toBe(true);
+    manager.releaseCompletionFence(activePractice);
+
+    manager.receive({ type: "input", data: "ab\u0015" });
+    expect(manager.hasUnobservedInput(activePractice)).toBe(false);
+    expect(manager.acquireCompletionFence(activePractice)).toBe(true);
+    manager.releaseCompletionFence(activePractice);
+
+    manager.receive({ type: "input", data: "cd\u0003" });
+    expect(manager.hasUnobservedInput(activePractice)).toBe(false);
+    expect(manager.acquireCompletionFence(activePractice)).toBe(true);
+    manager.releaseCompletionFence(activePractice);
+
+    manager.receive({ type: "input", data: "echo one \\\r" });
+    manager.receive({ type: "input", data: "  && echo two\r" });
+    expect(manager.hasUnobservedInput(activePractice)).toBe(true);
+    ptys[0]!.emit(marker("echo one && echo two"));
+    await Promise.resolve();
+    expect(facts).toEqual([expect.objectContaining({ type: "terminal-command-submitted", command: "echo one && echo two" })]);
+    expect(manager.hasUnobservedInput(activePractice)).toBe(true);
+
+    submittedSink.resolve();
+    await submittedSink.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(manager.hasUnobservedInput(activePractice)).toBe(false);
+    expect(manager.acquireCompletionFence(activePractice)).toBe(true);
+  });
+
   it("rejects input after a completion fence without writing to transcript, observation, or PTY, then restores input on release", () => {
     const { manager, ptys, facts } = setup();
     const client = new FakeClient();
