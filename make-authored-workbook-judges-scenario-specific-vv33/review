@@ -1,9 +1,0 @@
-Independent review found required hardening before merge:
-- strict parse/cross-check curated envelopes and reject unknown directory files except closed diagnostics;
-- abort during cleanup must prevent success/latest publication;
-- deterministic pass requires all 17 assertions, not only passed flag/count;
-- lifecycle must reflect cleanup-before-publication ordering;
-- sole deterministic selection ignores malformed ambient Judge config and omits absent keys;
-- exported schemas must be mode/status-discriminated;
-- deterministic-only report boundary must be closed to lessons-003-004, not any 17-assertion public descriptor.
-Implementation agent resumed with adversarial test requirements.
