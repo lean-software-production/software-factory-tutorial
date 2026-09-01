@@ -50,7 +50,7 @@ function documentTopFromLayout(element: HTMLElement) {
  * The only live practice surface. Its sticky wrapper lets the learner refer to the
  * activity while the durable conversation scrolls below it.
  */
-export function ActivityBand({ lessonId, activeBlock, progress, refresh, disabled = false, onTerminalInsertionChange, onEditorLocalRevision }: {
+export function ActivityBand({ lessonId, activeBlock, progress, refresh, disabled = false, onTerminalInsertionChange, onEditorLocalRevision, onTerminalCommandRevision }: {
   lessonId: string;
   activeBlock: Block;
   progress: Progress;
@@ -58,6 +58,7 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, disable
   disabled?: boolean;
   onTerminalInsertionChange?(blockId: string, insertCommand: (() => void) | undefined): void;
   onEditorLocalRevision?(blockId: string, revision: number): void;
+  onTerminalCommandRevision?(blockId: string, revision: number): void;
 }) {
   const bandRef = useRef<HTMLElement | null>(null);
   const focusedForBlock = useRef<string | undefined>(undefined);
@@ -144,7 +145,7 @@ export function ActivityBand({ lessonId, activeBlock, progress, refresh, disable
 
   return <>
     <section ref={bandRef} className="current-activity-band" data-activity-type={activeBlock.type} data-activity-layout="scroll-linked" data-activity-preloaded={readyTerminalPreload ? "true" : undefined} aria-label="Activity" aria-disabled={disabled ? "true" : undefined}>
-      <BlockView lessonId={lessonId} block={activeBlock} progress={progress} refresh={refresh} disabled={disabled} onTerminalInsertionChange={forwardTerminalInsertion} onEditorLocalRevision={onEditorLocalRevision} />
+      <BlockView lessonId={lessonId} block={activeBlock} progress={progress} refresh={refresh} disabled={disabled} onTerminalInsertionChange={forwardTerminalInsertion} onEditorLocalRevision={onEditorLocalRevision} onTerminalCommandRevision={onTerminalCommandRevision} />
     </section>
   </>;
 }

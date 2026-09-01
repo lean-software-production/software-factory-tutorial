@@ -3110,6 +3110,50 @@ describe("workbook lesson UI", () => {
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
   });
 
+  it("hides terminal Continue immediately on Enter until the authoritative terminal revision catches up", async () => {
+    FakeEventSource.reset();
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      sent: string[] = [];
+      addEventListener() {}
+      send(message: string) { this.sent.push(message); }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const terminalBlock = lesson.blocks[1]!;
+    const acceptedProgress = activeBlockProgress(terminalBlock, { terminalRevision: 1, terminal: { phase: "accepted", message: "Terminal accepted." } } as any);
+    acceptedProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    const caughtUpProgress = activeBlockProgress(terminalBlock, { terminalRevision: 2, terminal: { phase: "accepted", message: "Terminal accepted again." } } as any);
+    caughtUpProgress.canComplete = { blockId: terminalBlock.id, eligible: true };
+    let currentState: State = {
+      workbook: { title: "Workbook" },
+      introduction: "Intro.",
+      introductionComplete: true,
+      chapters: [chapter({ lesson: { ...lesson, blocks: [terminalBlock] } as any })],
+      progress: acceptedProgress,
+      adapter: {},
+      timeline: [{ type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: lesson.id, blockId: terminalBlock.id, role: "assistant", source: "authored", presentation: "course", text: "## Run command" }],
+    } as State;
+    const fetchMock = vi.fn(async (input?: RequestInfo | URL) => {
+      expect(String(input)).toMatch(/api\/workbook\/state$/);
+      return { ok: true, json: async () => currentState };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("EventSource", FakeEventSource as any);
+
+    const container = await mount(createElement(App), stubAppShellGlobals);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+
+    await act(async () => { terminalDataListeners[0]!("echo after acceptance\r"); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(0);
+
+    currentState = { ...currentState, progress: caughtUpProgress };
+    await act(async () => { FakeEventSource.instances[0]!.emit("state", { blockId: terminalBlock.id, terminalRevision: 2 }); await Promise.resolve(); await Promise.resolve(); });
+    expect([...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent === "Continue")).toHaveLength(1);
+  });
+
   it("routes active reflection composer sends through the reflection event path without a sticky hint", async () => {
     const reflectionProgress: Progress = {
       ...progress,

@@ -1655,6 +1655,71 @@ describe("workbook browser API", () => {
     } finally { await reloaded.close(); }
   });
 
+  it("rejects accepted terminal completion when input predates Bash's command marker", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty(false);
+    const tutor = new FakeMainTutor(
+      { outcome: "accepted", message: "Editor accepted." },
+      { outcome: "accepted", message: "Terminal accepted." },
+    );
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: tutor });
+    const blockId = "lesson--001-first--run-supplied-command";
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      const ws = await connect(server.url, server.url);
+      ws.send(JSON.stringify({ type: "input", data: "accepted command\r" }));
+      pty.data?.(`${bashCommandMarker("accepted command")}accepted output\r\n${bashFinishedMarker()}`);
+      await waitForWorkbookState(server.url, (next) => block(next, blockId)?.terminal?.phase === "accepted" && next.progress.canComplete?.eligible === true, "manual terminal acceptance");
+
+      ws.send(JSON.stringify({ type: "input", data: "typed before marker\r" }));
+      const response = await completeBlock(server.url, blockId);
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toMatchObject({ outcome: "rejected", reason: "ineligible" });
+      expect(tutor.blockSummaries.filter((summary) => summary.blockId === blockId)).toHaveLength(0);
+      expect(await privateTimeline(dir)).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId }));
+      ws.close();
+    } finally { await server.close(); }
+  });
+
+  it("fences accepted terminal completion so post-fence input is not run through the server socket", async () => {
+    const dir = await fixture();
+    const pty = new ServerFakePty();
+    const summary = deferred<string>();
+    const tutor = new class extends FakeMainTutor {
+      stalledSummaries = 0;
+      override async summarizeBlock(input: any): Promise<string> {
+        this.blockSummaries.push(input);
+        if (input.blockId !== "lesson--001-first--run-supplied-command") return `Summary of ${input.blockId}.`;
+        this.stalledSummaries += 1;
+        return summary.promise;
+      }
+    }(
+      { outcome: "accepted", message: "Editor accepted." },
+      { outcome: "accepted", message: "Terminal accepted." },
+    );
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), port: 0, terminalPtyFactory: () => pty, mainTutor: tutor });
+    const blockId = "lesson--001-first--run-supplied-command";
+    try {
+      await introduceAndOpenEditor(server.url);
+      await acceptEditor(server.url, tutor);
+      await submitTerminalAttempt(server.url, blockId);
+      await waitForWorkbookState(server.url, (next) => block(next, blockId)?.terminal?.phase === "accepted" && next.progress.canComplete?.eligible === true, "terminal accepted");
+
+      const ws = await connect(server.url, server.url);
+      const pendingCompletion = completeBlock(server.url, blockId).then((response) => response.json() as Promise<any>);
+      await waitForWorkbookState(server.url, () => tutor.stalledSummaries > 0, "terminal completion summary start");
+      const rejectionOutput = waitFor(ws, (message) => message.type === "output" && /not run/i.test(message.data));
+      ws.send(JSON.stringify({ type: "input", data: "echo after fence\r" }));
+      await rejectionOutput;
+      expect(pty.writes).not.toContain("echo after fence\r");
+
+      summary.resolve("Terminal summary.");
+      await expect(pendingCompletion).resolves.toMatchObject({ outcome: "completed" });
+      ws.close();
+    } finally { await server.close(); }
+  });
+
   it("reviews and accepts a second terminal command after earlier acceptance without duplicating successor records", async () => {
     const dir = await fixture();
     const pty = new ServerFakePty();

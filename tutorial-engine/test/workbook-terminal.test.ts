@@ -44,6 +44,13 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(error: Error): void } {
+  let resolveDeferred!: (value: T) => void;
+  let rejectDeferred!: (error: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolveDeferred = resolvePromise; rejectDeferred = rejectPromise; });
+  return { promise, resolve: resolveDeferred, reject: rejectDeferred };
+}
+
 function setup(options: { initialActiveBlock?: ActiveObservedTerminalBlock } = {}) {
   const initialActiveBlock = "initialActiveBlock" in options ? options.initialActiveBlock : activePractice;
   const facts: TerminalObservationFact[] = [];
@@ -424,6 +431,58 @@ describe("WorkbookTerminalManager", () => {
       { type: "interactive-input", data: "typed line\r" },
       { type: "terminal-output", data: "sync-output:typed line\r" },
     ] } });
+  });
+
+  it("tracks pending input epochs until observation sinks resolve", async () => {
+    const submittedSink = deferred<void>();
+    const facts: TerminalObservationFact[] = [];
+    const ptys: FakePty[] = [];
+    const manager = new WorkbookTerminalManager({
+      workspace: "/tmp/workspace",
+      getActiveBlock: () => activePractice,
+      observationSink: async (fact) => { facts.push(fact); await submittedSink.promise; },
+      ptyFactory: () => {
+        const pty = new FakePty();
+        ptys.push(pty);
+        return pty;
+      },
+    });
+    manager.attach(new FakeClient());
+
+    manager.receive({ type: "input", data: "npm test\r" });
+    expect(manager.hasUnobservedInput(activePractice)).toBe(true);
+    expect(manager.acquireCompletionFence(activePractice)).toBe(false);
+
+    ptys[0]!.emit(marker("npm test"));
+    await Promise.resolve();
+    expect(facts).toEqual([expect.objectContaining({ type: "terminal-command-submitted", command: "npm test" })]);
+    expect(manager.hasUnobservedInput(activePractice)).toBe(true);
+    expect(manager.acquireCompletionFence(activePractice)).toBe(false);
+
+    submittedSink.resolve();
+    await submittedSink.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(manager.hasUnobservedInput(activePractice)).toBe(false);
+  });
+
+  it("rejects input after a completion fence without writing to transcript, observation, or PTY, then restores input on release", () => {
+    const { manager, ptys, facts } = setup();
+    const client = new FakeClient();
+    manager.attach(client);
+
+    expect(manager.acquireCompletionFence(activePractice)).toBe(true);
+    manager.receive({ type: "input", data: "echo should not run\r" });
+
+    expect(ptys[0]!.writes).toEqual([]);
+    expect(facts).toEqual([]);
+    expect(manager.activeTranscriptContext()).toBeUndefined();
+    expect(client.messages.at(-1)).toMatchObject({ type: "output" });
+    expect(client.messages.at(-1)?.data).toContain("not run");
+
+    manager.releaseCompletionFence(activePractice);
+    manager.receive({ type: "input", data: "echo restored\r" });
+    expect(ptys[0]!.writes).toEqual(["echo restored\r"]);
   });
 
   it("captures one immutable final command fact and no output checkpoints", async () => {

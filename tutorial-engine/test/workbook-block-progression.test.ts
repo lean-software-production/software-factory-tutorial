@@ -548,6 +548,38 @@ describe("workbook block progression", () => {
     } finally { await restarted.close(); }
   });
 
+  it("cancels slow accepted-editor completion when a newer editor submission arrives and keeps that draft", async () => {
+    const dir = await fixture();
+    const deferredSummary = deferred<string>();
+    const tutor = new SummaryStallTutor("block", deferredSummary.promise);
+    const blockId = "lesson--001-first--edit-answer";
+    const server = await startWorkbookServer({ target: dir, webRoot: resolve(dir, "web"), embeddedTerminal: false, mainTutor: tutor });
+    try {
+      await advanceToEditor(server.url);
+      const first = await fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision: 1, text: "accepted v1" }) });
+      expect(first.status).toBe(202);
+      await waitForState(server.url, (next) => block(next, blockId)?.checkpoint?.status === "accepted" && next.progress.canComplete?.eligible === true);
+
+      const pendingCompletion = complete(server.url, blockId);
+      await waitUntil(() => tutor.stalledCalls > 0);
+      const pendingEditor = fetch(`${server.url}/api/workbook/editor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blockId, revision: 2, text: "newer v2 while summary waits" }) });
+      await sleep(20);
+      expect(await timelineRecords(dir)).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId }));
+
+      deferredSummary.resolve("Summary that should be discarded after invalidation.");
+      const completion = await pendingCompletion;
+      const editorResponse = await pendingEditor;
+      expect(editorResponse.status).toBe(202);
+      expect(completion).toMatchObject({ outcome: "rejected", reason: "not-current" });
+      const afterEditor = await editorResponse.json() as any;
+      expect(block(afterEditor, blockId)).toMatchObject({ active: true, completed: false, revision: 2, draftText: "newer v2 while summary waits" });
+      await waitForState(server.url, (next) => block(next, blockId)?.revision === 2 && block(next, blockId)?.checkpoint?.status === "accepted");
+      const records = await timelineRecords(dir);
+      expect(records).not.toContainEqual(expect.objectContaining({ type: "block_completed", blockId }));
+      expect(records).not.toContainEqual(expect.objectContaining({ type: "block_summarized", blockId, text: "Summary that should be discarded after invalidation." }));
+    } finally { await server.close(); }
+  });
+
   it("does not write late summaries after closing during completion compaction", async () => {
     for (const [stall, outcome] of [
       ["block", "resolve"],

@@ -467,6 +467,8 @@ export interface WorkbookWorkflowDependencies {
   attempts: AttemptStore;
   mainTutor: MainWorkbookTutor;
   activeTerminalContext?: () => ActiveTerminalTranscriptContext | undefined;
+  acquireTerminalCompletionFence?: (block: ActiveObservedTerminalBlock) => boolean;
+  releaseTerminalCompletionFence?: (block: ActiveObservedTerminalBlock) => void;
   onTerminalContinued?: (block: ActiveObservedTerminalBlock) => void;
   log: TutorialLogger;
 }
@@ -476,6 +478,21 @@ export class WorkbookWorkflowCommandError extends Error {
 }
 
 export interface WorkbookWorkflowStateEvent { lessonId?: string; blockId?: string; revision?: number; status?: PublicCheckpoint["status"]; terminalPhase?: PublicTerminal["phase"]; fatal?: true; }
+
+type CompletionFence = {
+  blockId: string;
+  generation: number;
+  token: string;
+  invalidated: boolean;
+  committing: boolean;
+  terminalBlock?: ActiveObservedTerminalBlock;
+  released: Promise<void>;
+  release(): void;
+};
+
+class CompletionFenceEncountered extends Error {
+  constructor(readonly fence: CompletionFence) { super("Practice completion is currently fenced."); }
+}
 
 export interface WorkbookWorkflow {
   start(): Promise<void>;
@@ -494,7 +511,7 @@ export interface WorkbookWorkflow {
   submitEvent(input: { blockId: string; action: string; response?: string }): Promise<Awaited<ReturnType<typeof publicState>>>;
 }
 
-export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, timeline, attempts, mainTutor, activeTerminalContext: currentActiveTerminalContext, onTerminalContinued, log }: WorkbookWorkflowDependencies): Promise<WorkbookWorkflow> {
+export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, timeline, attempts, mainTutor, activeTerminalContext: currentActiveTerminalContext, acquireTerminalCompletionFence, releaseTerminalCompletionFence, onTerminalContinued, log }: WorkbookWorkflowDependencies): Promise<WorkbookWorkflow> {
   let loaded = await loadWorkbook(contentRoot);
   let stream = buildWorkbookBlockStream(loaded);
   let records = await timeline.read();
@@ -505,6 +522,7 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   const terminalSessionId = randomUUID();
   let reloadGeneration = 0;
   let fatal: PublicTutorInfrastructureFatalState | undefined;
+  const completionFences = new Map<string, CompletionFence>();
 
   const append = async (input: Parameters<WorkbookTimeline["append"]>[0]): Promise<WorkbookTimelineRecord> => {
     const record = await timeline.appendWithinRun(input);
@@ -674,6 +692,40 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
   };
   const assertNoFatal = (): void => {
     if (fatal) throw new WorkbookWorkflowCommandError(409, TUTOR_INFRASTRUCTURE_FATAL_MESSAGE);
+  };
+  const matchingCompletionFence = (blockId: string): CompletionFence | undefined => {
+    const projection = currentWorkbookProjection();
+    const declared = declaredRefForInput(projection, blockId);
+    return completionFences.get(declared?.id ?? blockId);
+  };
+  const invalidateCompletionFence = (fence: CompletionFence): void => {
+    if (!fence.committing) fence.invalidated = true;
+  };
+  const completionFenceIsCurrent = (fence: CompletionFence): boolean => completionFences.get(fence.blockId)?.token === fence.token && !fence.invalidated && generationIsCurrent(fence.generation);
+  const beginCompletionFence = (block: OrderedWorkbookBlock, generation: number): CompletionFence | undefined => {
+    let terminalBlock: ActiveObservedTerminalBlock | undefined;
+    if (block.origin === "declared" && block.block.type === "terminal-practice") {
+      const workspaceRoot = workspaceRootForLesson(block.chapter.lesson);
+      if (workspaceRoot) terminalBlock = { lessonId: block.lessonId, blockId: block.id, workspaceId: block.chapter.lesson.workspace!, workspaceRoot };
+      if (terminalBlock && !acquireTerminalCompletionFence?.(terminalBlock)) return undefined;
+    }
+    let releaseFence!: () => void;
+    const fence: CompletionFence = {
+      blockId: block.id,
+      generation,
+      token: randomUUID(),
+      invalidated: false,
+      committing: false,
+      terminalBlock,
+      released: new Promise<void>((resolvePromise) => { releaseFence = resolvePromise; }),
+      release: () => {
+        if (completionFences.get(block.id)?.token === fence.token) completionFences.delete(block.id);
+        if (terminalBlock) releaseTerminalCompletionFence?.(terminalBlock);
+        releaseFence();
+      }
+    };
+    completionFences.set(block.id, fence);
+    return fence;
   };
   const logSummaryFailure = (operation: "block_summary" | "lesson_summary" | "completion_summary", input: { lessonId: string; blockId: string }): void => {
     log.info(`Workbook tutor ${operation} failed for ${input.lessonId}/${input.blockId}; fatal state latched.`);
@@ -997,6 +1049,11 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
       if (closed || fatal) return undefined;
       const active = activeDeclaredBlock();
       if (!active || active.block.type !== "terminal-practice" || active.id !== fact.blockId) return undefined;
+      const fence = matchingCompletionFence(active.id);
+      if (fence) {
+        invalidateCompletionFence(fence);
+        throw new Error("Terminal observation rejected while block completion is fenced.");
+      }
 
       if (fact.type === "terminal-command-submitted") {
         if (records.some((record) => record.type === "terminal-command-submitted" && record.attemptId === fact.attemptId)) return undefined;
@@ -1044,48 +1101,50 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     launchTerminalMainReview(job);
   });
 
-  const summarizeDeparture = async (leaving: DeclaredWorkbookBlock, coveredThroughId: string, lessonWillComplete: boolean, generation = currentGeneration()): Promise<boolean> => {
-    if (!generationIsCurrent(generation)) return false;
+  const summarizeDeparture = async (leaving: DeclaredWorkbookBlock, coveredThroughId: string, lessonWillComplete: boolean, generation = currentGeneration(), fence?: CompletionFence): Promise<boolean> => {
+    const current = () => generationIsCurrent(generation) && (!fence || completionFenceIsCurrent(fence));
+    if (!current()) return false;
     if (isEvaluatedBlock(leaving.block) && !records.some((record) => record.type === "block_summarized" && record.blockId === leaving.id)) {
       try {
         const text = requireTutorText(await mainTutor.summarizeBlock({ ...(await mainContext()), lessonId: leaving.lessonId, blockId: leaving.id, coveredThroughId }), "block_summary");
-        if (!generationIsCurrent(generation)) return false;
+        if (!current()) return false;
         await append({ type: "block_summarized", lessonId: leaving.lessonId, blockId: leaving.id, text, coveredThroughId });
       } catch {
-        if (!generationIsCurrent(generation)) return false;
+        if (!current()) return false;
         logSummaryFailure("block_summary", { lessonId: leaving.lessonId, blockId: leaving.id });
         latchTutorInfrastructureFatal("block summary");
         return false;
       }
     }
-    if (!generationIsCurrent(generation)) return false;
+    if (!current()) return false;
     if (lessonWillComplete && !records.some((record) => record.type === "lesson_summarized" && record.lessonId === leaving.lessonId)) {
       const lessonCoveredThroughId = records.at(-1)?.id ?? coveredThroughId;
       try {
         const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: leaving.lessonId, coveredThroughId: lessonCoveredThroughId }), "lesson_summary");
-        if (!generationIsCurrent(generation)) return false;
+        if (!current()) return false;
         await append({ type: "lesson_summarized", lessonId: leaving.lessonId, text, coveredThroughId: lessonCoveredThroughId });
       } catch {
-        if (!generationIsCurrent(generation)) return false;
+        if (!current()) return false;
         logSummaryFailure("lesson_summary", { lessonId: leaving.lessonId, blockId: leaving.id });
         latchTutorInfrastructureFatal("lesson summary");
         return false;
       }
     }
-    return generationIsCurrent(generation);
+    return current();
   };
 
-  const requestCompletionSummary = async (coveredThroughId: string, generation = currentGeneration()): Promise<boolean> => {
-    if (!generationIsCurrent(generation)) return false;
+  const requestCompletionSummary = async (coveredThroughId: string, generation = currentGeneration(), fence?: CompletionFence): Promise<boolean> => {
+    const current = () => generationIsCurrent(generation) && (!fence || completionFenceIsCurrent(fence));
+    if (!current()) return false;
     if (records.some((record) => record.type === "workbook_completion_summary")) return true;
     const completionCoveredThroughId = records.at(-1)?.id ?? coveredThroughId;
     try {
       const text = requireTutorText(await mainTutor.summarizeLesson({ ...(await mainContext()), lessonId: "workbook", coveredThroughId: completionCoveredThroughId }), "completion_summary");
-      if (!generationIsCurrent(generation)) return false;
+      if (!current()) return false;
       await append({ type: "workbook_completion_summary", text });
       return true;
     } catch {
-      if (!generationIsCurrent(generation)) return false;
+      if (!current()) return false;
       logSummaryFailure("completion_summary", { lessonId: WORKBOOK_COMPLETE_ANCHOR_ID, blockId: WORKBOOK_COMPLETE_ANCHOR_ID });
       latchTutorInfrastructureFatal("completion summary");
       return false;
@@ -1104,31 +1163,40 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
     if (projection.current?.id !== requested.id) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
     const eligibility = await canCompleteBlock(requested, projection, records, attempts);
     if (!eligibility.eligible) return { outcome: "rejected", state: await stateBefore(), reason: "ineligible" };
+    const fence = beginCompletionFence(requested, generation);
+    if (!fence) return { outcome: "rejected", state: await stateBefore(), reason: "ineligible" };
 
-    const coveredThroughId = records.at(-1)?.id ?? randomUUID();
-    const lessonWillComplete = requested.origin === "declared" && stream
-      .filter((block) => block.origin === "declared" && block.lessonId === requested.lessonId)
-      .every((block) => block.id === requested.id || projection.completedBlockIds.has(block.id));
-    const workbookWillComplete = stream.every((block) => block.id === requested.id || projection.completedBlockIds.has(block.id));
-    if (requested.origin === "declared" && !await summarizeDeparture(requested, coveredThroughId, lessonWillComplete, generation)) {
-      assertNoFatal();
-      return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
-    }
-    if (workbookWillComplete && !await requestCompletionSummary(coveredThroughId, generation)) {
-      assertNoFatal();
-      return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
-    }
-    if (!generationIsCurrent(generation)) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
+    try {
+      const coveredThroughId = records.at(-1)?.id ?? randomUUID();
+      const lessonWillComplete = requested.origin === "declared" && stream
+        .filter((block) => block.origin === "declared" && block.lessonId === requested.lessonId)
+        .every((block) => block.id === requested.id || projection.completedBlockIds.has(block.id));
+      const workbookWillComplete = stream.every((block) => block.id === requested.id || projection.completedBlockIds.has(block.id));
+      if (!completionFenceIsCurrent(fence)) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
+      if (requested.origin === "declared" && !await summarizeDeparture(requested, coveredThroughId, lessonWillComplete, generation, fence)) {
+        assertNoFatal();
+        return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
+      }
+      if (!completionFenceIsCurrent(fence)) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
+      if (workbookWillComplete && !await requestCompletionSummary(coveredThroughId, generation, fence)) {
+        assertNoFatal();
+        return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
+      }
+      if (!completionFenceIsCurrent(fence)) return { outcome: "rejected", state: await stateBefore(), reason: "not-current" };
 
-    await append({ type: "block_completed", blockId: requested.id });
-    if (requested.origin === "declared" && requested.block.type === "terminal-practice") {
-      const workspaceRoot = workspaceRootForLesson(requested.chapter.lesson);
-      try { if (workspaceRoot) onTerminalContinued?.({ lessonId: requested.lessonId, blockId: requested.id, workspaceId: requested.chapter.lesson.workspace!, workspaceRoot }); }
-      catch (error) { log.info(`Could not reset completed terminal ${requested.id}: ${error instanceof Error ? error.message : String(error)}`); }
+      fence.committing = true;
+      await append({ type: "block_completed", blockId: requested.id });
+      if (requested.origin === "declared" && requested.block.type === "terminal-practice") {
+        const workspaceRoot = workspaceRootForLesson(requested.chapter.lesson);
+        try { if (workspaceRoot) onTerminalContinued?.({ lessonId: requested.lessonId, blockId: requested.id, workspaceId: requested.chapter.lesson.workspace!, workspaceRoot }); }
+        catch (error) { log.info(`Could not reset completed terminal ${requested.id}: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+      const nextProjection = currentWorkbookProjection();
+      if (nextProjection.current) await ensureActiveWorkAcceptance(generation);
+      return { outcome: "completed", state: await currentPublicState(), navigationTarget: successorAnchor(stream, requested.id) };
+    } finally {
+      fence.release();
     }
-    const nextProjection = currentWorkbookProjection();
-    if (nextProjection.current) await ensureActiveWorkAcceptance(generation);
-    return { outcome: "completed", state: await currentPublicState(), navigationTarget: successorAnchor(stream, requested.id) };
   };
 
   const reloadContent = async (): Promise<{ outcome: "reloaded"; generation: number } | { outcome: "error"; message: string } | { outcome: "closed" }> => {
@@ -1219,21 +1287,44 @@ export async function createWorkbookWorkflow({ contentRoot, workspaceRootForId, 
 
   const submitEditor = async (blockId: string, text: string, revision?: number) => {
     assertNoFatal();
-    const active = activeDeclaredBlock();
-    if (!active || active.block.type !== "editor-practice" || (active.id !== blockId && active.declaredId !== blockId)) throw new WorkbookWorkflowCommandError(409, "This editor block is not active yet.");
-    const workspaceRoot = workspaceRootForLesson(active.chapter.lesson);
-    if (!workspaceRoot) throw new WorkbookWorkflowCommandError(400, `Lesson '${active.lessonId}' has no live workspace.`);
-    try { await resolveEditorTarget(workspaceRoot, active.block.path); }
-    catch (error) { throw new WorkbookWorkflowCommandError(400, error instanceof Error ? error.message : "Unsafe editor target path."); }
-    const editorGuidance = active.block.tutor;
-    await transact(async () => {
-      assertNoFatal();
-      const current = await attempts.current(active.lessonId, active.id).catch(() => undefined);
-      if (revision !== undefined && (!Number.isSafeInteger(revision) || revision <= 0)) throw new WorkbookWorkflowCommandError(400, "Editor revision must be a positive integer.");
-      if (revision !== undefined && current && revision <= current.version) return;
-      await createAttempt({ lessonId: active.lessonId, blockId: active.id, evidence: { kind: "editor", text }, privateGuidance: editorGuidance, version: revision });
-    });
-    return await currentPublicState();
+    if (revision !== undefined && (!Number.isSafeInteger(revision) || revision <= 0)) throw new WorkbookWorkflowCommandError(400, "Editor revision must be a positive integer.");
+    for (;;) {
+      const preFence = matchingCompletionFence(blockId);
+      if (preFence) {
+        invalidateCompletionFence(preFence);
+        await preFence.released;
+        continue;
+      }
+      const active = activeDeclaredBlock();
+      if (!active || active.block.type !== "editor-practice" || (active.id !== blockId && active.declaredId !== blockId)) throw new WorkbookWorkflowCommandError(409, "This editor block is not active yet.");
+      const workspaceRoot = workspaceRootForLesson(active.chapter.lesson);
+      if (!workspaceRoot) throw new WorkbookWorkflowCommandError(400, `Lesson '${active.lessonId}' has no live workspace.`);
+      try { await resolveEditorTarget(workspaceRoot, active.block.path); }
+      catch (error) { throw new WorkbookWorkflowCommandError(400, error instanceof Error ? error.message : "Unsafe editor target path."); }
+      const editorGuidance = active.block.tutor;
+      try {
+        await transact(async () => {
+          assertNoFatal();
+          const transactionFence = matchingCompletionFence(blockId);
+          if (transactionFence) {
+            invalidateCompletionFence(transactionFence);
+            throw new CompletionFenceEncountered(transactionFence);
+          }
+          const currentActive = activeDeclaredBlock();
+          if (!currentActive || currentActive.block.type !== "editor-practice" || (currentActive.id !== active.id && currentActive.declaredId !== blockId)) throw new WorkbookWorkflowCommandError(409, "This editor block is not active yet.");
+          const current = await attempts.current(currentActive.lessonId, currentActive.id).catch(() => undefined);
+          if (revision !== undefined && current && revision <= current.version) return;
+          await createAttempt({ lessonId: currentActive.lessonId, blockId: currentActive.id, evidence: { kind: "editor", text }, privateGuidance: editorGuidance, version: revision });
+        });
+        return await currentPublicState();
+      } catch (error) {
+        if (error instanceof CompletionFenceEncountered) {
+          await error.fence.released;
+          continue;
+        }
+        throw error;
+      }
+    }
   };
 
   const submitEvent = async ({ blockId, action, response }: { blockId: string; action: string; response?: string }) => transact(async () => {
