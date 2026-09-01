@@ -7,3 +7,5 @@ node_modules
 tutorial/.tutorial
 tutorial-engine/reports
 reports
+# Legacy local artifacts from the removed authored-eval lane; not an active feature.
+/evals/workbook/reports/
