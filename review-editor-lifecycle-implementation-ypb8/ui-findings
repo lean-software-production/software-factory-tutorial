@@ -1,0 +1,3 @@
+High: passive scroll completion checks terminal-local pending work but not editor-local revision, so an accepted editor can complete during its 750ms debounce.
+Medium: partial terminal input is authoritative pending work but does not hide Continue; a server-rejected complete response leaves useContinueOnce stuck in Continuing state.
+Reviewer: b5111a08-38c2-40b; 175 focused tests passed.
