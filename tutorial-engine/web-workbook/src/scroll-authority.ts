@@ -148,6 +148,8 @@ export function flushScheduledViewportWork(state: PublicWorkbookState, now = Dat
 export interface UnseenContent {
   readonly anchorId: string;
   readonly label: string;
+  /** Agent work is still happening, or its latest result has settled. */
+  readonly phase: "generating" | "settled";
 }
 
 const unseenListeners = new Set<() => void>();
@@ -155,7 +157,7 @@ let unseen: UnseenContent | undefined;
 let unseenObserver: IntersectionObserver | undefined;
 
 function setUnseen(next: UnseenContent | undefined): void {
-  if (unseen === next || (unseen && next && unseen.anchorId === next.anchorId && unseen.label === next.label)) return;
+  if (unseen === next || (unseen && next && unseen.anchorId === next.anchorId && unseen.label === next.label && unseen.phase === next.phase)) return;
   unseen = next;
   for (const listener of unseenListeners) listener();
 }
@@ -175,13 +177,13 @@ function clearUnseen(): void {
  * practice surface as well as appended to the conversation — and if any of them is not below
  * the fold the learner can already see it, so nothing is announced.
  */
-export function announceContent(element: HTMLElement, label: string, representatives: readonly HTMLElement[] = [element]): void {
+export function announceContent(element: HTMLElement, label: string, representatives: readonly HTMLElement[] = [element], phase: UnseenContent["phase"] = "settled"): void {
   if (!element.id) return;
   const safeBottom = safeViewportBottom();
   if (representatives.some((candidate) => !contentBelowFold(candidate.getBoundingClientRect(), safeBottom))) return;
   unseenObserver?.disconnect();
   unseenObserver = undefined;
-  setUnseen({ anchorId: element.id, label });
+  setUnseen({ anchorId: element.id, label, phase });
   if (typeof IntersectionObserver === "undefined") return;
   // The chip clears itself when the announced content scrolls into the reading area.
   const observer = new IntersectionObserver(([entry]) => {

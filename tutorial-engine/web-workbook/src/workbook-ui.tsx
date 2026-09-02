@@ -10,7 +10,7 @@ import { PracticeFeedbackBar, type PracticeFeedbackTone } from "./practice-feedb
 import { lessonElementId } from "../../src/workbook/lesson-links.js";
 import { ActivityBand } from "./activity-band.js";
 import { TimelineThread } from "./timeline-thread.js";
-import { flushScheduledViewportWork, navigateToAnchor, passiveHistoryAllowed, replaceUrlAnchor, revealUnseen, scheduleAnnouncement, scheduleNavigation, useUnseenContent } from "./scroll-authority.js";
+import { announceContent, contentBelowFold, flushScheduledViewportWork, safeViewportBottom, navigateToAnchor, passiveHistoryAllowed, replaceUrlAnchor, revealUnseen, scheduleAnnouncement, scheduleNavigation, useUnseenContent } from "./scroll-authority.js";
 import { canonicalBlockInView, readySuccessorCrossedReadingLine, subscribeViewport } from "./reading-line.js";
 import { isPublicWorkbookState, parsePublicCompleteBlockResult, parsePublicWorkbookState } from "../../src/workbook/public-contract.js";
 import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookChapter, PublicWorkbookLesson, PublicWorkbookProgress, PublicWorkbookState } from "../../src/workbook/public-contract.js";
@@ -107,6 +107,27 @@ export function FrozenTerminal({ text }: { text?: string }) {
   return <div className="frozen-terminal" aria-label="Frozen terminal session">
     <pre className="frozen-terminal-output">{text ?? "Terminal completed."}</pre>
   </div>;
+}
+
+/** The one welded feedback node for a practice block, and the target the unseen-content chip reveals. */
+export function practiceFeedbackElementId(blockId: string): string {
+  return "practice-feedback-" + domSafe(blockId);
+}
+
+function PracticeActivityAnnouncement({ blockId, phase, activityId }: { blockId: string; phase: "generating" | "settled" | undefined; activityId: string }) {
+  const announced = useRef<string>();
+  const announce = useCallback(() => {
+    if (!phase) return;
+    const identity = activityId + ":" + phase;
+    if (announced.current === identity) return;
+    const target = document.getElementById(practiceFeedbackElementId(blockId));
+    if (!target || !contentBelowFold(target.getBoundingClientRect(), safeViewportBottom())) return;
+    announced.current = identity;
+    announceContent(target, phase === "generating" ? "Tutor review in progress below" : "Tutor review below", [target], phase);
+  }, [activityId, blockId, phase]);
+  useLayoutEffect(() => { announce(); }, [announce]);
+  useEffect(() => { window.addEventListener("scroll", announce, { passive: true }); return () => window.removeEventListener("scroll", announce); }, [announce]);
+  return null;
 }
 
 /** xterm's mutable input option lets a ready canvas connect and render without accepting keystrokes. */
@@ -402,13 +423,15 @@ function TerminalBlock({ block, state, disabled = false, onTerminalInsertionChan
   const terminalTone: PracticeFeedbackTone = terminalError ? "failure" : display.phase === "accepted" ? "success" : display.phase === "feedback" ? "feedback" : "status";
   // Exactly one in-place learner-facing node represents status, feedback, acceptance, or a
   // transport error. It stays welded to the live surface until block completion moves history below.
-  const displayPanel = text ? <PracticeFeedbackBar tone={terminalTone} busy={terminalBusy} status={terminalBusy ? text : undefined} markdown={terminalBusy ? undefined : text} className="live-block-feedback terminal-feedback-overlay" /> : null;
+  const announcementPhase = terminalBusy ? "generating" : text ? "settled" : undefined;
+  const displayPanel = text ? <PracticeFeedbackBar id={practiceFeedbackElementId(block.id)} tone={terminalTone} busy={terminalBusy} status={terminalBusy ? text : undefined} markdown={terminalBusy ? undefined : text} className="live-block-feedback terminal-feedback-overlay" /> : null;
   return <div className={`work-block terminal ${state?.active ? "is-active" : ""}`} aria-disabled={disabled ? "true" : undefined}>
     {showLiveTerminal && <div className={`terminal-live-surface${displayPanel ? " has-feedback" : ""}`}>
       <EmbeddedTerminal command={command} active={Boolean(state?.active && !disabled)} onError={handleTerminalError} onTerminalInsertionChange={onTerminalInsertionChange} onTerminalInputActivity={handleTerminalInputActivity} />
       {displayPanel}
     </div>}
     {!showLiveTerminal && displayPanel}
+    <PracticeActivityAnnouncement blockId={block.id} phase={announcementPhase} activityId={`${state?.terminalRevision ?? 0}:${display.phase}`} />
     {preloading && <p className="terminal-coaching-activity subtle">Preparing terminal…</p>}
   </div>;
 }
@@ -617,9 +640,10 @@ function EditorPracticeBlockView({ block, state, refresh, disabled = false, onLo
     {!completed && <div className="editor-target"><span>Target file</span><code>{block.path}</code></div>}
     {lifecycleCanEdit && <div className={`editor-live-surface${liveFeedback || acceptedSuccess || liveStatus ? " has-feedback" : ""}`}>
       <div ref={editorElement} className="editor-surface" aria-label={`Editor for ${block.path}`} aria-disabled={disabled ? "true" : undefined} />
-      {(liveFeedback || acceptedSuccess || liveStatus) && <PracticeFeedbackBar tone={editorTone} busy={editorBusy} markdown={acceptedSuccess ?? liveFeedback} status={liveStatus} className="live-block-feedback editor-feedback-overlay" />}
+      {(liveFeedback || acceptedSuccess || liveStatus) && <PracticeFeedbackBar id={practiceFeedbackElementId(block.id)} tone={editorTone} busy={editorBusy} markdown={acceptedSuccess ?? liveFeedback} status={liveStatus} className="live-block-feedback editor-feedback-overlay" />}
     </div>}
     {completed ? <EditorHistory block={block} state={state} /> : !lifecycleCanEdit && <p className="next-ready">This editor practice will unlock when you reach this block.</p>}
+    <PracticeActivityAnnouncement blockId={block.id} phase={editorBusy ? "generating" : liveFeedback || acceptedSuccess || localError ? "settled" : undefined} activityId={`${state?.revision ?? 0}:${state?.checkpoint?.status ?? "idle"}`} />
   </div>;
 }
 
@@ -813,10 +837,10 @@ function CompletionPanel({ state }: { state: State }) {
 }
 
 /** Content that arrived below the fold on its own: the learner presses this to go and read it. */
-function UnseenContentChip() {
+export function UnseenContentChip() {
   const unseen = useUnseenContent();
   if (!unseen) return null;
-  return <div className="conversation-unseen-dock"><button type="button" className="conversation-unseen-chip" data-unseen-below={unseen.anchorId} onClick={() => revealUnseen()}><span aria-hidden="true">↓</span> {unseen.label}</button></div>;
+  return <div className="conversation-unseen-dock"><button type="button" className={`conversation-unseen-chip${unseen.phase === "generating" ? " is-generating" : ""}`} data-unseen-below={unseen.anchorId} aria-label={unseen.label} onClick={() => revealUnseen()}><span aria-hidden="true">↓</span></button></div>;
 }
 
 function FatalTutorNotice({ state }: { state: NonNullable<State["fatal"]> }) {

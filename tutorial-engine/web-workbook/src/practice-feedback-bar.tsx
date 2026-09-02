@@ -3,9 +3,9 @@ import { Markdown } from "./markdown.js";
 
 export type PracticeFeedbackTone = "status" | "feedback" | "updating" | "failure" | "success";
 
-export function PracticeFeedbackBar({ tone, markdown, status, label, title, busy = false, className = "" }: { tone: PracticeFeedbackTone; markdown?: string; status?: string; label?: string; title?: string; busy?: boolean; className?: string }) {
+export function PracticeFeedbackBar({ tone, markdown, status, label, title, busy = false, className = "", id }: { tone: PracticeFeedbackTone; markdown?: string; status?: string; label?: string; title?: string; busy?: boolean; className?: string; id?: string }) {
   const classes = [`practice-feedback-bar is-${tone}`, busy ? "is-busy" : "", className].filter(Boolean).join(" ");
-  return <aside className={classes} aria-live="polite" aria-atomic="true" role="status">
+  return <aside id={id} className={classes} aria-live="polite" aria-atomic="true" role="status">
     {tone === "success" && <span className="success-check" aria-hidden="true">✓</span>}
     <div className="practice-feedback-content">
       {label && <p className="section-label">{label}</p>}

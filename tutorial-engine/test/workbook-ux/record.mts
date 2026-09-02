@@ -458,6 +458,21 @@ async function feedbackTelemetry(page: Page, surface: "editor" | "terminal", exp
   });
 }
 
+async function observeGeneratingUnseenFeedback(page: Page): Promise<void> {
+  await page.locator(".conversation-unseen-chip.is-generating").waitFor({ state: "visible", timeout: 10_000 });
+}
+
+async function revealUnseenFeedback(page: Page, telemetryStart: number): Promise<void> {
+  const chip = page.locator(".conversation-unseen-chip");
+  await chip.waitFor({ state: "visible", timeout: 10_000 });
+  await page.waitForFunction(() => { const element = document.querySelector<HTMLElement>(".conversation-unseen-chip"); return Boolean(element && !element.classList.contains("is-generating")); }, undefined, { timeout: 20_000 });
+  const targetId = await chip.getAttribute("data-unseen-below");
+  if (!targetId?.startsWith("practice-feedback-")) throw new Error("The unseen chip did not target the welded practice feedback.");
+  if (applicationScrollCalls(await readScrollTelemetry(page, telemetryStart)).length > 0) throw new Error("The application scrolled before the learner pressed the unseen activity chip.");
+  await chip.click();
+  await page.waitForFunction((id) => { const target = document.getElementById(id); const composer = document.querySelector<HTMLElement>(".timeline-composer-dock"); return Boolean(target && target.getBoundingClientRect().top >= 0 && target.getBoundingClientRect().top < (composer?.getBoundingClientRect().top ?? window.innerHeight)); }, targetId, { timeout: 10_000 });
+}
+
 async function currentState(page: Page): Promise<{ progress: { activeBlockId: string; activeAnchorId?: string; blocks: Array<{ id: string; checkpoint?: { status?: string } }> }; orderedBlocks?: Array<{ id: string; anchorId: string }> }> {
   return page.evaluate(async () => (await (await fetch("api/workbook/state")).json()));
 }
@@ -657,7 +672,10 @@ export function assertCheckpointGeometry(checkpoint: SemanticCheckpoint, failure
   // A review of the active block is rendered only as the bar welded to its surface (the server
   // projects it into the conversation later, as history), so there is nothing for the chip to
   // announce when it lands off-screen; but the chip must never show for feedback in view.
-  if (checkpoint.requestedState === "away") return;
+  if (checkpoint.requestedState === "away") {
+    if (!checkpoint.feedback?.unseenChip) failures.push(`${checkpoint.name}: feedback landed below the fold but no unseen activity chip appeared.`);
+    return;
+  }
   if (checkpoint.feedback?.unseenChip) failures.push(`${checkpoint.name}: the "new below" chip is showing although the feedback is in view.`);
   if (checkpoint.feedback && !checkpoint.feedback.safeRegion.insideSafeRegion) failures.push(`${checkpoint.name}: feedback is outside the viewport safe region above the fixed composer.`);
   if (checkpoint.feedback && !checkpoint.feedback.safeRegion.unoccluded) failures.push(`${checkpoint.name}: feedback is occluded at representative points (${JSON.stringify(checkpoint.feedback.safeRegion.occlusionChecks)}).`);
@@ -837,7 +855,10 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
       await typeEditorRevision(page!, typedText);
       return { typedText };
     }, position: async () => positionBand(page!, "away", editorBandTop) });
+    await observeGeneratingUnseenFeedback(page);
+    const editorAwayTelemetry = await scrollTelemetryLength(page);
     await runPreparedCheckpoint({ ...editorCheckpoint, step: WORKBOOK_UX_TEST_STEPS.editorAwayFeedback, prepare: async () => ({}), trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.away) });
+    await revealUnseenFeedback(page, editorAwayTelemetry);
 
     await runScrollCheckpoint({ ...editorCheckpoint, step: WORKBOOK_UX_TEST_STEPS.editorScrollToDocked, position: async () => positionBand(page!, "docked", editorBandTop) });
     await runPreparedCheckpoint({ ...editorCheckpoint, step: WORKBOOK_UX_TEST_STEPS.editorDockedFeedback, prepare: async () => {
@@ -870,7 +891,10 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
       await waitForTerminalText(page!, "fake terminal 2");
       return { command };
     }, position: async () => positionBand(page!, "away", terminalBandTop) });
+    await observeGeneratingUnseenFeedback(page);
+    const terminalAwayTelemetry = await scrollTelemetryLength(page);
     await runPreparedCheckpoint({ ...terminalCheckpoint, step: WORKBOOK_UX_TEST_STEPS.terminalAwayFeedback, prepare: async () => ({}), trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.away) });
+    await revealUnseenFeedback(page, terminalAwayTelemetry);
 
     await runScrollCheckpoint({ ...terminalCheckpoint, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToDocked, position: async () => positionBand(page!, "docked", terminalBandTop) });
     await runPreparedCheckpoint({ ...terminalCheckpoint, step: WORKBOOK_UX_TEST_STEPS.terminalDockedFeedback, prepare: async () => {

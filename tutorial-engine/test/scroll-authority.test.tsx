@@ -163,7 +163,7 @@ describe("scheduled navigation", () => {
     expect(currentUnseen()).toBeUndefined();
 
     flushScheduledViewportWork(stateWithActive("next"));
-    expect(currentUnseen()).toEqual({ anchorId: "next", label: "Continue below" });
+    expect(currentUnseen()).toEqual({ anchorId: "next", label: "Continue below", phase: "settled" });
     expect(scrolled).toEqual([]);
   });
 });
@@ -179,7 +179,7 @@ describe("announced content", () => {
 
     announceContent(reply, "New reply below");
 
-    expect(currentUnseen()).toEqual({ anchorId: "reply", label: "New reply below" });
+    expect(currentUnseen()).toEqual({ anchorId: "reply", label: "New reply below", phase: "settled" });
     expect(scrolled).toEqual([]);
 
     expect(revealUnseen()).toBe(true);
@@ -238,6 +238,23 @@ describe("announced content", () => {
     expect(currentUnseen()).toBeUndefined();
   });
 
+  it("updates one below-fold target from generating to settled and replaces it with newer activity", () => {
+    const win = stubDom('<!doctype html><html><body><article id="first"></article><article id="second"></article></body></html>');
+    const first = win.document.getElementById("first")!;
+    const second = win.document.getElementById("second")!;
+    first.getBoundingClientRect = () => rect(1100, 80);
+    second.getBoundingClientRect = () => rect(1200, 80);
+
+    announceContent(first, "Tutor review in progress below", [first], "generating");
+    expect(currentUnseen()).toEqual({ anchorId: "first", label: "Tutor review in progress below", phase: "generating" });
+
+    announceContent(first, "Tutor review below", [first], "settled");
+    expect(currentUnseen()).toEqual({ anchorId: "first", label: "Tutor review below", phase: "settled" });
+
+    announceContent(second, "New reply below");
+    expect(currentUnseen()).toEqual({ anchorId: "second", label: "New reply below", phase: "settled" });
+  });
+
   it("lets React subscribe to the chip state", async () => {
     const win = stubDom('<!doctype html><html><body><div id="root"></div><article id="reply"></article></body></html>');
     win.HTMLElement.prototype.scrollIntoView = () => {};
@@ -280,6 +297,6 @@ describe("TimelineThread and the scroll authority", () => {
 
     expect(scrollTo).not.toHaveBeenCalled();
     expect(win.HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
-    expect(currentUnseen()).toEqual({ anchorId: "timeline-message-answered", label: "New reply below" });
+    expect(currentUnseen()).toEqual({ anchorId: "timeline-message-answered", label: "New reply below", phase: "settled" });
   });
 });

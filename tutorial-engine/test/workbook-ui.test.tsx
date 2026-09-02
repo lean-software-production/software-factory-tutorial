@@ -89,7 +89,8 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 import { ActivityBand } from "../web-workbook/src/activity-band.js";
-import { App, BlockView, ContinuationPageBreak, EditorHistory, LessonCompletionConfetti, LessonRail, TerminalHistory, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
+import { App, BlockView, ContinuationPageBreak, EditorHistory, LessonCompletionConfetti, LessonRail, TerminalHistory, UnseenContentChip, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
+import { announceContent, resetScrollAuthorityForTests } from "../web-workbook/src/scroll-authority.js";
 
 const stylesCss = readFileSync(new URL("../web-workbook/src/styles.css", import.meta.url), "utf8");
 
@@ -195,6 +196,7 @@ afterEach(async () => {
   dom = undefined;
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  resetScrollAuthorityForTests();
   confettiMock.cannon.mockClear();
   confettiMock.create.mockClear();
   confettiMock.reset.mockClear();
@@ -1718,6 +1720,23 @@ describe("workbook lesson UI", () => {
     expect(successMarkup).toContain("terminal-completion-surface");
     expect(successMarkup).toContain("practice-feedback-bar is-success");
     expect(successMarkup).toContain("Terminal accepted.");
+  });
+
+  it("renders an icon-only unseen chip with an accessible label and motion only while generating", async () => {
+    const container = await mount(createElement("div"));
+    const target = document.createElement("aside");
+    target.id = "feedback";
+    target.getBoundingClientRect = () => ({ top: 1100, bottom: 1180, left: 0, right: 800, width: 800, height: 80, x: 0, y: 1100, toJSON: () => ({}) }) as DOMRect;
+    document.body.append(target);
+    announceContent(target, "Tutor review in progress below", [target], "generating");
+    const markup = html(createElement(UnseenContentChip));
+    expect(markup).toContain("aria-label=\"Tutor review in progress below\"");
+    expect(markup).toContain("conversation-unseen-chip is-generating");
+    expect(markup).not.toContain("Tutor review in progress below</button>");
+    expect(markup).toContain("aria-hidden=\"true\">↓");
+    expect(container).toBeTruthy();
+    expect(stylesCss).toContain(".conversation-unseen-chip.is-generating");
+    expect(stylesCss).toContain(".conversation-unseen-chip,\n  .confetti-particle");
   });
 
   it("welds the shared practice feedback bar to editor, terminal, and narrow activity layouts in CSS", () => {

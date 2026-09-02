@@ -720,19 +720,21 @@ p {
 }
 .conversation-unseen-chip {
   display: inline-flex;
-  gap: 8px;
   align-items: center;
-  padding: 8px 16px;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
   border: 1px solid #254c82;
   border-radius: 999px;
   color: white;
   background: var(--blue);
   box-shadow: 0 10px 24px rgb(28 33 38 / 0.22);
-  font-size: 0.86rem;
+  font-size: 1.15rem;
   font-weight: 700;
   pointer-events: auto;
-  animation: conversation-unseen-pulse 1.6s ease-in-out infinite;
 }
+.conversation-unseen-chip.is-generating { animation: conversation-unseen-pulse 1.6s ease-in-out infinite; }
 .conversation-unseen-chip:hover {
   background: #1d4b8d;
 }
