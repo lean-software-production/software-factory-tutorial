@@ -10,6 +10,8 @@ import { PracticeFeedbackBar, type PracticeFeedbackTone } from "./practice-feedb
 import { lessonElementId } from "../../src/workbook/lesson-links.js";
 import { ActivityBand } from "./activity-band.js";
 import { TimelineThread } from "./timeline-thread.js";
+import { flushScheduledViewportWork, navigateToAnchor, passiveHistoryAllowed, replaceUrlAnchor, revealUnseen, scheduleAnnouncement, scheduleNavigation, useUnseenContent } from "./scroll-authority.js";
+import { canonicalBlockInView, readySuccessorCrossedReadingLine, subscribeViewport } from "./reading-line.js";
 import { isPublicWorkbookState, parsePublicCompleteBlockResult, parsePublicWorkbookState } from "../../src/workbook/public-contract.js";
 import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookChapter, PublicWorkbookLesson, PublicWorkbookProgress, PublicWorkbookState } from "../../src/workbook/public-contract.js";
 import { parsePublicTerminalMessage, type PublicTerminalFrame } from "../../src/workbook/public-terminal-contract.js";
@@ -27,6 +29,7 @@ export type BlockProgress = PublicWorkbookBlockProgress;
 export type Progress = PublicWorkbookProgress;
 export type CompleteBlockResult = PublicCompleteBlockResult;
 export type State = PublicWorkbookState;
+export { navigateToAnchor };
 
 function parseStateOrCompletion(value: unknown): State | CompleteBlockResult { return isPublicWorkbookState(value) ? value : parsePublicCompleteBlockResult(value); }
 
@@ -62,11 +65,6 @@ function successorFromState(state: State, completedBlockId: string): string | un
 }
 function progressFor(progress: Progress, id: string) { return progress.blocks.find((block) => block.id === id); }
 function domSafe(value: string) { return value.replace(/[^A-Za-z0-9_-]+/g, "-"); }
-let suppressPassiveHistoryUntil = 0;
-function replaceUrlAnchor(anchorId: string) {
-  suppressPassiveHistoryUntil = Date.now() + 450;
-  if (typeof history !== "undefined") history.replaceState(null, "", `#${anchorId}`);
-}
 
 function scheduleAnchorAnimationFrame(callback: FrameRequestCallback): () => void {
   const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (frameCallback: FrameRequestCallback) => setTimeout(() => frameCallback(Date.now()), 0) as unknown as number;
@@ -75,65 +73,10 @@ function scheduleAnchorAnimationFrame(callback: FrameRequestCallback): () => voi
   return () => cancel(handle);
 }
 
-export function navigateToAnchor(anchorId: string, mode: "push" | "replace" | "none" = "push") {
-  if (typeof document === "undefined") return false;
-  const element = document.getElementById(anchorId);
-  if (!element) return false;
-  suppressPassiveHistoryUntil = Date.now() + 450;
-  const fragment = `#${anchorId}`;
-  if (typeof history !== "undefined" && mode === "push") history.pushState(null, "", fragment);
-  if (typeof history !== "undefined" && mode === "replace") history.replaceState(null, "", fragment);
-  element.scrollIntoView({ behavior: reducedMotionPreferred() ? "auto" : "smooth", block: "start" });
-  if (mode === "push") {
-    const heading = element.matches("h1,h2,h3,[tabindex]") ? element as HTMLElement : element.querySelector<HTMLElement>("h1,h2,h3,[tabindex]");
-    heading?.focus?.({ preventScroll: true });
-  }
-  return true;
-}
 function canonicalLessonAnchor(lessonId: string) { return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(lessonId) ? `lesson--${lessonId}` : lessonElementId(lessonId); }
 function blockElementId(lessonId: string, blockId: string) { return blockId.includes("--") ? blockId : `${lessonElementId(lessonId)}-block-${domSafe(blockId)}`; }
 function stateForBlock(progress: Progress, lessonId: string, block: Block): BlockProgress | undefined { return lessonId === progress.activeLessonId ? progressFor(progress, block.id) : undefined; }
 function commandForInsertion(command = "") { return command.replace(/\\\r?\n\s*/g, " "); }
-
-const READING_LINE_TOP_PX = 120;
-const READING_LINE_HYSTERESIS_PX = 12;
-const READING_LINE_ADVANCE_TOP_PX = READING_LINE_TOP_PX - READING_LINE_HYSTERESIS_PX;
-const READING_LINE_RETURN_TOP_PX = READING_LINE_TOP_PX + READING_LINE_HYSTERESIS_PX;
-
-type CanonicalBlockCandidate = { id: string; top: number };
-
-function revealedCanonicalBlockIds(state: State): string[] {
-  const revealed = state.revealedBlockIds ?? state.progress.blocks.filter((block) => block.emerged).map((block) => block.id);
-  if (!state.orderedBlocks?.length) return revealed;
-  const revealedSet = new Set(revealed);
-  const ordered = state.orderedBlocks.map((block) => block.id).filter((id) => revealedSet.has(id));
-  return [...ordered, ...revealed.filter((id) => !ordered.includes(id))];
-}
-
-function canonicalBlockCandidates(state: State): CanonicalBlockCandidate[] {
-  return revealedCanonicalBlockIds(state).flatMap((id) => {
-    const element = typeof document !== "undefined" ? document.getElementById(id) : null;
-    return element ? [{ id, top: element.getBoundingClientRect().top }] : [];
-  });
-}
-
-function lastCandidateAtOrAbove(candidates: readonly CanonicalBlockCandidate[], top: number): CanonicalBlockCandidate | undefined {
-  return candidates.filter((candidate) => candidate.top <= top).at(-1);
-}
-
-function canonicalBlockInView(state: State, currentBlockId?: string): string | undefined {
-  const candidates = canonicalBlockCandidates(state);
-  if (candidates.length === 0) return currentBlockId ?? state.progress.activeBlockId;
-  const currentIndex = currentBlockId ? candidates.findIndex((candidate) => candidate.id === currentBlockId) : -1;
-  if (currentIndex < 0) return lastCandidateAtOrAbove(candidates, READING_LINE_ADVANCE_TOP_PX)?.id ?? state.progress.activeBlockId;
-
-  const later = lastCandidateAtOrAbove(candidates.slice(currentIndex + 1), READING_LINE_ADVANCE_TOP_PX);
-  if (later) return later.id;
-
-  const current = candidates[currentIndex]!;
-  if (current.top >= READING_LINE_RETURN_TOP_PX) return lastCandidateAtOrAbove(candidates.slice(0, currentIndex), READING_LINE_RETURN_TOP_PX)?.id ?? candidates[0]?.id ?? current.id;
-  return current.id;
-}
 
 const SHELL_FENCE = /^```([^`\n]*)\n([\s\S]*?)^```/gm;
 const SHELL_LANGUAGES = new Set(["sh", "bash", "shell", "zsh", "console"]);
@@ -297,23 +240,24 @@ function useContinueOnce(block: Block, state: BlockProgress | undefined, refresh
     pendingRef.current = true;
     setPending(true);
     completeBlockRequest(block.id).then((result) => {
+      // Scheduled before the state is applied: the navigation runs in the layout effect of the
+      // commit that makes the successor active, on the layout the learner is about to see.
+      const target = navigationTargetFrom(result);
+      if (target) scheduleNavigation(target, historyMode, { keepIfVisible: true });
       refresh(stateFromCompletion(result));
       if ("outcome" in result && result.outcome === "rejected") {
         pendingRef.current = false;
         setPending(false);
-        return;
       }
-      const target = navigationTargetFrom(result);
-      if (target) requestAnimationFrame(() => navigateToAnchor(target, historyMode));
     }).catch((error) => {
       pendingRef.current = false;
       setPending(false);
       console.error(error);
       readWorkbookState().then((next) => {
         if (next.progress.completedBlocks?.includes(block.id)) {
-          refresh(next);
           const target = successorFromState(next, block.id);
-          if (target) requestAnimationFrame(() => navigateToAnchor(target, historyMode));
+          if (target) scheduleNavigation(target, historyMode, { keepIfVisible: true });
+          refresh(next);
         }
       }).catch(() => undefined);
     });
@@ -724,13 +668,6 @@ export function LessonRail({ title, chapters, progress, viewedLessonId, setViewe
   </aside>;
 }
 
-function reducedMotionPreferred(): boolean {
-  const query = "(prefers-reduced-motion: reduce)";
-  if (typeof matchMedia === "function") return matchMedia(query).matches;
-  if (typeof window !== "undefined" && typeof window.matchMedia === "function") return window.matchMedia(query).matches;
-  return false;
-}
-
 const LESSON_COMPLETION_CONFETTI_BURSTS = [
   { angle: 58, origin: { x: 0, y: 1 } },
   { angle: 122, origin: { x: 1, y: 1 } },
@@ -875,6 +812,13 @@ function CompletionPanel({ state }: { state: State }) {
   </section>;
 }
 
+/** Content that arrived below the fold on its own: the learner presses this to go and read it. */
+function UnseenContentChip() {
+  const unseen = useUnseenContent();
+  if (!unseen) return null;
+  return <div className="conversation-unseen-dock"><button type="button" className="conversation-unseen-chip" data-unseen-below={unseen.anchorId} onClick={() => revealUnseen()}><span aria-hidden="true">↓</span> {unseen.label}</button></div>;
+}
+
 function FatalTutorNotice({ state }: { state: NonNullable<State["fatal"]> }) {
   return <aside className="workbook-fatal-notice" role="alert" aria-live="assertive" aria-atomic="true" aria-label="Workbook paused">
     <span className="workbook-fatal-icon" aria-hidden="true">!</span>
@@ -963,18 +907,25 @@ export function App() {
   }, [applyWorkbookState, hasInitialState]);
   const workbookTitle = state?.workbook.title;
   useEffect(() => { if (workbookTitle) document.title = workbookTitle; }, [workbookTitle]);
+  // The page is placed once, when the first state arrives: at the URL fragment if it names a
+  // revealed block, otherwise at the active block. No later state moves the page. If a later
+  // state invalidates the fragment — an author reload removed the block — only the URL is
+  // corrected, because the learner is reading wherever they are.
   useEffect(() => {
     if (!state) return;
     const fragment = typeof location === "undefined" ? "" : decodeURIComponent(location.hash.replace(/^#/, ""));
     const revealed = new Set(state.revealedBlockIds ?? state.progress.blocks.filter((block) => block.emerged).map((block) => block.id));
     const fragmentIsValid = Boolean(fragment && (revealed.has(fragment) || fragment === "workbook--complete" && state.progress.workbookComplete));
     const activeAnchor = state.progress.activeAnchorId ?? state.progress.activeBlockId;
-    const target = !fragment || !fragmentIsValid ? activeAnchor : !initialAnchorReconciled.current ? fragment : undefined;
-    const mode = !fragment || !fragmentIsValid ? "replace" : "none";
-    if (!target) return;
+    if (initialAnchorReconciled.current) {
+      if (fragment && !fragmentIsValid) replaceUrlAnchor(activeAnchor);
+      return;
+    }
+    const target = fragment && fragmentIsValid ? fragment : activeAnchor;
+    const mode = fragment && fragmentIsValid ? "none" : "replace";
     return scheduleAnchorAnimationFrame(() => {
-      initialAnchorReconciled.current = true;
-      navigateToAnchor(target, mode);
+      if (initialAnchorReconciled.current) return;
+      initialAnchorReconciled.current = navigateToAnchor(target, mode);
     });
   }, [state]);
   // The four dependencies this effect used to carry — the active block, the completion flag, and
@@ -991,63 +942,69 @@ export function App() {
   useEffect(() => {
     if (state) commitViewedCanonicalBlock(state);
   }, [commitViewedCanonicalBlock, state]);
-  useEffect(() => {
-    if (runwayWorkbookComplete || runwayFatal || runwayEditorLocalRevisionPending || runwayTerminalLocalRevisionPending || typeof IntersectionObserver === "undefined") return;
-    const readyId = readySuccessorAnchorId;
-    const activeId = runwayActiveBlockId;
-    if (!readyId || !activeId) return;
+  // Navigations and announcements scheduled against a state run here, once that state's DOM is
+  // committed and before it is painted.
+  useLayoutEffect(() => {
+    if (state) flushScheduledViewportWork(state);
+  }, [state]);
+  // Passive promotion reads the ready successor's position from the same viewport frame as the
+  // sidebar and the URL. The inputs it needs travel in a ref that is written after render, so the
+  // frame handler and the intersection observer below always decide with the latest state and a
+  // new successor or active block starts with no completion in flight.
+  const readySuccessorTrackingEnabled = !(runwayWorkbookComplete || runwayFatal || runwayEditorLocalRevisionPending || runwayTerminalLocalRevisionPending);
+  const readySuccessorTracking = useRef<{ readyId?: string; activeId?: string; enabled: boolean }>({ enabled: false });
+  useLayoutEffect(() => {
+    const previous = readySuccessorTracking.current;
+    if (previous.readyId !== readySuccessorAnchorId || previous.activeId !== runwayActiveBlockId) scrollCompletionPending.current = false;
+    readySuccessorTracking.current = { readyId: readySuccessorAnchorId, activeId: runwayActiveBlockId, enabled: readySuccessorTrackingEnabled };
+  }, [readySuccessorAnchorId, readySuccessorTrackingEnabled, runwayActiveBlockId]);
+  const completeReadySuccessorIfCrossed = useCallback((top?: number) => {
+    const { readyId, activeId, enabled } = readySuccessorTracking.current;
+    if (!enabled || !readyId || !activeId || scrollCompletionPending.current) return;
     const element = document.getElementById(readyId);
     if (!element) return;
-    scrollCompletionPending.current = false;
-    const completeIfCrossedReadingLine = (top = element.getBoundingClientRect().top) => {
-      if (top > READING_LINE_TOP_PX || scrollCompletionPending.current) return;
-      scrollCompletionPending.current = true;
-      completeBlockRequest(activeId).then((result) => {
-        applyWorkbookState(stateFromCompletion(result));
-        const target = navigationTargetFrom(result);
-        if (target) replaceUrlAnchor(target);
-      }).catch((error) => {
-        scrollCompletionPending.current = false;
-        console.error(error);
-        readWorkbookState().then((next) => { if (next.progress.completedBlocks?.includes(activeId)) applyWorkbookState(next); }).catch(() => undefined);
-      });
-    };
+    if (!readySuccessorCrossedReadingLine(top ?? element.getBoundingClientRect().top)) return;
+    scrollCompletionPending.current = true;
+    completeBlockRequest(activeId).then((result) => {
+      applyWorkbookState(stateFromCompletion(result));
+      const target = navigationTargetFrom(result);
+      if (target) replaceUrlAnchor(target);
+    }).catch((error) => {
+      scrollCompletionPending.current = false;
+      console.error(error);
+      readWorkbookState().then((next) => { if (next.progress.completedBlocks?.includes(activeId)) applyWorkbookState(next); }).catch(() => undefined);
+    });
+  }, [applyWorkbookState]);
+  useEffect(() => {
+    if (!readySuccessorTrackingEnabled || !readySuccessorAnchorId || typeof IntersectionObserver === "undefined") return;
+    const element = document.getElementById(readySuccessorAnchorId);
+    if (!element) return;
     const observer = new IntersectionObserver(([entry]) => {
       if (!entry?.isIntersecting) return;
-      completeIfCrossedReadingLine(entry.boundingClientRect?.top ?? element.getBoundingClientRect().top);
+      completeReadySuccessorIfCrossed(entry.boundingClientRect?.top ?? element.getBoundingClientRect().top);
     }, { threshold: 0 });
-    const checkReadySuccessorPosition = () => completeIfCrossedReadingLine();
     observer.observe(element);
-    addEventListener("scroll", checkReadySuccessorPosition, { passive: true });
-    addEventListener("resize", checkReadySuccessorPosition);
-    return () => {
-      observer.disconnect();
-      removeEventListener("scroll", checkReadySuccessorPosition);
-      removeEventListener("resize", checkReadySuccessorPosition);
-    };
-  }, [applyWorkbookState, readySuccessorAnchorId, runwayActiveBlockId, runwayWorkbookComplete, runwayFatal, runwayEditorLocalRevisionPending, runwayTerminalLocalRevisionPending]);
+    return () => observer.disconnect();
+  }, [completeReadySuccessorIfCrossed, readySuccessorAnchorId, readySuccessorTrackingEnabled]);
   useEffect(() => {
     if (!hasInitialState) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const commitViewedFromScroll = () => commitViewedCanonicalBlock();
     const commitPassiveHistory = () => {
       const id = viewedCanonicalBlock.current;
-      if (id && typeof history !== "undefined" && Date.now() > suppressPassiveHistoryUntil) history.replaceState(null, "", `#${id}`);
+      if (id && typeof history !== "undefined" && passiveHistoryAllowed()) history.replaceState(null, "", `#${id}`);
     };
-    const schedulePassiveHistoryCommit = () => {
+    const onFrame = () => {
+      commitViewedCanonicalBlock();
       if (timer) clearTimeout(timer);
       timer = setTimeout(commitPassiveHistory, 120);
+      completeReadySuccessorIfCrossed();
     };
-    commitViewedFromScroll();
-    const onScroll = () => {
-      commitViewedFromScroll();
-      schedulePassiveHistoryCommit();
-    };
-    addEventListener("scroll", onScroll, { passive: true });
+    commitViewedCanonicalBlock();
+    const unsubscribe = subscribeViewport(onFrame);
     const pop = () => { const id = typeof location === "undefined" ? "" : decodeURIComponent(location.hash.replace(/^#/, "")); if (id) navigateToAnchor(id, "none"); };
     addEventListener("popstate", pop);
-    return () => { removeEventListener("scroll", onScroll); removeEventListener("popstate", pop); if (timer) clearTimeout(timer); };
-  }, [commitViewedCanonicalBlock, hasInitialState]);
+    return () => { unsubscribe(); removeEventListener("popstate", pop); if (timer) clearTimeout(timer); };
+  }, [commitViewedCanonicalBlock, completeReadySuccessorIfCrossed, hasInitialState]);
   if (!state) return <p className="loading">Loading workbook…</p>;
   const fatal = state.fatal;
   const mutationsDisabled = Boolean(fatal);
@@ -1072,8 +1029,14 @@ export function App() {
     }
     const before = state.progress.activeBlockId;
     return postTutorMessage(state.progress.workbookComplete ? "workbook--complete" : state.introductionComplete ? state.progress.activeBlockId : INTRODUCTION_BLOCK_ID, text, state.introductionComplete ? blockInView() : undefined).then((next) => {
+      // The tutor advanced the workbook on the learner's behalf. The URL follows the new active
+      // block; the page stays put, and the chip announces the block if it landed below the fold.
+      if (next.progress.activeBlockId !== before || next.progress.workbookComplete && !state.progress.workbookComplete) {
+        const anchor = next.progress.activeAnchorId ?? next.progress.activeBlockId;
+        replaceUrlAnchor(anchor);
+        scheduleAnnouncement(anchor, "Continue below");
+      }
       applyWorkbookState(next);
-      if (next.progress.activeBlockId !== before || next.progress.workbookComplete && !state.progress.workbookComplete) requestAnimationFrame(() => navigateToAnchor(next.progress.activeAnchorId ?? next.progress.activeBlockId, "push"));
     });
   };
   const activeContinuationEligible = !state.introductionComplete ? true : localActiveEditorRevisionOutrunsState || localActiveTerminalRevisionOutrunsState ? false : state.progress.canComplete ? state.progress.canComplete.blockId === effectiveActiveBlockId && state.progress.canComplete.eligible : Boolean(effectiveActiveBlockProgress?.active && effectiveActiveBlockProgress.ready && !effectiveActiveBlockProgress.completed && (activeBlock?.type === "narrative" || effectiveActiveBlockProgress.checkpoint?.status === "accepted" || effectiveActiveBlockProgress.terminal?.phase === "accepted"));
@@ -1094,6 +1057,7 @@ export function App() {
   return <div className={`shell${mutationsDisabled ? " has-fatal-tutor-state" : ""}`}>
     {contentReloadError && <aside className="author-reload-notice" aria-live="polite"><b>Author reload failed.</b> {contentReloadError}</aside>}
     {fatal && <FatalTutorNotice state={fatal} />}
+    <UnseenContentChip />
     <LessonCompletionConfetti completedLessonIds={state.progress.completedLessons} />
     <LessonRail title={state.workbook.title} chapters={state.chapters} progress={state.progress} viewedLessonId={viewedLesson} setViewedLesson={setViewed} orderedBlocks={state.orderedBlocks} />
     <main><article className="page">

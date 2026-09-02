@@ -65,9 +65,6 @@
 * {
   box-sizing: border-box;
 }
-html {
-  scroll-behavior: smooth;
-}
 body {
   margin: 0;
   color: var(--ink);
@@ -365,6 +362,7 @@ h1 {
 }
 .opening,
 .work-block {
+  min-width: 0;
   scroll-margin-top: 34px;
   margin-top: 9rem;
 }
@@ -540,20 +538,29 @@ p {
 .prose-callout p:last-child {
   margin-bottom: 0;
 }
+/* The live practice surface. Sticky so the learner can refer to it while the conversation
+   scrolls below; fixed in width and bounded in height so its geometry never answers the scroll
+   position, and the editor scrolls inside its own box instead of moving the page. */
 .current-activity-band {
   position: sticky;
   z-index: 2;
   top: 0;
-  margin-top: 4rem;
-  padding: 12px 0 14px;
-  background: #fafaf3;
-  box-shadow: 0 14px 18px -18px rgb(28 33 38 / 0.55);
+  width: min(720px, 100%);
+  margin: 24px 0;
+  padding: 0;
 }
 .current-activity-band .work-block {
   margin-top: 0;
 }
+.current-activity-band > .work-block {
+  position: relative;
+}
+/* The page owns the column's width. A grid's auto column grows to its widest item's minimum
+   content, so one unbreakable line — a long typed draft, a pasted path, a terminal row — would
+   otherwise widen every block and the page with it. Content overflows its own box instead. */
 .timeline-thread {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   margin-top: 3rem;
 }
@@ -700,6 +707,43 @@ p {
 .timeline-message.failure {
   border-color: #e3c17a;
   background: var(--amber-pale);
+}
+.conversation-unseen-dock {
+  position: fixed;
+  z-index: 7;
+  right: 0;
+  bottom: 118px;
+  left: max(265px, calc((100vw - 1480px) / 2 + 265px));
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.conversation-unseen-chip {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 16px;
+  border: 1px solid #254c82;
+  border-radius: 999px;
+  color: white;
+  background: var(--blue);
+  box-shadow: 0 10px 24px rgb(28 33 38 / 0.22);
+  font-size: 0.86rem;
+  font-weight: 700;
+  pointer-events: auto;
+  animation: conversation-unseen-pulse 1.6s ease-in-out infinite;
+}
+.conversation-unseen-chip:hover {
+  background: #1d4b8d;
+}
+@keyframes conversation-unseen-pulse {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(4px);
+  }
 }
 .timeline-composer-dock.fixed-composer {
   position: fixed;
@@ -1541,8 +1585,11 @@ p {
 }
 
 /* Workbook block progression layout */
+/* Each block is a grid too, and the same rule holds one level down: its column is the block's
+   width, and a long editor line or terminal row scrolls inside its own surface. */
 .active-block-region {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 .active-block-region.is-active {
@@ -1664,35 +1711,6 @@ p {
   cursor: not-allowed;
   filter: saturate(0.65);
 }
-.current-activity-band {
-  --activity-expand: 0;
-  --activity-canvas-inset: 24px;
-  --activity-inline-width: min(720px, 100%);
-  --activity-expanded-width: var(--activity-inline-width);
-  --activity-expanded-left-offset: 0px;
-  --activity-width: var(--activity-inline-width);
-  --activity-left-offset: 0px;
-  --activity-top: 0px;
-  justify-self: start;
-  width: var(--activity-inline-width);
-  max-width: none;
-  top: var(--activity-top);
-  margin: 24px 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  transition: top 80ms linear;
-}
-.current-activity-band > .work-block {
-  position: relative;
-  left: var(--activity-left-offset);
-  width: var(--activity-width);
-  transition:
-    left 80ms linear,
-    width 80ms linear;
-}
 .current-activity-band .embedded-terminal {
   height: min(46vh, 380px);
   min-height: 240px;
@@ -1702,6 +1720,13 @@ p {
 .current-activity-band .editor-surface .cm-scroller,
 .current-activity-band .editor-surface .cm-content {
   min-height: min(46vh, 380px);
+}
+/* The editor's own box is the only thing that scrolls to keep the cursor in view. Without this
+   cap a long draft grows the docked band past the window, and every keystroke then scrolls the
+   page under a surface that cannot move. */
+.current-activity-band .editor-surface .cm-scroller {
+  max-height: min(48vh, 420px);
+  overflow-y: auto;
 }
 .current-activity-band .embedded-terminal-panel,
 .current-activity-band .editor-surface {
@@ -1715,10 +1740,7 @@ p {
   margin: 0 0 12px;
 }
 @media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
-  }
-  .current-activity-band,
+  .conversation-unseen-chip,
   .confetti-particle {
     transition: none;
     animation: none;
@@ -1726,13 +1748,12 @@ p {
 }
 @media (max-width: 840px) {
   .current-activity-band {
-    --activity-left-offset: 0px;
     top: 46vh;
-    width: min(var(--activity-inline-width), 100%);
-    max-width: 100%;
+    width: 100%;
   }
-  .current-activity-band > .work-block {
-    width: min(var(--activity-width), 100%);
+  .conversation-unseen-dock {
+    left: 0;
+    bottom: 96px;
   }
   .continuation-page-break {
     min-height: 10rem;

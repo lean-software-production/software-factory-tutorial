@@ -7,6 +7,7 @@ import { startWorkbookServer, type StartedWorkbookServer } from "../../src/workb
 import type { TutorDecision } from "../../src/workbook/tutor.js";
 import { ENGINE_ROOT, WEB_BUNDLE_DIRECTORY, ensureFreshWebBundle } from "../support/web-bundle.js";
 import { QueuedMainTutor } from "../support/fake-tutors.js";
+import { applicationScrollCalls, applicationScrollEvents, installScrollTelemetry, maxScrollExcursion, readScrollTelemetry, SCROLL_TELEMETRY_NOTE_GLOBAL, scrollTelemetryLength, type ScrollTelemetryEntry } from "../support/scroll-telemetry.js";
 import { analyzeWorkbookVideo, type AnalyzerReport } from "./analyzer.js";
 import { createProtocolAwareFakePty } from "./fake-pty.js";
 import { MARKER_BITS, MARKER_COLOURS, MARKER_CELL_SIZE, MARKER_GAP, MARKER_TOTAL_CELLS, markerCss, rgbCss } from "./marker-protocol.js";
@@ -27,32 +28,48 @@ export const REAL_JOURNEY_OBSERVED_SPARSE_EDITOR_TEXTURE_FLOOR = 3.862;
 // Clean runs have measured that sparse editor at and above 3.862, so 3 keeps a healthy
 // scenario-specific margin without weakening the generic analyzer's texture default.
 export const REAL_JOURNEY_MIN_TEXTURE_SCORE = 3;
-const GEOMETRY_TARGETS: Record<WorkbookUxTestGeometryState, { naturalTop: number; minExpand: number; maxExpand: number }> = {
-  small: { naturalTop: 285, minExpand: 0, maxExpand: 0.08 },
-  mid: { naturalTop: 130, minExpand: 0.25, maxExpand: 0.75 },
-  full: { naturalTop: 0, minExpand: 0.92, maxExpand: 1 },
+/** The page may drift this much while feedback lands or the learner types before it counts as moved. */
+export const PAGE_HOLD_TOLERANCE_PX = 1;
+/** Where the band sits, from the top of the viewport, when it is "in flow". */
+export const BAND_INFLOW_TOP_PX = 285;
+/** How far below the bottom of the viewport the band is parked when the learner has scrolled "away". */
+export const BAND_AWAY_MARGIN_PX = 120;
+/** How long a review is held back so feedback lands after the learner has scrolled away from the band. */
+const AWAY_REVIEW_DELAY_MS = 1_200;
+
+const GEOMETRY_TARGETS: Record<WorkbookUxTestGeometryState, { readonly description: string; readonly viewportTop: (viewportHeight: number) => number; readonly durationMs: number }> = {
+  inflow: { description: `band top within 24px of ${BAND_INFLOW_TOP_PX}px`, viewportTop: () => BAND_INFLOW_TOP_PX, durationMs: 900 },
+  docked: { description: "band stuck at the top of the viewport and fitting above the composer", viewportTop: () => 0, durationMs: 900 },
+  away: { description: "band entirely below the fold", viewportTop: (viewportHeight) => viewportHeight + BAND_AWAY_MARGIN_PX, durationMs: 300 },
 };
 
 const EDITOR_FEEDBACK = {
-  small: "EDITOR_FEEDBACK_SMALL_STATE: the small activity band feedback has settled.",
-  mid: "EDITOR_FEEDBACK_MID_STATE: the mid-scroll activity band feedback has settled.",
-  full: "EDITOR_FEEDBACK_FULL_STATE: the full-width activity band feedback has settled.",
+  inflow: "EDITOR_FEEDBACK_INFLOW_STATE: feedback settled with the band in the flow of the page.",
+  docked: "EDITOR_FEEDBACK_DOCKED_STATE: feedback settled with the band docked at the top.",
+  away: "EDITOR_FEEDBACK_AWAY_STATE: feedback settled while the band was below the fold.",
 };
 const EDITOR_ACCEPTED = "EDITOR_ACCEPTED_FINAL_STATE: accepted draft unlocks the terminal.";
 const TERMINAL_FEEDBACK = {
-  small: "TERMINAL_FEEDBACK_SMALL_STATE: Main Tutor feedback settled while the terminal band is small.",
-  mid: "TERMINAL_FEEDBACK_MID_STATE: Main Tutor feedback settled while the terminal band is mid-scroll.",
-  full: "TERMINAL_FEEDBACK_FULL_STATE: Main Tutor feedback settled while the terminal band is full-width.",
+  inflow: "TERMINAL_FEEDBACK_INFLOW_STATE: Main Tutor feedback settled with the terminal band in flow.",
+  docked: "TERMINAL_FEEDBACK_DOCKED_STATE: Main Tutor feedback settled with the terminal band docked.",
+  away: "TERMINAL_FEEDBACK_AWAY_STATE: Main Tutor feedback settled while the terminal band was below the fold.",
 };
 
 export interface RectTelemetry { readonly x: number; readonly y: number; readonly width: number; readonly height: number; readonly top: number; readonly right: number; readonly bottom: number; readonly left: number; }
 export interface GeometryTelemetry {
-  readonly expand: number;
   readonly scrollY: number;
+  readonly viewportHeight: number;
+  /** Where the band would sit in the document if nothing were sticking it: measured with its section at the top. */
   readonly bandDocumentTop: number;
   readonly bandRect: RectTelemetry;
+  readonly bandStuck: boolean;
   readonly workRect: RectTelemetry;
   readonly mainRect: RectTelemetry;
+  readonly composerTop: number;
+  readonly scrollWidth: number;
+  readonly clientWidth: number;
+  /** Elements whose right edge passes the viewport when the page overflows horizontally; empty otherwise. */
+  readonly overflowing: readonly string[];
 }
 export interface FeedbackSafeRegionTelemetry {
   readonly viewport: { readonly width: number; readonly height: number };
@@ -64,6 +81,27 @@ export interface FeedbackSafeRegionTelemetry {
 }
 export interface FeedbackTelemetry { readonly text: string; readonly rect: RectTelemetry; readonly safeRegion: FeedbackSafeRegionTelemetry; }
 export interface FakeCallCounts { readonly mainTutorReviews: number; readonly fakePtyCommands: number; }
+/** Who moved the page during a checkpoint, from the scroll telemetry probe. */
+export interface ScrollOwnershipTelemetry {
+  /** Programmatic scroll calls the application made (the recorder's own positioning is excluded). */
+  readonly applicationScrollCalls: readonly ScrollTelemetryEntry[];
+  /** Window scroll events not caused by the recorder's own positioning. */
+  readonly applicationScrollEvents: number;
+  /** The furthest the page moved from where it was when the checkpoint started, excluding recorder positioning. */
+  readonly maxExcursionPx: number;
+  /** For feedback checkpoints: how far the page moved while the learner typed, before feedback was awaited. */
+  readonly typingExcursionPx?: number;
+}
+/** Where a Continue left the successor block, measured once the navigation settled. */
+export interface ContinueLanding {
+  readonly from: string;
+  readonly to: string;
+  readonly scrollYBefore: number;
+  readonly scrollYAfter: number;
+  readonly successorTop: number;
+  readonly composerTop: number;
+  readonly inView: boolean;
+}
 export interface SemanticCheckpoint {
   readonly stepId: number;
   readonly name: string;
@@ -79,6 +117,8 @@ export interface SemanticCheckpoint {
   readonly feedback?: FeedbackTelemetry;
   readonly typedText?: string;
   readonly command?: string;
+  readonly landing?: ContinueLanding;
+  readonly scroll: ScrollOwnershipTelemetry;
   readonly fakeCallCounts: FakeCallCounts;
 }
 export interface WorkbookUxTestWalkthrough {
@@ -90,6 +130,8 @@ export interface WorkbookUxTestWalkthrough {
   readonly viewport: typeof VIEWPORT & { readonly deviceScaleFactor: 1; readonly reducedMotion: "no-preference" };
   readonly markerProtocol: { readonly bits: number; readonly stateCheckpointStepIds: readonly number[]; readonly scrollCheckpointStepIds: readonly number[]; readonly requiredMotionStepIds: readonly number[] };
   readonly checkpoints: SemanticCheckpoint[];
+  /** Every Continue the recorder pressed, and where it left the successor. */
+  readonly landings: ContinueLanding[];
   readonly fake: { readonly mainTutorReviews: number; readonly ptyCommands: readonly unknown[] };
   readonly analyzer?: Pick<AnalyzerReport, "ok" | "requiredMotionStepIds" | "markerSamples" | "findings"> & { readonly segmentStepIds: number[]; readonly evidenceFiles: readonly string[]; readonly contactSheet?: string };
   readonly semanticFailures: string[];
@@ -111,8 +153,9 @@ export interface WorkbookUxTestRecorderResult {
 type MarkerPhase = "settled" | "transition";
 
 type Mutable<T> = { -readonly [Property in keyof T]: T[Property] };
-type MutableWalkthrough = Mutable<Omit<WorkbookUxTestWalkthrough, "checkpoints" | "semanticFailures" | "fake" | "videoPath">> & {
+type MutableWalkthrough = Mutable<Omit<WorkbookUxTestWalkthrough, "checkpoints" | "landings" | "semanticFailures" | "fake" | "videoPath">> & {
   checkpoints: SemanticCheckpoint[];
+  landings: ContinueLanding[];
   semanticFailures: string[];
   fake: Mutable<WorkbookUxTestWalkthrough["fake"]>;
   videoPath: string;
@@ -120,13 +163,11 @@ type MutableWalkthrough = Mutable<Omit<WorkbookUxTestWalkthrough, "checkpoints" 
 };
 
 function isoNow(): string { return new Date().toISOString(); }
-function rectTelemetry(rect: DOMRect | DOMRectReadOnly): RectTelemetry {
-  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left };
-}
 function shell(command: string, cwd = ENGINE_ROOT): string {
   return execFileSync(command, { cwd, shell: "/bin/bash", encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 async function exists(path: string): Promise<boolean> { try { await stat(path); return true; } catch { return false; } }
+function delay(ms: number): Promise<void> { return new Promise((resolvePromise) => setTimeout(resolvePromise, ms)); }
 
 async function collectInputMetadata(runRoot: string, bundleStatus: ReturnType<typeof ensureFreshWebBundle>, browserVersion?: string): Promise<Record<string, unknown>> {
   const packageJson = JSON.parse(await readFile(resolve(ENGINE_ROOT, "package.json"), "utf8")) as Record<string, unknown>;
@@ -225,12 +266,12 @@ async function setMarker(page: Page, phase: MarkerPhase, step: WorkbookUxTestSte
 
 async function waitForStableViewport(page: Page): Promise<void> {
   await page.waitForFunction(() => new Promise<boolean>((resolvePromise) => {
-    const sample = () => ({ y: window.scrollY, expand: Number(getComputedStyle(document.querySelector(".current-activity-band") as Element).getPropertyValue("--activity-expand")) || 0 });
+    const sample = () => ({ y: window.scrollY, top: document.querySelector(".current-activity-band")?.getBoundingClientRect().top ?? 0 });
     let previous = sample();
     let stable = 0;
     const tick = () => requestAnimationFrame(() => {
       const next = sample();
-      if (Math.abs(next.y - previous.y) < 0.5 && Math.abs(next.expand - previous.expand) < 0.005) stable += 1;
+      if (Math.abs(next.y - previous.y) < 0.5 && Math.abs(next.top - previous.top) < 0.5) stable += 1;
       else stable = 0;
       previous = next;
       if (stable >= 4) resolvePromise(true);
@@ -240,56 +281,121 @@ async function waitForStableViewport(page: Page): Promise<void> {
   }), undefined, { timeout: 10_000 });
 }
 
-async function measureGeometry(page: Page): Promise<GeometryTelemetry> {
-  return page.evaluate(() => {
+/** An instant scroll issued by the recorder, marked so the telemetry never attributes it to the application. */
+async function recorderScrollTo(page: Page, top: number): Promise<void> {
+  await page.evaluate(({ noteName, target }) => {
+    const host = window as unknown as Record<string, unknown>;
+    host[noteName] = "harness";
+    try { window.scrollTo({ top: target, left: window.scrollX, behavior: "instant" }); }
+    finally { host[noteName] = undefined; }
+  }, { noteName: SCROLL_TELEMETRY_NOTE_GLOBAL, target: top });
+}
+
+/**
+ * The band's natural document position. Sticky positioning displaces the band once it is stuck,
+ * so the honest measurement scrolls its own section to the top of the viewport first, reads the
+ * band there, and scrolls back.
+ */
+async function measureBandDocumentTop(page: Page): Promise<number> {
+  const original = await page.evaluate(() => window.scrollY);
+  const sectionTop = await page.evaluate(() => {
+    const band = document.querySelector<HTMLElement>(".current-activity-band");
+    const section = band?.closest("section");
+    if (!band || !section) throw new Error("Cannot measure the activity band's document position because the active work surface is missing.");
+    return section.getBoundingClientRect().top + window.scrollY;
+  });
+  await recorderScrollTo(page, sectionTop);
+  const naturalTop = await page.evaluate(() => document.querySelector<HTMLElement>(".current-activity-band")!.getBoundingClientRect().top + window.scrollY);
+  await recorderScrollTo(page, original);
+  return naturalTop;
+}
+
+async function measureGeometry(page: Page, bandDocumentTop?: number): Promise<GeometryTelemetry> {
+  const documentTop = bandDocumentTop ?? await measureBandDocumentTop(page);
+  return page.evaluate((measuredDocumentTop) => {
     const band = document.querySelector<HTMLElement>(".current-activity-band");
     const work = band?.querySelector<HTMLElement>(".work-block");
     const main = document.querySelector<HTMLElement>("main");
+    const composer = document.querySelector<HTMLElement>(".timeline-composer-dock");
     if (!band || !work || !main) throw new Error("Cannot measure activity band geometry because the active work surface is missing.");
-    let bandDocumentTop = 0;
-    let current: HTMLElement | null = band;
-    while (current) { bandDocumentTop += current.offsetTop; current = current.offsetParent as HTMLElement | null; }
-    if (bandDocumentTop <= 0) bandDocumentTop = band.getBoundingClientRect().top + window.scrollY;
     const toRect = (rect: DOMRect): RectTelemetry => ({ x: rect.x, y: rect.y, width: rect.width, height: rect.height, top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left });
+    const bandRect = band.getBoundingClientRect();
+    const stickyTop = Number.parseFloat(getComputedStyle(band).top) || 0;
+    const clientWidth = document.documentElement.clientWidth;
+    const describe = (element: Element) => `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}${typeof element.className === "string" && element.className ? `.${element.className.trim().split(/\s+/).slice(0, 3).join(".")}` : ""}`;
+    const overflowing = document.documentElement.scrollWidth > clientWidth
+      ? Array.from(document.body.querySelectorAll<HTMLElement>("*"))
+        .filter((element) => getComputedStyle(element).position !== "fixed")
+        .map((element) => ({ element, right: element.getBoundingClientRect().right }))
+        .filter(({ right }) => right > clientWidth + 0.5)
+        .sort((left, right) => right.right - left.right)
+        .slice(0, 6)
+        .map(({ element, right }) => `${describe(element)} right=${right.toFixed(0)}`)
+      : [];
     return {
-      expand: Number(getComputedStyle(band).getPropertyValue("--activity-expand")) || 0,
       scrollY: window.scrollY,
-      bandDocumentTop,
-      bandRect: toRect(band.getBoundingClientRect()),
+      viewportHeight: window.innerHeight,
+      bandDocumentTop: measuredDocumentTop,
+      bandRect: toRect(bandRect),
+      // Stuck: sticky positioning is holding the band at its offset, which is the case from the
+      // moment its natural position reaches that offset.
+      bandStuck: getComputedStyle(band).position === "sticky" && Math.abs(bandRect.top - stickyTop) < 1 && measuredDocumentTop - window.scrollY <= stickyTop + 0.5,
       workRect: toRect(work.getBoundingClientRect()),
       mainRect: toRect(main.getBoundingClientRect()),
+      composerTop: composer ? composer.getBoundingClientRect().top : window.innerHeight,
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth,
+      overflowing,
     };
-  });
+  }, documentTop);
 }
 
+/** The scroll the learner would make with the wheel: animated, and marked as the recorder's own. */
 async function positionBand(page: Page, state: WorkbookUxTestGeometryState): Promise<GeometryTelemetry> {
   const target = GEOMETRY_TARGETS[state];
-  const before = await measureGeometry(page);
-  await page.evaluate(async ({ bandDocumentTop, naturalTop }) => {
+  const bandDocumentTop = await measureBandDocumentTop(page);
+  const viewportHeight = await page.evaluate(() => window.innerHeight);
+  const end = Math.max(0, bandDocumentTop - target.viewportTop(viewportHeight));
+  await page.evaluate(async ({ noteName, end: endY, durationMs }) => {
+    const host = window as unknown as Record<string, unknown>;
     const start = window.scrollY;
-    const end = Math.max(0, bandDocumentTop - naturalTop);
-    if (Math.abs(end - start) < 1) {
-      window.scrollTo(0, end);
-      return;
+    host[noteName] = "harness";
+    try {
+      if (Math.abs(endY - start) < 1) {
+        window.scrollTo({ top: endY, behavior: "instant" });
+        return;
+      }
+      const startedAt = performance.now();
+      await new Promise<void>((resolvePromise) => {
+        const tick = (now: number) => {
+          const progress = Math.min(1, (now - startedAt) / durationMs);
+          window.scrollTo({ top: start + (endY - start) * progress, behavior: "instant" });
+          if (progress >= 1) resolvePromise();
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+    } finally {
+      host[noteName] = undefined;
     }
-    const durationMs = 900;
-    const startedAt = performance.now();
-    await new Promise<void>((resolvePromise) => {
-      const tick = (now: number) => {
-        const progress = Math.min(1, (now - startedAt) / durationMs);
-        window.scrollTo(0, start + (end - start) * progress);
-        if (progress >= 1) resolvePromise();
-        else requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    });
-  }, { bandDocumentTop: before.bandDocumentTop, naturalTop: target.naturalTop });
+  }, { noteName: SCROLL_TELEMETRY_NOTE_GLOBAL, end, durationMs: target.durationMs });
   await waitForStableViewport(page);
-  const after = await measureGeometry(page);
-  if (after.expand < target.minExpand || after.expand > target.maxExpand) {
-    throw new Error(`Activity band ${state} expansion out of range: measured ${after.expand}, expected ${target.minExpand}..${target.maxExpand}`);
-  }
+  const after = await measureGeometry(page, bandDocumentTop);
+  const failure = geometryStateFailure(state, after);
+  if (failure) throw new Error(`Activity band could not be placed ${state}: ${failure}`);
   return after;
+}
+
+export function geometryStateFailure(state: WorkbookUxTestGeometryState, geometry: GeometryTelemetry): string | undefined {
+  const top = geometry.bandRect.top;
+  if (state === "inflow") return Math.abs(top - BAND_INFLOW_TOP_PX) <= 24 ? undefined : `expected ${GEOMETRY_TARGETS.inflow.description}, measured band top ${top.toFixed(1)}`;
+  if (state === "docked") {
+    if (Math.abs(top) > 2) return `expected ${GEOMETRY_TARGETS.docked.description}, measured band top ${top.toFixed(1)}`;
+    if (!geometry.bandStuck) return "expected the band to be stuck at the top, but it is in flow";
+    if (geometry.bandRect.bottom > geometry.composerTop + 1) return `expected the docked band to fit above the composer (bottom ${geometry.bandRect.bottom.toFixed(1)} > composer top ${geometry.composerTop.toFixed(1)})`;
+    return undefined;
+  }
+  return top >= geometry.viewportHeight ? undefined : `expected ${GEOMETRY_TARGETS.away.description}, measured band top ${top.toFixed(1)} in a ${geometry.viewportHeight}px viewport`;
 }
 
 async function feedbackTelemetry(page: Page, surface: "editor" | "terminal", expectedText: string): Promise<FeedbackTelemetry> {
@@ -332,23 +438,52 @@ async function feedbackTelemetry(page: Page, surface: "editor" | "terminal", exp
   });
 }
 
-async function clickContinue(page: Page): Promise<void> {
+async function currentState(page: Page): Promise<{ progress: { activeBlockId: string; activeAnchorId?: string; blocks: Array<{ id: string; checkpoint?: { status?: string } }> }; orderedBlocks?: Array<{ id: string; anchorId: string }> }> {
+  return page.evaluate(async () => (await (await fetch("api/workbook/state")).json()));
+}
+
+/**
+ * Press Continue as a learner would, wait for the server and the instant navigation, and record
+ * where the successor block landed. The successor must be in the reading area: that is the
+ * "newly revealed steps did not come into view" failure from the play-test, measured directly.
+ */
+async function clickContinue(page: Page): Promise<ContinueLanding> {
+  const before = await currentState(page);
+  const ordered = before.orderedBlocks ?? [];
+  const index = ordered.findIndex((block) => block.id === before.progress.activeBlockId);
+  const successor = ordered[index + 1];
+  if (!successor) throw new Error(`No ordered successor after ${before.progress.activeBlockId} to continue into.`);
+  const scrollYBefore = await page.evaluate(() => window.scrollY);
   const button = page.getByRole("button", { name: /^(?:Ready to continue|Continue)/ }).first();
   await button.waitFor({ state: "visible", timeout: 10_000 });
   await button.click();
+  await page.waitForFunction(async (expected: string) => (await (await fetch("api/workbook/state")).json()).progress.activeBlockId === expected, successor.id, { timeout: 10_000 });
+  await page.waitForTimeout(400);
+  await waitForStableViewport(page).catch(() => undefined);
+  const landing = await page.evaluate(({ from, to, anchorId, scrollYBeforeClick }) => {
+    const element = document.getElementById(anchorId);
+    const composer = document.querySelector<HTMLElement>(".timeline-composer-dock");
+    const composerTop = composer ? composer.getBoundingClientRect().top : window.innerHeight;
+    const top = element ? element.getBoundingClientRect().top : Number.POSITIVE_INFINITY;
+    return { from, to, scrollYBefore: scrollYBeforeClick, scrollYAfter: window.scrollY, successorTop: top, composerTop, inView: top >= -1 && top < Math.min(composerTop, window.innerHeight) };
+  }, { from: before.progress.activeBlockId, to: successor.id, anchorId: successor.anchorId, scrollYBeforeClick: scrollYBefore });
+  return landing;
 }
 
-async function advanceToTerminal(page: Page): Promise<void> {
+async function advanceToTerminal(page: Page, walkthrough: MutableWalkthrough): Promise<ContinueLanding | undefined> {
   const terminalBand = page.locator('.current-activity-band[data-activity-type="terminal-practice"]');
-  if (await terminalBand.count() > 0) return;
-  await clickContinue(page);
+  if (await terminalBand.count() > 0) return undefined;
+  const landing = await clickContinue(page);
+  walkthrough.landings.push(landing);
+  return landing;
 }
 
-async function revealEditor(page: Page): Promise<void> {
+async function revealEditor(page: Page, walkthrough: MutableWalkthrough): Promise<ContinueLanding | undefined> {
+  let last: ContinueLanding | undefined;
   for (let index = 0; index < 10; index += 1) {
-    if (await page.locator('.current-activity-band[data-activity-type="editor-practice"]').count()) return;
-    await clickContinue(page);
-    await page.waitForTimeout(500);
+    if (await page.locator('.current-activity-band[data-activity-type="editor-practice"]').count()) return last;
+    last = await clickContinue(page);
+    walkthrough.landings.push(last);
   }
   throw new Error("The recorder could not reveal the editor activity band through visible Continue controls.");
 }
@@ -391,19 +526,30 @@ function fakeCounts(mainTutor: QueuedMainTutor, fakePty: ReturnType<typeof creat
   return { mainTutorReviews: mainTutor.reviews.length, fakePtyCommands: fakePty.commandCount };
 }
 
+async function scrollOwnership(page: Page, sinceIndex: number, fromScrollY: number, typingExcursionPx?: number): Promise<ScrollOwnershipTelemetry> {
+  const entries = await readScrollTelemetry(page, sinceIndex);
+  const events = applicationScrollEvents(entries);
+  return { applicationScrollCalls: applicationScrollCalls(entries), applicationScrollEvents: events.length, maxExcursionPx: maxScrollExcursion(events, fromScrollY), typingExcursionPx };
+}
+
 async function runScrollCheckpoint(args: {
   page: Page;
   walkthrough: MutableWalkthrough;
   step: WorkbookUxTestStepDeclaration;
   mainTutor: QueuedMainTutor;
   fakePty: ReturnType<typeof createProtocolAwareFakePty>;
+  /** Learner work done before the scroll, such as a revision typed while docked. */
+  prepare?: () => Promise<{ typedText?: string; command?: string }>;
   position: () => Promise<GeometryTelemetry>;
+  landing?: ContinueLanding;
   progress?: WorkbookUxProgressSink;
 }): Promise<void> {
+  const telemetryStart = await scrollTelemetryLength(args.page);
   const before = await measureGeometry(args.page);
   const startedAt = isoNow();
   const transitionAt = await setMarker(args.page, "transition", args.step);
   await args.page.waitForTimeout(180);
+  const prepared = await args.prepare?.() ?? {};
   const after = await args.position();
   const settledMarkerAt = await setMarker(args.page, "settled", args.step);
   await args.page.waitForTimeout(450);
@@ -419,6 +565,10 @@ async function runScrollCheckpoint(args: {
     marker: { transitionAt, settledAt: settledMarkerAt },
     before,
     after,
+    typedText: prepared.typedText,
+    command: prepared.command,
+    landing: args.landing,
+    scroll: await scrollOwnership(args.page, telemetryStart, before.scrollY),
     fakeCallCounts: fakeCounts(args.mainTutor, args.fakePty),
   });
   args.progress?.(checkpointProgressEvent(args.walkthrough.checkpoints.length, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, args.step));
@@ -435,12 +585,16 @@ async function runPreparedCheckpoint(args: {
   progress?: WorkbookUxProgressSink;
 }): Promise<void> {
   const startedAt = isoNow();
+  const telemetryStart = await scrollTelemetryLength(args.page);
+  const beforeTyping = await measureGeometry(args.page);
   const prepared = await args.prepare();
-  const before = await measureGeometry(args.page);
+  const typingEntries = await readScrollTelemetry(args.page, telemetryStart);
+  const typingExcursionPx = maxScrollExcursion(applicationScrollEvents(typingEntries), beforeTyping.scrollY);
+  const before = await measureGeometry(args.page, beforeTyping.bandDocumentTop);
   const transitionAt = await setMarker(args.page, "transition", args.step);
   await args.page.waitForTimeout(250);
   const feedback = await args.trigger();
-  const after = await measureGeometry(args.page);
+  const after = await measureGeometry(args.page, beforeTyping.bandDocumentTop);
   const settledMarkerAt = await setMarker(args.page, "settled", args.step);
   await args.page.waitForTimeout(450);
   args.walkthrough.checkpoints.push({
@@ -458,37 +612,64 @@ async function runPreparedCheckpoint(args: {
     feedback,
     typedText: prepared.typedText,
     command: prepared.command,
+    scroll: await scrollOwnership(args.page, telemetryStart, beforeTyping.scrollY, typingExcursionPx),
     fakeCallCounts: fakeCounts(args.mainTutor, args.fakePty),
   });
   args.progress?.(checkpointProgressEvent(args.walkthrough.checkpoints.length, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, args.step));
 }
 
-function assertCheckpointGeometry(checkpoint: SemanticCheckpoint, failures: string[]): void {
-  if (!checkpoint.requestedState) return;
-  const range = GEOMETRY_TARGETS[checkpoint.requestedState];
-  if (checkpoint.after.expand < range.minExpand || checkpoint.after.expand > range.maxExpand) {
-    failures.push(`${checkpoint.name}: measured expand ${checkpoint.after.expand}, expected ${range.minExpand}..${range.maxExpand}`);
+export function assertCheckpointGeometry(checkpoint: SemanticCheckpoint, failures: string[]): void {
+  if (checkpoint.after.scrollWidth > checkpoint.after.clientWidth) failures.push(`${checkpoint.name}: the page overflows horizontally (scrollWidth ${checkpoint.after.scrollWidth} > clientWidth ${checkpoint.after.clientWidth}; widest: ${checkpoint.after.overflowing.join(", ") || "unattributed"}).`);
+  if (checkpoint.requestedState) {
+    const failure = geometryStateFailure(checkpoint.requestedState, checkpoint.after);
+    if (failure) failures.push(`${checkpoint.name}: ${failure}.`);
   }
+  if (checkpoint.landing && !checkpoint.landing.inView) failures.push(`${checkpoint.name}: Continue left ${checkpoint.landing.to} out of view (top ${checkpoint.landing.successorTop.toFixed(1)}, composer top ${checkpoint.landing.composerTop.toFixed(1)}).`);
+  if (checkpoint.kind !== "feedback") return;
+  // The whole of the play-test's "typing bounce" and "feedback moved the page" is this check.
+  const held = Math.abs(checkpoint.after.scrollY - checkpoint.before.scrollY);
+  if (held > PAGE_HOLD_TOLERANCE_PX) failures.push(`${checkpoint.name}: the page moved ${held.toFixed(1)}px while feedback arrived (scrollY ${checkpoint.before.scrollY.toFixed(1)} -> ${checkpoint.after.scrollY.toFixed(1)}).`);
+  if ((checkpoint.scroll.typingExcursionPx ?? 0) > PAGE_HOLD_TOLERANCE_PX) failures.push(`${checkpoint.name}: the page moved ${checkpoint.scroll.typingExcursionPx?.toFixed(1)}px while the learner typed.`);
+  if (checkpoint.scroll.applicationScrollCalls.length > 0) failures.push(`${checkpoint.name}: the application scrolled the page on its own (${checkpoint.scroll.applicationScrollCalls.map((call) => call.kind).join(", ")}).`);
   if (checkpoint.feedback && checkpoint.feedback.rect.width <= 50) failures.push(`${checkpoint.name}: feedback rect is too narrow to be visible.`);
+  if (checkpoint.requestedState === "away") return;
   if (checkpoint.feedback && !checkpoint.feedback.safeRegion.insideSafeRegion) failures.push(`${checkpoint.name}: feedback is outside the viewport safe region above the fixed composer.`);
   if (checkpoint.feedback && !checkpoint.feedback.safeRegion.unoccluded) failures.push(`${checkpoint.name}: feedback is occluded at representative points (${JSON.stringify(checkpoint.feedback.safeRegion.occlusionChecks)}).`);
 }
 
 export function assertRealJourneyMotionThresholdCalibration(): void {
-  // The real workbook journey's mid-to-full expansion produces a smaller visible translation than
-  // synthetic fixtures. A scenario floor of 12px remains well above zero/static codec noise while
-  // staying below the semantic browser-scroll floor that makes a checkpoint motion-required.
+  // The real workbook journey's shortest required scroll is the in-flow to docked move, a few
+  // hundred pixels of visible translation. A scenario floor of 12px remains well above zero/static
+  // codec noise while staying below the semantic browser-scroll floor that makes a checkpoint
+  // motion-required.
   if (REAL_JOURNEY_MIN_REQUIRED_MOTION_PX <= 0 || REAL_JOURNEY_MIN_REQUIRED_MOTION_PX >= REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX) {
     throw new Error(`Real journey motion threshold ${REAL_JOURNEY_MIN_REQUIRED_MOTION_PX}px must be > 0 and < semantic scroll delta ${REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX}px.`);
   }
 }
 
-function assertRequiredScrollTelemetry(checkpoint: SemanticCheckpoint, failures: string[]): void {
+export function assertRequiredScrollTelemetry(checkpoint: SemanticCheckpoint, failures: string[]): void {
   if (!checkpoint.requiredMotion) return;
   const scrollDelta = Math.abs(checkpoint.after.scrollY - checkpoint.before.scrollY);
-  const expandDelta = Math.abs(checkpoint.after.expand - checkpoint.before.expand);
   if (checkpoint.kind !== "scroll") failures.push(`${checkpoint.name}: required-motion checkpoint is not a scroll step.`);
-  if (scrollDelta < REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX && expandDelta < 0.2) failures.push(`${checkpoint.name}: required scroll telemetry did not move enough (scroll delta ${scrollDelta}, expand delta ${expandDelta}).`);
+  if (scrollDelta < REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX) failures.push(`${checkpoint.name}: required scroll telemetry did not move enough (scroll delta ${scrollDelta}).`);
+}
+
+/** Between one checkpoint settling and the next starting, nothing but the recorder may move the page. */
+export function assertPageHeldBetweenCheckpoints(checkpoints: readonly SemanticCheckpoint[], failures: string[]): void {
+  for (let index = 1; index < checkpoints.length; index += 1) {
+    const previous = checkpoints[index - 1]!;
+    const next = checkpoints[index]!;
+    if (next.kind !== "feedback") continue;
+    const moved = Math.abs(next.before.scrollY - previous.after.scrollY);
+    if (moved > PAGE_HOLD_TOLERANCE_PX) failures.push(`${next.name}: the page moved ${moved.toFixed(1)}px between "${previous.name}" settling and this checkpoint starting.`);
+  }
+}
+
+export function assertContinueLandings(landings: readonly ContinueLanding[], failures: string[]): void {
+  if (landings.length === 0) failures.push("The recorder pressed no Continue control, so nothing tested where a successor lands.");
+  for (const landing of landings) {
+    if (!landing.inView) failures.push(`Continue from ${landing.from} left ${landing.to} out of view (top ${landing.successorTop.toFixed(1)}, composer top ${landing.composerTop.toFixed(1)}).`);
+  }
 }
 
 async function copyFixture(runRoot: string): Promise<string> {
@@ -527,18 +708,20 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
   await collectInputMetadata(runRoot, bundleStatus);
 
   process.env.OPENCODE_API_KEY ??= "workbook-ux-no-model-key";
+  const delayed = (decision: TutorDecision): (() => Promise<TutorDecision>) => async () => { await delay(AWAY_REVIEW_DELAY_MS); return decision; };
   const mainTutor = new QueuedMainTutor(
     // The authored workspace seeds a non-empty draft, so opening the editor deliberately triggers
     // one review before the three recorded learner revisions. Keep that review explicit so it
     // cannot consume the first named checkpoint decision while retained feedback is visible.
     { outcome: "feedback", message: "The seeded draft is ready for the learner's first revision." } satisfies TutorDecision,
-    { outcome: "feedback", message: EDITOR_FEEDBACK.small } satisfies TutorDecision,
-    { outcome: "feedback", message: EDITOR_FEEDBACK.mid } satisfies TutorDecision,
-    { outcome: "feedback", message: EDITOR_FEEDBACK.full } satisfies TutorDecision,
+    { outcome: "feedback", message: EDITOR_FEEDBACK.inflow } satisfies TutorDecision,
+    { outcome: "feedback", message: EDITOR_FEEDBACK.docked } satisfies TutorDecision,
+    // Held back so the feedback lands after the learner has scrolled away from the band.
+    delayed({ outcome: "feedback", message: EDITOR_FEEDBACK.away }),
     { outcome: "accepted", message: EDITOR_ACCEPTED } satisfies TutorDecision,
-    { outcome: "feedback", message: TERMINAL_FEEDBACK.small } satisfies TutorDecision,
-    { outcome: "feedback", message: TERMINAL_FEEDBACK.mid } satisfies TutorDecision,
-    { outcome: "feedback", message: TERMINAL_FEEDBACK.full } satisfies TutorDecision,
+    { outcome: "feedback", message: TERMINAL_FEEDBACK.inflow } satisfies TutorDecision,
+    { outcome: "feedback", message: TERMINAL_FEEDBACK.docked } satisfies TutorDecision,
+    delayed({ outcome: "feedback", message: TERMINAL_FEEDBACK.away }),
   );
   const fakePty = createProtocolAwareFakePty({ outputForCommand: (command, index) => `\r\nfake terminal ${index}: observed ${command}\r\nworkspace: refactor-line\r\nstatus: deterministic protocol marker received\r\nnext: read the feedback below\r\n` });
 
@@ -556,6 +739,7 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
     viewport: { ...VIEWPORT, deviceScaleFactor: 1, reducedMotion: "no-preference" },
     markerProtocol: { bits: MARKER_BITS, stateCheckpointStepIds: REQUIRED_STATE_CHECKPOINT_STEP_IDS, scrollCheckpointStepIds: SCROLL_CHECKPOINT_STEP_IDS, requiredMotionStepIds: REQUIRED_MOTION_STEP_IDS },
     checkpoints: [],
+    landings: [],
     fake: { mainTutorReviews: 0, ptyCommands: [] },
     semanticFailures: [],
   };
@@ -578,6 +762,7 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
       recordVideo: { dir: resolve(runRoot, "video-raw"), size: VIEWPORT },
     });
     page = await context.newPage();
+    await installScrollTelemetry(page);
     await installVideoMarker(page);
     progress?.({ type: "stage", phase: "record", message: `Recording browser journey (${WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL} checkpoints)...` });
     await page.goto(server.url, { waitUntil: "domcontentloaded" });
@@ -585,64 +770,67 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
     await page.waitForTimeout(600);
 
     await setMarker(page, "settled", WORKBOOK_UX_TEST_STEPS.revealEditor);
-    await revealEditor(page);
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorScrollToSmall, position: async () => positionBand(page!, "small") });
+    const editorLanding = await revealEditor(page, walkthrough);
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorScrollToInflow, landing: editorLanding, position: async () => positionBand(page!, "inflow") });
 
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorSmallFeedback, prepare: async () => {
-      const typedText = "Small-state draft: the learner notices compact feedback in the editor.\nThe typed line stays short enough to look like a first revision.";
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorInflowFeedback, prepare: async () => {
+      const typedText = "In-flow draft: the learner notices compact feedback in the editor.\nThe typed line stays short enough to look like a first revision.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
-    }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.small) });
+    }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.inflow) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorScrollToMid, position: async () => positionBand(page!, "mid") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorMidFeedback, prepare: async () => {
-      const typedText = "Mid-scroll draft: the learner revises while the activity band is partially expanded.\nThey add a second visible line before pausing for feedback.\nThe surface should keep its feedback welded during the scroll-linked resize.";
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorScrollToDocked, position: async () => positionBand(page!, "docked") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorDockedFeedback, prepare: async () => {
+      const typedText = "Docked draft: the learner revises while the band is stuck at the top of the window.\nThey add a second visible line before pausing for feedback.\nThe surface must keep its feedback welded, and the page must not move under their hands.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
-    }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.mid) });
+    }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.docked) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorScrollToFull, position: async () => positionBand(page!, "full") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorFullFeedback, prepare: async () => {
-      const typedText = "Full-width draft: the learner checks that feedback remains welded to the editor surface.\nThis longer note creates real text texture across the editor viewport.\nThe final visible line names the full-width state before feedback arrives.\nA fourth line keeps the cursor moving like an actual revision.\nA fifth line makes the full-width editor less empty in the recording.\nA sixth line gives the deterministic analyzer text edges to track.";
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorScrollAway, prepare: async () => {
+      const typedText = "Away draft: the learner types this, then scrolls back up to reread the orientation while the review runs.\nThe feedback must land on the surface without pulling the page back down.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
-    }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.full) });
+    }, position: async () => positionBand(page!, "away") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorAwayFeedback, prepare: async () => ({}), trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.away) });
 
     await setMarker(page, "settled", WORKBOOK_UX_TEST_STEPS.editorAccepted);
-    await typeEditorRevision(page, "Accepted final draft: small, mid-scroll, and full-width feedback all stayed stable.");
+    await positionBand(page, "docked");
+    await typeEditorRevision(page, "Accepted final draft: in-flow, docked, and away feedback all left the page where the learner put it.");
     await waitForEditorAccepted(page);
     await page.waitForTimeout(450);
 
-    await advanceToTerminal(page);
+    const terminalLanding = await advanceToTerminal(page, walkthrough);
     await page.locator('.current-activity-band[data-activity-type="terminal-practice"]').waitFor({ state: "attached", timeout: 15_000 });
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToSmall, position: async () => positionBand(page!, "small") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalSmallFeedback, prepare: async () => {
-      const command = "printf small-terminal-state";
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToInflow, landing: terminalLanding, position: async () => positionBand(page!, "inflow") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalInflowFeedback, prepare: async () => {
+      const command = "printf inflow-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 1");
       return { command };
-    }, trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.small) });
+    }, trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.inflow) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToMid, position: async () => positionBand(page!, "mid") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalMidFeedback, prepare: async () => {
-      const command = "printf mid-terminal-state";
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToDocked, position: async () => positionBand(page!, "docked") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalDockedFeedback, prepare: async () => {
+      const command = "printf docked-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 2");
       return { command };
-    }, trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.mid) });
+    }, trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.docked) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToFull, position: async () => positionBand(page!, "full") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalFullFeedback, prepare: async () => {
-      const command = "printf full-terminal-state";
+    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalScrollAway, prepare: async () => {
+      const command = "printf away-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 3");
       return { command };
-    }, trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.full) });
+    }, position: async () => positionBand(page!, "away") });
+    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalAwayFeedback, prepare: async () => ({}), trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.away) });
 
     for (const checkpoint of walkthrough.checkpoints) {
       assertCheckpointGeometry(checkpoint, walkthrough.semanticFailures);
       assertRequiredScrollTelemetry(checkpoint, walkthrough.semanticFailures);
     }
+    assertPageHeldBetweenCheckpoints(walkthrough.checkpoints, walkthrough.semanticFailures);
+    assertContinueLandings(walkthrough.landings, walkthrough.semanticFailures);
     const seenStateSteps = new Set(walkthrough.checkpoints.map((checkpoint) => checkpoint.stepId));
     for (const stepId of REQUIRED_STATE_CHECKPOINT_STEP_IDS) if (!seenStateSteps.has(stepId)) walkthrough.semanticFailures.push(`Missing semantic checkpoint for marker step ${stepId}.`);
     for (const stepId of SCROLL_CHECKPOINT_STEP_IDS) if (!seenStateSteps.has(stepId)) walkthrough.semanticFailures.push(`Missing scroll checkpoint for marker step ${stepId}.`);

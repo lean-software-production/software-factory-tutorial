@@ -88,7 +88,7 @@ vi.mock("../src/workbook/lesson-links.js", async (importOriginal) => {
 });
 
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
-import { ActivityBand, activityGeometryFor } from "../web-workbook/src/activity-band.js";
+import { ActivityBand } from "../web-workbook/src/activity-band.js";
 import { App, BlockView, ContinuationPageBreak, EditorHistory, LessonCompletionConfetti, LessonRail, TerminalHistory, completionAgeLabel, navigateToAnchor, scrollRunwayBlockIds, type Block, type Chapter, type EditorPracticeBlock, type Lesson, type Progress, type State } from "../web-workbook/src/workbook-ui.js";
 
 const stylesCss = readFileSync(new URL("../web-workbook/src/styles.css", import.meta.url), "utf8");
@@ -1049,7 +1049,7 @@ describe("workbook lesson UI", () => {
 
     expect(markup).toContain("current-activity-band");
     expect(markup).toContain("data-activity-type=\"terminal-practice\"");
-    expect(markup).toContain("data-activity-layout=\"scroll-linked\"");
+    expect(markup).toContain("data-activity-layout=\"sticky\"");
     expect(markup).toContain('class="terminal-connection-status"');
     expect(markup).toContain('aria-label="Terminal disconnected"');
     expect(markup).not.toContain("Terminal practice");
@@ -1077,34 +1077,6 @@ describe("workbook lesson UI", () => {
     expect(markup).not.toContain("Get a hint");
     expect(markup).not.toContain("Edit the answer");
     expect(markup).not.toContain("Update the answer file");
-  });
-
-  it("calculates left-aligned start, balanced growth, and full centered canvas geometry", () => {
-    const mainRect = { left: 265, width: 1000 };
-    const inlineRect = { left: 365, width: 720 };
-    const inlineCenter = inlineRect.left + inlineRect.width / 2;
-    const canvasCenter = mainRect.left + mainRect.width / 2;
-    const inset = 24;
-
-    const atStart = activityGeometryFor({ mainRect, inlineRect, progress: 0 });
-    const atMiddle = activityGeometryFor({ mainRect, inlineRect, progress: 0.5 });
-    const atFull = activityGeometryFor({ mainRect, inlineRect, progress: 1 });
-    const reversed = activityGeometryFor({ mainRect, inlineRect, progress: 0.25 });
-
-    expect(atStart).toMatchObject({ left: inlineRect.left, width: inlineRect.width, top: 0 });
-    expect(atStart.left + atStart.width / 2).toBe(inlineCenter);
-
-    expect(atMiddle).toMatchObject({ left: 327, width: 836, top: 12 });
-    expect(atMiddle.left).toBeLessThan(inlineRect.left);
-    expect(atMiddle.left + atMiddle.width).toBeGreaterThan(inlineRect.left + inlineRect.width);
-    expect(atMiddle.left + atMiddle.width / 2).toBe((inlineCenter + canvasCenter) / 2);
-
-    expect(atFull).toMatchObject({ left: mainRect.left + inset, width: mainRect.width - inset * 2, top: inset });
-    expect(atFull.left + atFull.width).toBe(mainRect.left + mainRect.width - inset);
-    expect(atFull.left + atFull.width / 2).toBe(canvasCenter);
-
-    expect(reversed).toMatchObject({ left: 346, width: 778, top: 6 });
-    expect(reversed.left + reversed.width / 2).toBe(inlineCenter + (canvasCenter - inlineCenter) * 0.25);
   });
 
   it("does not show checkpoint Continue for nonaccepted evaluated blocks", () => {

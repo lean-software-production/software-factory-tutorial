@@ -227,7 +227,7 @@ describe('workbook UX test orchestration', () => {
     expect(messages).toEqual(expect.arrayContaining([
       '[1/5] Preparing fixture, local server, and headless browser...',
       '[2/5] Recording browser journey (12 checkpoints)...',
-      'Checkpoint 1/12: editor reveal scroll to small activity band',
+      'Checkpoint 1/12: editor reveal: Continue lands the band in view, then it is placed in flow',
       '[3/5] Decoding and analysing recorded video (this can take several minutes)...',
       'Deterministic recording and analysis passed.',
       '[4/5] Running advisory AI review (timeout: 180s)...',
@@ -237,7 +237,7 @@ describe('workbook UX test orchestration', () => {
     expectInOrder(messages, [
       '[1/5] Preparing fixture, local server, and headless browser...',
       '[2/5] Recording browser journey (12 checkpoints)...',
-      'Checkpoint 1/12: editor reveal scroll to small activity band',
+      'Checkpoint 1/12: editor reveal: Continue lands the band in view, then it is placed in flow',
       '[3/5] Decoding and analysing recorded video (this can take several minutes)...',
       '[4/5] Running advisory AI review (timeout: 180s)...',
       '[5/5] Writing report...',
@@ -417,18 +417,20 @@ function walkthroughFixture(runRoot: string, semanticFailures: string[]): Workbo
     videoPath: resolve(runRoot, 'walkthrough.webm'),
     viewport: { width: 1280, height: 900, deviceScaleFactor: 1, reducedMotion: 'no-preference' },
     markerProtocol: { bits: 6, stateCheckpointStepIds: [3], scrollCheckpointStepIds: [3], requiredMotionStepIds: [3] },
+    landings: [{ from: "intro", to: "part", scrollYBefore: 0, scrollYAfter: 900, successorTop: 34, composerTop: 806, inView: true }],
     checkpoints: [{
       stepId: 3,
       name: 'editor scroll to mid',
       surface: 'editor',
-      requestedState: 'mid',
+      requestedState: 'docked',
       kind: 'scroll',
       requiredMotion: true,
       startedAt: now,
       settledAt: now,
       marker: { transitionAt: now, settledAt: now },
-      before: geometry(0, 0),
-      after: geometry(300, 0.5),
+      before: geometry(0, 300),
+      after: geometry(300, 0),
+      scroll: { applicationScrollCalls: [], applicationScrollEvents: 0, maxExcursionPx: 0 },
       fakeCallCounts: { mainTutorReviews: 1, fakePtyCommands: 0 },
     }],
     fake: { mainTutorReviews: 1, ptyCommands: [] },
@@ -488,7 +490,7 @@ function recorderResult(runRoot: string): WorkbookUxTestRecorderResult {
 
 async function progressRecorder(options: WorkbookUxTestRecorderOptions, runRoot: string): Promise<WorkbookUxTestRecorderResult> {
   options.progress?.({ type: 'stage', phase: 'record', message: 'Recording browser journey (12 checkpoints)...' });
-  options.progress?.({ type: 'checkpoint', completed: 1, total: 12, stepId: 31, stepName: 'editor reveal scroll to small activity band', message: 'Checkpoint 1/12: editor reveal scroll to small activity band' });
+  options.progress?.({ type: 'checkpoint', completed: 1, total: 12, stepId: 31, stepName: 'editor reveal: Continue lands the band in view, then it is placed in flow', message: 'Checkpoint 1/12: editor reveal: Continue lands the band in view, then it is placed in flow' });
   options.progress?.({ type: 'stage', phase: 'decode', message: 'Decoding and analysing recorded video (this can take several minutes)...' });
   return recorderResult(runRoot);
 }
@@ -502,9 +504,9 @@ function expectInOrder(haystack: readonly string[], needles: readonly string[]):
   }
 }
 
-function geometry(scrollY: number, expand: number) {
-  const rect = { x: 0, y: 0, width: 100, height: 100, top: 0, right: 100, bottom: 100, left: 0 };
-  return { expand, scrollY, bandDocumentTop: 300, bandRect: rect, workRect: rect, mainRect: rect };
+function geometry(scrollY: number, bandTop: number) {
+  const rect = { x: 0, y: bandTop, width: 100, height: 100, top: bandTop, right: 100, bottom: bandTop + 100, left: 0 };
+  return { scrollY, viewportHeight: 900, bandDocumentTop: 300, bandRect: rect, bandStuck: bandTop === 0, workRect: rect, mainRect: rect, composerTop: 800, scrollWidth: 1280, clientWidth: 1280, overflowing: [] };
 }
 
 function station(name: string, status: UxTestStationResult['status']): UxTestStationResult {

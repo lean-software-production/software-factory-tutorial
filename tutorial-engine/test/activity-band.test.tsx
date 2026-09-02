@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
@@ -7,9 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ActivityBand } from "../web-workbook/src/activity-band.js";
 import type { Block, Progress } from "../web-workbook/src/workbook-ui.js";
 
-const terminalTransitionStylesPath = fileURLToPath(new URL("../web-workbook/src/activity-band.css", import.meta.url));
 const workbookStylesPath = fileURLToPath(new URL("../web-workbook/src/styles.css", import.meta.url));
-const mainSourcePath = fileURLToPath(new URL("../web-workbook/src/main.tsx", import.meta.url));
+const activityBandSourcePath = fileURLToPath(new URL("../web-workbook/src/activity-band.tsx", import.meta.url));
 
 const editorBlock: Block = {
   id: "edit-answer",
@@ -39,7 +38,7 @@ const activeTerminalProgress: Progress = {
   activeLessonId: "part/lesson",
   activeBlockId: terminalBlock.id,
   completedLessons: [],
-  blocks: [{ id: terminalBlock.id, type: terminalBlock.type, ready: true, active: true, completed: false, verified: true, emerged: true }],
+  blocks: [{ id: terminalBlock.id, type: terminalBlock.type, ready: true, active: true, completed: false, verified: true, emerged: true } as any],
   reflections: {},
   reflectionConversations: {}
 };
@@ -76,31 +75,90 @@ async function mount(element: ReturnType<typeof createElement>, setup?: (window:
   return container;
 }
 
-function rect(left: number, width: number, top = 300) {
-  return { left, width, top } as DOMRect;
-}
-
 describe("ActivityBand stability", () => {
-  it("keeps terminal and editor practice sticky and scroll-linked while terminal work-block transitions stay disabled", () => {
-    expect(existsSync(terminalTransitionStylesPath)).toBe(true);
-    const terminalStyles = readFileSync(terminalTransitionStylesPath, "utf8");
+  it("is a sticky surface whose geometry the stylesheet fixes, never the scroll position", () => {
     const workbookStyles = readFileSync(workbookStylesPath, "utf8");
-    const mainSource = readFileSync(mainSourcePath, "utf8");
+    const source = readFileSync(activityBandSourcePath, "utf8");
 
-    expect(mainSource).toContain('import "./activity-band.css"');
-    expect(terminalStyles).not.toMatch(/\.current-activity-band\[data-activity-type="terminal-practice"\]\s*\{/);
-    expect(terminalStyles).toMatch(/\.current-activity-band\[data-activity-type="terminal-practice"\]\s*>\s*\.work-block\s*\{[^}]*transition:\s*none;/);
-    expect(workbookStyles).toMatch(/\.current-activity-band\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;/);
-    expect(workbookStyles).toMatch(/\.current-activity-band\s*\{[^}]*top:\s*var\(--activity-top\);/);
-    expect(workbookStyles).toMatch(/\.current-activity-band\s*>\s*\.work-block\s*\{[^}]*left:\s*var\(--activity-left-offset\);[^}]*width:\s*var\(--activity-width\);[^}]*transition:\s*left 80ms linear,\s*width 80ms linear;/);
+    // One declaration owns the band's shape: sticky at the top, the column's width, and an editor
+    // that scrolls inside its own box so the band never outgrows the window.
+    expect(workbookStyles).toMatch(/\.current-activity-band\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;[^}]*width:\s*min\(720px, 100%\);/);
+    expect(workbookStyles).toMatch(/\.current-activity-band \.editor-surface \.cm-scroller\s*\{[^}]*max-height:\s*min\(48vh, 420px\);[^}]*overflow-y:\s*auto;/);
+    // The scroll-linked expansion is gone: no measured variables, no transitions that animated them.
+    expect(workbookStyles).not.toContain("--activity-");
+    const bandRules = workbookStyles.match(/\.current-activity-band[^{}]*\{[^}]*\}/g) ?? [];
+    expect(bandRules.join("\n")).not.toContain("transition");
+    expect(bandRules.join("\n")).not.toContain("transform");
+    // And the component reads nothing from the viewport to produce that shape.
+    expect(source).not.toContain("scrollY");
+    expect(source).not.toContain("getBoundingClientRect");
+    expect(source).not.toContain("ResizeObserver");
+    expect(source).not.toContain("IntersectionObserver");
   });
 
-  it("keeps accepted-but-incomplete editor and terminal practice live in the sticky band", async () => {
-    class FakeIntersectionObserver {
+  it("renders the editor as a sticky band that never restyles itself on scroll or takes focus", async () => {
+    const focusCalls: string[] = [];
+    class FakeResizeObserver {
+      static instances = 0;
+      constructor() { FakeResizeObserver.instances += 1; }
       observe() {}
       disconnect() {}
     }
+    const container = await mount(createElement(ActivityBand, {
+      lessonId: "part/lesson",
+      activeBlock: editorBlock,
+      progress: activeEditorProgress,
+      refresh: vi.fn()
+    }), (window) => {
+      // CodeMirror keeps its own observers for its measurements; the band creates none. The
+      // resize observer is defined on the window alone, which is where the band used to look.
+      Object.defineProperty(window, "ResizeObserver", { value: FakeResizeObserver, configurable: true });
+      window.HTMLElement.prototype.focus = function () { focusCalls.push(this.className); };
+    });
 
+    const band = container.querySelector<HTMLElement>(".current-activity-band")!;
+    expect(band.getAttribute("data-activity-type")).toBe("editor-practice");
+    expect(band.getAttribute("data-activity-layout")).toBe("sticky");
+    expect(band.getAttribute("style")).toBeNull();
+    expect(FakeResizeObserver.instances).toBe(0);
+
+    await act(async () => { dom!.window.dispatchEvent(new dom!.window.Event("scroll")); });
+    await act(async () => { dom!.window.dispatchEvent(new dom!.window.Event("resize")); });
+    expect(band.getAttribute("style")).toBeNull();
+    expect(focusCalls).toEqual([]);
+  });
+
+  it("lets a terminal band keep its fit observer but never watches the viewport for itself", async () => {
+    const listenerTypes: string[] = [];
+    class FakeIntersectionObserver {
+      static instances = 0;
+      constructor() { FakeIntersectionObserver.instances += 1; }
+      observe() {}
+      disconnect() {}
+    }
+    const container = await mount(createElement(ActivityBand, {
+      lessonId: "part/lesson",
+      activeBlock: terminalBlock,
+      progress: activeTerminalProgress,
+      refresh: vi.fn()
+    }), (window) => {
+      vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+      vi.stubGlobal("location", window.location);
+      const addEventListener = window.addEventListener.bind(window) as (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => void;
+      window.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
+        listenerTypes.push(type);
+        addEventListener(type, listener, options);
+      }) as typeof window.addEventListener;
+    });
+
+    const band = container.querySelector<HTMLElement>(".current-activity-band")!;
+    expect(band.getAttribute("data-activity-type")).toBe("terminal-practice");
+    expect(band.getAttribute("data-activity-layout")).toBe("sticky");
+    expect(listenerTypes).not.toContain("scroll");
+    expect(FakeIntersectionObserver.instances).toBe(0);
+  });
+
+  it("keeps accepted-but-incomplete editor and terminal practice live in the sticky band", async () => {
     const acceptedEditorProgress: Progress = {
       ...activeEditorProgress,
       blocks: [{ id: editorBlock.id, type: editorBlock.type, ready: false, active: true, completed: false, verified: true, emerged: true, revision: 1, draftText: "accepted editor draft", editorStatus: "accepted", checkpoint: { status: "accepted", successMessage: "Editor accepted.", evidence: { kind: "editor", text: "accepted editor draft" } } } as any],
@@ -110,7 +168,7 @@ describe("ActivityBand stability", () => {
       activeBlock: editorBlock,
       progress: acceptedEditorProgress,
       refresh: vi.fn()
-    }), () => vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver));
+    }));
 
     expect(editorContainer.querySelector(".current-activity-band")?.getAttribute("data-activity-type")).toBe("editor-practice");
     expect(editorContainer.querySelector(".editor-live-surface")).toBeTruthy();
@@ -137,7 +195,6 @@ describe("ActivityBand stability", () => {
       progress: acceptedTerminalProgress,
       refresh: vi.fn()
     }), (window) => {
-      vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
       vi.stubGlobal("WebSocket", FakeWebSocket);
       vi.stubGlobal("location", window.location);
       vi.stubGlobal("addEventListener", window.addEventListener.bind(window) as any);
@@ -149,152 +206,5 @@ describe("ActivityBand stability", () => {
     expect(terminalContainer.querySelector(".embedded-terminal")).toBeTruthy();
     expect(terminalContainer.textContent).toContain("Terminal accepted.");
     expect(terminalContainer.querySelector(".terminal-history")).toBeNull();
-  });
-
-  it("does not auto-focus terminal practice but keeps editor auto-focus", async () => {
-    class FakeIntersectionObserver {
-      static instances: FakeIntersectionObserver[] = [];
-      observed: Element[] = [];
-      constructor(_callback: IntersectionObserverCallback) { FakeIntersectionObserver.instances.push(this); }
-      observe(element: Element) { this.observed.push(element); }
-      disconnect() {}
-    }
-
-    const container = await mount(createElement(ActivityBand, {
-      lessonId: "part/lesson",
-      activeBlock: terminalBlock,
-      progress: activeTerminalProgress,
-      refresh: vi.fn()
-    }), () => vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver));
-
-    expect(FakeIntersectionObserver.instances).toHaveLength(0);
-
-    await act(async () => { root!.render(createElement(ActivityBand, {
-      lessonId: "part/lesson",
-      activeBlock: editorBlock,
-      progress: activeEditorProgress,
-      refresh: vi.fn()
-    })); });
-
-    const band = container.querySelector(".current-activity-band");
-    expect(FakeIntersectionObserver.instances.some((observer) => observer.observed.includes(band!))).toBe(true);
-  });
-
-  it("registers terminal practice for scroll-linked geometry and expands as the band rises", async () => {
-    class FakeResizeObserver {
-      static instances: FakeResizeObserver[] = [];
-      observed: Element[] = [];
-      constructor(private readonly callback: ResizeObserverCallback) { FakeResizeObserver.instances.push(this); }
-      observe(element: Element) { this.observed.push(element); }
-      disconnect() {}
-      trigger(target: Element) {
-        this.callback([{ target } as ResizeObserverEntry], this as unknown as ResizeObserver);
-      }
-    }
-
-    const listenerTypes: string[] = [];
-    let viewportScrollY = 0;
-    const container = await mount(createElement("main", null,
-      createElement("div", { "data-inline-source": "" }),
-      createElement(ActivityBand, {
-        lessonId: "part/lesson",
-        activeBlock: terminalBlock,
-        progress: activeTerminalProgress,
-        refresh: vi.fn()
-      })
-    ), (window) => {
-      Object.defineProperty(window, "ResizeObserver", { value: FakeResizeObserver, configurable: true });
-      Object.defineProperty(window, "requestAnimationFrame", { value: (callback: FrameRequestCallback) => { callback(0); return 1; }, configurable: true });
-      Object.defineProperty(window, "scrollY", { get: () => viewportScrollY, configurable: true });
-      const addEventListener = window.addEventListener.bind(window) as (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => void;
-      window.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
-        listenerTypes.push(type);
-        addEventListener(type, listener, options);
-      }) as typeof window.addEventListener;
-    });
-
-    const main = container.querySelector<HTMLElement>("main")!;
-    const inlineSource = container.querySelector("[data-inline-source]")!;
-    const band = container.querySelector<HTMLElement>(".current-activity-band")!;
-    Object.defineProperty(main, "offsetTop", { value: 80, configurable: true });
-    Object.defineProperty(band, "offsetTop", { value: 240, configurable: true });
-    Object.defineProperty(band, "offsetParent", { value: main, configurable: true });
-    Object.defineProperty(main, "getBoundingClientRect", { value: () => rect(100, 1000), configurable: true });
-    Object.defineProperty(inlineSource, "getBoundingClientRect", { value: () => rect(240, 720), configurable: true });
-
-    const observer = FakeResizeObserver.instances.find((instance) => instance.observed.includes(inlineSource) && instance.observed.includes(main))!;
-    expect(observer).toBeTruthy();
-    expect(listenerTypes).toContain("scroll");
-    expect(listenerTypes).toContain("resize");
-    expect(band.getAttribute("data-activity-layout")).toBe("scroll-linked");
-
-    await act(async () => { observer.trigger(inlineSource); });
-    expect(band.style.getPropertyValue("--activity-expand")).toBe("0.000");
-    expect(band.style.getPropertyValue("--activity-width")).toBe("720px");
-
-    viewportScrollY = 320;
-    await act(async () => { dom!.window.dispatchEvent(new dom!.window.Event("scroll")); });
-    expect(band.style.getPropertyValue("--activity-expand")).toBe("1.000");
-    expect(band.style.getPropertyValue("--activity-width")).toBe("952px");
-  });
-
-  it("observes the inline source and main, but never the band whose feedback can change height", async () => {
-    class FakeResizeObserver {
-      static instances: FakeResizeObserver[] = [];
-      observed: Element[] = [];
-      constructor(private readonly callback: ResizeObserverCallback) { FakeResizeObserver.instances.push(this); }
-      observe(element: Element) { this.observed.push(element); }
-      disconnect() {}
-      trigger(target: Element) {
-        this.callback([{ target } as ResizeObserverEntry], this as unknown as ResizeObserver);
-      }
-    }
-
-    const container = await mount(createElement("main", null,
-      createElement("div", { "data-inline-source": "" }),
-      createElement(ActivityBand, {
-        lessonId: "part/lesson",
-        activeBlock: editorBlock,
-        progress: activeEditorProgress,
-        refresh: vi.fn()
-      })
-    ), (window) => {
-      Object.defineProperty(window, "ResizeObserver", { value: FakeResizeObserver, configurable: true });
-      Object.defineProperty(window, "requestAnimationFrame", { value: (callback: FrameRequestCallback) => { callback(0); return 1; }, configurable: true });
-    });
-
-    const main = container.querySelector("main")!;
-    const inlineSource = container.querySelector("[data-inline-source]")!;
-    const band = container.querySelector<HTMLElement>(".current-activity-band")!;
-    let mainRect = rect(100, 1000);
-    let inlineRect = rect(240, 720);
-    let bandRect = rect(240, 720);
-    Object.defineProperty(main, "getBoundingClientRect", { value: () => mainRect, configurable: true });
-    Object.defineProperty(inlineSource, "getBoundingClientRect", { value: () => inlineRect, configurable: true });
-    Object.defineProperty(band, "getBoundingClientRect", { value: () => bandRect, configurable: true });
-
-    const observer = FakeResizeObserver.instances[0]!;
-    expect(FakeResizeObserver.instances).toHaveLength(1);
-    expect(observer.observed).toContain(inlineSource);
-    expect(observer.observed).toContain(main);
-    expect(observer.observed).not.toContain(band);
-
-    await act(async () => { observer.trigger(inlineSource); });
-    expect(band.style.getPropertyValue("--activity-inline-width")).toBe("720px");
-    expect(band.style.getPropertyValue("--activity-expanded-width")).toBe("952px");
-
-    inlineRect = rect(240, 680);
-    await act(async () => { observer.trigger(inlineSource); });
-    expect(band.style.getPropertyValue("--activity-inline-width")).toBe("680px");
-    expect(band.style.getPropertyValue("--activity-width")).toBe("680px");
-
-    mainRect = rect(100, 900);
-    await act(async () => { observer.trigger(main); });
-    expect(band.style.getPropertyValue("--activity-expanded-width")).toBe("852px");
-    expect(band.style.getPropertyValue("--activity-canvas-center")).toBe("550px");
-
-    // A feedback insertion can grow the band, but it is not an observed sizing source.
-    bandRect = rect(240, 720, 500);
-    expect(observer.observed).not.toContain(band);
   });
 });

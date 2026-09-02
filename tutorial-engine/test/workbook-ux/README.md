@@ -10,6 +10,7 @@ Input checked-out tutorial-engine version → copied fixture workbook → provid
 2. **Recording** — `recordWorkbookUxTest()` copies `test/fixtures/journey-workbook/` into the ignored run workspace and starts the real workbook server with deterministic fakes:
    - `QueuedMainTutor` for editor feedback, acceptance, and terminal feedback;
    - a protocol-aware fake PTY that accepts xterm keystrokes, emits visible output and OSC-633 workbook markers, and never runs shell commands.
+   The recording also carries a scroll-ownership probe (`test/support/scroll-telemetry.ts`): every programmatic scroll and focus call the page makes is logged with its caller, and every checkpoint records who moved the page. The recorder's own positioning is marked and excluded.
 3. **Deterministic analysis** — the analyzer decodes the recorded WebM in Chromium, reads only the test marker embedded in the video, checks required scroll motion, and writes `analysis/motion.json`, selected evidence frames, and `analysis/contact-sheet.png`.
 4. **Optional advisory AI** — `review-ai.ts` invokes `pi` with `execFile`, `-p -nt --no-session --thinking low`, and `@...` attachments for the contact sheet, decoded frames, provider-safe `ai-walkthrough-summary.json`, and `analysis/motion.json`. It asks only for UX/scroll glitch observations and requires `@needs-human` evidence citations. Missing/quota-limited/nonzero/timeout/empty/thrown AI output is reported as unavailable and never changes the exit code.
 5. **Report** — `report.ts` always writes `report.md` and `ux-test-result.json`, even when recording or deterministic analysis throws. The report renders whatever metadata, screenshot, video, walkthrough, analyzer, and AI artifacts exist.
@@ -37,7 +38,7 @@ The default commands are headless. A full deterministic run may take several min
 [1/5] Preparing fixture, local server, and headless browser...
   server: Workbook tutor listening on http://127.0.0.1:54231. State: ...
 [2/5] Recording browser journey (12 checkpoints)...
-Checkpoint 1/12: editor reveal scroll to small activity band
+Checkpoint 1/12: editor reveal: Continue lands the band in view, then it is placed in flow
 ...
 [3/5] Decoding and analysing recorded video (this can take several minutes)...
 [4/5] Advisory AI review skipped (--no-ai).
@@ -54,6 +55,18 @@ tsx test/workbook-ux/run.mts --ai --headed
 tsx test/workbook-ux/run.mts --ai --ai-command=/path/to/pi --ai-model='provider/model' --ai-timeout-ms=180000
 ```
 
+## The scroll contract the journey asserts
+
+The journey is the 2026-09-01 play-test's complaints, made deterministic. For the editor and then the terminal it places the live activity band in three positions — `inflow` (part-way down the viewport, as it lands after Continue), `docked` (scrolled to the top, where it sticks), and `away` (the learner scrolled back up; the band is below the fold) — and at each one it has the learner work and waits for feedback. The recording fails if:
+
+- a Continue leaves its successor block out of the reading area (`landings` in `walkthrough.json`);
+- the page moves while the learner types, or while feedback lands, at any band position (`scroll.typingExcursionPx`, `before`/`after` scroll positions);
+- the application scrolls the page on its own during a feedback checkpoint (`scroll.applicationScrollCalls`);
+- the page moved between one checkpoint settling and the next starting;
+- the docked band does not fit above the composer, or the page overflows horizontally.
+
+`npx tsx test/scroll-ownership.mts` drives a wider set of the same situations — a shorter window, a draft that outgrows the editor, a tutor reply arriving below the fold, narrow viewports — and prints who moved the page in each. It is a diagnostic, not a gate.
+
 ## Artifact contract
 
 Default run root: `tutorial-engine/test/.tmp/workbook-ux/latest/`.
@@ -61,7 +74,7 @@ Default run root: `tutorial-engine/test/.tmp/workbook-ux/latest/`.
 Expected durable artifacts:
 
 - `input-metadata.json` — Git SHA/dirty status, package/browser pins, viewport, bundle freshness;
-- `walkthrough.json` — semantic checkpoints, typed editor/terminal input, geometry/scroll/feedback safe-region and occlusion telemetry, fake call counts;
+- `walkthrough.json` — semantic checkpoints, typed editor/terminal input, band geometry, scroll-ownership telemetry (who moved the page), Continue landings, feedback safe-region and occlusion telemetry, fake call counts;
 - `walkthrough.webm` — finalized Playwright recording when Chromium produced one;
 - `analysis/motion.json` — deterministic decoded-WebM report;
 - `analysis/contact-sheet.png` and selected `analysis/*.png` evidence frames;
@@ -84,6 +97,8 @@ npm run test:workbook-ux:ai  # AI unavailability is reported but does not fail t
 ```
 
 No scheduled CI job is installed yet.
+
+If the recorder fails during `vite build` with `Cannot find module`, the installed dependency tree is older than `package-lock.json` (a pulled commit added a dependency). Run `npm ci` at the repository root and retry.
 
 ## Synthetic analyzer contract
 

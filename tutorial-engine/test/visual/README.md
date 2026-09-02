@@ -28,8 +28,9 @@ If you approve from a Mac, expect these to fail for everyone else.
 
 Layout, not typography as a learner sees it. The workbook server runs in the container but the
 learner's browser runs on their own machine, so what a learner sees depends on their OS. These
-shots exist to catch the band geometry regressing — at rest versus expanded, the composer capping
-at its maximum height, and the feedback bars welded to editor and terminal work surfaces.
+shots exist to catch the band geometry regressing — at rest versus docked at the top, where it must
+keep the same width (ADR 0028) — the composer capping at its maximum height, and the feedback bars
+welded to editor and terminal work surfaces.
 
 The band approvals pin only the visible `main` canvas, from its left edge to the viewport right.
 They deliberately exclude the sticky lesson rail, which is not part of the band affordance, and they

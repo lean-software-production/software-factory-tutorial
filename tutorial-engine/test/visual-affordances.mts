@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * Real-browser validation for the workbook's scroll-driven visual affordances.
+ * Real-browser validation for the workbook's visual affordances.
  *
  * JSDOM has no layout engine, so the unit tests can only exercise the geometry maths against
  * fabricated rects and assert the stylesheet as a string. Neither notices if the selector stops
@@ -540,25 +540,34 @@ async function main(): Promise<void> {
       .catch(() => { failures.push("reading line: scrolling the successor past the line did not promote the block behind it"); return false; });
     check(await orientationCompleted(), "reading line: crossing the line did not complete the orientation block");
 
-    // ---- Affordance 2: the activity band expands as it rises ---------------------------------
-    // Both practice blocks ride the same band, so the same measurements must hold for each.
+    // ---- Affordance 2: the activity band keeps one shape and sticks at the top ---------------
+    // Both practice blocks ride the same band, so the same measurements must hold for each. The
+    // band's geometry is fixed by the stylesheet (ADR 0028): the same width and left edge at rest
+    // and when docked, stuck at the top of the viewport, and fitting above the composer.
     const validateBand = async (label: string) => {
+      // Sticky positioning displaces the band once it is stuck, so measure its natural position
+      // with its own section scrolled to the top, where nothing can be sticking it.
       const layout = await page.evaluate(() => {
         const band = document.querySelector(".current-activity-band") as HTMLElement;
-        let top = 0; let current: HTMLElement | null = band;
-        while (current) { top += current.offsetTop; current = current.offsetParent as HTMLElement | null; }
-        return { bandDocumentTop: top };
+        const section = band.closest("section") as HTMLElement;
+        window.scrollTo(0, section.getBoundingClientRect().top + window.scrollY);
+        return { bandDocumentTop: band.getBoundingClientRect().top + window.scrollY };
       });
       const measure = async () => page.evaluate(() => {
         const band = document.querySelector(".current-activity-band") as HTMLElement | null;
         const main = document.querySelector("main") as HTMLElement | null;
         const work = band?.querySelector(".work-block")?.getBoundingClientRect();
+        const composer = document.querySelector(".timeline-composer-dock") as HTMLElement | null;
         if (!band || !main || !work) return null;
         const mainRect = main.getBoundingClientRect();
+        const bandRect = band.getBoundingClientRect();
         return {
-          expand: Number(getComputedStyle(band).getPropertyValue("--activity-expand")) || 0,
+          top: Math.round(bandRect.top), bottom: Math.round(bandRect.bottom),
           width: Math.round(work.width), left: Math.round(work.left),
           mainLeft: Math.round(mainRect.left), mainWidth: Math.round(mainRect.width),
+          composerTop: composer ? Math.round(composer.getBoundingClientRect().top) : window.innerHeight,
+          scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth,
+          inlineStyle: band.getAttribute("style"),
         };
       });
       const at = async (naturalTop: number) => {
@@ -570,32 +579,22 @@ async function main(): Promise<void> {
       };
 
       const rest = await at(320);
-      const rising = [await at(160), await at(100), await at(40)];
-      const full = await at(0);
+      const rising = [await at(160), await at(40)];
+      const docked = await at(0);
 
-      check(Boolean(rest && full && rising.every(Boolean)), `${label} band: could not measure the band at every sample point`);
-      if (rest && full && rising.every(Boolean)) {
-        const series = [rest, ...rising as NonNullable<typeof rest>[], full];
-        check(rest.expand === 0, `${label} band: expected no expansion at rest, measured --activity-expand ${rest.expand}`);
-        check(full.expand === 1, `${label} band: expected full expansion at the top, measured --activity-expand ${full.expand}`);
-        for (let index = 1; index < series.length; index++) {
-          check(series[index].width > series[index - 1].width, `${label} band: width did not grow between samples ${index - 1} and ${index} (${series[index - 1].width} then ${series[index].width})`);
-          check(series[index].left < series[index - 1].left, `${label} band: band did not widen leftwards between samples ${index - 1} and ${index}`);
-        }
-        // At rest it sits inline; fully expanded it fills main minus the 24px canvas inset.
-        expectClose(full.left, full.mainLeft + 24, 1, `${label} band: expanded left edge`);
-        expectClose(full.width, full.mainWidth - 48, 2, `${label} band: expanded width`);
-        expectClose(full.left + full.width / 2, full.mainLeft + full.mainWidth / 2, 2, `${label} band: expanded centre`);
+      check(Boolean(rest && docked && rising.every(Boolean)), `${label} band: could not measure the band at every sample point`);
+      if (rest && docked && rising.every(Boolean)) {
+        const series = [rest, ...rising as NonNullable<typeof rest>[], docked];
         for (const sample of series) {
+          expectClose(sample.width, rest.width, 1, `${label} band: width changed with the scroll position`);
+          expectClose(sample.left, rest.left, 1, `${label} band: left edge changed with the scroll position`);
+          check(sample.inlineStyle === null, `${label} band: the band restyled itself inline (${sample.inlineStyle})`);
           check(sample.left >= sample.mainLeft - 1, `${label} band: overflowed the left edge of main (${sample.left} < ${sample.mainLeft})`);
           check(sample.left + sample.width <= sample.mainLeft + sample.mainWidth + 1, `${label} band: overflowed the right edge of main`);
+          check(sample.scrollWidth <= sample.clientWidth, `${label} band: the page overflows horizontally (${sample.scrollWidth} > ${sample.clientWidth})`);
         }
-        // Scrolling back must undo it, not leave the band stuck wide.
-        const returned = await at(320);
-        if (returned) {
-          check(returned.expand === 0, `${label} band: expansion did not reverse on scroll back (--activity-expand ${returned.expand})`);
-          expectClose(returned.width, rest.width, 1, `${label} band: width did not return to its inline size`);
-        }
+        expectClose(docked.top, 0, 1, `${label} band: docked band top`);
+        check(docked.bottom <= docked.composerTop + 1, `${label} band: docked band does not fit above the composer (bottom ${docked.bottom}, composer top ${docked.composerTop})`);
       }
 
       // Shoot the visible main canvas, not just the band: the affordance is how wide the band sits
@@ -605,11 +604,8 @@ async function main(): Promise<void> {
       // Both work surfaces are masked — xterm's canvas and CodeMirror's caret and selection do not
       // reproduce between runs — which leaves the band's own chrome, including its welded feedback.
       const masked = page.locator(".embedded-terminal, .cm-editor");
-      // The band focuses its work surface when it scrolls into view, and :focus-within paints a
-      // ring. Whether that has landed by the time the shot is taken depends on how the scroll
-      // crossed the observer's margin, so settle on the unfocused state rather than approving a
-      // ring that comes and goes. The auto-focus itself stays uncovered: asserting it here failed
-      // two runs in three, because jumping the scroll position skips the crossing it waits for.
+      // Focus arrives with a navigation or a click, never with a scroll, but the fill above may
+      // have left it in the editor and :focus-within paints a ring. Settle on the unfocused state.
       const shoot = async () => {
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.());
         await page.waitForTimeout(80);
@@ -628,7 +624,7 @@ async function main(): Promise<void> {
       await at(320);
       await approve(page, `${label}-band-at-rest`, await shoot());
       await at(0);
-      await approve(page, `${label}-band-expanded`, await shoot());
+      await approve(page, `${label}-band-docked`, await shoot());
     };
 
     // ---- Affordance 4: the editor rides the same band, and wears the same feedback ------------
@@ -736,7 +732,7 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  console.log("Visual affordance validation passed: reading-line promotion, activity band expansion, composer auto-resize, practice feedback bar states.");
+  console.log("Visual affordance validation passed: reading-line promotion, fixed sticky activity band, composer auto-resize, practice feedback bar states.");
 }
 
 main().catch((error) => { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; });

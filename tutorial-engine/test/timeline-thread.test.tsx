@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { TimelineThread, computeTutorReplyRevealScrollDelta } from "../web-workbook/src/timeline-thread.js";
+import { TimelineThread, timelineMessageElementId } from "../web-workbook/src/timeline-thread.js";
 
 const noopSend = vi.fn(async () => undefined);
 
@@ -197,25 +197,21 @@ describe("TimelineThread", () => {
     expect(acceptedMarkup).not.toContain("Thinking");
   });
 
-  describe("computeTutorReplyRevealScrollDelta", () => {
-    it("keeps an already-visible reply stable above the fixed composer", () => {
-      expect(computeTutorReplyRevealScrollDelta({
-        replyTop: 220,
-        replyBottom: 520,
-        viewportHeight: 900,
-        composerTop: 780,
-        gapPx: 14,
-      })).toBe(0);
-    });
+  it("gives every conversation record an element id the scroll authority can announce and reveal", () => {
+    const markup = renderToStaticMarkup(createElement(TimelineThread, {
+      activeLessonId: "lesson",
+      activeBlockId: "write",
+      onSend: noopSend,
+      records: [
+        { type: "message", id: "course", sequence: 1, at: "2026-08-21T00:00:00.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "authored", presentation: "course", text: "## Course note" },
+        { type: "message", id: "asked", sequence: 2, at: "2026-08-21T00:00:01.000Z", lessonId: "lesson", blockId: "write", role: "user", source: "learner", presentation: "chat", text: "Which directory?" },
+        { type: "message", id: "answered", sequence: 3, at: "2026-08-21T00:00:02.000Z", lessonId: "lesson", blockId: "write", role: "assistant", source: "main_tutor", presentation: "chat", text: "Use `.tmp`." },
+      ]
+    }));
 
-    it("moves a reply obscured by the composer by only the distance needed to reveal its bottom", () => {
-      expect(computeTutorReplyRevealScrollDelta({
-        replyTop: 650,
-        replyBottom: 830,
-        viewportHeight: 900,
-        composerTop: 790,
-        gapPx: 14,
-      })).toBe(54);
-    });
+    expect(timelineMessageElementId("answered")).toBe("timeline-message-answered");
+    expect(markup).toContain('id="timeline-message-asked"');
+    expect(markup).toContain('id="timeline-message-answered"');
+    expect(markup).not.toContain('id="timeline-message-course"');
   });
 });

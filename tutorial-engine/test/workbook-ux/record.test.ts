@@ -3,7 +3,7 @@ import { TerminalShellProtocol } from "../../src/workbook/terminal-shell-protoco
 import { ProtocolAwareFakePty } from "./fake-pty.js";
 import { REQUIRED_MOTION_STEP_IDS, REQUIRED_STATE_CHECKPOINT_STEP_IDS, SCROLL_CHECKPOINT_STEP_IDS, WORKBOOK_UX_TEST_STEP_LIST, WORKBOOK_UX_TEST_STEPS } from "./steps.js";
 import { encodeStepBits } from "./marker-protocol.js";
-import { assertRealJourneyMotionThresholdCalibration, REAL_JOURNEY_MIN_REQUIRED_MOTION_PX, REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX } from "./record.mjs";
+import { assertCheckpointGeometry, assertContinueLandings, assertPageHeldBetweenCheckpoints, assertRealJourneyMotionThresholdCalibration, geometryStateFailure, PAGE_HOLD_TOLERANCE_PX, REAL_JOURNEY_MIN_REQUIRED_MOTION_PX, REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX, type GeometryTelemetry, type SemanticCheckpoint } from "./record.mjs";
 import { checkpointProgressEvent, createWorkbookUxProgressLogger, formatWorkbookUxCheckpointProgress, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, type WorkbookUxProgressEvent } from "./progress.js";
 
 describe("protocol-aware fake PTY", () => {
@@ -29,14 +29,14 @@ describe("protocol-aware fake PTY", () => {
 describe("workbook UX test progress", () => {
   it("formats semantic checkpoint progress with count and step name", () => {
     expect(WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL).toBe(12);
-    expect(formatWorkbookUxCheckpointProgress(3, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, "editor scroll from small to mid activity band"))
-      .toBe("Checkpoint 3/12: editor scroll from small to mid activity band");
-    expect(checkpointProgressEvent(1, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, WORKBOOK_UX_TEST_STEPS.editorScrollToSmall)).toMatchObject({
+    expect(formatWorkbookUxCheckpointProgress(3, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, "editor scroll from in-flow to docked band"))
+      .toBe("Checkpoint 3/12: editor scroll from in-flow to docked band");
+    expect(checkpointProgressEvent(1, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, WORKBOOK_UX_TEST_STEPS.editorScrollToInflow)).toMatchObject({
       type: "checkpoint",
       completed: 1,
       total: 12,
-      stepId: WORKBOOK_UX_TEST_STEPS.editorScrollToSmall.id,
-      message: "Checkpoint 1/12: editor reveal scroll to small activity band",
+      stepId: WORKBOOK_UX_TEST_STEPS.editorScrollToInflow.id,
+      message: "Checkpoint 1/12: editor reveal: Continue lands the band in view, then it is placed in flow",
     });
   });
 
@@ -75,5 +75,68 @@ describe("workbook UX test marker declarations", () => {
     for (const id of REQUIRED_STATE_CHECKPOINT_STEP_IDS) expect(scrollIds.has(id)).toBe(false);
     for (const id of SCROLL_CHECKPOINT_STEP_IDS) expect(feedbackIds.has(id)).toBe(false);
     for (const id of [...REQUIRED_STATE_CHECKPOINT_STEP_IDS, ...SCROLL_CHECKPOINT_STEP_IDS, ...REQUIRED_MOTION_STEP_IDS]) expect(encodeStepBits(id)).toHaveLength(8);
+  });
+});
+
+function geometry(overrides: Partial<GeometryTelemetry> & { bandTop: number; scrollY: number }): GeometryTelemetry {
+  const { bandTop, scrollY, ...rest } = overrides;
+  const rect = { x: 0, y: bandTop, width: 720, height: 500, top: bandTop, right: 720, bottom: bandTop + 500, left: 0 };
+  return { scrollY, viewportHeight: 900, bandDocumentTop: 4500, bandRect: rect, bandStuck: bandTop === 0, workRect: rect, mainRect: { x: 265, y: 0, width: 1015, height: 900, top: 0, right: 1280, bottom: 900, left: 265 }, composerTop: 806, scrollWidth: 1280, clientWidth: 1280, overflowing: [], ...rest };
+}
+
+function checkpoint(overrides: Partial<SemanticCheckpoint> & Pick<SemanticCheckpoint, "kind" | "before" | "after">): SemanticCheckpoint {
+  return {
+    stepId: 12, name: "fixture checkpoint", surface: "editor", requiredMotion: false, startedAt: "2026-09-02T00:00:00.000Z", settledAt: "2026-09-02T00:00:01.000Z",
+    marker: { transitionAt: "2026-09-02T00:00:00.000Z", settledAt: "2026-09-02T00:00:01.000Z" },
+    scroll: { applicationScrollCalls: [], applicationScrollEvents: 0, maxExcursionPx: 0 },
+    fakeCallCounts: { mainTutorReviews: 0, fakePtyCommands: 0 },
+    ...overrides,
+  };
+}
+
+describe("workbook UX scroll contract", () => {
+  it("names each band placement by where the band sits, not by how wide it is", () => {
+    expect(geometryStateFailure("inflow", geometry({ bandTop: 285, scrollY: 4215 }))).toBeUndefined();
+    expect(geometryStateFailure("inflow", geometry({ bandTop: 340, scrollY: 4215 }))).toMatch(/measured band top 340/);
+    expect(geometryStateFailure("docked", geometry({ bandTop: 0, scrollY: 4500 }))).toBeUndefined();
+    expect(geometryStateFailure("docked", geometry({ bandTop: 0, scrollY: 4500, bandStuck: false }))).toMatch(/stuck/);
+    expect(geometryStateFailure("docked", geometry({ bandTop: 0, scrollY: 4500, composerTop: 400 }))).toMatch(/fit above the composer/);
+    expect(geometryStateFailure("away", geometry({ bandTop: 1020, scrollY: 3480 }))).toBeUndefined();
+    expect(geometryStateFailure("away", geometry({ bandTop: 880, scrollY: 3620 }))).toMatch(/below the fold/);
+  });
+
+  it("fails a feedback checkpoint when the page moved while typing or while feedback landed", () => {
+    const failures: string[] = [];
+    assertCheckpointGeometry(checkpoint({ kind: "feedback", requestedState: "docked", before: geometry({ bandTop: 0, scrollY: 4500 }), after: geometry({ bandTop: 0, scrollY: 4500 }) }), failures);
+    expect(failures).toEqual([]);
+
+    assertCheckpointGeometry(checkpoint({ kind: "feedback", requestedState: "docked", before: geometry({ bandTop: 0, scrollY: 4500 }), after: geometry({ bandTop: 0, scrollY: 4500 + PAGE_HOLD_TOLERANCE_PX + 1 }) }), failures);
+    expect(failures.at(-1)).toMatch(/moved 2\.0px while feedback arrived/);
+
+    assertCheckpointGeometry(checkpoint({ kind: "feedback", requestedState: "docked", before: geometry({ bandTop: 0, scrollY: 4500 }), after: geometry({ bandTop: 0, scrollY: 4500 }), scroll: { applicationScrollCalls: [], applicationScrollEvents: 3, maxExcursionPx: 18, typingExcursionPx: 18 } }), failures);
+    expect(failures.at(-1)).toMatch(/moved 18\.0px while the learner typed/);
+
+    assertCheckpointGeometry(checkpoint({ kind: "feedback", requestedState: "docked", before: geometry({ bandTop: 0, scrollY: 4500 }), after: geometry({ bandTop: 0, scrollY: 4500 }), scroll: { applicationScrollCalls: [{ index: 1, atMs: 1, kind: "window.scrollTo", scrollX: 0, scrollY: 4500 }], applicationScrollEvents: 1, maxExcursionPx: 0 } }), failures);
+    expect(failures.at(-1)).toMatch(/scrolled the page on its own \(window\.scrollTo\)/);
+  });
+
+  it("fails any checkpoint that overflows horizontally or leaves a Continue landing out of view", () => {
+    const failures: string[] = [];
+    assertCheckpointGeometry(checkpoint({ kind: "scroll", before: geometry({ bandTop: 285, scrollY: 0 }), after: geometry({ bandTop: 285, scrollY: 0, scrollWidth: 1300 }) }), failures);
+    expect(failures.at(-1)).toMatch(/overflows horizontally/);
+
+    assertContinueLandings([{ from: "a", to: "b", scrollYBefore: 0, scrollYAfter: 0, successorTop: 1190, composerTop: 806, inView: false }], failures);
+    expect(failures.at(-1)).toMatch(/left b out of view/);
+    assertContinueLandings([], failures);
+    expect(failures.at(-1)).toMatch(/pressed no Continue/);
+  });
+
+  it("fails when the page moved between a scroll checkpoint settling and the next feedback checkpoint starting", () => {
+    const failures: string[] = [];
+    const settled = checkpoint({ kind: "scroll", name: "scroll", before: geometry({ bandTop: 285, scrollY: 4215 }), after: geometry({ bandTop: 0, scrollY: 4500 }) });
+    assertPageHeldBetweenCheckpoints([settled, checkpoint({ kind: "feedback", name: "feedback", before: geometry({ bandTop: 0, scrollY: 4500 }), after: geometry({ bandTop: 0, scrollY: 4500 }) })], failures);
+    expect(failures).toEqual([]);
+    assertPageHeldBetweenCheckpoints([settled, checkpoint({ kind: "feedback", name: "feedback", before: geometry({ bandTop: 0, scrollY: 4756 }), after: geometry({ bandTop: 0, scrollY: 4756 }) })], failures);
+    expect(failures.at(-1)).toMatch(/moved 256\.0px between "scroll" settling/);
   });
 });

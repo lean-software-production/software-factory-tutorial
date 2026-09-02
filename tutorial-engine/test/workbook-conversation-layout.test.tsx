@@ -53,7 +53,7 @@ describe("workbook fixed conversation layout", () => {
     ));
 
     expect(markup).toContain('class="current-activity-band"');
-    expect(markup).toContain('data-activity-layout="scroll-linked"');
+    expect(markup).toContain('data-activity-layout="sticky"');
     expect(markup).not.toContain("Get a hint");
     expect(markup.indexOf("current-activity-band")).toBeLessThan(markup.indexOf("timeline-thread"));
     expect(markup).toContain('class="timeline-thread has-fixed-composer"');
@@ -61,22 +61,27 @@ describe("workbook fixed conversation layout", () => {
     expect(markup).toContain("Message the tutor");
   });
 
-  it("uses measured CSS variables instead of binary width or viewport centering hacks", () => {
-    const inlineBand = (workbookStyles.match(/\.current-activity-band\s*\{[^}]*--activity-expand[^}]*\}/)?.[0] ?? "").split("{")[1] ?? "";
+  it("fixes the band's geometry in the stylesheet so layout never answers the scroll position", () => {
+    const stickyBand = (workbookStyles.match(/\.current-activity-band\s*\{([^}]*)\}/)?.[1] ?? "");
     const visualWorkBlock = declarationsFor(".current-activity-band > .work-block");
     const activityBandRules = workbookStyles.match(/\.current-activity-band[^{}]*\{[^}]*\}/g) ?? [];
 
-    expect(inlineBand).toContain("--activity-expand: 0");
-    expect(inlineBand).toContain("--activity-expanded-width: var(--activity-inline-width)");
-    expect(inlineBand).toContain("width: var(--activity-inline-width)");
-    expect(inlineBand).toContain("top: var(--activity-top)");
+    expect(stickyBand).toContain("position: sticky");
+    expect(stickyBand).toContain("top: 0");
+    expect(stickyBand).toContain("width: min(720px, 100%)");
+    expect(stickyBand).toContain("padding: 0");
     expect(visualWorkBlock).toContain("position: relative");
-    expect(visualWorkBlock).toContain("left: var(--activity-left-offset)");
-    expect(visualWorkBlock).toContain("width: var(--activity-width)");
-    expect(inlineBand).toContain("padding: 0");
-    expect(inlineBand).toContain("border: 0");
+    expect(visualWorkBlock).not.toContain("left:");
+    expect(visualWorkBlock).not.toContain("width:");
+    expect(workbookStyles).not.toContain("--activity-");
+    expect(workbookStyles).not.toMatch(/scroll-behavior:\s*smooth/);
+    // The page owns the column width: no block's content can widen the thread past the viewport.
+    expect(declarationsFor(".timeline-thread")).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(declarationsFor(".active-block-region")).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(declarationsFor(".work-block")).toContain("min-width: 0");
     expect(activityBandRules.join("\n")).not.toContain("margin-left");
     expect(activityBandRules.join("\n")).not.toContain("transform");
+    expect(activityBandRules.join("\n")).not.toContain("transition");
   });
 
   it("uses larger readable code and terminal font sizes without a code header row", () => {

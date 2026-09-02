@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./markdown.js";
+import { announceContent } from "./scroll-authority.js";
 import type { PublicTimelineMessage, PublicTimelineRecord } from "../../src/workbook/public-contract.js";
 
 export type { PublicTimelineRecord };
@@ -7,53 +8,10 @@ type TimelineMessageRecord = PublicTimelineMessage;
 type TimelineThreadRecord = PublicTimelineRecord;
 
 const composerMaxHeightPx = 160;
-const defaultTutorReplyScrollGapPx = 14;
 
-export type TutorReplyRevealGeometry = {
-  replyTop: number;
-  replyBottom: number;
-  viewportHeight: number;
-  composerTop?: number | null;
-  safeTop?: number;
-  gapPx?: number;
-};
-
-export function computeTutorReplyRevealScrollDelta({ replyTop, replyBottom, viewportHeight, composerTop, safeTop = 0, gapPx = defaultTutorReplyScrollGapPx }: TutorReplyRevealGeometry): number {
-  const safeBottom = Math.max(safeTop, Math.min(viewportHeight, composerTop ?? viewportHeight) - gapPx);
-  const replyHeight = Math.max(0, replyBottom - replyTop);
-  const safeHeight = Math.max(0, safeBottom - safeTop);
-  if (replyTop >= safeTop && replyBottom <= safeBottom) return 0;
-  if (replyHeight <= safeHeight && replyTop < safeTop) return replyTop - safeTop;
-  if (replyBottom > safeBottom) return replyBottom - safeBottom;
-  if (replyTop < safeTop) return replyTop - safeTop;
-  return 0;
-}
-
-function parseCssPixelValue(value: string, fallback: number): number {
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-export function revealTutorReplyIfNeeded(replyElement: HTMLElement, composerDock: HTMLElement | null): number {
-  const replyRect = replyElement.getBoundingClientRect();
-  const composerRect = composerDock?.getBoundingClientRect();
-  const style = replyElement.ownerDocument.defaultView?.getComputedStyle?.(replyElement);
-  const gapPx = parseCssPixelValue(style?.getPropertyValue("--timeline-reply-scroll-gap") ?? "", defaultTutorReplyScrollGapPx);
-  const delta = computeTutorReplyRevealScrollDelta({
-    replyTop: replyRect.top,
-    replyBottom: replyRect.bottom,
-    viewportHeight: window.innerHeight,
-    composerTop: composerRect?.top,
-    gapPx,
-  });
-  if (Math.abs(delta) < 0.5) return 0;
-  const scrollRoot = document.scrollingElement ?? document.documentElement;
-  const maxScrollY = Math.max(0, scrollRoot.scrollHeight - window.innerHeight);
-  const nextScrollY = Math.max(0, Math.min(maxScrollY, window.scrollY + delta));
-  const clampedDelta = nextScrollY - window.scrollY;
-  if (Math.abs(clampedDelta) < 0.5) return 0;
-  window.scrollTo({ top: nextScrollY, left: window.scrollX, behavior: "instant" });
-  return clampedDelta;
+/** The DOM id of a conversation record's article, which the scroll authority can announce and reveal. */
+export function timelineMessageElementId(recordId: string): string {
+  return `timeline-message-${recordId}`;
 }
 
 function isMessageRecord(record: TimelineThreadRecord): boolean {
@@ -100,31 +58,33 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   const [pending, setPending] = useState(false);
   const [commandInserted, setCommandInserted] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const composerDockRef = useRef<HTMLDivElement | null>(null);
-  const responseEntryRefs = useRef(new Map<string, HTMLElement>());
-  const knownResponseIds = useRef<Set<string> | null>(null);
+  const messageEntryRefs = useRef(new Map<string, HTMLElement>());
+  const knownMessageIds = useRef<Set<string> | null>(null);
   const recordMatchesActive = (record: { lessonId: string; blockId: string }) => record.blockId === activeBlockId && (record.lessonId === activeLessonId || activeBlockId.includes("--"));
   const activeAuthoredRecordId = [...records].reverse().find((record) => isAuthoredCourseRecord(record) && recordMatchesActive(record))?.id;
   const readyBlockIdSet = new Set(readyBlockIds);
-  const responseRecords = records.filter((record) => isMessageRecord(record) && record.role === "assistant" && !isAuthoredCourseRecord(record));
-  const latestResponseId = responseRecords.at(-1)?.id;
-  const responseIdsKey = responseRecords.map((record) => record.id).join("\u0000");
+  const conversationRecords = records.filter((record): record is TimelineMessageRecord => isMessageRecord(record) && !isAuthoredCourseRecord(record));
+  const latestMessage = conversationRecords.at(-1);
+  const latestMessageId = latestMessage?.id;
+  const latestMessageIsReply = latestMessage?.role === "assistant";
+  const messageIdsKey = conversationRecords.map((record) => record.id).join("\u0000");
   // `records` is a new array every render, so the set below is memoised on the ids it contains
-  // rather than on the array's identity. That lets the effect depend on exactly what it reads:
-  // previously it read responseRecords while depending on a key derived from it, which was correct
-  // but only provably so to a reader.
-  const responseIdSet = useMemo(() => new Set(responseIdsKey ? responseIdsKey.split("\u0000") : []), [responseIdsKey]);
+  // rather than on the array's identity. That lets the effect depend on exactly what it reads.
+  const messageIdSet = useMemo(() => new Set(messageIdsKey ? messageIdsKey.split("\u0000") : []), [messageIdsKey]);
+  // A message that arrives after mount is announced, never scrolled to. The learner may be
+  // reading or typing above; the scroll authority shows the "new below" chip if it landed below
+  // the fold and leaves the page where the learner put it.
   useLayoutEffect(() => {
-    if (knownResponseIds.current === null) {
-      knownResponseIds.current = responseIdSet;
+    if (knownMessageIds.current === null) {
+      knownMessageIds.current = messageIdSet;
       return;
     }
-    const shouldScroll = latestResponseId !== undefined && !knownResponseIds.current.has(latestResponseId);
-    knownResponseIds.current = responseIdSet;
-    if (!shouldScroll) return;
-    const latestResponseElement = responseEntryRefs.current.get(latestResponseId);
-    if (latestResponseElement) revealTutorReplyIfNeeded(latestResponseElement, composerDockRef.current);
-  }, [latestResponseId, responseIdSet]);
+    const fresh = latestMessageId !== undefined && !knownMessageIds.current.has(latestMessageId);
+    knownMessageIds.current = messageIdSet;
+    if (!fresh) return;
+    const element = messageEntryRefs.current.get(latestMessageId);
+    if (element) announceContent(element, latestMessageIsReply ? "New reply below" : "New message below");
+  }, [latestMessageId, latestMessageIsReply, messageIdSet]);
   useLayoutEffect(() => {
     if (textareaRef.current) resizeComposerTextarea(textareaRef.current);
   }, [draft]);
@@ -164,15 +124,14 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     }
     void submitText(draft || event.currentTarget.value);
   };
-  const responseEntryRef = (recordId: string) => (el: HTMLElement | null) => {
-    if (el) responseEntryRefs.current.set(recordId, el);
-    else responseEntryRefs.current.delete(recordId);
+  const messageEntryRef = (recordId: string) => (el: HTMLElement | null) => {
+    if (el) messageEntryRefs.current.set(recordId, el);
+    else messageEntryRefs.current.delete(recordId);
   };
   const renderConversationRecord = (record: TimelineThreadRecord) => {
     if (!isMessageRecord(record)) return null;
     const className = record.role === "user" ? "timeline-message learner" : `timeline-message tutor${record.presentation === "review" ? " review" : ""}`;
-    const trackResponse = record.role === "assistant" && !(record.source === "authored" && record.presentation === "course");
-    return <article key={record.id} ref={trackResponse ? responseEntryRef(record.id) : undefined} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown source={record.source === "authored" && record.presentation === "course" ? "authored" : "generated"}>{record.text}</Markdown>}</article>;
+    return <article key={record.id} id={timelineMessageElementId(record.id)} ref={messageEntryRef(record.id)} className={className}><b>{record.role === "user" ? "You" : record.presentation === "review" ? "Tutor review" : "Tutor"}</b>{record.role === "user" ? <p>{record.text}</p> : <Markdown source={record.source === "authored" && record.presentation === "course" ? "authored" : "generated"}>{record.text}</Markdown>}</article>;
   };
   const reflectionReviewingNode = activeReflectionReviewing ? <aside className="timeline-message tutor thinking" role="status" aria-live="polite" aria-label="Tutor is thinking"><b>Tutor</b><span className="tutor-thinking-dots" aria-hidden="true"><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /><span className="tutor-thinking-dot" /></span><span className="tutor-thinking-label">Thinking</span></aside> : null;
   const renderedRecords = (() => {
@@ -221,7 +180,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   return <section className="timeline-thread has-fixed-composer" aria-label="Tutor conversation">
     {renderedRecords}
     {completionPanel}
-    <div ref={composerDockRef} className="timeline-composer-dock fixed-composer">
+    <div className="timeline-composer-dock fixed-composer">
       <form className="timeline-input fixed-composer" onSubmit={send}>
         <textarea ref={textareaRef} className="timeline-composer-textarea" name="message" rows={1} aria-label="Message the tutor" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} disabled={inputDisabled || pending} />
         <button className="round-send" aria-label="Send message" title="Send message" disabled={inputDisabled || pending || !draft.trim()}>{pending ? "…" : "↑"}</button>
