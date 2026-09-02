@@ -34,11 +34,11 @@ export const WORKBOOK_UX_TEST_STEPS = {
   terminalDockedFeedback: { id: 22, name: 'terminal feedback arrives with the band docked; page holds still', surface: 'terminal', requestedState: 'docked', kind: 'feedback', requiredMotion: false },
   terminalAwayFeedback: { id: 23, name: 'terminal feedback arrives with the band below the fold; page holds still', surface: 'terminal', requestedState: 'away', kind: 'feedback', requiredMotion: false },
   editorScrollToInflow: { id: 31, name: 'editor reveal: Continue lands the band in view, then it is placed in flow', surface: 'editor', requestedState: 'inflow', kind: 'scroll', requiredMotion: false },
-  editorScrollToDocked: { id: 32, name: 'editor scroll from in-flow to docked band', surface: 'editor', requestedState: 'docked', kind: 'scroll', requiredMotion: true },
-  editorScrollAway: { id: 33, name: 'editor revision typed while docked, then scrolled below the fold', surface: 'editor', requestedState: 'away', kind: 'scroll', requiredMotion: true },
+  editorScrollToDocked: { id: 32, name: 'editor scroll back from below the fold to the docked band', surface: 'editor', requestedState: 'docked', kind: 'scroll', requiredMotion: true },
+  editorScrollAway: { id: 33, name: 'editor revision typed in flow, then scrolled below the fold', surface: 'editor', requestedState: 'away', kind: 'scroll', requiredMotion: true },
   terminalScrollToInflow: { id: 34, name: 'terminal reveal: Continue lands the band in view, then it is placed in flow', surface: 'terminal', requestedState: 'inflow', kind: 'scroll', requiredMotion: false },
-  terminalScrollToDocked: { id: 35, name: 'terminal scroll from in-flow to docked band', surface: 'terminal', requestedState: 'docked', kind: 'scroll', requiredMotion: true },
-  terminalScrollAway: { id: 36, name: 'terminal command submitted while docked, then scrolled below the fold', surface: 'terminal', requestedState: 'away', kind: 'scroll', requiredMotion: true },
+  terminalScrollToDocked: { id: 35, name: 'terminal scroll back from below the fold to the docked band', surface: 'terminal', requestedState: 'docked', kind: 'scroll', requiredMotion: true },
+  terminalScrollAway: { id: 36, name: 'terminal command submitted in flow, then scrolled below the fold', surface: 'terminal', requestedState: 'away', kind: 'scroll', requiredMotion: true },
 } as const satisfies Record<string, WorkbookUxTestStepDeclaration>;
 
 export type WorkbookUxTestStepKey = keyof typeof WORKBOOK_UX_TEST_STEPS;

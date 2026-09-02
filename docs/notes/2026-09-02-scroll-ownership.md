@@ -82,7 +82,23 @@ CodeMirror's content-driven height, and xterm's fixed height with fit-driven col
 The diagnostic holds 23 of 23 scenarios. The recorder's twelve checkpoints hold the page still
 while typing and while feedback lands at every band position, land every Continue in view, and see
 no application scroll calls; the recorder now fails on any of those, on a docked band that does
-not fit above the composer, and on horizontal overflow, naming the widest element.
+not fit above the composer, on horizontal overflow (naming the widest element), and on the "new
+below" chip showing for feedback the learner can already see. (A review of the active block is
+rendered only as the bar welded to its surface — the server projects it into the conversation
+later, as history — so a review that lands while the learner has scrolled away is not announced.
+Whether it should be is a product question left open here.)
+
+Two calibrations of the recorder's own camera work were needed for the video analyzer, which
+measures translation by correlating frames: its band placement is measured once per surface
+outside any transition (the measurement scrolls, and inside a transition read as oscillation), the
+"away" move is paced like the others (a 300ms move read as a teleport at 11 Hz sampling), and the
+editor's away scroll starts from the in-flow position rather than the docked one and follows a
+ten-line draft, because a white editor over the notebook grid gives the correlation too little to
+track. The analyzer's region also stops above the fixed chip and composer, so only scrolling
+content is measured, and its per-sample search is bounded to twice the recorder's fastest move
+(`REAL_JOURNEY_MAX_SAMPLE_SHIFT_PX`): the estimator under-measures a scroll while the editor fills
+the frame and then reports a "catch-up" of several hundred pixels, which the jump detector read
+as a teleport. Application scrolls are caught by the ownership probe, not by the video.
 
 ## Left for a human
 

@@ -24,10 +24,14 @@ const INPUT_METADATA_PATH = "input-metadata.json";
 export const REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX = 20;
 export const REAL_JOURNEY_MIN_REQUIRED_MOTION_PX = 12;
 export const REAL_JOURNEY_OBSERVED_SPARSE_EDITOR_TEXTURE_FLOOR = 3.862;
-// The real provider-free journey deliberately samples a mostly white CodeMirror editor ROI.
-// Clean runs have measured that sparse editor at and above 3.862, so 3 keeps a healthy
-// scenario-specific margin without weakening the generic analyzer's texture default.
-export const REAL_JOURNEY_MIN_TEXTURE_SCORE = 3;
+export const REAL_JOURNEY_OBSERVED_AWAY_TEXTURE_FLOOR = 2.36;
+// The real provider-free journey deliberately samples a mostly white CodeMirror editor ROI, and
+// its "away" checkpoints show the page a viewport above the band: the orientation prose for the
+// editor, the completed editor's history for the terminal. Clean runs have measured the sparse
+// editor at and above 3.862 and the away views at and above 2.36, so 2 keeps a scenario-specific
+// margin without weakening the generic analyzer's texture default. Motion confidence is checked
+// separately, so a lower texture floor does not admit an unmeasurable translation.
+export const REAL_JOURNEY_MIN_TEXTURE_SCORE = 2;
 /** The page may drift this much while feedback lands or the learner types before it counts as moved. */
 export const PAGE_HOLD_TOLERANCE_PX = 1;
 /** Where the band sits, from the top of the viewport, when it is "in flow". */
@@ -35,12 +39,28 @@ export const BAND_INFLOW_TOP_PX = 285;
 /** How far below the bottom of the viewport the band is parked when the learner has scrolled "away". */
 export const BAND_AWAY_MARGIN_PX = 120;
 /** How long a review is held back so feedback lands after the learner has scrolled away from the band. */
-const AWAY_REVIEW_DELAY_MS = 1_200;
+const AWAY_REVIEW_DELAY_MS = 1_800;
+/** How often the analyzer samples the recording. */
+export const RECORDER_ANALYZER_SAMPLE_HZ = 11;
+/** The recorder's slowest positioning move, and so its fastest per-sample translation. */
+export const RECORDER_POSITIONING_DURATION_MS = 900;
+/** The longest positioning move: from in flow to below the fold. */
+export const RECORDER_MAX_POSITIONING_TRAVEL_PX = VIEWPORT.height + BAND_AWAY_MARGIN_PX + BAND_INFLOW_TOP_PX;
+/**
+ * The largest translation the analyzer looks for between two sampled frames. The recorder never
+ * moves the page faster than its positioning moves, so a larger estimate is a wrong correlation
+ * peak, not a movement: a white editor over the notebook grid reads as still for a few frames and
+ * the estimator then "catches up" in one, which the jump detector would report as a teleport. An
+ * application scroll during a checkpoint is caught by the scroll-ownership probe, not by the video.
+ */
+export const REAL_JOURNEY_MAX_SAMPLE_SHIFT_PX = 300;
 
 const GEOMETRY_TARGETS: Record<WorkbookUxTestGeometryState, { readonly description: string; readonly viewportTop: (viewportHeight: number) => number; readonly durationMs: number }> = {
   inflow: { description: `band top within 24px of ${BAND_INFLOW_TOP_PX}px`, viewportTop: () => BAND_INFLOW_TOP_PX, durationMs: 900 },
   docked: { description: "band stuck at the top of the viewport and fitting above the composer", viewportTop: () => 0, durationMs: 900 },
-  away: { description: "band entirely below the fold", viewportTop: (viewportHeight) => viewportHeight + BAND_AWAY_MARGIN_PX, durationMs: 300 },
+  // Paced like the others: the analyzer samples the video at 11 Hz and reads a faster move as a
+  // teleport. The away review is held back long enough for the feedback to land after this.
+  away: { description: "band entirely below the fold", viewportTop: (viewportHeight) => viewportHeight + BAND_AWAY_MARGIN_PX, durationMs: 900 },
 };
 
 const EDITOR_FEEDBACK = {
@@ -79,7 +99,7 @@ export interface FeedbackSafeRegionTelemetry {
   readonly occlusionChecks: readonly { readonly x: number; readonly y: number; readonly topElement: string; readonly targetContainsTopElement: boolean }[];
   readonly unoccluded: boolean;
 }
-export interface FeedbackTelemetry { readonly text: string; readonly rect: RectTelemetry; readonly safeRegion: FeedbackSafeRegionTelemetry; }
+export interface FeedbackTelemetry { readonly text: string; readonly rect: RectTelemetry; readonly safeRegion: FeedbackSafeRegionTelemetry; /** Whether the "new below" chip is showing: expected only when the feedback landed off-screen. */ readonly unseenChip: boolean; }
 export interface FakeCallCounts { readonly mainTutorReviews: number; readonly fakePtyCommands: number; }
 /** Who moved the page during a checkpoint, from the scroll telemetry probe. */
 export interface ScrollOwnershipTelemetry {
@@ -310,8 +330,8 @@ async function measureBandDocumentTop(page: Page): Promise<number> {
   return naturalTop;
 }
 
-async function measureGeometry(page: Page, bandDocumentTop?: number): Promise<GeometryTelemetry> {
-  const documentTop = bandDocumentTop ?? await measureBandDocumentTop(page);
+async function measureGeometry(page: Page, bandDocumentTop: number): Promise<GeometryTelemetry> {
+  const documentTop = bandDocumentTop;
   return page.evaluate((measuredDocumentTop) => {
     const band = document.querySelector<HTMLElement>(".current-activity-band");
     const work = band?.querySelector<HTMLElement>(".work-block");
@@ -351,9 +371,8 @@ async function measureGeometry(page: Page, bandDocumentTop?: number): Promise<Ge
 }
 
 /** The scroll the learner would make with the wheel: animated, and marked as the recorder's own. */
-async function positionBand(page: Page, state: WorkbookUxTestGeometryState): Promise<GeometryTelemetry> {
+async function positionBand(page: Page, state: WorkbookUxTestGeometryState, bandDocumentTop: number): Promise<GeometryTelemetry> {
   const target = GEOMETRY_TARGETS[state];
-  const bandDocumentTop = await measureBandDocumentTop(page);
   const viewportHeight = await page.evaluate(() => window.innerHeight);
   const end = Math.max(0, bandDocumentTop - target.viewportTop(viewportHeight));
   await page.evaluate(async ({ noteName, end: endY, durationMs }) => {
@@ -426,6 +445,7 @@ async function feedbackTelemetry(page: Page, surface: "editor" | "terminal", exp
     return {
       text: element.textContent ?? "",
       rect: toRect(rect),
+      unseenChip: document.querySelector("[data-unseen-below]") !== null,
       safeRegion: {
         viewport: { width: window.innerWidth, height: window.innerHeight },
         composerRect: composerRect ? toRect(composerRect) : undefined,
@@ -541,11 +561,12 @@ async function runScrollCheckpoint(args: {
   /** Learner work done before the scroll, such as a revision typed while docked. */
   prepare?: () => Promise<{ typedText?: string; command?: string }>;
   position: () => Promise<GeometryTelemetry>;
+  bandDocumentTop: number;
   landing?: ContinueLanding;
   progress?: WorkbookUxProgressSink;
 }): Promise<void> {
   const telemetryStart = await scrollTelemetryLength(args.page);
-  const before = await measureGeometry(args.page);
+  const before = await measureGeometry(args.page, args.bandDocumentTop);
   const startedAt = isoNow();
   const transitionAt = await setMarker(args.page, "transition", args.step);
   await args.page.waitForTimeout(180);
@@ -582,11 +603,12 @@ async function runPreparedCheckpoint(args: {
   fakePty: ReturnType<typeof createProtocolAwareFakePty>;
   prepare: () => Promise<{ typedText?: string; command?: string }>;
   trigger: () => Promise<FeedbackTelemetry>;
+  bandDocumentTop: number;
   progress?: WorkbookUxProgressSink;
 }): Promise<void> {
   const startedAt = isoNow();
   const telemetryStart = await scrollTelemetryLength(args.page);
-  const beforeTyping = await measureGeometry(args.page);
+  const beforeTyping = await measureGeometry(args.page, args.bandDocumentTop);
   const prepared = await args.prepare();
   const typingEntries = await readScrollTelemetry(args.page, telemetryStart);
   const typingExcursionPx = maxScrollExcursion(applicationScrollEvents(typingEntries), beforeTyping.scrollY);
@@ -632,18 +654,31 @@ export function assertCheckpointGeometry(checkpoint: SemanticCheckpoint, failure
   if ((checkpoint.scroll.typingExcursionPx ?? 0) > PAGE_HOLD_TOLERANCE_PX) failures.push(`${checkpoint.name}: the page moved ${checkpoint.scroll.typingExcursionPx?.toFixed(1)}px while the learner typed.`);
   if (checkpoint.scroll.applicationScrollCalls.length > 0) failures.push(`${checkpoint.name}: the application scrolled the page on its own (${checkpoint.scroll.applicationScrollCalls.map((call) => call.kind).join(", ")}).`);
   if (checkpoint.feedback && checkpoint.feedback.rect.width <= 50) failures.push(`${checkpoint.name}: feedback rect is too narrow to be visible.`);
+  // A review of the active block is rendered only as the bar welded to its surface (the server
+  // projects it into the conversation later, as history), so there is nothing for the chip to
+  // announce when it lands off-screen; but the chip must never show for feedback in view.
   if (checkpoint.requestedState === "away") return;
+  if (checkpoint.feedback?.unseenChip) failures.push(`${checkpoint.name}: the "new below" chip is showing although the feedback is in view.`);
   if (checkpoint.feedback && !checkpoint.feedback.safeRegion.insideSafeRegion) failures.push(`${checkpoint.name}: feedback is outside the viewport safe region above the fixed composer.`);
   if (checkpoint.feedback && !checkpoint.feedback.safeRegion.unoccluded) failures.push(`${checkpoint.name}: feedback is occluded at representative points (${JSON.stringify(checkpoint.feedback.safeRegion.occlusionChecks)}).`);
 }
 
+/** The recorder's fastest per-sample translation, from its longest move at its positioning pace. */
+export function recorderMaxSampleShiftPx(): number {
+  return RECORDER_MAX_POSITIONING_TRAVEL_PX / RECORDER_POSITIONING_DURATION_MS * (1000 / RECORDER_ANALYZER_SAMPLE_HZ);
+}
+
 export function assertRealJourneyMotionThresholdCalibration(): void {
-  // The real workbook journey's shortest required scroll is the in-flow to docked move, a few
-  // hundred pixels of visible translation. A scenario floor of 12px remains well above zero/static
-  // codec noise while staying below the semantic browser-scroll floor that makes a checkpoint
-  // motion-required.
+  // The real workbook journey's shortest required scroll is a few hundred pixels of visible
+  // translation. A scenario floor of 12px remains well above zero/static codec noise while
+  // staying below the semantic browser-scroll floor that makes a checkpoint motion-required.
   if (REAL_JOURNEY_MIN_REQUIRED_MOTION_PX <= 0 || REAL_JOURNEY_MIN_REQUIRED_MOTION_PX >= REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX) {
     throw new Error(`Real journey motion threshold ${REAL_JOURNEY_MIN_REQUIRED_MOTION_PX}px must be > 0 and < semantic scroll delta ${REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX}px.`);
+  }
+  // The analyzer's search bound must comfortably cover the recorder's own fastest move, or a
+  // genuine positioning frame would be clamped and read as a stall.
+  if (REAL_JOURNEY_MAX_SAMPLE_SHIFT_PX < recorderMaxSampleShiftPx() * 2) {
+    throw new Error(`Real journey sample shift bound ${REAL_JOURNEY_MAX_SAMPLE_SHIFT_PX}px must be at least twice the recorder's fastest per-sample move (${recorderMaxSampleShiftPx().toFixed(0)}px).`);
   }
 }
 
@@ -715,13 +750,13 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
     // cannot consume the first named checkpoint decision while retained feedback is visible.
     { outcome: "feedback", message: "The seeded draft is ready for the learner's first revision." } satisfies TutorDecision,
     { outcome: "feedback", message: EDITOR_FEEDBACK.inflow } satisfies TutorDecision,
-    { outcome: "feedback", message: EDITOR_FEEDBACK.docked } satisfies TutorDecision,
     // Held back so the feedback lands after the learner has scrolled away from the band.
     delayed({ outcome: "feedback", message: EDITOR_FEEDBACK.away }),
+    { outcome: "feedback", message: EDITOR_FEEDBACK.docked } satisfies TutorDecision,
     { outcome: "accepted", message: EDITOR_ACCEPTED } satisfies TutorDecision,
     { outcome: "feedback", message: TERMINAL_FEEDBACK.inflow } satisfies TutorDecision,
-    { outcome: "feedback", message: TERMINAL_FEEDBACK.docked } satisfies TutorDecision,
     delayed({ outcome: "feedback", message: TERMINAL_FEEDBACK.away }),
+    { outcome: "feedback", message: TERMINAL_FEEDBACK.docked } satisfies TutorDecision,
   );
   const fakePty = createProtocolAwareFakePty({ outputForCommand: (command, index) => `\r\nfake terminal ${index}: observed ${command}\r\nworkspace: refactor-line\r\nstatus: deterministic protocol marker received\r\nnext: read the feedback below\r\n` });
 
@@ -771,59 +806,79 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
 
     await setMarker(page, "settled", WORKBOOK_UX_TEST_STEPS.revealEditor);
     const editorLanding = await revealEditor(page, walkthrough);
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorScrollToInflow, landing: editorLanding, position: async () => positionBand(page!, "inflow") });
+    // The band's natural position is measured once per surface, outside any transition: the
+    // measurement itself scrolls, and inside a transition the analyzer would read it as motion.
+    const editorBandTop = await measureBandDocumentTop(page);
+    const editorCheckpoint = { page, walkthrough, mainTutor, fakePty, progress, bandDocumentTop: editorBandTop };
+    await runScrollCheckpoint({ ...editorCheckpoint, step: WORKBOOK_UX_TEST_STEPS.editorScrollToInflow, landing: editorLanding, position: async () => positionBand(page!, "inflow", editorBandTop) });
 
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorInflowFeedback, prepare: async () => {
+    await runPreparedCheckpoint({ ...editorCheckpoint, step: WORKBOOK_UX_TEST_STEPS.editorInflowFeedback, prepare: async () => {
       const typedText = "In-flow draft: the learner notices compact feedback in the editor.\nThe typed line stays short enough to look like a first revision.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
     }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.inflow) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorScrollToDocked, position: async () => positionBand(page!, "docked") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorDockedFeedback, prepare: async () => {
+    await runScrollCheckpoint({ ...editorCheckpoint, step: WORKBOOK_UX_TEST_STEPS.editorScrollAway, prepare: async () => {
+      // A longer draft on purpose: the analyzer tracks the page by correlating frames, and a
+      // mostly white editor reads as still until textured content enters, which it then reports
+      // as a jump. Text across the editor gives it edges to follow through the scroll away.
+      const typedText = [
+        "Away draft: the learner types this, then scrolls back up to reread the orientation while the review runs.",
+        "The feedback must land on the surface without pulling the page back down.",
+        "Line three restates the goal: a short implementation note the tutor can accept.",
+        "Line four names the three feedback placements the recorder visits: in flow, away, docked.",
+        "Line five is here so the editor has text edges from top to bottom.",
+        "Line six keeps the cursor moving like an actual revision.",
+        "Line seven mentions that the page must not move under the learner's hands.",
+        "Line eight repeats the shape of tutorial prose: claim, instruction, reminder.",
+        "Line nine is the last line before the learner scrolls up to reread.",
+        "Line ten ends the draft.",
+      ].join("\n");
+      await typeEditorRevision(page!, typedText);
+      return { typedText };
+    }, position: async () => positionBand(page!, "away", editorBandTop) });
+    await runPreparedCheckpoint({ ...editorCheckpoint, step: WORKBOOK_UX_TEST_STEPS.editorAwayFeedback, prepare: async () => ({}), trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.away) });
+
+    await runScrollCheckpoint({ ...editorCheckpoint, step: WORKBOOK_UX_TEST_STEPS.editorScrollToDocked, position: async () => positionBand(page!, "docked", editorBandTop) });
+    await runPreparedCheckpoint({ ...editorCheckpoint, step: WORKBOOK_UX_TEST_STEPS.editorDockedFeedback, prepare: async () => {
       const typedText = "Docked draft: the learner revises while the band is stuck at the top of the window.\nThey add a second visible line before pausing for feedback.\nThe surface must keep its feedback welded, and the page must not move under their hands.";
       await typeEditorRevision(page!, typedText);
       return { typedText };
     }, trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.docked) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorScrollAway, prepare: async () => {
-      const typedText = "Away draft: the learner types this, then scrolls back up to reread the orientation while the review runs.\nThe feedback must land on the surface without pulling the page back down.";
-      await typeEditorRevision(page!, typedText);
-      return { typedText };
-    }, position: async () => positionBand(page!, "away") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.editorAwayFeedback, prepare: async () => ({}), trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.away) });
-
     await setMarker(page, "settled", WORKBOOK_UX_TEST_STEPS.editorAccepted);
-    await positionBand(page, "docked");
+    await positionBand(page, "docked", editorBandTop);
     await typeEditorRevision(page, "Accepted final draft: in-flow, docked, and away feedback all left the page where the learner put it.");
     await waitForEditorAccepted(page);
     await page.waitForTimeout(450);
 
     const terminalLanding = await advanceToTerminal(page, walkthrough);
     await page.locator('.current-activity-band[data-activity-type="terminal-practice"]').waitFor({ state: "attached", timeout: 15_000 });
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToInflow, landing: terminalLanding, position: async () => positionBand(page!, "inflow") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalInflowFeedback, prepare: async () => {
+    const terminalBandTop = await measureBandDocumentTop(page);
+    const terminalCheckpoint = { page, walkthrough, mainTutor, fakePty, progress, bandDocumentTop: terminalBandTop };
+    await runScrollCheckpoint({ ...terminalCheckpoint, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToInflow, landing: terminalLanding, position: async () => positionBand(page!, "inflow", terminalBandTop) });
+    await runPreparedCheckpoint({ ...terminalCheckpoint, step: WORKBOOK_UX_TEST_STEPS.terminalInflowFeedback, prepare: async () => {
       const command = "printf inflow-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 1");
       return { command };
     }, trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.inflow) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToDocked, position: async () => positionBand(page!, "docked") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalDockedFeedback, prepare: async () => {
-      const command = "printf docked-terminal-state";
+    await runScrollCheckpoint({ ...terminalCheckpoint, step: WORKBOOK_UX_TEST_STEPS.terminalScrollAway, prepare: async () => {
+      const command = "printf away-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 2");
       return { command };
-    }, trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.docked) });
+    }, position: async () => positionBand(page!, "away", terminalBandTop) });
+    await runPreparedCheckpoint({ ...terminalCheckpoint, step: WORKBOOK_UX_TEST_STEPS.terminalAwayFeedback, prepare: async () => ({}), trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.away) });
 
-    await runScrollCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalScrollAway, prepare: async () => {
-      const command = "printf away-terminal-state";
+    await runScrollCheckpoint({ ...terminalCheckpoint, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToDocked, position: async () => positionBand(page!, "docked", terminalBandTop) });
+    await runPreparedCheckpoint({ ...terminalCheckpoint, step: WORKBOOK_UX_TEST_STEPS.terminalDockedFeedback, prepare: async () => {
+      const command = "printf docked-terminal-state";
       await typeTerminalCommand(page!, command, true);
       await waitForTerminalText(page!, "fake terminal 3");
       return { command };
-    }, position: async () => positionBand(page!, "away") });
-    await runPreparedCheckpoint({ page, walkthrough, mainTutor, fakePty, progress, step: WORKBOOK_UX_TEST_STEPS.terminalAwayFeedback, prepare: async () => ({}), trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.away) });
+    }, trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.docked) });
 
     for (const checkpoint of walkthrough.checkpoints) {
       assertCheckpointGeometry(checkpoint, walkthrough.semanticFailures);
@@ -865,12 +920,15 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
       videoPath,
       outputDir: resolve(runRoot, "analysis"),
       requiredMotionStepIds: REQUIRED_MOTION_STEP_IDS,
-      sampleHz: 11,
-      roi: { x: 360, y: 90, width: 720, height: 700 },
+      sampleHz: RECORDER_ANALYZER_SAMPLE_HZ,
+      // The region ends above the fixed "new below" chip and the composer: only page content that
+      // scrolls belongs in a translation measurement.
+      roi: { x: 360, y: 90, width: 720, height: 640 },
       maxMotionWidth: 240,
       thresholds: {
         minRequiredMotionPx: REAL_JOURNEY_MIN_REQUIRED_MOTION_PX,
         minTextureScore: REAL_JOURNEY_MIN_TEXTURE_SCORE,
+        maxShiftPx: REAL_JOURNEY_MAX_SAMPLE_SHIFT_PX,
       },
     });
     progress?.({ type: "detail", source: "analyzer", message: `  decoded video duration: ${analysis.video.duration.toFixed(2)}s` });

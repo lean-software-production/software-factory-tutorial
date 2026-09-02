@@ -57,13 +57,14 @@ tsx test/workbook-ux/run.mts --ai --ai-command=/path/to/pi --ai-model='provider/
 
 ## The scroll contract the journey asserts
 
-The journey is the 2026-09-01 play-test's complaints, made deterministic. For the editor and then the terminal it places the live activity band in three positions — `inflow` (part-way down the viewport, as it lands after Continue), `docked` (scrolled to the top, where it sticks), and `away` (the learner scrolled back up; the band is below the fold) — and at each one it has the learner work and waits for feedback. The recording fails if:
+The journey is the 2026-09-01 play-test's complaints, made deterministic. For the editor and then the terminal it places the live activity band in three positions — `inflow` (part-way down the viewport, as it lands after Continue), `away` (the learner scrolled back up to reread; the band is below the fold), and `docked` (scrolled to the top, where it sticks) — and at each one it has the learner work and waits for feedback. The recording fails if:
 
 - a Continue leaves its successor block out of the reading area (`landings` in `walkthrough.json`);
 - the page moves while the learner types, or while feedback lands, at any band position (`scroll.typingExcursionPx`, `before`/`after` scroll positions);
 - the application scrolls the page on its own during a feedback checkpoint (`scroll.applicationScrollCalls`);
 - the page moved between one checkpoint settling and the next starting;
-- the docked band does not fit above the composer, or the page overflows horizontally.
+- the docked band does not fit above the composer, or the page overflows horizontally;
+- the "new below" chip shows for feedback the learner can already see.
 
 `npx tsx test/scroll-ownership.mts` drives a wider set of the same situations — a shorter window, a draft that outgrows the editor, a tutor reply arriving below the fold, narrow viewports — and prints who moved the page in each. It is a diagnostic, not a gate.
 

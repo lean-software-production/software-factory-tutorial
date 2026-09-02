@@ -170,10 +170,15 @@ function clearUnseen(): void {
  * Note that `element` just appeared or changed on its own. If it is below the reading area the
  * "new below" chip shows until the learner scrolls it into view or presses the chip. Nothing is
  * scrolled: the learner may be reading, or typing, or half-way through a thought.
+ *
+ * `representatives` are other elements that show the same content — a review is welded to its
+ * practice surface as well as appended to the conversation — and if any of them is not below
+ * the fold the learner can already see it, so nothing is announced.
  */
-export function announceContent(element: HTMLElement, label: string): void {
+export function announceContent(element: HTMLElement, label: string, representatives: readonly HTMLElement[] = [element]): void {
   if (!element.id) return;
-  if (!contentBelowFold(element.getBoundingClientRect(), safeViewportBottom())) return;
+  const safeBottom = safeViewportBottom();
+  if (representatives.some((candidate) => !contentBelowFold(candidate.getBoundingClientRect(), safeBottom))) return;
   unseenObserver?.disconnect();
   unseenObserver = undefined;
   setUnseen({ anchorId: element.id, label });

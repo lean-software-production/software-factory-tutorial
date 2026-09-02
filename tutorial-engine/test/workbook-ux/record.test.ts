@@ -3,7 +3,7 @@ import { TerminalShellProtocol } from "../../src/workbook/terminal-shell-protoco
 import { ProtocolAwareFakePty } from "./fake-pty.js";
 import { REQUIRED_MOTION_STEP_IDS, REQUIRED_STATE_CHECKPOINT_STEP_IDS, SCROLL_CHECKPOINT_STEP_IDS, WORKBOOK_UX_TEST_STEP_LIST, WORKBOOK_UX_TEST_STEPS } from "./steps.js";
 import { encodeStepBits } from "./marker-protocol.js";
-import { assertCheckpointGeometry, assertContinueLandings, assertPageHeldBetweenCheckpoints, assertRealJourneyMotionThresholdCalibration, geometryStateFailure, PAGE_HOLD_TOLERANCE_PX, REAL_JOURNEY_MIN_REQUIRED_MOTION_PX, REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX, type GeometryTelemetry, type SemanticCheckpoint } from "./record.mjs";
+import { assertCheckpointGeometry, assertContinueLandings, assertPageHeldBetweenCheckpoints, assertRealJourneyMotionThresholdCalibration, geometryStateFailure, PAGE_HOLD_TOLERANCE_PX, REAL_JOURNEY_MAX_SAMPLE_SHIFT_PX, REAL_JOURNEY_MIN_REQUIRED_MOTION_PX, recorderMaxSampleShiftPx, REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX, type GeometryTelemetry, type SemanticCheckpoint } from "./record.mjs";
 import { checkpointProgressEvent, createWorkbookUxProgressLogger, formatWorkbookUxCheckpointProgress, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, type WorkbookUxProgressEvent } from "./progress.js";
 
 describe("protocol-aware fake PTY", () => {
@@ -29,8 +29,8 @@ describe("protocol-aware fake PTY", () => {
 describe("workbook UX test progress", () => {
   it("formats semantic checkpoint progress with count and step name", () => {
     expect(WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL).toBe(12);
-    expect(formatWorkbookUxCheckpointProgress(3, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, "editor scroll from in-flow to docked band"))
-      .toBe("Checkpoint 3/12: editor scroll from in-flow to docked band");
+    expect(formatWorkbookUxCheckpointProgress(3, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, "editor revision typed in flow, then scrolled below the fold"))
+      .toBe("Checkpoint 3/12: editor revision typed in flow, then scrolled below the fold");
     expect(checkpointProgressEvent(1, WORKBOOK_UX_SEMANTIC_CHECKPOINT_TOTAL, WORKBOOK_UX_TEST_STEPS.editorScrollToInflow)).toMatchObject({
       type: "checkpoint",
       completed: 1,
@@ -61,6 +61,12 @@ describe("workbook UX test marker declarations", () => {
     expect(() => assertRealJourneyMotionThresholdCalibration()).not.toThrow();
     expect(REAL_JOURNEY_MIN_REQUIRED_MOTION_PX).toBeGreaterThan(0);
     expect(REAL_JOURNEY_MIN_REQUIRED_MOTION_PX).toBeLessThan(REQUIRED_SCROLL_SEMANTIC_DELTA_MIN_PX);
+  });
+
+  it("bounds the analyzer's per-sample search to the recorder's own pace, with headroom", () => {
+    expect(recorderMaxSampleShiftPx()).toBeGreaterThan(100);
+    expect(REAL_JOURNEY_MAX_SAMPLE_SHIFT_PX).toBeGreaterThanOrEqual(recorderMaxSampleShiftPx() * 2);
+    expect(REAL_JOURNEY_MAX_SAMPLE_SHIFT_PX).toBeLessThan(900);
   });
 
   it("use unique marker ids and keep feedback and required scroll phases separate", () => {

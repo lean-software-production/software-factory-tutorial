@@ -67,6 +67,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
   const latestMessage = conversationRecords.at(-1);
   const latestMessageId = latestMessage?.id;
   const latestMessageIsReply = latestMessage?.role === "assistant";
+  const latestMessageIsReview = latestMessage?.presentation === "review";
   const messageIdsKey = conversationRecords.map((record) => record.id).join("\u0000");
   // `records` is a new array every render, so the set below is memoised on the ids it contains
   // rather than on the array's identity. That lets the effect depend on exactly what it reads.
@@ -83,8 +84,12 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     knownMessageIds.current = messageIdSet;
     if (!fresh) return;
     const element = messageEntryRefs.current.get(latestMessageId);
-    if (element) announceContent(element, latestMessageIsReply ? "New reply below" : "New message below");
-  }, [latestMessageId, latestMessageIsReply, messageIdSet]);
+    if (!element) return;
+    // A review is also welded to the live practice surface; if that bar is in view the learner is
+    // already reading the review, and the chip would only point at its copy below.
+    const representatives = latestMessageIsReview ? [element, ...Array.from(document.querySelectorAll<HTMLElement>(".current-activity-band .live-block-feedback"))] : [element];
+    announceContent(element, latestMessageIsReply ? "New reply below" : "New message below", representatives);
+  }, [latestMessageId, latestMessageIsReply, latestMessageIsReview, messageIdSet]);
   useLayoutEffect(() => {
     if (textareaRef.current) resizeComposerTextarea(textareaRef.current);
   }, [draft]);

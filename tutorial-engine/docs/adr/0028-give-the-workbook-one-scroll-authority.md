@@ -53,7 +53,8 @@ something the learner did: opening the page, following a link, pressing Continue
 pressing the "new below" chip. All of its scrolls are instant. Content that arrives on its own — a
 tutor reply, a learner's own message, a block the tutor advanced — is announced, never scrolled to:
 if it landed below the reading area the authority shows a fixed chip, which clears when the content
-scrolls into view or the learner presses it.
+scrolls into view or the learner presses it. A review is shown twice, welded to its practice
+surface and appended to the conversation, so it is announced only when neither copy is in view.
 
 Continue keeps the learner's position when the successor's start is already in the reading area,
 and otherwise brings the successor to the top of it. The navigation is scheduled against the state

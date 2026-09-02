@@ -188,6 +188,20 @@ describe("announced content", () => {
     expect(revealUnseen()).toBe(false);
   });
 
+  it("stays quiet when a representative of the content — a review's welded bar — is in view", () => {
+    const win = stubDom('<!doctype html><html><body><aside id="bar" class="live-block-feedback"></aside><article id="review"></article></body></html>');
+    const bar = win.document.getElementById("bar")!;
+    const review = win.document.getElementById("review")!;
+    review.getBoundingClientRect = () => rect(950, 80);
+    bar.getBoundingClientRect = () => rect(500, 45);
+    announceContent(review, "New reply below", [review, bar]);
+    expect(currentUnseen()).toBeUndefined();
+
+    bar.getBoundingClientRect = () => rect(1400, 45);
+    announceContent(review, "New reply below", [review, bar]);
+    expect(currentUnseen()?.anchorId).toBe("review");
+  });
+
   it("ignores content that is already readable, and forgets the chip when the learner navigates", () => {
     const win = stubDom('<!doctype html><html><body><article id="seen"></article><article id="unseen"></article><section id="elsewhere" tabindex="-1"></section></body></html>');
     win.HTMLElement.prototype.scrollIntoView = () => {};
