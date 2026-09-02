@@ -95,6 +95,23 @@ describe("v2 public judge trace projection", () => {
     }
   });
 
+  it("keeps the verdict of a judge that exits cleanly before reading a large prompt", async () => {
+    const root = await mkdtemp(join(tmpdir(), "v2-judge-unread-prompt-"));
+    const command = join(root, "unread-prompt.sh");
+    await writeFile(command, "#!/bin/sh\nprintf '{\"verdict\":\"read nothing\"}'\n", { mode: 0o700 });
+    try {
+      // Larger than the pipe buffer, so the write is still in flight when the script exits and
+      // fails with EPIPE; the exit code and output must still decide the outcome.
+      await expect(invokeJudgeCommand({
+        prompt: "x".repeat(Math.floor(V2_JUDGE_PROMPT_MAX_BYTES / 2)),
+        model: "provider/model",
+        environment: { EVAL_JUDGE_MODEL: "provider/model", EVAL_JUDGE_COMMAND: command, PATH: process.env.PATH, HOME: process.env.HOME }
+      })).resolves.toEqual({ verdict: "read nothing" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("handles early-exit stdin errors through sanitized one-shot settlement", async () => {
     const root = await mkdtemp(join(tmpdir(), "v2-judge-early-exit-"));
     const command = join(root, "early-exit.sh");

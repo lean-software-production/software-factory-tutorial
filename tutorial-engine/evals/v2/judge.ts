@@ -132,9 +132,14 @@ export async function invokeJudgeCommand(request: JudgeCommandRequest): Promise<
       if (timedOut || cancelling) return;
       settle(() => code === 0 ? resolve(Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8")) : reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE)));
     });
-    child.stdin.once("error", () => { if (!cancelling) settle(() => reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE))); });
+    // A judge that exits before reading its prompt closes the pipe under this write, and the
+    // write then fails with EPIPE. That is not a verdict on the judge: the close handler above
+    // sees the exit code and the bounded output and decides, and the timeout bounds a child that
+    // never closes. Settling here used to race that handler and turn a clean exit with malformed
+    // or valid JSON into a command failure, one full test run in two.
+    child.stdin.once("error", () => { /* the close handler decides. */ });
     try { child.stdin.end(request.prompt, "utf8", () => { /* successful stdin completion is not a result boundary. */ }); }
-    catch { settle(() => reject(new Error(V2_JUDGE_COMMAND_FAILURE_MESSAGE))); }
+    catch { /* the pipe is already closed; the close handler decides. */ }
   });
   try { return extractJson(output); }
   catch { throw new Error(V2_JUDGE_COMMAND_INVALID_JSON_MESSAGE); }
