@@ -194,6 +194,43 @@ export function announceContent(element: HTMLElement, label: string, representat
   unseenObserver = observer;
 }
 
+/**
+ * Agent activity the learner can currently see. Nothing is announced while it is in view, and the
+ * authority — not the practice surface — keeps watching the viewport, so if the learner reads on
+ * and leaves the activity below the fold the chip appears then.
+ */
+let pendingAnnouncement: { element: HTMLElement; label: string; phase: UnseenContent["phase"] } | undefined;
+let pendingViewportListener: (() => void) | undefined;
+
+function flushPendingAnnouncement(): void {
+  const target = pendingAnnouncement;
+  if (!target) return;
+  if (target.element.isConnected && !contentBelowFold(target.element.getBoundingClientRect(), safeViewportBottom())) return;
+  clearPendingAnnouncement();
+  if (target.element.isConnected) announceContent(target.element, target.label, [target.element], target.phase);
+}
+
+function clearPendingAnnouncement(): void {
+  pendingAnnouncement = undefined;
+  if (!pendingViewportListener) return;
+  if (typeof window !== "undefined") window.removeEventListener("scroll", pendingViewportListener);
+  pendingViewportListener = undefined;
+}
+
+/**
+ * Announce `element` as soon as it is below the reading area — now, or the next time the learner
+ * scrolls past it. Only the latest activity is held, so a settled result replaces the generating
+ * one it came from.
+ */
+export function announceContentWhenBelowFold(element: HTMLElement, label: string, phase: UnseenContent["phase"]): void {
+  clearPendingAnnouncement();
+  pendingAnnouncement = { element, label, phase };
+  flushPendingAnnouncement();
+  if (!pendingAnnouncement) return;
+  pendingViewportListener = flushPendingAnnouncement;
+  window.addEventListener("scroll", pendingViewportListener, { passive: true });
+}
+
 /** The learner pressed the chip: go to the announced content. */
 export function revealUnseen(): boolean {
   const target = unseen;
@@ -221,6 +258,7 @@ export function useUnseenContent(): UnseenContent | undefined {
 /** Test seam: forget any announced content between mounts. */
 export function resetScrollAuthorityForTests(): void {
   clearUnseen();
+  clearPendingAnnouncement();
   scheduledNavigation = undefined;
   scheduledAnnouncement = undefined;
   passiveHistorySuppressedUntil = 0;

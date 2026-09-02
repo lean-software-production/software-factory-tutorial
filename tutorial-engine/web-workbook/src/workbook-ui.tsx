@@ -10,7 +10,7 @@ import { PracticeFeedbackBar, type PracticeFeedbackTone } from "./practice-feedb
 import { lessonElementId } from "../../src/workbook/lesson-links.js";
 import { ActivityBand } from "./activity-band.js";
 import { TimelineThread } from "./timeline-thread.js";
-import { announceContent, contentBelowFold, flushScheduledViewportWork, safeViewportBottom, navigateToAnchor, passiveHistoryAllowed, replaceUrlAnchor, revealUnseen, scheduleAnnouncement, scheduleNavigation, useUnseenContent } from "./scroll-authority.js";
+import { announceContentWhenBelowFold, flushScheduledViewportWork, navigateToAnchor, passiveHistoryAllowed, replaceUrlAnchor, revealUnseen, scheduleAnnouncement, scheduleNavigation, useUnseenContent } from "./scroll-authority.js";
 import { canonicalBlockInView, readySuccessorCrossedReadingLine, subscribeViewport } from "./reading-line.js";
 import { isPublicWorkbookState, parsePublicCompleteBlockResult, parsePublicWorkbookState } from "../../src/workbook/public-contract.js";
 import type { PublicCheckpoint, PublicCompleteBlockResult, PublicTimelineRecord, PublicWorkbookBlock, PublicWorkbookBlockProgress, PublicWorkbookChapter, PublicWorkbookLesson, PublicWorkbookProgress, PublicWorkbookState } from "../../src/workbook/public-contract.js";
@@ -115,18 +115,17 @@ export function practiceFeedbackElementId(blockId: string): string {
 }
 
 function PracticeActivityAnnouncement({ blockId, phase, activityId }: { blockId: string; phase: "generating" | "settled" | undefined; activityId: string }) {
-  const announced = useRef<string>();
-  const announce = useCallback(() => {
+  const announced = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
     if (!phase) return;
+    // One announcement per review lifecycle state, so a rerender cannot restart the chip.
     const identity = activityId + ":" + phase;
     if (announced.current === identity) return;
     const target = document.getElementById(practiceFeedbackElementId(blockId));
-    if (!target || !contentBelowFold(target.getBoundingClientRect(), safeViewportBottom())) return;
+    if (!target) return;
     announced.current = identity;
-    announceContent(target, phase === "generating" ? "Tutor review in progress below" : "Tutor review below", [target], phase);
+    announceContentWhenBelowFold(target, phase === "generating" ? "Tutor review in progress below" : "Tutor review below", phase);
   }, [activityId, blockId, phase]);
-  useLayoutEffect(() => { announce(); }, [announce]);
-  useEffect(() => { window.addEventListener("scroll", announce, { passive: true }); return () => window.removeEventListener("scroll", announce); }, [announce]);
   return null;
 }
 

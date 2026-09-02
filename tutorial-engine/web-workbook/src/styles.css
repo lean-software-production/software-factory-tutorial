@@ -738,13 +738,16 @@ p {
 .conversation-unseen-chip:hover {
   background: #1d4b8d;
 }
+/* The chip throbs in place: a moving chip would read as the page itself scrolling. */
 @keyframes conversation-unseen-pulse {
   0%,
   100% {
-    transform: translateY(0);
+    opacity: 1;
+    box-shadow: 0 10px 24px rgb(28 33 38 / 0.22);
   }
   50% {
-    transform: translateY(4px);
+    opacity: 0.72;
+    box-shadow: 0 10px 24px rgb(28 33 38 / 0.4);
   }
 }
 .timeline-composer-dock.fixed-composer {

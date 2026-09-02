@@ -2,7 +2,7 @@ import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { announceContent, blockStartVisible, contentBelowFold, currentUnseen, flushScheduledViewportWork, navigateToAnchor, passiveHistoryAllowed, READING_LINE_TOP_PX, replaceUrlAnchor, resetScrollAuthorityForTests, revealUnseen, safeViewportBottom, scheduleAnnouncement, scheduleNavigation, useUnseenContent } from "../web-workbook/src/scroll-authority.js";
+import { announceContent, announceContentWhenBelowFold, blockStartVisible, contentBelowFold, currentUnseen, flushScheduledViewportWork, navigateToAnchor, passiveHistoryAllowed, READING_LINE_TOP_PX, replaceUrlAnchor, resetScrollAuthorityForTests, revealUnseen, safeViewportBottom, scheduleAnnouncement, scheduleNavigation, useUnseenContent } from "../web-workbook/src/scroll-authority.js";
 import type { PublicWorkbookState } from "../src/workbook/public-contract.js";
 import { TimelineThread } from "../web-workbook/src/timeline-thread.js";
 
@@ -253,6 +253,25 @@ describe("announced content", () => {
 
     announceContent(second, "New reply below");
     expect(currentUnseen()).toEqual({ anchorId: "second", label: "New reply below", phase: "settled" });
+  });
+
+  it("holds an announcement made while the learner can see it until they scroll it below the fold", () => {
+    const win = stubDom('<!doctype html><html><body><aside id="feedback"></aside></body></html>');
+    const feedback = win.document.getElementById("feedback")!;
+    feedback.getBoundingClientRect = () => rect(200, 80);
+    const scrolled: string[] = [];
+    win.HTMLElement.prototype.scrollIntoView = function () { scrolled.push(this.id); };
+
+    announceContentWhenBelowFold(feedback, "Tutor review in progress below", "generating");
+    expect(currentUnseen()).toBeUndefined();
+
+    win.dispatchEvent(new win.Event("scroll"));
+    expect(currentUnseen()).toBeUndefined();
+
+    feedback.getBoundingClientRect = () => rect(1100, 80);
+    win.dispatchEvent(new win.Event("scroll"));
+    expect(currentUnseen()).toEqual({ anchorId: "feedback", label: "Tutor review in progress below", phase: "generating" });
+    expect(scrolled).toEqual([]);
   });
 
   it("lets React subscribe to the chip state", async () => {

@@ -859,6 +859,9 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
     const editorAwayTelemetry = await scrollTelemetryLength(page);
     await runPreparedCheckpoint({ ...editorCheckpoint, step: WORKBOOK_UX_TEST_STEPS.editorAwayFeedback, prepare: async () => ({}), trigger: async () => feedbackTelemetry(page!, "editor", EDITOR_FEEDBACK.away) });
     await revealUnseenFeedback(page, editorAwayTelemetry);
+    // Pressing the chip lands the learner on the feedback, so the journey returns to the reading
+    // position it was at before the reveal; the docked checkpoint then makes its own scroll.
+    await positionBand(page, "away", editorBandTop);
 
     await runScrollCheckpoint({ ...editorCheckpoint, step: WORKBOOK_UX_TEST_STEPS.editorScrollToDocked, position: async () => positionBand(page!, "docked", editorBandTop) });
     await runPreparedCheckpoint({ ...editorCheckpoint, step: WORKBOOK_UX_TEST_STEPS.editorDockedFeedback, prepare: async () => {
@@ -895,6 +898,7 @@ export async function recordWorkbookUxTest(options: WorkbookUxTestRecorderOption
     const terminalAwayTelemetry = await scrollTelemetryLength(page);
     await runPreparedCheckpoint({ ...terminalCheckpoint, step: WORKBOOK_UX_TEST_STEPS.terminalAwayFeedback, prepare: async () => ({}), trigger: async () => feedbackTelemetry(page!, "terminal", TERMINAL_FEEDBACK.away) });
     await revealUnseenFeedback(page, terminalAwayTelemetry);
+    await positionBand(page, "away", terminalBandTop);
 
     await runScrollCheckpoint({ ...terminalCheckpoint, step: WORKBOOK_UX_TEST_STEPS.terminalScrollToDocked, position: async () => positionBand(page!, "docked", terminalBandTop) });
     await runPreparedCheckpoint({ ...terminalCheckpoint, step: WORKBOOK_UX_TEST_STEPS.terminalDockedFeedback, prepare: async () => {
