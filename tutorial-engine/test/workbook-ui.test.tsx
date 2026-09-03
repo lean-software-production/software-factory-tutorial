@@ -578,6 +578,7 @@ describe("workbook lesson UI", () => {
     expect(container.querySelector("label")).toBeNull();
     expect(container.textContent).not.toContain("Message the tutor");
     expect(container.querySelector(".round-send")?.getAttribute("aria-label")).toBe("Send message");
+    expect(container.querySelector(".round-send")?.classList.contains("is-pending")).toBe(false);
   });
 
   it("auto-sizes the docked composer from one line as draft content grows", async () => {
@@ -643,6 +644,8 @@ describe("workbook lesson UI", () => {
     expect(textarea.value).toBe("");
     expect(textarea.disabled).toBe(true);
     expect(sendButton.disabled).toBe(true);
+    expect(sendButton.classList.contains("is-pending")).toBe(true);
+    expect(sendButton.getAttribute("aria-busy")).toBe("true");
     expect(container.querySelector(".timeline-message.learner")).toBeNull();
     expect(container.querySelector(".timeline-message.tutor.thinking")).toBeNull();
 
@@ -1736,7 +1739,11 @@ describe("workbook lesson UI", () => {
     expect(markup).toContain("aria-hidden=\"true\">↓");
     expect(container).toBeTruthy();
     expect(stylesCss).toContain(".conversation-unseen-chip.is-generating");
-    expect(stylesCss).toContain(".conversation-unseen-chip,\n  .confetti-particle");
+    expect(stylesCss).toContain(".conversation-unseen-chip:focus-visible");
+    expect(stylesCss).toContain(".conversation-unseen-chip,\n  .round-send,\n  .confetti-particle");
+    expect(stylesCss).toContain(".round-send.is-pending");
+    expect(stylesCss).toContain(".round-send:focus-visible");
+    expect(stylesCss).toContain(".round-send:disabled:not(.is-pending)");
   });
 
   it("welds the shared practice feedback bar to editor, terminal, and narrow activity layouts in CSS", () => {

@@ -188,7 +188,7 @@ export function TimelineThread({ records, activeLessonId, activeBlockId, onSend,
     <div className="timeline-composer-dock fixed-composer">
       <form className="timeline-input fixed-composer" onSubmit={send}>
         <textarea ref={textareaRef} className="timeline-composer-textarea" name="message" rows={1} aria-label="Message the tutor" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} disabled={inputDisabled || pending} />
-        <button className="round-send" aria-label="Send message" title="Send message" disabled={inputDisabled || pending || !draft.trim()}>{pending ? "…" : "↑"}</button>
+        <button className={`round-send${pending ? " is-pending" : ""}`} aria-label="Send message" title="Send message" aria-busy={pending || undefined} disabled={inputDisabled || pending || !draft.trim()}><span aria-hidden="true">{pending ? "…" : "↑"}</span></button>
       </form>
     </div>
   </section>;
